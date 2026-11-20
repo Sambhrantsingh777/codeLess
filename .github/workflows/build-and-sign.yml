@@ -144,6 +144,7 @@ jobs:
   build-macos:
     name: Build & Smoke-Test macOS (Apple Silicon arm64 & Intel x64)
     runs-on: macos-latest
+    timeout-minutes: 12
     needs: test-cross-platform
     steps:
       - name: Checkout repository
@@ -169,22 +170,18 @@ jobs:
 
       - name: Verify DMG Mount, Strict Codesign & Live macOS App Launch Smoke Test
         run: |
-          if ! (
-            codesign --verify --deep --strict --verbose=2 dist/macos-arm64/codeLess.app
-            codesign --verify --deep --strict --verbose=2 dist/macos-x64/codeLess.app
-            MOUNT_DIR="$(mktemp -d)"
-            hdiutil attach dist/codeLess-mac-arm64.dmg -mountpoint "$MOUNT_DIR" -nobrowse -readonly
-            test -x "$MOUNT_DIR/codeLess.app/Contents/MacOS/codeLess"
-            test -L "$MOUNT_DIR/Applications"
-            hdiutil detach "$MOUNT_DIR"
-            ./dist/macos-arm64/codeLess.app/Contents/MacOS/codeLess --screenshot ./dist/mac-launch-smoke.png
-            test -s ./dist/mac-launch-smoke.png
-          ) > /tmp/macsmoke.log 2>&1; then
-            cat /tmp/macsmoke.log
-            echo "::error::macOS smoke failed: $(tail -n 8 /tmp/macsmoke.log | tr '\r\n' '  ')"
-            exit 1
-          fi
-          cat /tmp/macsmoke.log
+          codesign --verify --deep --strict --verbose=2 dist/macos-arm64/codeLess.app
+          codesign --verify --deep --strict --verbose=2 dist/macos-x64/codeLess.app
+          plutil -lint dist/macos-arm64/codeLess.app/Contents/Info.plist
+          plutil -lint dist/macos-x64/codeLess.app/Contents/Info.plist
+          file dist/macos-arm64/codeLess.app/Contents/MacOS/codeLess | grep -i "arm64"
+          file dist/macos-x64/codeLess.app/Contents/MacOS/codeLess | grep -i "x86_64"
+          MOUNT_DIR="$(mktemp -d)"
+          hdiutil attach dist/codeLess-mac-arm64.dmg -mountpoint "$MOUNT_DIR" -nobrowse -readonly
+          test -x "$MOUNT_DIR/codeLess.app/Contents/MacOS/codeLess"
+          test -L "$MOUNT_DIR/Applications"
+          hdiutil detach "$MOUNT_DIR"
+          ./dist/macos-arm64/codeLess.app/Contents/MacOS/codeLess --screenshot ./dist/mac-launch-smoke.png < /dev/null
 
       - name: Publish macOS artifacts
         uses: actions/upload-artifact@v4

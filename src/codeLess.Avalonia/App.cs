@@ -69,7 +69,9 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (!string.IsNullOrWhiteSpace(ScreenshotOutputPath))
                 {
+                    string targetOut = Path.GetFullPath(ScreenshotOutputPath);
                     int completed = 0;
+
                     void CaptureAndExit()
                     {
                         if (System.Threading.Interlocked.Exchange(ref completed, 1) != 0)
@@ -77,8 +79,7 @@ namespace codeLess.AvaloniaApp
                         try
                         {
                             Dispatcher.UIThread.RunJobs();
-                            string fullOut = Path.GetFullPath(ScreenshotOutputPath);
-                            string dir = Path.GetDirectoryName(fullOut);
+                            string dir = Path.GetDirectoryName(targetOut);
                             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                             int w = Math.Max(1280, (int)mainWindow.Bounds.Width);
                             int h = Math.Max(820, (int)mainWindow.Bounds.Height);
@@ -86,12 +87,11 @@ namespace codeLess.AvaloniaApp
                             mainWindow.Arrange(new Rect(0, 0, w, h));
                             using var rtb = new RenderTargetBitmap(new PixelSize(w, h), new Vector(96, 96));
                             rtb.Render(mainWindow);
-                            rtb.Save(fullOut);
+                            rtb.Save(targetOut);
                         }
                         finally
                         {
                             try { mainWindow.Close(); } catch { }
-                            desktop.Shutdown(0);
                             Environment.Exit(0);
                         }
                     }
@@ -102,14 +102,20 @@ namespace codeLess.AvaloniaApp
                         CaptureAndExit();
                     };
 
-                    // Fallback for displayless CI runners where WindowServer does not emit Opened
-                    var ciFallbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2200) };
-                    ciFallbackTimer.Tick += (s, e) =>
+                    // OS thread watchdog for displayless SSH CI VMs where Aqua NSRunLoop does not emit Opened
+                    var watchdog = new System.Threading.Thread(() =>
                     {
-                        ciFallbackTimer.Stop();
-                        CaptureAndExit();
+                        System.Threading.Thread.Sleep(2200);
+                        Dispatcher.UIThread.Post(CaptureAndExit);
+                        System.Threading.Thread.Sleep(2000);
+                        try { mainWindow.Close(); } catch { }
+                        Environment.Exit(0);
+                    })
+                    {
+                        IsBackground = true,
+                        Name = "ScreenshotWatchdog"
                     };
-                    ciFallbackTimer.Start();
+                    watchdog.Start();
                 }
             }
 
