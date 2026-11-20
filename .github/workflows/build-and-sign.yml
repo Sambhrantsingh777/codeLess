@@ -8,6 +8,10 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+concurrency:
+  group: codeless-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-cross-platform:
     name: Build & Run Headless Test Suite

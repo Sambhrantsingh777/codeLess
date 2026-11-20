@@ -69,26 +69,47 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (!string.IsNullOrWhiteSpace(ScreenshotOutputPath))
                 {
-                    mainWindow.Opened += async (s, e) =>
+                    int completed = 0;
+                    void CaptureAndExit()
                     {
+                        if (System.Threading.Interlocked.Exchange(ref completed, 1) != 0)
+                            return;
                         try
                         {
-                            await Task.Delay(350);
                             Dispatcher.UIThread.RunJobs();
-                            string dir = Path.GetDirectoryName(Path.GetFullPath(ScreenshotOutputPath));
+                            string fullOut = Path.GetFullPath(ScreenshotOutputPath);
+                            string dir = Path.GetDirectoryName(fullOut);
                             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                             int w = Math.Max(1280, (int)mainWindow.Bounds.Width);
                             int h = Math.Max(820, (int)mainWindow.Bounds.Height);
+                            mainWindow.Measure(new Size(w, h));
+                            mainWindow.Arrange(new Rect(0, 0, w, h));
                             using var rtb = new RenderTargetBitmap(new PixelSize(w, h), new Vector(96, 96));
                             rtb.Render(mainWindow);
-                            rtb.Save(ScreenshotOutputPath);
+                            rtb.Save(fullOut);
                         }
                         finally
                         {
+                            try { mainWindow.Close(); } catch { }
                             desktop.Shutdown(0);
                             Environment.Exit(0);
                         }
+                    }
+
+                    mainWindow.Opened += async (s, e) =>
+                    {
+                        await Task.Delay(350);
+                        CaptureAndExit();
                     };
+
+                    // Fallback for displayless CI runners where WindowServer does not emit Opened
+                    var ciFallbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2200) };
+                    ciFallbackTimer.Tick += (s, e) =>
+                    {
+                        ciFallbackTimer.Stop();
+                        CaptureAndExit();
+                    };
+                    ciFallbackTimer.Start();
                 }
             }
 
