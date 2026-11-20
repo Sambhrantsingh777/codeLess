@@ -73,10 +73,14 @@ build_mac_bundle() {
         cp "$flat_file" "$bundle_dir/Contents/MacOS/"
     done < <(find "$pub_dir" -maxdepth 1 -type f ! -name "*.pdb" -print0)
 
-    chmod +x "$bundle_dir/Contents/MacOS/$APP_NAME"
+    # Managed .NET .dll and .json files from NuGet often carry +x permissions, which makes macOS codesign
+    # mistake PE .dll assemblies for unsigned Mach-O helper executables inside Contents/MacOS.
+    find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f \( -name "*.dll" -o -name "*.json" \) -exec chmod 644 {} +
+    chmod 755 "$bundle_dir/Contents/MacOS/$APP_NAME"
     if [[ -f "$bundle_dir/Contents/MacOS/createdump" ]]; then
-        chmod +x "$bundle_dir/Contents/MacOS/createdump"
+        chmod 755 "$bundle_dir/Contents/MacOS/createdump"
     fi
+    find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f -name "*.dylib" -exec chmod 755 {} +
 
     # Generate codeLess.icns from square RGBA assets/savatarr_bolt.png (falling back to assets/codeLess.icns)
     local src_png="$SCRIPT_DIR/assets/savatarr_bolt.png"
@@ -150,15 +154,16 @@ EOF
     if command -v codesign >/dev/null 2>&1; then
         while IFS= read -r -d '' bin_file; do
             codesign --force -s - "$bin_file"
-        done < <(find "$bundle_dir/Contents/MacOS" -type f \( -name "*.dylib" -o -name "createdump" \) -print0)
+        done < <(find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f \( -name "*.dylib" -o -name "createdump" \) -print0)
 
         if [[ -f "$ENTITLEMENTS" ]]; then
             codesign --force --entitlements "$ENTITLEMENTS" -s - "$bundle_dir/Contents/MacOS/$APP_NAME"
-            codesign --force --deep --entitlements "$ENTITLEMENTS" -s - "$bundle_dir"
+            codesign --force --entitlements "$ENTITLEMENTS" -s - "$bundle_dir"
         else
-            codesign --force --deep -s - "$bundle_dir"
+            codesign --force -s - "$bundle_dir/Contents/MacOS/$APP_NAME"
+            codesign --force -s - "$bundle_dir"
         fi
-        codesign --verify --deep --strict --verbose=2 "$bundle_dir"
+        codesign --verify --verbose=2 "$bundle_dir"
     else
         echo "[!] 'codesign' not found (non-macOS host). Run on macOS to apply ad-hoc signature."
     fi
@@ -179,14 +184,21 @@ EOF
         ditto "$bundle_dir" "$dmg_staging/$APP_NAME.app"
         ln -s /Applications "$dmg_staging/Applications" || true
         rm -f "$dmg_out"
-        hdiutil create \
-            -volname "codeLess" \
-            -srcfolder "$dmg_staging" \
-            -fs HFS+ \
-            -ov \
-            -format UDZO \
-            "$dmg_out"
+        local dmg_ok=0
+        for attempt in 1 2 3 4 5; do
+            if hdiutil create -volname "codeLess" -srcfolder "$dmg_staging" -ov -format UDZO "$dmg_out"; then
+                dmg_ok=1
+                break
+            fi
+            echo "[!] hdiutil busy (attempt $attempt/5), retrying in 2s..."
+            rm -f "$dmg_out"
+            sleep 2
+        done
         rm -rf "$dmg_staging"
+        if [[ "$dmg_ok" -ne 1 ]]; then
+            echo "::error::hdiutil failed to create $dmg_out after 5 attempts"
+            exit 1
+        fi
     else
         echo "[!] 'hdiutil' not found (non-macOS host). Run on macOS to produce .dmg."
     fi

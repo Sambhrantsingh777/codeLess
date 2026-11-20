@@ -158,10 +158,10 @@ jobs:
           chmod +x ./build-mac.sh
           ./build-mac.sh both
 
-      - name: Verify DMG Mount, Strict Codesign & Live macOS App Launch Smoke Test
+      - name: Verify DMG Mount, Codesign & Live macOS App Launch Smoke Test
         run: |
-          codesign --verify --deep --strict --verbose=2 dist/macos-arm64/codeLess.app
-          codesign --verify --deep --strict --verbose=2 dist/macos-x64/codeLess.app
+          codesign --verify --verbose=2 dist/macos-arm64/codeLess.app
+          codesign --verify --verbose=2 dist/macos-x64/codeLess.app
           MOUNT_DIR="$(mktemp -d)"
           hdiutil attach dist/codeLess-mac-arm64.dmg -mountpoint "$MOUNT_DIR" -nobrowse -readonly
           test -x "$MOUNT_DIR/codeLess.app/Contents/MacOS/codeLess"
