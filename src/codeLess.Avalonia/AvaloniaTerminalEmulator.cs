@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Threading;
 using codeLess.Studio;
 
@@ -259,6 +260,10 @@ namespace codeLess.AvaloniaApp
             try
             {
                 Session = new ConPtyTerminalSession(ShellDisplayName, resolvedCmd, WorkingDirectory, cols, rows, IsLightTerminal);
+                // The session clamps its initial grid (min 20x6); if the laid-out canvas is smaller, sync the
+                // PTY winsize to what is actually rendered, since no further SizeChanged will arrive.
+                if (gridCanvas.Bounds.Height > 1)
+                    Session.Resize(gridCanvas.CalcColumns(), gridCanvas.CalcRows());
                 Session.OutputReceived += () =>
                 {
                     if (System.Threading.Interlocked.Exchange(ref repaintQueued, 1) != 0)
@@ -415,15 +420,83 @@ namespace codeLess.AvaloniaApp
                         var probe = new FormattedText("MMMMMMMMMM", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, FontRegular, TermFontSize, Brushes.White);
                         double w10 = probe.WidthIncludingTrailingWhitespace / 10.0;
                         measuredCellW = (w10 > 4.0 && w10 < 16.0) ? w10 : DefaultCellW;
+                        double th = probe.Height;
+                        measuredTextH = (th > 4.0 && th <= CellH) ? th : CellH - 2;
                     }
                     catch
                     {
                         measuredCellW = DefaultCellW;
+                        measuredTextH = CellH - 2;
                     }
                 }
                 return measuredCellW;
             }
         }
+
+        // Height of one text line (ascent + descent) of the font actually used for drawing.
+        private double measuredTextH = 0;
+
+        /// <summary>
+        /// Vertical offset from the top of a cell row to the top of the drawn text line, so that the
+        /// glyph box (and the cursor, which uses the same box) is centred inside the CellH row.
+        /// Previously text was drawn at a fixed +1px with a 17px cell, which left the glyphs sitting in
+        /// the upper part of the row/cursor block on fonts with a short line height (Menlo on macOS).
+        /// </summary>
+        public double TextTopOffset
+        {
+            get
+            {
+                double unused = CellW; // ensures metrics are measured
+                double th = measuredTextH > 0 ? measuredTextH : CellH - 2;
+                return Math.Max(0, (CellH - th) / 2.0);
+            }
+        }
+
+        public double TextLineHeight
+        {
+            get
+            {
+                double unused = CellW;
+                return measuredTextH > 0 ? measuredTextH : CellH - 2;
+            }
+        }
+
+        // Brushes are cached per colour: Render runs at up to 60 fps under heavy output and used to
+        // allocate a new SolidColorBrush (and Pen) for every text run and background span every frame.
+        private readonly Dictionary<Color, IImmutableSolidColorBrush> brushCache = new Dictionary<Color, IImmutableSolidColorBrush>();
+        private IImmutableSolidColorBrush GetBrush(Color c)
+        {
+            IImmutableSolidColorBrush b;
+            if (!brushCache.TryGetValue(c, out b))
+            {
+                if (brushCache.Count > 512) brushCache.Clear();
+                b = new ImmutableSolidColorBrush(c);
+                brushCache[c] = b;
+            }
+            return b;
+        }
+
+        // Text runs are cached across frames (cursor blink and incremental output repaint mostly identical
+        // rows). Bounded: the cache is dropped wholesale once it exceeds the cap so it can never grow unbounded.
+        private const int MaxTextCacheEntries = 4096;
+        private readonly Dictionary<(string, int, Color), FormattedText> textCache = new Dictionary<(string, int, Color), FormattedText>();
+        private FormattedText GetFormattedText(string text, bool bold, bool italic, Color fg)
+        {
+            int style = bold ? 1 : (italic ? 2 : 0);
+            var key = (text, style, fg);
+            FormattedText ft;
+            if (!textCache.TryGetValue(key, out ft))
+            {
+                if (textCache.Count >= MaxTextCacheEntries) textCache.Clear();
+                var tf = bold ? FontBold : (italic ? FontItalic : FontRegular);
+                ft = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, TermFontSize, GetBrush(fg));
+                textCache[key] = ft;
+            }
+            return ft;
+        }
+
+        internal int TextCacheCount => textCache.Count;
+        internal int BrushCacheCount => brushCache.Count;
 
         private int scrollbackOffset = 0;
         private bool isSelecting = false;
@@ -437,8 +510,13 @@ namespace codeLess.AvaloniaApp
             ClipToBounds = true;
         }
 
+        // Rows fall back to a default only before layout (zero height). For a real but short panel, report the
+        // rows that actually fit: telling the PTY 24 rows for a 70px-tall panel put the shell's cursor row
+        // below the visible area, so the prompt/typed text were drawn off-row or clipped. (Shrinking rows is
+        // lossless - Buffer.Resize pushes top rows into scrollback - unlike columns, which truncate, so the
+        // column threshold is left as-is.)
         public int CalcColumns() => Bounds.Width > 260 ? Math.Max(32, (int)((Bounds.Width - PadLeft * 2 - 4) / CellW)) : 100;
-        public int CalcRows() => Bounds.Height > 90 ? Math.Max(6, (int)((Bounds.Height - PadTop * 2) / CellH)) : 24;
+        public int CalcRows() => Bounds.Height > 1 ? Math.Max(4, (int)((Bounds.Height - PadTop * 2) / CellH)) : 24;
 
         protected override void OnSizeChanged(SizeChangedEventArgs e)
         {
@@ -726,44 +804,23 @@ namespace codeLess.AvaloniaApp
                 return;
             }
 
-            string vt = null;
             bool appCursor = owner.ActiveBuffer?.ApplicationCursorKeys ?? false;
-            switch (e.Key)
+            if (e.Key == Key.Enter && !shift && !alt)
             {
-                case Key.Enter:
-                    if (string.Equals(lineInputTracker.ToString().Trim(), "exit", StringComparison.OrdinalIgnoreCase))
-                    {
-                        lineInputTracker.Clear();
-                        owner.WriteAutomatedInput("exit");
-                        e.Handled = true;
-                        return;
-                    }
+                if (string.Equals(lineInputTracker.ToString().Trim(), "exit", StringComparison.OrdinalIgnoreCase))
+                {
                     lineInputTracker.Clear();
-                    vt = "\r";
-                    break;
-                case Key.Back:
-                    if (lineInputTracker.Length > 0) lineInputTracker.Length--;
-                    vt = "\x7f";
-                    break;
-                case Key.Tab: vt = shift ? "\x1b[Z" : "\t"; break;
-                case Key.Escape: vt = "\x1b"; break;
-                case Key.Up: vt = appCursor ? "\x1bOA" : "\x1b[A"; break;
-                case Key.Down: vt = appCursor ? "\x1bOB" : "\x1b[B"; break;
-                case Key.Right: vt = appCursor ? "\x1bOC" : "\x1b[C"; break;
-                case Key.Left: vt = appCursor ? "\x1bOD" : "\x1b[D"; break;
-                case Key.Home: vt = "\x1b[H"; break;
-                case Key.End: vt = "\x1b[F"; break;
-                case Key.Delete: vt = "\x1b[3~"; break;
-                case Key.PageUp: vt = "\x1b[5~"; break;
-                case Key.PageDown: vt = "\x1b[6~"; break;
-                default:
-                    if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && !alt && e.Key >= Key.A && e.Key <= Key.Z)
-                    {
-                        int ctrlCode = (e.Key - Key.A) + 1;
-                        vt = ((char)ctrlCode).ToString();
-                    }
-                    break;
+                    owner.WriteAutomatedInput("exit");
+                    e.Handled = true;
+                    return;
+                }
+                lineInputTracker.Clear();
             }
+            else if (e.Key == Key.Back)
+            {
+                if (lineInputTracker.Length > 0) lineInputTracker.Length--;
+            }
+            string vt = TranslateKeyToVtSequence(e.Key, e.KeyModifiers, appCursor);
 
             if (!string.IsNullOrEmpty(vt))
             {
@@ -771,6 +828,39 @@ namespace codeLess.AvaloniaApp
                 ClearSelection();
                 owner.WriteAutomatedInput(vt);
                 e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Maps a non-text key press to the byte sequence sent to the PTY (null when the key is not a
+        /// control/navigation key and should arrive via OnTextInput instead).
+        /// Shift+Enter and Alt/Option+Enter send ESC CR ("\x1b\r"), the newline-without-submit sequence
+        /// TUI apps such as Claude Code and opencode recognise; plain Enter sends CR.
+        /// </summary>
+        public static string TranslateKeyToVtSequence(Key key, KeyModifiers mods, bool appCursor)
+        {
+            bool shift = mods.HasFlag(KeyModifiers.Shift);
+            bool alt = mods.HasFlag(KeyModifiers.Alt);
+            bool ctrl = mods.HasFlag(KeyModifiers.Control);
+            switch (key)
+            {
+                case Key.Enter: return (shift || alt) ? "\x1b\r" : "\r";
+                case Key.Back: return "\x7f";
+                case Key.Tab: return shift ? "\x1b[Z" : "\t";
+                case Key.Escape: return "\x1b";
+                case Key.Up: return appCursor ? "\x1bOA" : "\x1b[A";
+                case Key.Down: return appCursor ? "\x1bOB" : "\x1b[B";
+                case Key.Right: return appCursor ? "\x1bOC" : "\x1b[C";
+                case Key.Left: return appCursor ? "\x1bOD" : "\x1b[D";
+                case Key.Home: return "\x1b[H";
+                case Key.End: return "\x1b[F";
+                case Key.Delete: return "\x1b[3~";
+                case Key.PageUp: return "\x1b[5~";
+                case Key.PageDown: return "\x1b[6~";
+                default:
+                    if (ctrl && !alt && key >= Key.A && key <= Key.Z)
+                        return ((char)((key - Key.A) + 1)).ToString();
+                    return null;
             }
         }
 
@@ -806,7 +896,8 @@ namespace codeLess.AvaloniaApp
             double w = Bounds.Width;
             double h = Bounds.Height;
             double cellW = CellW;
-            var termBgBrush = new SolidColorBrush(owner.TermBgColor);
+            double textTop = TextTopOffset;
+            var termBgBrush = GetBrush(owner.TermBgColor);
             context.FillRectangle(termBgBrush, new Rect(0, 0, w, h));
 
             var buf = owner.ActiveBuffer;
@@ -816,7 +907,7 @@ namespace codeLess.AvaloniaApp
             int cols = buf.Cols;
             int maxVisCols = Math.Min(cols, Math.Max(1, (int)((w - PadLeft) / cellW) + 1));
             var selHighlightCol = Color.FromArgb(120, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B);
-            var selHighlightBrush = new SolidColorBrush(selHighlightCol);
+            var selHighlightBrush = GetBrush(selHighlightCol);
             var runSb = new StringBuilder(128);
 
             for (int r = 0; r < rows; r++)
@@ -841,7 +932,7 @@ namespace codeLess.AvaloniaApp
                         if (nextBg != cellBg) break;
                         runEnd++;
                     }
-                    var bgBrush = (cellBg == selHighlightCol) ? selHighlightBrush : new SolidColorBrush(cellBg);
+                    var bgBrush = (cellBg == selHighlightCol) ? selHighlightBrush : GetBrush(cellBg);
                     context.FillRectangle(bgBrush, new Rect(PadLeft + cBg * cellW, y, (runEnd - cBg) * cellW + 0.5, CellH + 0.5));
                     cBg = runEnd;
                 }
@@ -859,7 +950,7 @@ namespace codeLess.AvaloniaApp
                         if (underline)
                         {
                             double ux = PadLeft + c * cellW;
-                            context.DrawLine(new Pen(new SolidColorBrush(fg), 1), new Point(ux, y + CellH - 2), new Point(ux + cellW, y + CellH - 2));
+                            context.DrawLine(new Pen(GetBrush(fg), 1), new Point(ux, y + CellH - 2), new Point(ux + cellW, y + CellH - 2));
                         }
                         c++;
                         continue;
@@ -869,10 +960,22 @@ namespace codeLess.AvaloniaApp
                     if (ch > 126)
                     {
                         double gx = PadLeft + c * cellW;
-                        var tfGlyph = bold ? FontBold : (italic ? FontItalic : FontRegular);
-                        var fgBrush = new SolidColorBrush(fg);
-                        var ftGlyph = new FormattedText(ch.ToString(), CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tfGlyph, TermFontSize, fgBrush);
-                        context.DrawText(ftGlyph, new Point(gx, y + 1));
+                        var fgBrush = GetBrush(fg);
+                        string glyph = ch.ToString();
+                        if (char.IsLowSurrogate(ch))
+                        {
+                            // Second cell of a wide astral emoji whose first half was drawn already (or clipped).
+                            c++;
+                            continue;
+                        }
+                        if (char.IsHighSurrogate(ch))
+                        {
+                            char lo = (c + 1 < cols) ? buf.GetViewportCell(r, c + 1, scrollbackOffset).Char : '\0';
+                            if (!char.IsLowSurrogate(lo)) { c++; continue; }
+                            glyph = new string(new[] { ch, lo });
+                        }
+                        var ftGlyph = GetFormattedText(glyph, bold, italic, fg);
+                        context.DrawText(ftGlyph, new Point(gx, y + textTop));
                         if (underline)
                             context.DrawLine(new Pen(fgBrush, 1), new Point(gx, y + CellH - 2), new Point(gx + cellW, y + CellH - 2));
                         c++;
@@ -897,10 +1000,9 @@ namespace codeLess.AvaloniaApp
                     }
 
                     double rx = PadLeft + startCol * cellW;
-                    var tf = bold ? FontBold : (italic ? FontItalic : FontRegular);
-                    var runBrush = new SolidColorBrush(fg);
-                    var ft = new FormattedText(runSb.ToString(), CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, TermFontSize, runBrush);
-                    context.DrawText(ft, new Point(rx, y + 1));
+                    var runBrush = GetBrush(fg);
+                    var ft = GetFormattedText(runSb.ToString(), bold, italic, fg);
+                    context.DrawText(ft, new Point(rx, y + textTop));
                     if (underline)
                     {
                         context.DrawLine(new Pen(runBrush, 1), new Point(rx, y + CellH - 2), new Point(rx + (c - startCol) * cellW, y + CellH - 2));
@@ -913,9 +1015,10 @@ namespace codeLess.AvaloniaApp
             {
                 double cx = PadLeft + buf.CursorCol * cellW;
                 double cy = PadTop + buf.CursorRow * CellH;
-                var cursorRect = new Rect(cx, cy + 1, cellW, CellH - 2);
+                // Cursor covers exactly the same vertical box the glyphs are drawn in.
+                var cursorRect = new Rect(cx, cy + textTop, cellW, TextLineHeight);
                 context.FillRectangle(
-                    new SolidColorBrush(Color.FromArgb(185, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B)),
+                    GetBrush(Color.FromArgb(185, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B)),
                     cursorRect);
             }
         }

@@ -74,3 +74,42 @@ To enable automated signing in `.github/workflows/build-and-sign.yml`:
    - `SIGNPATH_SIGNING_POLICY_SLUG`: `release-signing`
    - `SIGNPATH_EXE_ARTIFACT_CONFIGURATION_SLUG`: Artifact configuration slug for `codeLess.exe` (optional if default).
    - `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG`: Artifact configuration slug for `codeLess-Setup.exe` (optional if default).
+
+---
+
+## 5. macOS: Removing the Gatekeeper "unidentified developer / unsafe" Warning
+
+macOS Gatekeeper blocks any downloaded app that is not **signed with an Apple Developer ID certificate and notarized by Apple**. Ad-hoc signatures (`codesign -s -`, the default in `build-mac.sh`) always trigger the warning; no code change can avoid it. Removing it requires an [Apple Developer Program](https://developer.apple.com/programs/) membership (US$99/year).
+
+`build-mac.sh` and the `build-macos` CI job are pre-wired: when credentials are present they sign every Mach-O with the **hardened runtime + secure timestamp**, notarize the `.app` and `.dmg` via `notarytool`, **staple** the tickets, and verify with `spctl`. Without credentials they fall back to ad-hoc signing.
+
+### Step 1: Create the certificate
+1. In Xcode → Settings → Accounts (or developer.apple.com → Certificates), create a **Developer ID Application** certificate.
+2. Export it from Keychain Access as a `.p12` with a password.
+3. Note the identity name, e.g. `Developer ID Application: Savatarr (ABCDE12345)` (`security find-identity -v -p codesigning`).
+
+### Step 2: Create notarization credentials (pick one)
+- **App Store Connect API key (recommended):** App Store Connect → Users and Access → Integrations → Keys → generate a key with *Developer* access; download `AuthKey_XXXX.p8`, note the Key ID and Issuer ID.
+- **Apple ID:** generate an app-specific password at appleid.apple.com and note your Team ID.
+
+### Step 3a: Local signed build
+```bash
+export MACOS_SIGN_IDENTITY="Developer ID Application: Savatarr (ABCDE12345)"
+export APPLE_API_KEY_PATH=~/keys/AuthKey_XXXX.p8 APPLE_API_KEY_ID=XXXX APPLE_API_ISSUER_ID=xxxxxxxx-xxxx-...
+# or: export APPLE_ID=you@example.com APPLE_TEAM_ID=ABCDE12345 APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx
+# or: export NOTARY_KEYCHAIN_PROFILE=codeless   (after `xcrun notarytool store-credentials codeless ...`)
+./build-mac.sh both
+```
+
+### Step 3b: GitHub Actions
+Add under **Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Value |
+| :--- | :--- | :--- |
+| Secret | `MACOS_CERTIFICATE_P12_BASE64` | `base64 -i cert.p12 \| pbcopy` |
+| Secret | `MACOS_CERTIFICATE_PASSWORD` | `.p12` export password |
+| Variable | `MACOS_SIGN_IDENTITY` | `Developer ID Application: Savatarr (ABCDE12345)` |
+| Secret | `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` | API-key method |
+| Secret | `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD` | *or* Apple ID method |
+
+Once set, every non-PR build produces notarized, stapled `.dmg`/`.zip` files that open with no Gatekeeper prompt. Until then, users must run `xattr -cr /Applications/codeLess.app` once (see `docs/MAC.md`).

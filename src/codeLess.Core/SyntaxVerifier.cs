@@ -110,7 +110,7 @@ namespace codeLess.Studio
         public static bool VerifyPythonSyntax(string content, out string errorSummary, bool allowExternalProcess = true)
         {
             errorSummary = "";
-            if (!VerifyBracketAndQuoteBalance(content, out errorSummary))
+            if (!VerifyBracketAndQuoteBalance(content, out errorSummary, true))
                 return false;
 
             string[] lines = (content ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
@@ -158,7 +158,9 @@ namespace codeLess.Studio
                     string output;
                     if (TryRunSyntaxCheckProcess("python", "-m py_compile \"" + tempPy + "\"", 3000, out exitCode, out output))
                     {
-                        if (exitCode != 0 || output.IndexOf("SyntaxError", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        // Only real compiler diagnostics count: a non-zero exit without them (e.g. the Windows Store
+                        // "python" alias stub printing "Python was not found", exit 9009) must not reject valid code.
+                        if (output.IndexOf("SyntaxError", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             output.IndexOf("IndentationError", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             output.IndexOf("TabError", StringComparison.OrdinalIgnoreCase) >= 0)
                         {
@@ -290,10 +292,10 @@ namespace codeLess.Studio
                 errorSummary = "Invalid consecutive binary operators before semicolon.";
                 return false;
             }
-            return VerifyBracketAndQuoteBalance(content, out errorSummary);
+            return VerifyBracketAndQuoteBalance(content, out errorSummary, false);
         }
 
-        private static bool VerifyBracketAndQuoteBalance(string content, out string errorSummary)
+        private static bool VerifyBracketAndQuoteBalance(string content, out string errorSummary, bool pythonSyntax)
         {
             errorSummary = "";
             Stack<char> stack = new Stack<char>();
@@ -332,8 +334,17 @@ namespace codeLess.Studio
                 }
 
                 if (c == '\\') { i++; continue; }
-                if (c == '/' && next == '/') { inLineComment = true; i++; continue; }
-                if (c == '/' && next == '*') { inBlockComment = true; i++; continue; }
+                if (pythonSyntax)
+                {
+                    // Python: '#' starts a line comment (apostrophes in comments must not open strings),
+                    // while '//' is floor division and '/*' is not a comment.
+                    if (c == '#') { inLineComment = true; continue; }
+                }
+                else
+                {
+                    if (c == '/' && next == '/') { inLineComment = true; i++; continue; }
+                    if (c == '/' && next == '*') { inBlockComment = true; i++; continue; }
+                }
                 if (c == '\'') { inSingle = true; continue; }
                 if (c == '"') { inDouble = true; continue; }
 

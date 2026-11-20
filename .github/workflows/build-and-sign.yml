@@ -144,8 +144,10 @@ jobs:
   build-macos:
     name: Build & Smoke-Test macOS (Apple Silicon arm64 & Intel x64)
     runs-on: macos-latest
-    timeout-minutes: 12
+    timeout-minutes: 60
     needs: test-cross-platform
+    env:
+      HAS_MACOS_CERT: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -158,7 +160,37 @@ jobs:
       - name: Run Avalonia Headless Tests natively on macOS
         run: dotnet test tests/codeLess.Avalonia.Tests/codeLess.Avalonia.Tests.csproj -c Release --nologo
 
+      - name: Import Apple Developer ID certificate (optional)
+        if: github.event_name != 'pull_request' && env.HAS_MACOS_CERT == 'true'
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/codeless-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "MACOS_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          if [[ -n "$APPLE_API_KEY_P8_BASE64" ]]; then
+            echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+          fi
+
       - name: Build macOS .app, .zip, and .dmg (arm64 + x64)
+        env:
+          MACOS_SIGN_IDENTITY: ${{ (github.event_name != 'pull_request' && env.HAS_MACOS_CERT == 'true') && vars.MACOS_SIGN_IDENTITY || '-' }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           chmod +x ./build-mac.sh
           if ! ./build-mac.sh both > /tmp/macbuild.log 2>&1; then
@@ -182,6 +214,15 @@ jobs:
           test -L "$MOUNT_DIR/Applications"
           hdiutil detach "$MOUNT_DIR"
           ./dist/macos-arm64/codeLess.app/Contents/MacOS/codeLess --screenshot ./dist/mac-launch-smoke.png < /dev/null
+          # When notarized, Gatekeeper must accept the app and DMG exactly as an end user's Mac would.
+          if xcrun stapler validate dist/macos-arm64/codeLess.app >/dev/null 2>&1; then
+            spctl --assess --type execute --verbose=4 dist/macos-arm64/codeLess.app
+            spctl --assess --type execute --verbose=4 dist/macos-x64/codeLess.app
+            spctl --assess --type open --context context:primary-signature --verbose=4 dist/codeLess-mac-arm64.dmg
+          else
+            echo "::warning::macOS build is ad-hoc signed (not notarized). Gatekeeper will warn users until Apple Developer ID secrets are configured (see docs/SIGNING.md)."
+          fi
+          security delete-keychain "$RUNNER_TEMP/codeless-signing.keychain-db" 2>/dev/null || true
 
       - name: Publish macOS artifacts
         uses: actions/upload-artifact@v4

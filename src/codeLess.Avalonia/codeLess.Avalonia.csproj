@@ -10,7 +10,13 @@
     <Company>Savatarr</Company>
     <Product>codeLess</Product>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Desktop IDE: workstation GC, and compact more aggressively so RSS shrinks back after bursts of terminal output. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
   </PropertyGroup>
+
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\codeLess.Core\codeLess.Core.csproj" />

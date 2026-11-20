@@ -1834,6 +1834,16 @@ namespace codeLess.Studio
             virtualCanvas.Invalidate();
         }
 
+        // Lightweight repaint after a background (auto)save of the current buffer: unlike LoadBuffer it keeps the
+        // autocomplete popup, symbol dropdown selection and view state intact so typing is not interrupted.
+        public void RefreshAfterBackgroundSave()
+        {
+            if (CurrentBuffer == null) return;
+            UpdateBreadcrumbTitle();
+            UpdateDiffBannerState();
+            virtualCanvas.Invalidate();
+        }
+
         private bool suppressSymbolOutlineEvent = false;
 
         public void RefreshSymbolCombo()
@@ -3046,6 +3056,8 @@ namespace codeLess.Studio
             bool changed = Math.Abs(FontSizePt - clamped) > 0.01f || !string.Equals(FontFamilyName, cleanFamily, StringComparison.OrdinalIgnoreCase);
             FontFamilyName = cleanFamily;
             FontSizePt = clamped;
+            // Dispose the fonts being replaced (zooming with Ctrl+wheel used to leak 4 GDI+ fonts per step).
+            Font oldRegular = regularFont, oldBold = boldFont, oldItalic = italicFont, oldGutter = gutterFont;
             try
             {
                 regularFont = new Font(FontFamilyName, FontSizePt, FontStyle.Regular);
@@ -3060,6 +3072,13 @@ namespace codeLess.Studio
                 boldFont = new Font("Consolas", FontSizePt, FontStyle.Bold);
                 italicFont = new Font("Consolas", FontSizePt, FontStyle.Italic);
                 gutterFont = new Font("Consolas", Math.Max(7f, FontSizePt - 1.2f), FontStyle.Regular);
+            }
+            foreach (Font old in new Font[] { oldRegular, oldBold, oldItalic, oldGutter })
+            {
+                if (old != null && old != regularFont && old != boldFont && old != italicFont && old != gutterFont)
+                {
+                    try { old.Dispose(); } catch { }
+                }
             }
 
             Size m1 = TextRenderer.MeasureText("M", regularFont, new Size(1000, 1000), TextFormatFlags.NoPadding);

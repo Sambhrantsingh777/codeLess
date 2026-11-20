@@ -37,6 +37,55 @@ if ! command -v dotnet >/dev/null 2>&1; then
     fi
 fi
 
+# ------------------------------------------------------------------------------
+# Signing & notarization configuration (all optional; defaults to ad-hoc signing)
+#   MACOS_SIGN_IDENTITY   "Developer ID Application: Your Name (TEAMID)"  (default "-" = ad-hoc)
+#   MACOS_KEYCHAIN        optional keychain path holding the identity (used by CI)
+# Notarization (only when a Developer ID identity is set), pick ONE method:
+#   App Store Connect API key: APPLE_API_KEY_PATH (.p8), APPLE_API_KEY_ID, APPLE_API_ISSUER_ID
+#   Apple ID:                  APPLE_ID, APPLE_TEAM_ID, APPLE_APP_SPECIFIC_PASSWORD
+#   Stored profile:            NOTARY_KEYCHAIN_PROFILE (from `xcrun notarytool store-credentials`)
+# ------------------------------------------------------------------------------
+SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:--}"
+NOTARIZE=0
+NOTARY_ARGS=()
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+    if [[ -n "${APPLE_API_KEY_PATH:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" ]]; then
+        NOTARY_ARGS=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
+        NOTARIZE=1
+    elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+        NOTARY_ARGS=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD")
+        NOTARIZE=1
+    elif [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+        NOTARY_ARGS=(--keychain-profile "$NOTARY_KEYCHAIN_PROFILE")
+        NOTARIZE=1
+    else
+        echo "[!] MACOS_SIGN_IDENTITY is set but no notarization credentials were found;"
+        echo "    the app will be Developer ID signed but NOT notarized (Gatekeeper will still warn)."
+    fi
+fi
+
+notarize_file() {
+    local target="$1"
+    echo "→ Submitting $(basename "$target") to Apple notary service (this can take several minutes)..."
+    local out
+    if ! out="$(xcrun notarytool submit "$target" "${NOTARY_ARGS[@]}" --wait --timeout 30m 2>&1)"; then
+        echo "$out"
+        echo "::error::notarytool submission failed for $target"
+        exit 1
+    fi
+    echo "$out"
+    if ! grep -q "status: Accepted" <<<"$out"; then
+        local sub_id
+        sub_id="$(grep -m1 -E '^\s*id:' <<<"$out" | awk '{print $2}')"
+        if [[ -n "$sub_id" ]]; then
+            xcrun notarytool log "$sub_id" "${NOTARY_ARGS[@]}" || true
+        fi
+        echo "::error::Apple notarization was not accepted for $target"
+        exit 1
+    fi
+}
+
 build_mac_bundle() {
     local rid="$1"
     local arch_suffix="${rid#osx-}"
@@ -143,26 +192,60 @@ build_mac_bundle() {
 EOF
 
     echo "======================================================================"
-    echo " [3/5] Ad-Hoc Code Signing with CoreCLR JIT Entitlements ($rid)..."
+    if [[ "$SIGN_IDENTITY" == "-" ]]; then
+        echo " [3/5] Ad-Hoc Code Signing with CoreCLR JIT Entitlements ($rid)..."
+        echo "      (Set MACOS_SIGN_IDENTITY to a 'Developer ID Application' identity to remove the Gatekeeper warning.)"
+    else
+        echo " [3/5] Developer ID Signing (Hardened Runtime) with CoreCLR JIT Entitlements ($rid)..."
+    fi
     echo "======================================================================"
     if command -v xattr >/dev/null 2>&1; then
         xattr -cr "$bundle_dir" || true
     fi
     if command -v codesign >/dev/null 2>&1; then
+        local sign_flags=(--force -s "$SIGN_IDENTITY")
+        if [[ "$SIGN_IDENTITY" != "-" ]]; then
+            # Notarization requires the hardened runtime and a secure timestamp on every Mach-O.
+            sign_flags+=(--options runtime --timestamp)
+        fi
+        if [[ -n "${MACOS_KEYCHAIN:-}" ]]; then
+            sign_flags+=(--keychain "$MACOS_KEYCHAIN")
+        fi
+
+        # Sign nested Mach-O files first (inside-out), then the main executable, then the bundle.
         while IFS= read -r -d '' bin_file; do
-            codesign --force -s - "$bin_file"
-        done < <(find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f \( -name "*.dylib" -o -name "createdump" \) -print0)
+            if [[ "$bin_file" == "$bundle_dir/Contents/MacOS/$APP_NAME" ]]; then
+                continue
+            fi
+            if file -b "$bin_file" | grep -q "Mach-O"; then
+                codesign "${sign_flags[@]}" "$bin_file"
+            fi
+        done < <(find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f -print0)
 
         if [[ -f "$ENTITLEMENTS" ]]; then
-            codesign --force --entitlements "$ENTITLEMENTS" -s - "$bundle_dir/Contents/MacOS/$APP_NAME"
-            codesign --force --entitlements "$ENTITLEMENTS" -s - "$bundle_dir"
+            codesign "${sign_flags[@]}" --entitlements "$ENTITLEMENTS" "$bundle_dir/Contents/MacOS/$APP_NAME"
+            codesign "${sign_flags[@]}" --entitlements "$ENTITLEMENTS" "$bundle_dir"
         else
-            codesign --force -s - "$bundle_dir/Contents/MacOS/$APP_NAME"
-            codesign --force -s - "$bundle_dir"
+            codesign "${sign_flags[@]}" "$bundle_dir/Contents/MacOS/$APP_NAME"
+            codesign "${sign_flags[@]}" "$bundle_dir"
         fi
-        codesign --verify --verbose=2 "$bundle_dir"
+        codesign --verify --strict --verbose=2 "$bundle_dir"
     else
-        echo "[!] 'codesign' not found (non-macOS host). Run on macOS to apply ad-hoc signature."
+        echo "[!] 'codesign' not found (non-macOS host). Run on macOS to apply a code signature."
+    fi
+
+    if [[ "$NOTARIZE" == "1" ]]; then
+        echo "======================================================================"
+        echo " [3b/5] Notarizing $APP_NAME.app with Apple notary service ($rid)..."
+        echo "======================================================================"
+        local notary_zip="$SCRIPT_DIR/dist/notarize-$arch_suffix.zip"
+        rm -f "$notary_zip"
+        ditto -c -k --sequesterRsrc --keepParent "$bundle_dir" "$notary_zip"
+        notarize_file "$notary_zip"
+        rm -f "$notary_zip"
+        xcrun stapler staple "$bundle_dir"
+        xcrun stapler validate "$bundle_dir"
+        spctl --assess --type execute --verbose=4 "$bundle_dir"
     fi
 
     echo "======================================================================"
@@ -195,6 +278,18 @@ EOF
         if [[ "$dmg_ok" -ne 1 ]]; then
             echo "::error::hdiutil failed to create $dmg_out after 5 attempts"
             exit 1
+        fi
+        if [[ "$SIGN_IDENTITY" != "-" ]]; then
+            local dmg_sign_flags=(--force -s "$SIGN_IDENTITY" --timestamp)
+            if [[ -n "${MACOS_KEYCHAIN:-}" ]]; then
+                dmg_sign_flags+=(--keychain "$MACOS_KEYCHAIN")
+            fi
+            codesign "${dmg_sign_flags[@]}" "$dmg_out"
+        fi
+        if [[ "$NOTARIZE" == "1" ]]; then
+            notarize_file "$dmg_out"
+            xcrun stapler staple "$dmg_out"
+            xcrun stapler validate "$dmg_out"
         fi
     else
         echo "[!] 'hdiutil' not found (non-macOS host). Run on macOS to produce .dmg."

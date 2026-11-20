@@ -892,9 +892,7 @@ namespace codeLess.Studio
                     rowShift = lastOccupiedRow - newRows + 1;
                     for (int s = 0; s < rowShift && s < Rows; s++)
                     {
-                        TermCell[] savedLine = new TermCell[Cols];
-                        for (int c = 0; c < Cols; c++) savedLine[c] = primaryGrid[s, c];
-                        scrollback.Add(savedLine);
+                        scrollback.Add(CopyTrimmedScrollbackRow(primaryGrid, s, Cols));
                         if (scrollback.Count > MaxScrollbackLines)
                             scrollback.RemoveAt(0);
                     }
@@ -1118,7 +1116,51 @@ namespace codeLess.Studio
             }
         }
 
+        // High surrogate waiting for its low half (PTY output is decoded to UTF-16 one char at a time).
+        private char pendingHighSurrogate = '\0';
+
+        // Applies wcwidth-style column widths so the cursor stays in sync with TUI apps (Ink-based CLIs such as
+        // Claude Code / opencode compute layout with East-Asian/emoji widths): zero-width marks occupy no cell,
+        // wide glyphs occupy two cells (second cell is a '\0' continuation, or the low surrogate for astral emoji).
         private void PutChar(char ch)
+        {
+            if (char.IsHighSurrogate(ch))
+            {
+                pendingHighSurrogate = ch;
+                return;
+            }
+            if (char.IsLowSurrogate(ch))
+            {
+                char hi = pendingHighSurrogate;
+                pendingHighSurrogate = '\0';
+                if (hi == '\0') return; // orphaned low surrogate
+                int cp = char.ConvertToUtf32(hi, ch);
+                if (IsZeroWidthAstral(cp)) return;
+                if (IsWideAstral(cp)) PutWideCells(hi, ch);
+                else PutNarrowCell('�'); // narrow astral glyph cannot be stored in one UTF-16 cell
+                return;
+            }
+            pendingHighSurrogate = '\0';
+            if (IsZeroWidthBmp(ch)) return;
+            if (IsWideBmp(ch)) PutWideCells(ch, '\0');
+            else PutNarrowCell(ch);
+        }
+
+        private void WriteCellAt(int col, char ch)
+        {
+            TermCell[,] g = ActiveGrid;
+            if (CursorRow >= 0 && CursorRow < Rows && col >= 0 && col < Cols)
+            {
+                TermCell cell;
+                cell.Char = ch;
+                cell.Fg = curFg;
+                cell.Bg = curBg;
+                cell.Flags = curFlags;
+                g[CursorRow, col] = cell;
+            }
+        }
+
+        private void PutNarrowCell(char ch)
         {
             if (pendingWrap && AutoWrapMode)
             {
@@ -1127,16 +1169,7 @@ namespace codeLess.Studio
                 pendingWrap = false;
             }
 
-            TermCell[,] g = ActiveGrid;
-            if (CursorRow >= 0 && CursorRow < Rows && CursorCol >= 0 && CursorCol < Cols)
-            {
-                TermCell cell;
-                cell.Char = ch;
-                cell.Fg = curFg;
-                cell.Bg = curBg;
-                cell.Flags = curFlags;
-                g[CursorRow, CursorCol] = cell;
-            }
+            WriteCellAt(CursorCol, ch);
 
             if (CursorCol + 1 < Cols)
             {
@@ -1146,6 +1179,111 @@ namespace codeLess.Studio
             {
                 pendingWrap = true;
             }
+        }
+
+        private void PutWideCells(char first, char second)
+        {
+            if (Cols < 2)
+            {
+                PutNarrowCell(first);
+                return;
+            }
+            if (pendingWrap && AutoWrapMode)
+            {
+                CursorCol = 0;
+                LineFeed();
+                pendingWrap = false;
+            }
+            else if (CursorCol >= Cols - 1)
+            {
+                // Only one column left: like xterm, blank it and wrap so the wide glyph is never split.
+                if (AutoWrapMode)
+                {
+                    WriteCellAt(CursorCol, ' ');
+                    CursorCol = 0;
+                    LineFeed();
+                }
+                else
+                {
+                    CursorCol = Cols - 2;
+                }
+                pendingWrap = false;
+            }
+
+            WriteCellAt(CursorCol, first);
+            WriteCellAt(CursorCol + 1, second);
+
+            if (CursorCol + 2 < Cols)
+            {
+                CursorCol += 2;
+            }
+            else
+            {
+                CursorCol = Cols - 1;
+                pendingWrap = true;
+            }
+        }
+
+        internal static bool IsZeroWidthBmp(char c)
+        {
+            return (c >= '̀' && c <= 'ͯ') ||   // combining diacritics
+                   (c >= '᪰' && c <= '᫿') ||
+                   (c >= '᷀' && c <= '᷿') ||
+                   (c >= '​' && c <= '‏') ||   // ZWSP, ZWNJ, ZWJ, LRM, RLM
+                   (c >= '⁠' && c <= '⁤') ||
+                   (c >= '⃐' && c <= '⃿') ||
+                   (c >= '︀' && c <= '️') ||   // variation selectors (VS15/VS16)
+                   (c >= '︠' && c <= '︯') ||
+                   c == '﻿';
+        }
+
+        internal static bool IsWideBmp(char c)
+        {
+            if (c < 'ᄀ') return false;
+            return (c <= 'ᅟ') ||
+                   c == '⌚' || c == '⌛' || c == '〈' || c == '〉' ||
+                   (c >= '⏩' && c <= '⏬') || c == '⏰' || c == '⏳' ||
+                   c == '◽' || c == '◾' || c == '☔' || c == '☕' ||
+                   (c >= '♈' && c <= '♓') || c == '♿' || c == '⚓' || c == '⚡' ||
+                   c == '⚪' || c == '⚫' || c == '⚽' || c == '⚾' || c == '⛄' || c == '⛅' ||
+                   c == '⛎' || c == '⛔' || c == '⛪' || c == '⛲' || c == '⛳' || c == '⛵' ||
+                   c == '⛺' || c == '⛽' || c == '✅' || c == '✊' || c == '✋' || c == '✨' ||
+                   c == '❌' || c == '❎' || (c >= '❓' && c <= '❕') || c == '❗' ||
+                   (c >= '➕' && c <= '➗') || c == '➰' || c == '➿' ||
+                   c == '⬛' || c == '⬜' || c == '⭐' || c == '⭕' ||
+                   (c >= '⺀' && c <= '〾') ||   // CJK radicals, punctuation
+                   (c >= 'ぁ' && c <= '㏿') ||   // kana, CJK compatibility
+                   (c >= '㐀' && c <= '䶿') ||
+                   (c >= '一' && c <= '鿿') ||   // CJK unified ideographs
+                   (c >= 'ꀀ' && c <= '꓏') ||
+                   (c >= 'ꥠ' && c <= '꥿') ||
+                   (c >= '가' && c <= '힣') ||   // Hangul syllables
+                   (c >= '豈' && c <= '﫿') ||
+                   (c >= '︐' && c <= '︙') ||
+                   (c >= '︰' && c <= '﹯') ||
+                   (c >= '＀' && c <= '｠') ||   // fullwidth forms
+                   (c >= '￠' && c <= '￦');
+        }
+
+        internal static bool IsZeroWidthAstral(int cp)
+        {
+            return (cp >= 0x1F3FB && cp <= 0x1F3FF) ||   // emoji skin-tone modifiers
+                   (cp >= 0xE0000 && cp <= 0xE007F) ||   // tag characters
+                   (cp >= 0xE0100 && cp <= 0xE01EF);     // variation selectors supplement
+        }
+
+        internal static bool IsWideAstral(int cp)
+        {
+            return cp == 0x1F004 || cp == 0x1F0CF || cp == 0x1F18E ||
+                   (cp >= 0x1F191 && cp <= 0x1F19A) ||
+                   (cp >= 0x1F1E6 && cp <= 0x1F1FF) ||   // regional indicators (flags)
+                   (cp >= 0x1F200 && cp <= 0x1F2FF) ||
+                   (cp >= 0x1F300 && cp <= 0x1F64F) ||   // pictographs, emoticons
+                   (cp >= 0x1F680 && cp <= 0x1F6FF) ||   // transport & map
+                   (cp >= 0x1F7E0 && cp <= 0x1F7EB) ||
+                   (cp >= 0x1F90C && cp <= 0x1F9FF) ||   // supplemental symbols
+                   (cp >= 0x1FA70 && cp <= 0x1FAFF) ||
+                   (cp >= 0x20000 && cp <= 0x3FFFD);     // CJK extension planes
         }
 
         private void LineFeed()
@@ -1185,9 +1323,7 @@ namespace codeLess.Studio
             {
                 if (pushToScrollback)
                 {
-                    TermCell[] savedLine = new TermCell[Cols];
-                    for (int c = 0; c < Cols; c++) savedLine[c] = g[top, c];
-                    scrollback.Add(savedLine);
+                    scrollback.Add(CopyTrimmedScrollbackRow(g, top, Cols));
                     if (scrollback.Count > MaxScrollbackLines)
                         scrollback.RemoveAt(0);
                 }
@@ -1223,6 +1359,27 @@ namespace codeLess.Studio
                 for (int c = 0; c < Cols; c++)
                     g[top, c] = blank;
             }
+        }
+
+        // Copies a grid row into scrollback without its trailing invisible blank cells (space/NUL with default
+        // background, no underline/inverse). GetVirtualCell already returns an Empty cell past the stored length,
+        // so rendering is unchanged, but a mostly-empty wide row no longer costs Cols * ~64-byte cells
+        // (5000 full-width rows per session otherwise pin tens of MB during heavy output).
+        private static TermCell[] CopyTrimmedScrollbackRow(TermCell[,] grid, int row, int cols)
+        {
+            const byte visibleBlankMask = TermCell.FLAG_UNDERLINE | TermCell.FLAG_INVERSE | TermCell.FLAG_DEFAULT_BG;
+            int len = cols;
+            while (len > 0)
+            {
+                TermCell tail = grid[row, len - 1];
+                if ((tail.Char == ' ' || tail.Char == '\0') && (tail.Flags & visibleBlankMask) == TermCell.FLAG_DEFAULT_BG)
+                    len--;
+                else
+                    break;
+            }
+            TermCell[] line = new TermCell[len];
+            for (int c = 0; c < len; c++) line[c] = grid[row, c];
+            return line;
         }
 
         private TermCell BlankAttrCell()

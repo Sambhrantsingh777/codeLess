@@ -199,6 +199,9 @@ namespace codeLess.Studio
             catch { return updatedFiles; }
 
             string rep = replacementText ?? "";
+            // In plain-text mode the replacement must be literal: escape '$' so "$1", "$&", "$$" are not treated as substitutions.
+            if (!options.UseRegex)
+                rep = rep.Replace("$", "$$");
             foreach (string fp in files)
             {
                 try

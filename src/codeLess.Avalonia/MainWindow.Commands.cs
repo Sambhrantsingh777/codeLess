@@ -279,12 +279,13 @@ namespace codeLess.AvaloniaApp
             }
 
             // Navigation Back / Forward (Alt+Left / Alt+Right on Windows; Ctrl+- / Ctrl+Shift+- on Mac)
-            if ((alt && !ctrlOrCmd && !shift && key == Key.Left) || (MacKeymap.IsMacOS && ctrl && !meta && !shift && key == Key.OemMinus))
+            // On macOS Option+Left/Right is word navigation in the editor/terminal, so it must not be swallowed here.
+            if ((!MacKeymap.IsMacOS && alt && !ctrlOrCmd && !shift && key == Key.Left) || (MacKeymap.IsMacOS && ctrl && !meta && !shift && key == Key.OemMinus))
             {
                 NavigateBack();
                 return true;
             }
-            if ((alt && !ctrlOrCmd && !shift && key == Key.Right) || (MacKeymap.IsMacOS && ctrl && !meta && shift && key == Key.OemMinus))
+            if ((!MacKeymap.IsMacOS && alt && !ctrlOrCmd && !shift && key == Key.Right) || (MacKeymap.IsMacOS && ctrl && !meta && shift && key == Key.OemMinus))
             {
                 NavigateForward();
                 return true;
@@ -305,8 +306,9 @@ namespace codeLess.AvaloniaApp
                 return true;
             }
 
-            // Ctrl/Cmd + 1..9 -> Activate tab by 1-based index
-            if ((ctrlOrCmd || alt) && !shift && key >= Key.D1 && key <= Key.D9)
+            // Ctrl/Cmd + 1..9 -> Activate tab by 1-based index (Alt+digit too on Windows/Linux; on macOS
+            // Option+digit types characters such as ¡ ™ £ and must reach the editor/terminal).
+            if ((ctrlOrCmd || (alt && !MacKeymap.IsMacOS)) && !shift && key >= Key.D1 && key <= Key.D9)
             {
                 int tabIndex = (int)(key - Key.D1);
                 if (tabIndex >= 0 && tabIndex < openTabs.Count)
@@ -1474,6 +1476,8 @@ namespace codeLess.AvaloniaApp
         {
             if (entry == null || !terminalSessions.Contains(entry)) return;
             terminalSessions.Remove(entry);
+            // Dispose the exited PTY session (master fd, reader thread, grid + scrollback) instead of leaking it.
+            try { entry.Control?.StopShell(notifyExit: false); } catch { }
             if (ReferenceEquals(secondarySplitTerminalSession, entry))
             {
                 secondarySplitTerminalSession = null;

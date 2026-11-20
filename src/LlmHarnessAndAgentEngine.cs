@@ -1058,6 +1058,10 @@ namespace codeLess.Studio
                 }
                 if (string.IsNullOrEmpty(repoRoot))
                     return null;
+                // GetRelativePath falls back to the bare file name for paths outside repoRoot, which would make
+                // "git show HEAD:<name>" return an unrelated file from the repo root; such files have no HEAD baseline.
+                if (!IsPathInsideWorkspace(repoRoot, filePath))
+                    return null;
                 string rel = GetRelativePath(repoRoot, filePath).Replace('\\', '/');
                 if (string.IsNullOrEmpty(rel) || rel.StartsWith(".."))
                     return null;
@@ -1130,7 +1134,11 @@ namespace codeLess.Studio
                             }
                             catch
                             {
+#if NETFRAMEWORK
                                 enc = Encoding.Default;
+#else
+                                enc = Encoding.GetEncoding(28591);
+#endif
                             }
                         }
                         string decoded = enc.GetString(bytes, bomLen, bytes.Length - bomLen);
@@ -1637,7 +1645,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             int idx = normOrig.IndexOf(normSearch, StringComparison.Ordinal);
             if (idx >= 0)
             {
-                int secondIdx = normOrig.IndexOf(normSearch, idx + normSearch.Length, StringComparison.Ordinal);
+                // Search from idx + 1 so overlapping duplicates (e.g. "a\na" inside "a\na\na") are also rejected as ambiguous
+                int secondIdx = normOrig.IndexOf(normSearch, idx + 1, StringComparison.Ordinal);
                 if (secondIdx >= 0)
                 {
                     // Ambiguous duplicate match without disambiguating context
@@ -2481,6 +2490,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("read_file", workspaceRoot, fullPath, relPath, activeTab);
+                    if (denied != null) return denied;
                     string rawText = null;
                     if (stagedFiles != null && stagedFiles.ContainsKey(fullPath))
                         rawText = stagedFiles[fullPath];
@@ -2510,6 +2521,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string fullDir = string.IsNullOrEmpty(relPath) ? workspaceRoot : ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("list_dir", workspaceRoot, fullDir, relPath, activeTab);
+                    if (denied != null) return denied;
                     if (!Directory.Exists(fullDir))
                         return new AgentToolCallResult { ToolName = "list_dir", Success = false, Summary = "Directory not found: " + relPath, Output = "Directory does not exist." };
 
@@ -2526,6 +2539,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (activeTab != null ? activeTab.RelativePath : "");
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("ast_outline", workspaceRoot, fullPath, relPath, activeTab);
+                    if (denied != null) return denied;
                     string rawText = null;
                     if (stagedFiles != null && stagedFiles.ContainsKey(fullPath))
                         rawText = stagedFiles[fullPath];
@@ -2553,6 +2568,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     if (!string.IsNullOrWhiteSpace(reqRel))
                     {
                         string fullPath = ResolveWorkspacePath(workspaceRoot, reqRel);
+                        AgentToolCallResult denied = RejectIfOutsideWorkspace("get_diagnostics", workspaceRoot, fullPath, reqRel, activeTab);
+                        if (denied != null) return denied;
                         string srcText = (stagedFiles != null && stagedFiles.ContainsKey(fullPath))
                             ? stagedFiles[fullPath]
                             : (activeTab != null && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)
@@ -2640,6 +2657,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string content = args.ContainsKey("content") ? Convert.ToString(args["content"]) : "";
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("write_file", workspaceRoot, fullPath, relPath, activeTab);
+                    if (denied != null) return denied;
                     if (OnRequestToolApproval != null && !OnRequestToolApproval("write_file", "Write " + content.Length + " chars to " + relPath))
                     {
                         return new AgentToolCallResult
@@ -2677,6 +2696,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string search = args.ContainsKey("search") ? Convert.ToString(args["search"]) : "";
                     string replace = args.ContainsKey("replace") ? Convert.ToString(args["replace"]) : "";
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("edit_file", workspaceRoot, fullPath, relPath, activeTab);
+                    if (denied != null) return denied;
                     if (OnRequestToolApproval != null && !OnRequestToolApproval("edit_file", "Apply surgical edit to " + relPath))
                     {
                         return new AgentToolCallResult
@@ -2744,7 +2765,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         };
                     }
 
-                    Dictionary<string, string> diskBackups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    // Back up raw bytes (not decoded text) so the restore is byte-exact: re-encoding via
+                    // ReadAllText/WriteAllText would drop BOMs and corrupt UTF-16 / ANSI files.
+                    Dictionary<string, byte[]> diskBackups = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
                     List<string> newlyCreatedOnDisk = new List<string>();
                     if (stagedFiles != null && stagedFiles.Count > 0)
                     {
@@ -2752,8 +2775,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         {
                             try
                             {
+                                if (!IsPathInsideWorkspace(workspaceRoot, kv.Key))
+                                    continue;
                                 if (File.Exists(kv.Key))
-                                    diskBackups[kv.Key] = File.ReadAllText(kv.Key);
+                                    diskBackups[kv.Key] = File.ReadAllBytes(kv.Key);
                                 else
                                     newlyCreatedOnDisk.Add(kv.Key);
                                 string dir = Path.GetDirectoryName(kv.Key);
@@ -2788,7 +2813,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     {
                         foreach (var kv in diskBackups)
                         {
-                            try { File.WriteAllText(kv.Key, kv.Value, new UTF8Encoding(false)); } catch { }
+                            try { File.WriteAllBytes(kv.Key, kv.Value); } catch { }
                         }
                         foreach (string created in newlyCreatedOnDisk)
                         {
@@ -2884,6 +2909,15 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 else if (activeTab != null)
                     targetFullPath = activeTab.FilePath;
 
+                if (!string.IsNullOrEmpty(fileHint) && !string.IsNullOrEmpty(targetFullPath) && !IsPathInsideWorkspace(workspaceRoot, targetFullPath) &&
+                    !(activeTab != null && string.Equals(activeTab.FilePath, targetFullPath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    result.StagedFileContents.Clear();
+                    foreach (var kv in snapshot) result.StagedFileContents[kv.Key] = kv.Value;
+                    errorDetails = "Refusing to edit '" + fileHint + "': path resolves outside the workspace root.";
+                    return false;
+                }
+
                 bool applied = false;
                 string patched = "";
 
@@ -2974,6 +3008,41 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             if (!string.IsNullOrEmpty(workspaceRoot))
                 return Path.Combine(workspaceRoot, cleaned);
             return Path.GetFullPath(cleaned);
+        }
+
+        // True when fullPath (after normalizing "..", "/" and rooted paths) lies inside workspaceRoot.
+        // With no workspace open there is no boundary to enforce.
+        public static bool IsPathInsideWorkspace(string workspaceRoot, string fullPath)
+        {
+            if (string.IsNullOrEmpty(workspaceRoot)) return true;
+            if (string.IsNullOrEmpty(fullPath)) return false;
+            try
+            {
+                string root = Path.GetFullPath(workspaceRoot).TrimEnd('\\', '/');
+                string full = Path.GetFullPath(fullPath).TrimEnd('\\', '/');
+                if (string.Equals(full, root, StringComparison.OrdinalIgnoreCase)) return true;
+                return full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                       full.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static AgentToolCallResult RejectIfOutsideWorkspace(string toolName, string workspaceRoot, string fullPath, string relPath, EditorTabBuffer activeTab)
+        {
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath) && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
+                return null;
+            if (IsPathInsideWorkspace(workspaceRoot, fullPath))
+                return null;
+            return new AgentToolCallResult
+            {
+                ToolName = toolName,
+                Success = false,
+                Summary = "Path outside workspace: " + relPath,
+                Output = "Access denied: '" + relPath + "' resolves outside the workspace root."
+            };
         }
 
         private string BuildArchitectureOrSearchResponse(string prompt, List<Bm25CodeChunk> topChunks, string workspaceRoot)

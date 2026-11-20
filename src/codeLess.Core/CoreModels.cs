@@ -758,7 +758,13 @@ namespace codeLess.Studio
                 }
                 catch
                 {
+#if NETFRAMEWORK
                     encoding = Encoding.Default;
+#else
+                    // On .NET Core / .NET 8 Encoding.Default is UTF-8, which would replace every non-UTF-8 byte with U+FFFD
+                    // and corrupt the file on save. Latin-1 maps bytes 1:1 so the file round-trips losslessly.
+                    encoding = Encoding.GetEncoding(28591);
+#endif
                 }
             }
 

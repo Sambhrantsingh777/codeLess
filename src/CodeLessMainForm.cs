@@ -1513,7 +1513,7 @@ namespace codeLess.Studio
                 foreach (var t in openTabs.ToList())
                 {
                     if (t.IsDirty && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath))
-                        SaveTabBuffer(t);
+                        SaveTabBuffer(t, true);
                 }
             }
         }
@@ -8203,6 +8203,13 @@ if __name__ == '__main__':
 
         public bool SaveTabBuffer(EditorTabBuffer buf)
         {
+            return SaveTabBuffer(buf, false);
+        }
+
+        // backgroundSave: autosave tick. Must not reload the editor (LoadBuffer hides the autocomplete popup and
+        // resets the symbol dropdown every few seconds while the user is typing).
+        public bool SaveTabBuffer(EditorTabBuffer buf, bool backgroundSave)
+        {
             if (buf == null) return false;
             if (buf.IsUntitled || string.IsNullOrEmpty(buf.FilePath))
             {
@@ -8220,7 +8227,12 @@ if __name__ == '__main__':
                     buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, buf.FilePath);
                 buf.RefreshGutterDiff();
                 if (buf == activeTab)
-                    editorControl.LoadBuffer(buf);
+                {
+                    if (backgroundSave)
+                        editorControl.RefreshAfterBackgroundSave();
+                    else
+                        editorControl.LoadBuffer(buf);
+                }
                 RefreshOutlineAndProblems(activeTab ?? buf);
                 RefreshTabStrip();
                 if (!string.IsNullOrEmpty(workspaceRoot))
@@ -8231,7 +8243,9 @@ if __name__ == '__main__':
             }
             catch (Exception ex)
             {
-                if (!SuppressUnsavedPrompts && Application.MessageLoop)
+                if (backgroundSave)
+                    statusLeftLabel.Text = "Auto Save failed for " + buf.FileName + ": " + ex.Message;
+                else if (!SuppressUnsavedPrompts && Application.MessageLoop)
                     MessageBox.Show("Failed saving file: " + ex.Message, "codeLess IDE");
                 return false;
             }

@@ -2630,6 +2630,37 @@ namespace codeLess.AvaloniaApp
                 return;
             }
 
+            // macOS caret navigation (VS Code mac keymap). Must run before the Windows-style
+            // Shift+Alt+Arrow (expand/shrink) and Ctrl+Arrow (word jump) handlers below, which
+            // would otherwise turn Cmd+Shift+Right into a word selection.
+            if (MacKeymap.IsMacOS && (e.Key == Key.Left || e.Key == Key.Right || e.Key == Key.Up || e.Key == Key.Down))
+            {
+                bool horizontal = e.Key == Key.Left || e.Key == Key.Right;
+                bool forward = e.Key == Key.Right || e.Key == Key.Down;
+                if (meta && !ctrl && !alt)
+                {
+                    // Cmd+Left/Right -> line start (smart) / end; Cmd+Up/Down -> document start / end (+Shift selects)
+                    if (horizontal) MoveCaretToLineBoundary(forward, shift);
+                    else MoveCaretToDocumentBoundary(forward, shift);
+                    e.Handled = true;
+                    return;
+                }
+                if (alt && !meta && !ctrl && horizontal)
+                {
+                    // Option+Left/Right -> word move (+Shift selects)
+                    MoveCaretHorizontal(forward ? 1 : -1, shift, true);
+                    e.Handled = true;
+                    return;
+                }
+                if (ctrl && meta && shift && !alt && horizontal)
+                {
+                    // Ctrl+Shift+Cmd+Left/Right -> shrink / expand selection on macOS
+                    if (forward) ExpandSelection(); else ShrinkSelection();
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             // Multi-Cursor & Selection Shortcuts
             if (ctrlOrCmd && !shift && !alt && e.Key == Key.D)
             {
@@ -2947,32 +2978,13 @@ namespace codeLess.AvaloniaApp
                     }
                     break;
                 case Key.Home:
-                    SetSelectionAnchorIfNeeded(shift);
-                    if (ctrlOrCmd) { buf.CursorLine = 0; buf.CursorCol = 0; }
-                    else
-                    {
-                        int firstNonWs = GetLeadingSpaces(buf.Lines[buf.CursorLine]);
-                        buf.CursorCol = (buf.CursorCol == firstNonWs) ? 0 : Math.Min(buf.Lines[buf.CursorLine].Length, firstNonWs);
-                    }
-                    EnsureCursorVisible();
-                    owner.NotifyCaretMoved();
-                    InvalidateVisual();
+                    if (ctrlOrCmd) MoveCaretToDocumentBoundary(false, shift);
+                    else MoveCaretToLineBoundary(false, shift);
                     e.Handled = true;
                     break;
                 case Key.End:
-                    SetSelectionAnchorIfNeeded(shift);
-                    if (ctrlOrCmd)
-                    {
-                        buf.CursorLine = buf.Lines.Count - 1;
-                        buf.CursorCol = buf.Lines[buf.CursorLine].Length;
-                    }
-                    else
-                    {
-                        buf.CursorCol = buf.Lines[buf.CursorLine].Length;
-                    }
-                    EnsureCursorVisible();
-                    owner.NotifyCaretMoved();
-                    InvalidateVisual();
+                    if (ctrlOrCmd) MoveCaretToDocumentBoundary(true, shift);
+                    else MoveCaretToLineBoundary(true, shift);
                     e.Handled = true;
                     break;
                 case Key.PageUp:
@@ -3063,6 +3075,57 @@ namespace codeLess.AvaloniaApp
                     buf.CursorLine++;
                     buf.CursorCol = 0;
                 }
+            }
+            EnsureCursorVisible();
+            owner.NotifyCaretMoved();
+            InvalidateVisual();
+        }
+
+        private static int GetFirstNonWhitespaceIndex(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return 0;
+            int i = 0;
+            while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
+            return i;
+        }
+
+        // Home / Cmd+Left: first non-whitespace char, then column 0. End / Cmd+Right: end of the logical line.
+        private void MoveCaretToLineBoundary(bool toEnd, bool shift)
+        {
+            var buf = Buffer;
+            if (buf == null || buf.Lines.Count == 0) return;
+            SetSelectionAnchorIfNeeded(shift);
+            buf.CursorLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, buf.CursorLine));
+            string line = buf.Lines[buf.CursorLine] ?? "";
+            if (toEnd)
+            {
+                buf.CursorCol = line.Length;
+            }
+            else
+            {
+                int firstNonWs = GetFirstNonWhitespaceIndex(line);
+                buf.CursorCol = (buf.CursorCol == firstNonWs) ? 0 : firstNonWs;
+            }
+            EnsureCursorVisible();
+            owner.NotifyCaretMoved();
+            InvalidateVisual();
+        }
+
+        // Ctrl+Home/End (Windows) or Cmd+Up/Down (macOS): start / end of document.
+        private void MoveCaretToDocumentBoundary(bool toEnd, bool shift)
+        {
+            var buf = Buffer;
+            if (buf == null || buf.Lines.Count == 0) return;
+            SetSelectionAnchorIfNeeded(shift);
+            if (toEnd)
+            {
+                buf.CursorLine = buf.Lines.Count - 1;
+                buf.CursorCol = (buf.Lines[buf.CursorLine] ?? "").Length;
+            }
+            else
+            {
+                buf.CursorLine = 0;
+                buf.CursorCol = 0;
             }
             EnsureCursorVisible();
             owner.NotifyCaretMoved();

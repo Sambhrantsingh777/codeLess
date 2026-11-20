@@ -304,6 +304,13 @@ namespace System.Web.Script.Serialization
                     break;
                 }
             }
+            if (idx == start)
+            {
+                // Unrecognized token (e.g. unquoted identifier, Python "None"): always consume at least one
+                // character so ParseObject/ParseArray loops make progress instead of spinning forever.
+                idx++;
+                return null;
+            }
             string token = s.Substring(start, idx - start);
             if (isFloat)
             {
