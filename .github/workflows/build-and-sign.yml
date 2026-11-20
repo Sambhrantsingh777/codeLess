@@ -1,0 +1,153 @@
+name: Build, Test, and Sign codeLess
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  test-cross-platform:
+    name: Build & Run Headless Test Suite
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build solution
+        run: dotnet build codeLess.sln -c Release --nologo
+
+      - name: Run Avalonia Headless Test Suite
+        run: dotnet test tests/codeLess.Avalonia.Tests/codeLess.Avalonia.Tests.csproj -c Release --no-build --nologo
+
+  build-and-sign-windows:
+    name: Build & Sign Windows Native IDE
+    runs-on: windows-latest
+    needs: test-cross-platform
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile codeLess.Core.dll and codeLess.exe with .NET Framework csc.exe
+        shell: pwsh
+        run: ./Compile.ps1 -SkipInstaller
+
+      - name: Upload unsigned codeLess.exe artifact for SignPath origin verification
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        id: upload-unsigned-exe
+        with:
+          name: codeLess-unsigned-exe
+          path: codeLess.exe
+
+      - name: Sign codeLess.exe with SignPath
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_EXE_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-exe
+
+      - name: Replace codeLess.exe with signed executable and verify
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          Copy-Item "signed-exe\codeLess.exe" "codeLess.exe" -Force
+          $sig = Get-AuthenticodeSignature -FilePath "codeLess.exe"
+          if ($sig.Status -ne "Valid") {
+              throw "Authenticode signature on codeLess.exe is not Valid: $($sig.Status)"
+          }
+
+      - name: Build Inno Setup Installer (codeLess-Setup.exe)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+              choco install innosetup --no-progress -y
+          }
+          & $iscc /Q Installer.iss
+          if (-not (Test-Path "Output\codeLess-Setup.exe")) {
+              throw "Inno Setup failed to produce Output\codeLess-Setup.exe"
+          }
+
+      - name: Upload unsigned codeLess-Setup.exe artifact for SignPath origin verification
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        id: upload-unsigned-setup
+        with:
+          name: codeLess-unsigned-setup
+          path: Output/codeLess-Setup.exe
+
+      - name: Sign codeLess-Setup.exe with SignPath
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-setup
+
+      - name: Verify signed installer and prepare release output
+        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          Copy-Item "signed-setup\codeLess-Setup.exe" "Output\codeLess-Setup.exe" -Force
+          $sig = Get-AuthenticodeSignature -FilePath "Output\codeLess-Setup.exe"
+          if ($sig.Status -ne "Valid") {
+              throw "Authenticode signature on Output\codeLess-Setup.exe is not Valid: $($sig.Status)"
+          }
+
+      - name: Publish final Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeLess-Windows
+          path: |
+            codeLess.exe
+            codeLess.Core.dll
+            Output/codeLess-Setup.exe
+
+  build-macos:
+    name: Build macOS Bundles (Apple Silicon arm64 & Intel x64)
+    runs-on: macos-latest
+    needs: test-cross-platform
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build macOS .app, .zip, and .dmg (arm64 + x64)
+        run: |
+          chmod +x ./build-mac.sh
+          ./build-mac.sh both
+
+      - name: Publish macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeLess-macOS
+          path: |
+            dist/codeLess-mac-arm64.dmg
+            dist/codeLess-mac-x64.dmg
+            dist/codeLess-mac-arm64.zip
+            dist/codeLess-mac-x64.zip

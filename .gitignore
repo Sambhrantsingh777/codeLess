@@ -1,0 +1,27 @@
+﻿# Build & package outputs
+**/bin/
+**/obj/
+Output/
+dist/
+scratch/
+bench/
+
+# Compiled binaries & archives in root
+*.exe
+*.pdb
+*.dmg
+*.zip
+/codeLess.Core.dll
+
+# Internal local scripts & notes (not published)
+/TestAllFeatures.ps1
+/package-mac-from-windows.ps1
+/docs/PARITY.md
+
+# IDE & OS metadata
+.vs/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
