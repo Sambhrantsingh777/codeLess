@@ -507,6 +507,9 @@ namespace codeLess.Studio
         public bool BracketedPasteMode { get; private set; }
         public bool ApplicationCursorKeys { get; private set; }
         public bool AutoWrapMode { get; private set; }
+        public int MouseTrackingMode { get; private set; }
+        public bool SgrMouseMode { get; private set; }
+        public bool AlternateScrollMode { get; private set; }
         public string WindowTitle { get; private set; }
 
         public int ScrollTop { get; private set; }
@@ -528,7 +531,7 @@ namespace codeLess.Studio
         public Color[] AnsiPalette = new Color[16];
 
         // Parser state machine
-        private enum ParseState { Normal, Esc, Csi, Osc, OscEsc, Charset }
+        private enum ParseState { Normal, Esc, Csi, Osc, OscEsc, DcsOrString, DcsEsc, Charset }
         private ParseState state = ParseState.Normal;
         private readonly StringBuilder csiBuilder = new StringBuilder(64);
         private readonly StringBuilder oscBuilder = new StringBuilder(256);
@@ -550,6 +553,7 @@ namespace codeLess.Studio
             CursorCol = 0;
             CursorVisible = true;
             AutoWrapMode = true;
+            AlternateScrollMode = true;
             ScrollTop = 0;
             ScrollBottom = Rows - 1;
             WindowTitle = "Terminal";
@@ -962,6 +966,11 @@ namespace codeLess.Studio
                         oscBuilder.Length = 0;
                         state = ParseState.Osc;
                     }
+                    else if (ch == 'P' || ch == '_' || ch == '^' || ch == 'X')
+                    {
+                        // DCS (ESC P), APC (ESC _), PM (ESC ^), SOS (ESC X) — consume until ST (ESC \) or BEL (\a)
+                        state = ParseState.DcsOrString;
+                    }
                     else if (ch == '(' || ch == ')' || ch == '*' || ch == '+')
                     {
                         state = ParseState.Charset;
@@ -1001,6 +1010,24 @@ namespace codeLess.Studio
                     {
                         state = ParseState.Normal;
                     }
+                    break;
+
+                case ParseState.DcsOrString:
+                    if (ch == '\a' || ch == '\x9c')
+                    {
+                        state = ParseState.Normal;
+                    }
+                    else if (ch == '\x1b')
+                    {
+                        state = ParseState.DcsEsc;
+                    }
+                    break;
+
+                case ParseState.DcsEsc:
+                    if (ch == '\\')
+                        state = ParseState.Normal;
+                    else
+                        state = ParseState.DcsOrString;
                     break;
 
                 case ParseState.Charset:
@@ -1189,6 +1216,9 @@ namespace codeLess.Studio
             BracketedPasteMode = false;
             ApplicationCursorKeys = false;
             AutoWrapMode = true;
+            MouseTrackingMode = 0;
+            SgrMouseMode = false;
+            AlternateScrollMode = true;
             ScrollTop = 0;
             ScrollBottom = Rows - 1;
             ResetAttr();
@@ -1214,15 +1244,21 @@ namespace codeLess.Studio
 
         private void ExecuteCsi(string rawParams, char finalChar)
         {
-            bool isPrivate = false;
-            if (rawParams.StartsWith("?"))
+            char csiPrefix = '\0';
+            if (!string.IsNullOrEmpty(rawParams))
             {
-                isPrivate = true;
-                rawParams = rawParams.Substring(1);
+                char first = rawParams[0];
+                if (first == '?' || first == '>' || first == '<' || first == '=')
+                {
+                    csiPrefix = first;
+                    rawParams = rawParams.Substring(1);
+                }
             }
-            else if (rawParams.StartsWith(">") || rawParams.StartsWith("="))
+
+            if (finalChar == 'm' && csiPrefix == '\0')
             {
-                rawParams = rawParams.Substring(1);
+                ExecuteSgrRaw(rawParams);
+                return;
             }
 
             string[] parts = string.IsNullOrEmpty(rawParams)
@@ -1232,13 +1268,16 @@ namespace codeLess.Studio
             for (int i = 0; i < parts.Length; i++)
             {
                 int val;
-                nums[i] = int.TryParse(parts[i], out val) ? val : 0;
+                string pClean = parts[i];
+                int colonIdx = pClean.IndexOf(':');
+                if (colonIdx >= 0) pClean = pClean.Substring(0, colonIdx);
+                nums[i] = int.TryParse(pClean, out val) ? val : 0;
             }
 
             int p0 = (nums.Length > 0 && nums[0] > 0) ? nums[0] : 1;
             int p0Zero = (nums.Length > 0) ? nums[0] : 0;
 
-            if (isPrivate)
+            if (csiPrefix == '?')
             {
                 bool setMode = (finalChar == 'h');
                 if (finalChar == 'h' || finalChar == 'l')
@@ -1286,10 +1325,27 @@ namespace codeLess.Studio
                         {
                             AutoWrapMode = setMode;
                         }
+                        else if (mode == 9 || mode == 1000 || mode == 1002 || mode == 1003)
+                        {
+                            if (setMode) MouseTrackingMode = mode;
+                            else if (MouseTrackingMode == mode) MouseTrackingMode = 0;
+                        }
+                        else if (mode == 1006)
+                        {
+                            SgrMouseMode = setMode;
+                        }
+                        else if (mode == 1007)
+                        {
+                            AlternateScrollMode = setMode;
+                        }
                     }
                 }
                 return;
             }
+
+            // Ignore non-standard private CSI prefixes ('>', '<', '=') such as Kitty keyboard protocol (>1u / <u)
+            if (csiPrefix != '\0')
+                return;
 
             switch (finalChar)
             {
@@ -1472,6 +1528,76 @@ namespace codeLess.Studio
             TermCell blank = BlankAttrCell();
             for (int c = CursorCol; c < Math.Min(Cols, CursorCol + count); c++)
                 g[CursorRow, c] = blank;
+        }
+
+        private void ExecuteSgrRaw(string rawParams)
+        {
+            if (string.IsNullOrEmpty(rawParams))
+            {
+                ResetAttr();
+                return;
+            }
+
+            string[] parts = rawParams.Split(';');
+            List<int> expanded = new List<int>(parts.Length + 4);
+            for (int p = 0; p < parts.Length; p++)
+            {
+                string tok = parts[p];
+                if (string.IsNullOrEmpty(tok))
+                {
+                    expanded.Add(0);
+                    continue;
+                }
+                if (tok.IndexOf(':') >= 0)
+                {
+                    string[] sub = tok.Split(':');
+                    int mainCode = 0;
+                    int.TryParse(sub[0], out mainCode);
+                    if (mainCode == 4)
+                    {
+                        int ulStyle = 1;
+                        if (sub.Length > 1) int.TryParse(sub[1], out ulStyle);
+                        expanded.Add(ulStyle == 0 ? 24 : 4);
+                    }
+                    else if ((mainCode == 38 || mainCode == 48) && sub.Length >= 2)
+                    {
+                        int mode = 0;
+                        int.TryParse(sub[1], out mode);
+                        if (mode == 5 && sub.Length >= 3)
+                        {
+                            int idx256 = 0;
+                            int.TryParse(sub[2], out idx256);
+                            expanded.Add(mainCode);
+                            expanded.Add(5);
+                            expanded.Add(idx256);
+                        }
+                        else if (mode == 2 && sub.Length >= 5)
+                        {
+                            // Supports both 38:2:R:G:B (5 parts) and ITU 38:2:cs:R:G:B (6 parts)
+                            int off = sub.Length >= 6 ? 3 : 2;
+                            int r = 0, g = 0, b = 0;
+                            int.TryParse(sub[off], out r);
+                            int.TryParse(sub[off + 1], out g);
+                            int.TryParse(sub[off + 2], out b);
+                            expanded.Add(mainCode);
+                            expanded.Add(2);
+                            expanded.Add(r);
+                            expanded.Add(g);
+                            expanded.Add(b);
+                        }
+                    }
+                    else if (mainCode == 58 || mainCode == 59)
+                    {
+                        // Underline color SGR — ignore without resetting attributes
+                    }
+                    continue;
+                }
+                int v;
+                if (int.TryParse(tok, out v))
+                    expanded.Add(v);
+            }
+            if (expanded.Count > 0)
+                ExecuteSgr(expanded.ToArray());
         }
 
         private void ExecuteSgr(int[] nums)
@@ -1741,6 +1867,78 @@ namespace codeLess.Studio
         public string GetFullTranscriptText()
         {
             return GetScrollbackAndScreenText(5000);
+        }
+
+        public string EncodeMouseWheelSequence(bool wheelUp, int oneBasedCol, int oneBasedRow, bool shift, bool alt, bool ctrl)
+        {
+            lock (syncLock)
+            {
+                int cx = Math.Max(1, Math.Min(Cols, oneBasedCol));
+                int cy = Math.Max(1, Math.Min(Rows, oneBasedRow));
+
+                if (MouseTrackingMode != 0 && !shift)
+                {
+                    int btn = (wheelUp ? 64 : 65) | (alt ? 8 : 0) | (ctrl ? 16 : 0);
+                    if (SgrMouseMode)
+                        return string.Format("\x1b[<{0};{1};{2}M", btn, cx, cy);
+                    if (cx <= 223 && cy <= 223)
+                        return "\x1b[M" + (char)(32 + btn) + (char)(32 + cx) + (char)(32 + cy);
+                    return null;
+                }
+
+                if (IsAlternateScreen && AlternateScrollMode && !shift)
+                {
+                    return wheelUp
+                        ? (ApplicationCursorKeys ? "\x1bOA" : "\x1b[A")
+                        : (ApplicationCursorKeys ? "\x1bOB" : "\x1b[B");
+                }
+
+                return null;
+            }
+        }
+
+        public string EncodeMouseButtonOrMoveSequence(int buttonCode, bool isRelease, bool isMotion, int oneBasedCol, int oneBasedRow, bool shift, bool alt, bool ctrl)
+        {
+            lock (syncLock)
+            {
+                if (MouseTrackingMode == 0 || shift)
+                    return null;
+
+                int cx = Math.Max(1, Math.Min(Cols, oneBasedCol));
+                int cy = Math.Max(1, Math.Min(Rows, oneBasedRow));
+                int mods = (alt ? 8 : 0) | (ctrl ? 16 : 0);
+
+                if (isMotion)
+                {
+                    if (buttonCode < 0 && MouseTrackingMode != 1003)
+                        return null;
+                    if (buttonCode >= 0 && MouseTrackingMode < 1002)
+                        return null;
+                    int motionCode = (buttonCode >= 0 ? (32 + buttonCode) : 35) | mods;
+                    if (SgrMouseMode)
+                        return string.Format("\x1b[<{0};{1};{2}M", motionCode, cx, cy);
+                    if (cx <= 223 && cy <= 223)
+                        return "\x1b[M" + (char)(32 + motionCode) + (char)(32 + cx) + (char)(32 + cy);
+                    return null;
+                }
+
+                if (MouseTrackingMode == 9 && isRelease)
+                    return null;
+
+                if (SgrMouseMode)
+                {
+                    int sgrCode = Math.Max(0, buttonCode) | mods;
+                    return string.Format("\x1b[<{0};{1};{2}{3}", sgrCode, cx, cy, isRelease ? 'm' : 'M');
+                }
+
+                if (cx <= 223 && cy <= 223)
+                {
+                    int x10Code = (isRelease ? 3 : Math.Max(0, buttonCode)) | mods;
+                    return "\x1b[M" + (char)(32 + x10Code) + (char)(32 + cx) + (char)(32 + cy);
+                }
+
+                return null;
+            }
         }
     }
 
@@ -2374,7 +2572,8 @@ namespace codeLess.Studio
 
         private void ConPtyReadLoop(int gen, FileStream readStream)
         {
-            byte[] buf = new byte[4096];
+            byte[] buf = new byte[8192];
+            int lastSnapshotTick = 0;
             try
             {
                 while (!isDisposed && gen == sessionGeneration && readStream != null)
@@ -2383,7 +2582,12 @@ namespace codeLess.Studio
                     if (read <= 0 || gen != sessionGeneration || isDisposed) break;
 
                     Buffer.ProcessBytes(buf, read);
-                    SyncTranscriptSnapshot();
+                    int nowTick = Environment.TickCount;
+                    if (unchecked(nowTick - lastSnapshotTick) >= 250 || lastSnapshotTick == 0)
+                    {
+                        lastSnapshotTick = nowTick;
+                        SyncTranscriptSnapshot();
+                    }
 
                     Action handler = OutputReceived;
                     if (handler != null)
@@ -2391,6 +2595,7 @@ namespace codeLess.Studio
                         try { handler(); } catch { }
                     }
                 }
+                SyncTranscriptSnapshot();
             }
             catch
             {
@@ -3024,6 +3229,9 @@ namespace codeLess.Studio
 
         // Scrollback offset (0 = pinned to bottom live screen; >0 = scrolled up N lines)
         private int scrollbackOffset = 0;
+        private int wheelDeltaRemainder = 0;
+        private int repaintQueued = 0;
+        private int activeMouseButtonCode = -1;
 
         // Selection state (in virtual row/col coordinates)
         private bool isSelecting = false;
@@ -3248,15 +3456,20 @@ namespace codeLess.Studio
         private void OnSessionOutputReceived()
         {
             if (this.IsDisposed || !this.IsHandleCreated) return;
+            if (Interlocked.Exchange(ref repaintQueued, 1) != 0) return;
             try
             {
                 this.BeginInvoke(new Action(() =>
                 {
+                    Interlocked.Exchange(ref repaintQueued, 0);
                     if (!this.IsDisposed)
                         this.Invalidate();
                 }));
             }
-            catch { }
+            catch
+            {
+                Interlocked.Exchange(ref repaintQueued, 0);
+            }
         }
 
         protected override void OnResize(EventArgs e)
@@ -3573,19 +3786,49 @@ namespace codeLess.Studio
                 return;
             }
 
-            // Shift+PageUp / Shift+PageDown: Scrollback navigation
+            // Shift+PageUp / Shift+PageDown: Scrollback navigation (or forward PageUp/PageDown in Alternate Screen TUIs like opencode)
             if (e.Shift && e.KeyCode == Keys.PageUp)
             {
                 e.SuppressKeyPress = true;
                 e.Handled = true;
-                ScrollByLines(Math.Max(1, session.Buffer.Rows - 2));
+                if (session.Buffer != null && session.Buffer.IsAlternateScreen)
+                {
+                    string seq = session.Buffer.EncodeMouseWheelSequence(true, Math.Max(1, session.Buffer.Cols / 2), Math.Max(1, session.Buffer.Rows / 2), false, e.Alt, e.Control);
+                    if (seq != null && session.Buffer.MouseTrackingMode != 0)
+                    {
+                        for (int i = 0; i < 5; i++) session.WriteInput(seq);
+                    }
+                    else
+                    {
+                        session.WriteInput("\x1b[5~");
+                    }
+                }
+                else if (session.Buffer != null)
+                {
+                    ScrollByLines(Math.Max(1, session.Buffer.Rows - 2));
+                }
                 return;
             }
             if (e.Shift && e.KeyCode == Keys.PageDown)
             {
                 e.SuppressKeyPress = true;
                 e.Handled = true;
-                ScrollByLines(-Math.Max(1, session.Buffer.Rows - 2));
+                if (session.Buffer != null && session.Buffer.IsAlternateScreen)
+                {
+                    string seq = session.Buffer.EncodeMouseWheelSequence(false, Math.Max(1, session.Buffer.Cols / 2), Math.Max(1, session.Buffer.Rows / 2), false, e.Alt, e.Control);
+                    if (seq != null && session.Buffer.MouseTrackingMode != 0)
+                    {
+                        for (int i = 0; i < 5; i++) session.WriteInput(seq);
+                    }
+                    else
+                    {
+                        session.WriteInput("\x1b[6~");
+                    }
+                }
+                else if (session.Buffer != null)
+                {
+                    ScrollByLines(-Math.Max(1, session.Buffer.Rows - 2));
+                }
                 return;
             }
 
@@ -3803,11 +4046,43 @@ namespace codeLess.Studio
             this.Invalidate();
         }
 
+        private void PointToScreenOneBasedCell(Point pt, out int col1, out int row1)
+        {
+            col1 = 1;
+            row1 = 1;
+            if (session == null || session.Buffer == null) return;
+            row1 = Math.Max(1, Math.Min(session.Buffer.Rows, ((pt.Y - padTop) / Math.Max(1, cellHeight)) + 1));
+            col1 = Math.Max(1, Math.Min(session.Buffer.Cols, ((pt.X - padLeft) / Math.Max(1, cellWidth)) + 1));
+        }
+
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
             this.Focus();
             if (session == null || session.Buffer == null) return;
+
+            Keys mods = Control.ModifierKeys;
+            bool shift = (mods & Keys.Shift) == Keys.Shift;
+            bool alt = (mods & Keys.Alt) == Keys.Alt;
+            bool ctrl = (mods & Keys.Control) == Keys.Control;
+
+            // Forward mouse clicks to full-screen TUI apps (e.g. opencode) when MouseTrackingMode != 0 and Shift is not held
+            if (session.Buffer.MouseTrackingMode != 0 && !shift && !hasSelection)
+            {
+                int btnCode = e.Button == MouseButtons.Left ? 0 : (e.Button == MouseButtons.Middle ? 1 : (e.Button == MouseButtons.Right ? 2 : -1));
+                if (btnCode >= 0)
+                {
+                    int col1, row1;
+                    PointToScreenOneBasedCell(e.Location, out col1, out row1);
+                    string seq = session.Buffer.EncodeMouseButtonOrMoveSequence(btnCode, false, false, col1, row1, shift, alt, ctrl);
+                    if (seq != null)
+                    {
+                        activeMouseButtonCode = btnCode;
+                        session.WriteInput(seq);
+                        return;
+                    }
+                }
+            }
 
             if (e.Button == MouseButtons.Right)
             {
@@ -3835,7 +4110,7 @@ namespace codeLess.Studio
                 }
 
                 // Ctrl+Click on link
-                if ((Control.ModifierKeys & Keys.Control) == Keys.Control && !string.IsNullOrEmpty(hoveredLinkTarget))
+                if (ctrl && !string.IsNullOrEmpty(hoveredLinkTarget))
                 {
                     OpenHoveredLink(hoveredLinkTarget);
                     return;
@@ -3864,6 +4139,28 @@ namespace codeLess.Studio
                 return;
             }
 
+            Keys mods = Control.ModifierKeys;
+            bool shift = (mods & Keys.Shift) == Keys.Shift;
+            if (session.Buffer.MouseTrackingMode >= 1002 && !shift && !isSelecting)
+            {
+                int col1, row1;
+                PointToScreenOneBasedCell(e.Location, out col1, out row1);
+                string moveSeq = session.Buffer.EncodeMouseButtonOrMoveSequence(
+                    activeMouseButtonCode,
+                    false,
+                    true,
+                    col1,
+                    row1,
+                    shift,
+                    (mods & Keys.Alt) == Keys.Alt,
+                    (mods & Keys.Control) == Keys.Control);
+                if (moveSeq != null)
+                {
+                    session.WriteInput(moveSeq);
+                    return;
+                }
+            }
+
             int vr, c;
             PointToVirtualCell(e.Location, out vr, out c);
 
@@ -3883,6 +4180,27 @@ namespace codeLess.Studio
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (activeMouseButtonCode >= 0 && session != null && session.Buffer != null)
+            {
+                int releasedBtn = activeMouseButtonCode;
+                activeMouseButtonCode = -1;
+                Keys mods = Control.ModifierKeys;
+                int col1, row1;
+                PointToScreenOneBasedCell(e.Location, out col1, out row1);
+                string relSeq = session.Buffer.EncodeMouseButtonOrMoveSequence(
+                    releasedBtn,
+                    true,
+                    false,
+                    col1,
+                    row1,
+                    (mods & Keys.Shift) == Keys.Shift,
+                    (mods & Keys.Alt) == Keys.Alt,
+                    (mods & Keys.Control) == Keys.Control);
+                if (relSeq != null)
+                {
+                    session.WriteInput(relSeq);
+                }
+            }
             isSelecting = false;
             isDraggingScrollbar = false;
         }
@@ -3921,8 +4239,38 @@ namespace codeLess.Studio
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             base.OnMouseWheel(e);
-            int lines = (e.Delta > 0) ? 3 : -3;
-            ScrollByLines(lines);
+            if (session == null || session.Buffer == null || e.Delta == 0) return;
+
+            if ((wheelDeltaRemainder > 0 && e.Delta < 0) || (wheelDeltaRemainder < 0 && e.Delta > 0))
+                wheelDeltaRemainder = 0;
+
+            wheelDeltaRemainder += e.Delta;
+            const int stepThreshold = 40; // 120 (1 standard notch) = 3 steps; smooth 1-step precision touchpad scrolling
+            int steps = wheelDeltaRemainder / stepThreshold;
+            if (steps == 0) return;
+            wheelDeltaRemainder %= stepThreshold;
+
+            bool wheelUp = steps > 0;
+            int absSteps = Math.Min(12, Math.Abs(steps));
+
+            Keys mods = Control.ModifierKeys;
+            bool shift = (mods & Keys.Shift) == Keys.Shift;
+            bool alt = (mods & Keys.Alt) == Keys.Alt;
+            bool ctrl = (mods & Keys.Control) == Keys.Control;
+
+            int col1, row1;
+            PointToScreenOneBasedCell(e.Location, out col1, out row1);
+            string vtWheel = session.Buffer.EncodeMouseWheelSequence(wheelUp, col1, row1, shift, alt, ctrl);
+            if (vtWheel != null)
+            {
+                StringBuilder batch = new StringBuilder(vtWheel.Length * absSteps);
+                for (int i = 0; i < absSteps; i++)
+                    batch.Append(vtWheel);
+                session.WriteInput(batch.ToString());
+                return;
+            }
+
+            ScrollByLines(steps);
         }
 
         private void ScrollByLines(int deltaLines)
@@ -4241,6 +4589,28 @@ namespace codeLess.Studio
                 using (SolidBrush tb = new SolidBrush(thumbCol))
                     g.FillRectangle(tb, trackX + 1, thumbY, trackW - 2, thumbH);
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (blinkTimer != null)
+                {
+                    try { blinkTimer.Stop(); blinkTimer.Dispose(); } catch { }
+                    blinkTimer = null;
+                }
+                if (terminalContextMenu != null)
+                {
+                    try { terminalContextMenu.Dispose(); } catch { }
+                    terminalContextMenu = null;
+                }
+                if (regularFont != null) { try { regularFont.Dispose(); } catch { } regularFont = null; }
+                if (boldFont != null) { try { boldFont.Dispose(); } catch { } boldFont = null; }
+                if (italicFont != null) { try { italicFont.Dispose(); } catch { } italicFont = null; }
+                if (underlineFont != null) { try { underlineFont.Dispose(); } catch { } underlineFont = null; }
+            }
+            base.Dispose(disposing);
         }
     }
 #endif

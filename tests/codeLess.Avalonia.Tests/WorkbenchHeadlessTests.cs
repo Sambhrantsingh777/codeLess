@@ -322,6 +322,20 @@ namespace codeLess.Avalonia.Tests
                 window.SendTerminalCommand("echo CODELESS_AVALONIA_PTY_OK");
                 Assert.Contains("echo CODELESS_AVALONIA_PTY_OK", window.TerminalBufferText);
 
+                // Verify opencode TUI Alternate Screen (?1049h) + SGR Mouse Wheel (?1000h + ?1006h) + Kitty/DCS/Colon-SGR safety
+                var vt = new Vt100TerminalBuffer(80, 24, false);
+                vt.FeedText("\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[5;10H\x1b[>1u\x1bP+q544e\x1b\\\x1b[4:3m\x1b[38:2::56:189:248mOpenCodeTUI\x1b[<u");
+                Assert.True(vt.IsAlternateScreen);
+                Assert.Equal(1000, vt.MouseTrackingMode);
+                Assert.True(vt.SgrMouseMode);
+                // Kitty >1u / <u must NOT trigger ANSI RestoreCursor to (0,0), and DCS payload '+q544e' must NOT print
+                Assert.Equal(4, vt.CursorRow);
+                Assert.DoesNotContain("+q544e", vt.GetLineText(4));
+                Assert.Contains("OpenCodeTUI", vt.GetLineText(4));
+                // SGR mouse wheel up = 64, wheel down = 65
+                Assert.Equal("\x1b[<64;15;8M", vt.EncodeMouseWheelSequence(true, 15, 8, false, false, false));
+                Assert.Equal("\x1b[<65;15;8M", vt.EncodeMouseWheelSequence(false, 15, 8, false, false, false));
+
                 window.Close();
             }
             finally

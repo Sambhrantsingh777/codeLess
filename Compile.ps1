@@ -7,9 +7,29 @@ $ErrorActionPreference = "Stop"
 $projectRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 Set-Location $projectRoot
 
-# Stop any running codeLess instances so binaries are not locked
-Stop-Process -Name "codeLess" -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 250
+function Move-LockedFileAside {
+    param([string]$TargetPath)
+    $dir = Split-Path -Parent $TargetPath
+    $leaf = Split-Path -Leaf $TargetPath
+    if (Test-Path $dir) {
+        Get-ChildItem -Path $dir -Filter "$leaf.prev*" -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (Test-Path $TargetPath) {
+        try {
+            $fs = [System.IO.File]::Open($TargetPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            $fs.Dispose()
+        } catch {
+            # Target binary is currently running — rename in-place on NTFS without killing the user's open IDE window
+            $prevName = "$TargetPath.prev.$([DateTime]::UtcNow.Ticks)"
+            Move-Item -Path $TargetPath -Destination $prevName -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Move-LockedFileAside -TargetPath (Join-Path $projectRoot "codeLess.exe")
+Move-LockedFileAside -TargetPath (Join-Path $projectRoot "codeLess.Core.dll")
 
 # Remove legacy prototype files in root if present
 Remove-Item -Path "MainForm.cs", "Program.cs", "EditorControl.cs", "AiComposer.cs", "VsCodeExtensionShim.cs" -Force -ErrorAction SilentlyContinue
@@ -163,10 +183,17 @@ if ($LASTEXITCODE -eq 0) {
                 Write-Host "✓ Rebuilt Output\codeLess-Setup.exe installer successfully"
 
                 if ($Install) {
-                    Start-Process -FilePath $builtSetup -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="desktopicon"' -Wait -PassThru | Out-Null
                     $installDir = Join-Path $env:LOCALAPPDATA "Programs\codeLess"
                     if (-not (Test-Path $installDir)) {
                         New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+                    }
+                    $runningInstalled = @(Get-Process -Name "codeLess" -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $installDir "codeLess.exe") })
+                    if ($runningInstalled.Count -eq 0) {
+                        Start-Process -FilePath $builtSetup -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="desktopicon"' -Wait -PassThru | Out-Null
+                    } else {
+                        Move-LockedFileAside -TargetPath (Join-Path $installDir "codeLess.exe")
+                        Move-LockedFileAside -TargetPath (Join-Path $installDir "codeLess.Core.dll")
+                        Write-Host "ℹ Updated installed binaries in-place without closing your active codeLess window (restart codeLess to load new binary)."
                     }
                     Copy-Item $outExe (Join-Path $installDir "codeLess.exe") -Force
                     Copy-Item $outCoreDll (Join-Path $installDir "codeLess.Core.dll") -Force

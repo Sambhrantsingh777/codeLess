@@ -2439,7 +2439,10 @@ namespace codeLess.Studio
             base.WndProc(ref m);
             if (m.Msg == WM_NCHITTEST && EnableEdgeResize && this.WindowState == FormWindowState.Normal)
             {
-                Point pt = this.PointToClient(new Point(m.LParam.ToInt32()));
+                long lp = m.LParam.ToInt64();
+                int screenX = unchecked((short)(lp & 0xFFFF));
+                int screenY = unchecked((short)((lp >> 16) & 0xFFFF));
+                Point pt = this.PointToClient(new Point(screenX, screenY));
                 int grip = 7;
                 bool left = pt.X <= grip;
                 bool right = pt.X >= this.ClientSize.Width - grip;

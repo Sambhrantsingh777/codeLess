@@ -418,12 +418,17 @@ namespace codeLess.Studio
 
             vsixEngine.OnHostLog += (line) =>
             {
-                if (this.IsHandleCreated && extHostLogBox != null)
+                if (this.IsHandleCreated && !this.IsDisposed && extHostLogBox != null)
                 {
-                    this.BeginInvoke(new Action(() =>
+                    try
                     {
-                        extHostLogBox.AppendText(line + "\n");
-                    }));
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            if (!this.IsDisposed && extHostLogBox != null)
+                                extHostLogBox.AppendText(line + "\n");
+                        }));
+                    }
+                    catch { }
                 }
             };
             foreach (string log in vsixEngine.HostLogs)
@@ -457,13 +462,18 @@ namespace codeLess.Studio
             Task.Run(async () =>
             {
                 bool found = await aiEngine.ProbeLocalOllamaAsync();
-                if (found && this.IsHandleCreated)
+                if (found && this.IsHandleCreated && !this.IsDisposed)
                 {
-                    this.BeginInvoke(new Action(() =>
+                    try
                     {
-                        RefreshQuickVendorCombo();
-                        AppendOutputLog("Auto-detected Local Ollama Server on 127.0.0.1:11434.");
-                    }));
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            if (this.IsDisposed) return;
+                            RefreshQuickVendorCombo();
+                            AppendOutputLog("Auto-detected Local Ollama Server on 127.0.0.1:11434.");
+                        }));
+                    }
+                    catch { }
                 }
             });
 
@@ -7317,9 +7327,23 @@ if __name__ == '__main__':
                 FileSystemEventHandler onChanged = (s, e) =>
                 {
                     if (string.IsNullOrEmpty(e.FullPath)) return;
-                    if (this.IsHandleCreated)
+                    if (e.FullPath.IndexOf("\\.git\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        e.FullPath.IndexOf("\\obj\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        e.FullPath.IndexOf("\\bin\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        e.FullPath.IndexOf("\\node_modules\\", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return;
+                    if (this.IsHandleCreated && !this.IsDisposed)
                     {
-                        this.BeginInvoke(new Action(() => HandleExternalFileChanged(e.FullPath)));
+                        try
+                        {
+                            string changedPath = e.FullPath;
+                            this.BeginInvoke(new Action(() =>
+                            {
+                                if (!this.IsDisposed)
+                                    HandleExternalFileChanged(changedPath);
+                            }));
+                        }
+                        catch { }
                     }
                 };
                 workspaceFileWatcher.Changed += onChanged;
@@ -10575,10 +10599,32 @@ if __name__ == '__main__':
             Run(args);
         }
 
+        private static void LogUnhandledException(string source, Exception ex)
+        {
+            if (ex == null) return;
+            try
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "codeLess");
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                string logPath = Path.Combine(dir, "crash.log");
+                string entry = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] [" + source + "] " + ex + Environment.NewLine;
+                File.AppendAllText(logPath, entry, Encoding.UTF8);
+            }
+            catch { }
+        }
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static void Run(string[] args)
         {
             try { CodeLessMainForm.SetCurrentProcessExplicitAppUserModelID("Savatarr.codeLess"); } catch { }
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (s, e) => LogUnhandledException("UIThread", e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => LogUnhandledException("AppDomain", e.ExceptionObject as Exception);
+            TaskScheduler.UnobservedTaskException += (s, e) =>
+            {
+                LogUnhandledException("UnobservedTask", e.Exception);
+                e.SetObserved();
+            };
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             string initDir = (args != null && args.Length > 0) ? args[0] : "";

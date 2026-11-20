@@ -471,14 +471,37 @@ namespace codeLess.AvaloniaApp
             return true;
         }
 
+        private int activeMouseBtnCode = -1;
+
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
             Focus();
+            var buf = owner.ActiveBuffer;
             var pt = e.GetPosition(this);
             int c = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
             int r = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
             var props = e.GetCurrentPoint(this).Properties;
+            bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+
+            if (buf != null && buf.MouseTrackingMode != 0 && !shift && !HasSelection())
+            {
+                int btn = props.IsLeftButtonPressed ? 0 : (props.IsMiddleButtonPressed ? 1 : (props.IsRightButtonPressed ? 2 : -1));
+                if (btn >= 0)
+                {
+                    string seq = buf.EncodeMouseButtonOrMoveSequence(btn, false, false, c + 1, r + 1, shift, alt, ctrl);
+                    if (seq != null)
+                    {
+                        activeMouseBtnCode = btn;
+                        owner.WriteAutomatedInput(seq);
+                        e.Handled = true;
+                        return;
+                    }
+                }
+            }
+
             if (props.IsLeftButtonPressed)
             {
                 isSelecting = true;
@@ -492,16 +515,58 @@ namespace codeLess.AvaloniaApp
         protected override void OnPointerMoved(PointerEventArgs e)
         {
             base.OnPointerMoved(e);
-            if (!isSelecting) return;
+            var buf = owner.ActiveBuffer;
             var pt = e.GetPosition(this);
-            selEndCol = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
-            selEndRow = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
+            int c = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
+            int r = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
+            bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+
+            if (buf != null && buf.MouseTrackingMode >= 1002 && !shift && !isSelecting)
+            {
+                string seq = buf.EncodeMouseButtonOrMoveSequence(
+                    activeMouseBtnCode,
+                    false,
+                    true,
+                    c + 1,
+                    r + 1,
+                    shift,
+                    e.KeyModifiers.HasFlag(KeyModifiers.Alt),
+                    e.KeyModifiers.HasFlag(KeyModifiers.Control));
+                if (seq != null)
+                {
+                    owner.WriteAutomatedInput(seq);
+                    return;
+                }
+            }
+
+            if (!isSelecting) return;
+            selEndCol = c;
+            selEndRow = r;
             InvalidateVisual();
         }
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
             base.OnPointerReleased(e);
+            if (activeMouseBtnCode >= 0 && owner.ActiveBuffer != null)
+            {
+                int released = activeMouseBtnCode;
+                activeMouseBtnCode = -1;
+                var pt = e.GetPosition(this);
+                int c = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
+                int r = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
+                string relSeq = owner.ActiveBuffer.EncodeMouseButtonOrMoveSequence(
+                    released,
+                    true,
+                    false,
+                    c + 1,
+                    r + 1,
+                    e.KeyModifiers.HasFlag(KeyModifiers.Shift),
+                    e.KeyModifiers.HasFlag(KeyModifiers.Alt),
+                    e.KeyModifiers.HasFlag(KeyModifiers.Control));
+                if (relSeq != null)
+                    owner.WriteAutomatedInput(relSeq);
+            }
             isSelecting = false;
         }
 
@@ -509,9 +574,29 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerWheelChanged(e);
             var buf = owner.ActiveBuffer;
-            if (buf == null) return;
+            if (buf == null || Math.Abs(e.Delta.Y) < 0.01) return;
+
+            bool wheelUp = e.Delta.Y > 0;
+            int steps = Math.Max(1, Math.Min(10, (int)Math.Round(Math.Abs(e.Delta.Y) * 3)));
+            var pt = e.GetPosition(this);
+            int col1 = Math.Max(1, (int)((pt.X - PadLeft) / CellW) + 1);
+            int row1 = Math.Max(1, (int)((pt.Y - PadTop) / CellH) + 1);
+            bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+
+            string vtWheel = buf.EncodeMouseWheelSequence(wheelUp, col1, row1, shift, alt, ctrl);
+            if (vtWheel != null)
+            {
+                var batch = new StringBuilder(vtWheel.Length * steps);
+                for (int i = 0; i < steps; i++) batch.Append(vtWheel);
+                owner.WriteAutomatedInput(batch.ToString());
+                e.Handled = true;
+                return;
+            }
+
             int maxSb = buf.ScrollbackCount;
-            scrollbackOffset = Math.Max(0, Math.Min(maxSb, scrollbackOffset + (int)(e.Delta.Y * 3)));
+            scrollbackOffset = Math.Max(0, Math.Min(maxSb, scrollbackOffset + (wheelUp ? steps : -steps)));
             InvalidateVisual();
             e.Handled = true;
         }
@@ -563,15 +648,29 @@ namespace codeLess.AvaloniaApp
 
             if (shift && e.Key == Key.PageUp && owner.ActiveBuffer != null)
             {
-                scrollbackOffset = Math.Min(owner.ActiveBuffer.ScrollbackCount, scrollbackOffset + 10);
-                InvalidateVisual();
+                if (owner.ActiveBuffer.IsAlternateScreen)
+                {
+                    owner.WriteAutomatedInput("\x1b[5~");
+                }
+                else
+                {
+                    scrollbackOffset = Math.Min(owner.ActiveBuffer.ScrollbackCount, scrollbackOffset + 10);
+                    InvalidateVisual();
+                }
                 e.Handled = true;
                 return;
             }
-            if (shift && e.Key == Key.PageDown)
+            if (shift && e.Key == Key.PageDown && owner.ActiveBuffer != null)
             {
-                scrollbackOffset = Math.Max(0, scrollbackOffset - 10);
-                InvalidateVisual();
+                if (owner.ActiveBuffer.IsAlternateScreen)
+                {
+                    owner.WriteAutomatedInput("\x1b[6~");
+                }
+                else
+                {
+                    scrollbackOffset = Math.Max(0, scrollbackOffset - 10);
+                    InvalidateVisual();
+                }
                 e.Handled = true;
                 return;
             }
