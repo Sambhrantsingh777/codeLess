@@ -156,19 +156,31 @@ jobs:
       - name: Build macOS .app, .zip, and .dmg (arm64 + x64)
         run: |
           chmod +x ./build-mac.sh
-          ./build-mac.sh both
+          if ! ./build-mac.sh both > /tmp/macbuild.log 2>&1; then
+            cat /tmp/macbuild.log
+            echo "::error::macOS build failed: $(tail -n 8 /tmp/macbuild.log | tr '\r\n' '  ')"
+            exit 1
+          fi
+          cat /tmp/macbuild.log
 
-      - name: Verify DMG Mount, Codesign & Live macOS App Launch Smoke Test
+      - name: Verify DMG Mount, Strict Codesign & Live macOS App Launch Smoke Test
         run: |
-          codesign --verify --verbose=2 dist/macos-arm64/codeLess.app
-          codesign --verify --verbose=2 dist/macos-x64/codeLess.app
-          MOUNT_DIR="$(mktemp -d)"
-          hdiutil attach dist/codeLess-mac-arm64.dmg -mountpoint "$MOUNT_DIR" -nobrowse -readonly
-          test -x "$MOUNT_DIR/codeLess.app/Contents/MacOS/codeLess"
-          test -L "$MOUNT_DIR/Applications"
-          hdiutil detach "$MOUNT_DIR"
-          ./dist/macos-arm64/codeLess.app/Contents/MacOS/codeLess --screenshot ./dist/mac-launch-smoke.png
-          test -s ./dist/mac-launch-smoke.png
+          if ! (
+            codesign --verify --deep --strict --verbose=2 dist/macos-arm64/codeLess.app
+            codesign --verify --deep --strict --verbose=2 dist/macos-x64/codeLess.app
+            MOUNT_DIR="$(mktemp -d)"
+            hdiutil attach dist/codeLess-mac-arm64.dmg -mountpoint "$MOUNT_DIR" -nobrowse -readonly
+            test -x "$MOUNT_DIR/codeLess.app/Contents/MacOS/codeLess"
+            test -L "$MOUNT_DIR/Applications"
+            hdiutil detach "$MOUNT_DIR"
+            ./dist/macos-arm64/codeLess.app/Contents/MacOS/codeLess --screenshot ./dist/mac-launch-smoke.png
+            test -s ./dist/mac-launch-smoke.png
+          ) > /tmp/macsmoke.log 2>&1; then
+            cat /tmp/macsmoke.log
+            echo "::error::macOS smoke failed: $(tail -n 8 /tmp/macsmoke.log | tr '\r\n' '  ')"
+            exit 1
+          fi
+          cat /tmp/macsmoke.log
 
       - name: Publish macOS artifacts
         uses: actions/upload-artifact@v4

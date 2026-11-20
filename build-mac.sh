@@ -54,7 +54,8 @@ build_mac_bundle() {
         -c Release \
         -r "$rid" \
         --self-contained true \
-        -p:PublishSingleFile=false \
+        -p:PublishSingleFile=true \
+        -p:IncludeNativeLibrariesForSelfExtract=false \
         -p:UseAppHost=true \
         -o "$pub_dir"
 
@@ -71,16 +72,12 @@ build_mac_bundle() {
 
     while IFS= read -r -d '' flat_file; do
         cp "$flat_file" "$bundle_dir/Contents/MacOS/"
-    done < <(find "$pub_dir" -maxdepth 1 -type f ! -name "*.pdb" -print0)
+    done < <(find "$pub_dir" -maxdepth 1 -type f ! -name "*.pdb" ! -name "*.dsym" -print0)
 
-    # Managed .NET .dll and .json files from NuGet often carry +x permissions, which makes macOS codesign
-    # mistake PE .dll assemblies for unsigned Mach-O helper executables inside Contents/MacOS.
-    find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f \( -name "*.dll" -o -name "*.json" \) -exec chmod 644 {} +
     chmod 755 "$bundle_dir/Contents/MacOS/$APP_NAME"
-    if [[ -f "$bundle_dir/Contents/MacOS/createdump" ]]; then
-        chmod 755 "$bundle_dir/Contents/MacOS/createdump"
-    fi
-    find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f -name "*.dylib" -exec chmod 755 {} +
+    while IFS= read -r -d '' dylib_file; do
+        chmod 755 "$dylib_file"
+    done < <(find "$bundle_dir/Contents/MacOS" -maxdepth 1 -type f -name "*.dylib" -print0)
 
     # Generate codeLess.icns from square RGBA assets/savatarr_bolt.png (falling back to assets/codeLess.icns)
     local src_png="$SCRIPT_DIR/assets/savatarr_bolt.png"
