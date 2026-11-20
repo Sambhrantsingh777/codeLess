@@ -54,6 +54,14 @@ namespace codeLess.AvaloniaApp
         private int navHistoryIndex = -1;
         private bool suppressNavRecord = false;
         private string selectedForComparePath = "";
+        private CancellationTokenSource workspaceLoadCts;
+        private int workspaceLoadGeneration = 0;
+        private DispatcherTimer debouncedUiSyncTimer;
+        private EditorTabBuffer pendingDebouncedBuffer;
+        private EditorTabBuffer lastRenderedTabRef;
+        private bool lastRenderedTabDirty = false;
+        private bool lastRenderedTabPreview = false;
+        private int lastRenderedOpenTabCount = -1;
 
         // Unsaved Prompt Override for Headless Testing
         public Func<IReadOnlyList<EditorTabBuffer>, UnsavedPromptResult> UnsavedPromptOverride { get; set; }
@@ -316,6 +324,9 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnClosed(EventArgs e)
         {
+            try { workspaceLoadCts?.Cancel(); } catch { }
+            if (debouncedUiSyncTimer != null)
+                debouncedUiSyncTimer.Stop();
             foreach (var ts in terminalSessions.ToList())
             {
                 try { ts.Control?.StopShell(notifyExit: false); } catch { }
@@ -781,7 +792,24 @@ namespace codeLess.AvaloniaApp
                     new NativeMenuItemSeparator(),
                     Nmi("Quit codeLess", Close, Key.Q, meta)
                 };
-                rootMenu.Add(new NativeMenuItem("codeLess") { Menu = appSub });
+
+                bool isLiveMacDesktop = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
+                                        Application.Current?.ApplicationLifetime is global::Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
+                if (Application.Current != null)
+                {
+                    Application.Current.Name = "codeLess";
+                    NativeMenu.SetMenu(Application.Current, appSub);
+                }
+
+                if (!isLiveMacDesktop)
+                {
+                    rootMenu.Add(new NativeMenuItem("codeLess") { Menu = appSub });
+                }
+                else if (mainTopMenu != null)
+                {
+                    // On macOS desktop, menus live in the native top system menu bar; hide redundant in-window menu strip
+                    mainTopMenu.IsVisible = false;
+                }
 
                 var fileSub = new NativeMenu
                 {
@@ -2417,6 +2445,11 @@ namespace codeLess.AvaloniaApp
             if (!keepCurrentTabs && !ConfirmSaveOrDiscardDirtyTabs(openTabs))
                 return;
 
+            try { workspaceLoadCts?.Cancel(); } catch { }
+            var cts = new CancellationTokenSource();
+            workspaceLoadCts = cts;
+            int loadGen = ++workspaceLoadGeneration;
+
             sidebarProgressBar.StartProgress();
             workspaceRoot = Path.GetFullPath(rootDir);
             settings.AddRecentWorkspace(workspaceRoot);
@@ -2432,6 +2465,16 @@ namespace codeLess.AvaloniaApp
             ExplorerTree.Nodes.Clear();
 
             var excluded = GetExcludedFolderSet(workspaceRoot);
+            excluded.Add("DerivedData");
+            excluded.Add("Pods");
+            excluded.Add(".gradle");
+            excluded.Add(".nuxt");
+            excluded.Add(".svelte-kit");
+            excluded.Add("coverage");
+            excluded.Add(".turbo");
+            excluded.Add(".cache");
+
+            var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var rootNode = new ExplorerTreeNode(folderName)
             {
                 Tag = workspaceRoot,
@@ -2439,7 +2482,7 @@ namespace codeLess.AvaloniaApp
                 StateImageIndex = 1,
                 IsExpanded = true
             };
-            PopulateSingleDirectoryLevel(workspaceRoot, rootNode, excluded, addFilesToIndex: true);
+            PopulateSingleDirectoryLevel(workspaceRoot, rootNode, excluded, addFilesToIndex: true, seenSet: seenFiles);
             ExplorerTree.Nodes.Add(rootNode);
 
             foreach (string extraDir in additionalWorkspaceFolders)
@@ -2453,56 +2496,111 @@ namespace codeLess.AvaloniaApp
                         StateImageIndex = 1,
                         IsExpanded = true
                     };
-                    PopulateSingleDirectoryLevel(extraDir, extraNode, GetExcludedFolderSet(extraDir), addFilesToIndex: true);
+                    PopulateSingleDirectoryLevel(extraDir, extraNode, GetExcludedFolderSet(extraDir), addFilesToIndex: true, seenSet: seenFiles);
                     ExplorerTree.Nodes.Add(extraNode);
                 }
             }
 
-            // Index remaining files across subdirectories (respecting excluded folders)
-            CollectWorkspaceFilesRecursive(workspaceRoot, excluded, depth: 0);
-            aiEngine.IndexWorkspace(workspaceRoot, workspaceFiles);
-
             ExplorerTree.RebuildTreeLayout(preserveScroll: false);
-            RefreshGitStatus();
             PrimaryEditor.SetWorkspaceContext(workspaceRoot, settings.RecentWorkspaces);
             SplitEditor.SetWorkspaceContext(workspaceRoot, settings.RecentWorkspaces);
+
+            // Fast branch read via .git/HEAD file (zero subprocess spawn)
+            string fastBranch = LlmHarnessAndAgentEngine.GetGitBranch(workspaceRoot);
+            bool noGit = string.IsNullOrEmpty(fastBranch) || fastBranch == "no-git";
+            statusBranchBtn.Content = new LiteralTextBlock(noGit ? "⎇ no-git" : $"⎇ {fastBranch}");
+            scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {fastBranch}";
+
+            bool isLiveDesktop = AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
+            if (!isLiveDesktop)
+            {
+                // Headless test mode: complete indexing synchronously for immediate deterministic assertions
+                CollectWorkspaceFilesRecursive(workspaceRoot, excluded, depth: 0, seenSet: seenFiles, maxLimit: 1400, ct: CancellationToken.None);
+                aiEngine.IndexWorkspace(workspaceRoot, workspaceFiles);
+                if (!noGit) RefreshGitStatus();
+                if (!keepCurrentTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
+                    OpenFileInTab(workspaceFiles[0], preview: true);
+                UpdateWindowTitle();
+                UpdateStatusBar();
+                sidebarProgressBar.StopProgress();
+                return;
+            }
+
+            // Open first root file immediately if available so user sees code in < 5ms while indexing runs in background
             if (!keepCurrentTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
             {
                 OpenFileInTab(workspaceFiles[0], preview: true);
             }
             UpdateWindowTitle();
             UpdateStatusBar();
-            AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files, {aiEngine.WorkspaceSymbols.Count} symbols).");
 
-            // Stop loading indicator after brief visual feedback
-            var stopTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(220) };
-            stopTimer.Tick += (s, e) =>
+            string capturedRoot = workspaceRoot;
+            bool capturedKeepTabs = keepCurrentTabs;
+            var token = cts.Token;
+
+            _ = Task.Run(() =>
             {
-                stopTimer.Stop();
-                sidebarProgressBar.StopProgress();
-            };
-            stopTimer.Start();
+                var bgFiles = new List<string>(workspaceFiles);
+                var bgSeen = new HashSet<string>(bgFiles, StringComparer.OrdinalIgnoreCase);
+                CollectWorkspaceFilesListRecursive(capturedRoot, excluded, 0, bgFiles, bgSeen, 12000, token);
+                if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
+
+                var indexSubset = bgFiles.Count <= 1500 ? bgFiles : bgFiles.Take(1500).ToList();
+                aiEngine.IndexWorkspace(capturedRoot, indexSubset, token, null);
+                if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
+
+                List<GitStatusEntry> bgGitEntries = noGit
+                    ? new List<GitStatusEntry>()
+                    : (LlmHarnessAndAgentEngine.GetGitStatusEntries(capturedRoot) ?? new List<GitStatusEntry>());
+                if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
+
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
+                    workspaceFiles.Clear();
+                    workspaceFiles.AddRange(bgFiles);
+                    ApplyGitEntriesToUi(fastBranch, bgGitEntries);
+                    if (!capturedKeepTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
+                        OpenFileInTab(workspaceFiles[0], preview: true);
+                    AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files, {aiEngine.WorkspaceSymbols.Count} symbols).");
+                    sidebarProgressBar.StopProgress();
+                });
+            }, token);
         }
 
-        private void CollectWorkspaceFilesRecursive(string dirPath, HashSet<string> excluded, int depth)
+        private void CollectWorkspaceFilesRecursive(string dirPath, HashSet<string> excluded, int depth, HashSet<string> seenSet, int maxLimit, CancellationToken ct)
         {
-            if (depth > 6 || workspaceFiles.Count > 1400) return;
+            CollectWorkspaceFilesListRecursive(dirPath, excluded, depth, workspaceFiles, seenSet, maxLimit, ct);
+        }
+
+        private static void CollectWorkspaceFilesListRecursive(
+            string dirPath,
+            HashSet<string> excluded,
+            int depth,
+            List<string> targetList,
+            HashSet<string> seenSet,
+            int maxLimit,
+            CancellationToken ct)
+        {
+            if (depth > 7 || targetList.Count >= maxLimit || ct.IsCancellationRequested) return;
             try
             {
                 foreach (string f in Directory.EnumerateFiles(dirPath))
                 {
+                    if (ct.IsCancellationRequested || targetList.Count >= maxLimit) return;
                     string name = Path.GetFileName(f);
                     if (string.IsNullOrEmpty(name) || name.StartsWith("unins000.", StringComparison.OrdinalIgnoreCase)) continue;
                     string ext = Path.GetExtension(name);
                     if (!string.IsNullOrEmpty(ext) && DefaultIgnoredBinaryExtensions.Contains(ext)) continue;
-                    if (!workspaceFiles.Contains(f, StringComparer.OrdinalIgnoreCase))
-                        workspaceFiles.Add(f);
+                    if (seenSet.Add(f))
+                        targetList.Add(f);
                 }
                 foreach (string sub in Directory.EnumerateDirectories(dirPath))
                 {
+                    if (ct.IsCancellationRequested || targetList.Count >= maxLimit) return;
                     string subName = Path.GetFileName(sub);
                     if (string.IsNullOrEmpty(subName) || (excluded != null && excluded.Contains(subName))) continue;
-                    CollectWorkspaceFilesRecursive(sub, excluded, depth + 1);
+                    CollectWorkspaceFilesListRecursive(sub, excluded, depth + 1, targetList, seenSet, maxLimit, ct);
                 }
             }
             catch { }
@@ -2515,11 +2613,11 @@ namespace codeLess.AvaloniaApp
             {
                 folderNode.Nodes.Clear();
                 var excluded = GetExcludedFolderSet(workspaceRoot);
-                PopulateSingleDirectoryLevel(folderNode.Tag, folderNode, excluded, addFilesToIndex: false);
+                PopulateSingleDirectoryLevel(folderNode.Tag, folderNode, excluded, addFilesToIndex: false, seenSet: null);
             }
         }
 
-        private void PopulateSingleDirectoryLevel(string dirPath, ExplorerTreeNode parentNode, HashSet<string> excludedFolders, bool addFilesToIndex)
+        private void PopulateSingleDirectoryLevel(string dirPath, ExplorerTreeNode parentNode, HashSet<string> excludedFolders, bool addFilesToIndex, HashSet<string> seenSet = null)
         {
             try
             {
@@ -2561,7 +2659,7 @@ namespace codeLess.AvaloniaApp
 
                 foreach (string file in files)
                 {
-                    if (addFilesToIndex && !workspaceFiles.Contains(file, StringComparer.OrdinalIgnoreCase))
+                    if (addFilesToIndex && (seenSet != null ? seenSet.Add(file) : !workspaceFiles.Contains(file, StringComparer.OrdinalIgnoreCase)))
                         workspaceFiles.Add(file);
                     parentNode.Nodes.Add(new ExplorerTreeNode(Path.GetFileName(file))
                     {
@@ -2584,7 +2682,10 @@ namespace codeLess.AvaloniaApp
             if (existing != null)
             {
                 if (!preview && existing.IsPreviewTab)
+                {
                     existing.IsPreviewTab = false;
+                    RefreshTabStrip();
+                }
                 ActivateTab(existing);
                 return existing;
             }
@@ -2604,7 +2705,9 @@ namespace codeLess.AvaloniaApp
             string content = File.Exists(fullPath)
                 ? EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out fileEnc, out hasBom, out eol, out hasFinalNl)
                 : "";
-            string gitHead = File.Exists(fullPath) && !string.IsNullOrEmpty(workspaceRoot)
+
+            bool isLiveDesktop = AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
+            string gitHead = (!isLiveDesktop && File.Exists(fullPath) && !string.IsNullOrEmpty(workspaceRoot))
                 ? LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, fullPath)
                 : null;
 
@@ -2626,7 +2729,8 @@ namespace codeLess.AvaloniaApp
                 IsPreviewTab = preview
             };
             tab.SyncLinesFromContent();
-            tab.RefreshGutterDiff();
+            if (!tab.IsLargeFile)
+                tab.RefreshGutterDiff();
             LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
 
             openTabs.Add(tab);
@@ -2634,6 +2738,27 @@ namespace codeLess.AvaloniaApp
                 settings.AddRecentFile(fullPath);
 
             ActivateTab(tab);
+
+            // Fetch Git HEAD asynchronously on live desktop so clicking files in Explorer never waits on a git subprocess
+            if (isLiveDesktop && File.Exists(fullPath) && !string.IsNullOrEmpty(workspaceRoot) && !tab.IsLargeFile)
+            {
+                string capturedWs = workspaceRoot;
+                _ = Task.Run(() =>
+                {
+                    string head = LlmHarnessAndAgentEngine.GetGitHeadFileContent(capturedWs, fullPath);
+                    if (head != null)
+                    {
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            tab.GitHeadContent = head;
+                            tab.RefreshGutterDiff();
+                            if (ReferenceEquals(activeTab, tab))
+                                PrimaryEditor?.Canvas?.InvalidateVisual();
+                        });
+                    }
+                });
+            }
+
             return tab;
         }
 
@@ -2817,16 +2942,68 @@ namespace codeLess.AvaloniaApp
         private void OnEditorBufferModified(EditorTabBuffer buf)
         {
             if (buf == null) return;
+            bool previewChanged = false;
             if (buf.IsDirty && buf.IsPreviewTab)
+            {
                 buf.IsPreviewTab = false;
-            if (settings.AutoSave && !string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath))
-                SaveBufferToDisk(buf);
-            RefreshTabStrip();
-            RefreshOpenEditorsSection();
-            RefreshOutlineAndProblems(buf);
+                previewChanged = true;
+            }
+
+            bool tabMetaChanged = previewChanged ||
+                                  !ReferenceEquals(lastRenderedTabRef, activeTab) ||
+                                  lastRenderedTabDirty != buf.IsDirty ||
+                                  lastRenderedTabPreview != buf.IsPreviewTab ||
+                                  lastRenderedOpenTabCount != openTabs.Count;
+
+            if (tabMetaChanged)
+            {
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+                UpdateWindowTitle();
+                lastRenderedTabRef = activeTab;
+                lastRenderedTabDirty = buf.IsDirty;
+                lastRenderedTabPreview = buf.IsPreviewTab;
+                lastRenderedOpenTabCount = openTabs.Count;
+            }
+
             RefreshChangesetBanner();
-            UpdateWindowTitle();
             UpdateStatusBar();
+
+            // For large files on live desktop, coalesce Outline/Problems/AutoSave/GutterDiff rebuilds via 280ms idle debounce
+            if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime && buf.Lines != null && buf.Lines.Count > 250)
+            {
+                pendingDebouncedBuffer = buf;
+                if (debouncedUiSyncTimer == null)
+                {
+                    debouncedUiSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
+                    debouncedUiSyncTimer.Tick += (s, e) =>
+                    {
+                        debouncedUiSyncTimer.Stop();
+                        var target = pendingDebouncedBuffer;
+                        pendingDebouncedBuffer = null;
+                        if (target == null) return;
+                        if (settings.AutoSave && !string.IsNullOrEmpty(target.FilePath) && File.Exists(target.FilePath))
+                            SaveBufferToDisk(target);
+                        if (!target.IsLargeFile || target.Lines.Count <= 12000)
+                            target.RefreshGutterDiff();
+                        LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
+                        if (ReferenceEquals(target, activeTab))
+                        {
+                            RefreshOutlineAndProblems(target);
+                            PrimaryEditor?.RefreshBreadcrumbs();
+                            PrimaryEditor?.Canvas?.InvalidateVisual();
+                        }
+                    };
+                }
+                debouncedUiSyncTimer.Stop();
+                debouncedUiSyncTimer.Start();
+            }
+            else
+            {
+                if (settings.AutoSave && !string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath))
+                    SaveBufferToDisk(buf);
+                RefreshOutlineAndProblems(buf);
+            }
         }
 
         private void RefreshChangesetBanner()
@@ -2855,7 +3032,10 @@ namespace codeLess.AvaloniaApp
             Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
             Color borderCol = AvaloniaColorHelper.ToAvColor(currentTheme.BorderSubtle);
 
-            // Welcome Tab (closable)
+            lastRenderedTabRef = activeTab;
+            lastRenderedTabDirty = activeTab?.IsDirty ?? false;
+            lastRenderedTabPreview = activeTab?.IsPreviewTab ?? false;
+            lastRenderedOpenTabCount = openTabs.Count;
             if (showWelcomeTab || (openTabs.Count == 0 && activeTab == null))
             {
                 bool isWelcomeActive = (activeTab == null);

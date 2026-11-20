@@ -79,7 +79,8 @@ Connect API keys (via Preferences `Ctrl/Cmd+,` or standard environment variables
 | Platform | Package | Direct Download |
 | :--- | :--- | :--- |
 | **Windows 10 / 11 (x64)** | Setup Installer (`.exe`, ~2.4 MB) | [`codeLess-Setup.exe`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-Setup.exe) |
-| **Windows 10 / 11 (x64)** | Portable Standalone (`.exe`, ~963 KB) | [`codeLess.exe`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess.exe) |
+| **Windows 10 / 11 (x64)** | Windows Installer Package (`.msi`, ~524 KB) | [`codeLess-Setup.msi`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-Setup.msi) |
+| **Windows 10 / 11 (x64)** | Portable Standalone (`.exe`, ~966 KB) | [`codeLess.exe`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess.exe) |
 | **macOS Apple Silicon (M1–M4)** | Disk Image (`.dmg`) / Bundle (`.zip`) | [`codeLess-mac-arm64.dmg`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-arm64.dmg) · [`.zip`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-arm64.zip) |
 | **macOS Intel (x64)** | Disk Image (`.dmg`) / Bundle (`.zip`) | [`codeLess-mac-x64.dmg`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-x64.dmg) · [`.zip`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-x64.zip) |
 | **Linux (Ubuntu / Debian x64)** | Debian Package (`.deb`) / Tarball (`.tar.gz`) | [`codeLess-linux-x64.deb`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-linux-x64.deb) · [`.tar.gz`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-linux-x64.tar.gz) |

@@ -118,10 +118,15 @@ namespace codeLess.Studio
             (ProposedNewLines != null && ProposedNewLines.Count > 0) ||
             (DiffHunks != null && DiffHunks.Any(h => h.IsPending));
 
+        private int _cachedGutterMapVersion = -1;
+        private Dictionary<int, int> _cachedGutterDiffMap;
+
         public Dictionary<int, int> GutterDiffByLine
         {
             get
             {
+                if (_cachedGutterDiffMap != null && _cachedGutterMapVersion == GutterDiffVersion)
+                    return _cachedGutterDiffMap;
                 var map = new Dictionary<int, int>();
                 if (GutterAddedLines != null)
                 {
@@ -131,6 +136,8 @@ namespace codeLess.Studio
                 {
                     foreach (int l in GutterModifiedLines) map[l] = 2;
                 }
+                _cachedGutterDiffMap = map;
+                _cachedGutterMapVersion = GutterDiffVersion;
                 return map;
             }
         }
@@ -171,7 +178,7 @@ namespace codeLess.Studio
             CursorLine = sLine;
             CursorCol = sCol;
             ClearSelection();
-            SyncContentFromLines();
+            SyncContentFromLines(recomputeGutterDiff: false);
         }
 
         public void ReplaceSelection(string replacement)
@@ -211,7 +218,7 @@ namespace codeLess.Studio
                 CursorLine = lastLine;
                 CursorCol = lastPart.Length;
             }
-            SyncContentFromLines();
+            SyncContentFromLines(recomputeGutterDiff: false);
         }
 
         public void PerformBackspace()
@@ -235,7 +242,7 @@ namespace codeLess.Studio
                 CursorLine--;
                 CursorCol = prevLen;
             }
-            SyncContentFromLines();
+            SyncContentFromLines(recomputeGutterDiff: false);
         }
 
         public void PerformDelete()
@@ -255,7 +262,7 @@ namespace codeLess.Studio
                 Lines[CursorLine] += Lines[CursorLine + 1];
                 Lines.RemoveAt(CursorLine + 1);
             }
-            SyncContentFromLines();
+            SyncContentFromLines(recomputeGutterDiff: false);
         }
     }
 

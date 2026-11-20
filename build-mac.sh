@@ -97,8 +97,14 @@ build_mac_bundle() {
     <string>codeLess</string>
     <key>CFBundleDisplayName</key>
     <string>codeLess</string>
+    <key>CFBundleSpokenName</key>
+    <string>codeLess</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
     <key>CFBundleVersion</key>
     <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>

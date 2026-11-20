@@ -350,7 +350,10 @@ namespace codeLess.Studio
         public static void AnalyzeBufferAstAndDiagnostics(EditorTabBuffer buf)
         {
             if (buf == null) return;
-            buf.SyncLinesFromContent();
+            if (buf.Lines == null || buf.Lines.Count == 0 || (buf.Lines.Count == 1 && buf.Lines[0].Length == 0 && !string.IsNullOrEmpty(buf.Content)))
+            {
+                buf.SyncLinesFromContent();
+            }
             buf.Symbols.Clear();
             buf.Diagnostics.Clear();
 
@@ -367,11 +370,13 @@ namespace codeLess.Studio
             string activeTripleQuote = null;
             string lang = (buf.Language ?? "").ToLowerInvariant();
             bool isPowerShell = (lang == "ps1" || lang == "powershell");
-            bool checkBrackets = (lang == "cs" || lang == "py" || lang == "js" || lang == "mjs" || lang == "ts" || lang == "tsx" || lang == "rs" || lang == "go" || lang == "json" || lang == "java" || lang == "c" || lang == "cpp");
+            bool checkBrackets = buf.Lines.Count <= 6000 &&
+                (lang == "cs" || lang == "py" || lang == "js" || lang == "mjs" || lang == "ts" || lang == "tsx" || lang == "rs" || lang == "go" || lang == "json" || lang == "java" || lang == "c" || lang == "cpp");
 
             for (int i = 0; i < buf.Lines.Count; i++)
             {
-                string line = buf.Lines[i];
+                string line = buf.Lines[i] ?? "";
+                if (line.Length > 2000) continue;
                 string trimmed = line.Trim();
 
                 if (isPowerShell)

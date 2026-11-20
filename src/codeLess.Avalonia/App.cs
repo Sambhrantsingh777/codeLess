@@ -2,7 +2,9 @@
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
@@ -16,14 +18,35 @@ namespace codeLess.AvaloniaApp
         public static string ScreenshotOutputPath { get; set; }
         public static string ScreenshotSuiteDir { get; set; }
 
+        public App()
+        {
+            Name = "codeLess";
+        }
+
         public override void Initialize()
         {
+            Name = "codeLess";
             RequestedThemeVariant = ThemeVariant.Dark;
             Styles.Add(new FluentTheme());
+
+            // Seed default macOS application menu so the top menu bar always displays "codeLess" instead of "Avalonia Application"
+            var appMenu = new NativeMenu();
+            var quitItem = new NativeMenuItem("Quit codeLess")
+            {
+                Gesture = new KeyGesture(Key.Q, KeyModifiers.Meta)
+            };
+            quitItem.Click += (s, e) =>
+            {
+                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime dt)
+                    dt.Shutdown(0);
+            };
+            appMenu.Add(quitItem);
+            NativeMenu.SetMenu(this, appMenu);
         }
 
         public override void OnFrameworkInitializationCompleted()
         {
+            Name = "codeLess";
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
                 var mainWindow = new MainWindow(StartupWorkspacePath);
@@ -40,6 +63,7 @@ namespace codeLess.AvaloniaApp
                         finally
                         {
                             desktop.Shutdown(0);
+                            Environment.Exit(0);
                         }
                     };
                 }
@@ -62,6 +86,7 @@ namespace codeLess.AvaloniaApp
                         finally
                         {
                             desktop.Shutdown(0);
+                            Environment.Exit(0);
                         }
                     };
                 }

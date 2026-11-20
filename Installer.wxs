@@ -1,0 +1,88 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="codeLess"
+    Manufacturer="Savatarr"
+    Version="3.2.0.0"
+    UpgradeCode="8F9E4A12-3C7B-4D9A-9E15-7C8A2B4F6031"
+    Scope="perUser"
+    InstallerVersion="500"
+    Compressed="yes">
+
+    <SummaryInformation
+      Description="codeLess Native Agentic IDE Setup (MSI)"
+      Manufacturer="Savatarr" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="CodeLessAppIcon" SourceFile="assets\savatarr_app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="CodeLessAppIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Sambhrantsingh777/codeLess" />
+    <Property Id="ARPURLINFOABOUT" Value="https://savatarr.com/codeless/" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="codeLess">
+          <Directory Id="AssetsFolder" Name="assets" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="codeLess" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutableComponent" Guid="5A41B9D2-7E18-4C0A-B324-19D8E6F20411">
+        <RegistryValue Root="HKCU" Key="Software\Savatarr\codeLess" Name="InstallPath" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <File Id="CodeLessExe" Source="codeLess.exe" />
+        <File Id="CodeLessCoreDll" Source="codeLess.Core.dll" />
+        <RemoveFolder Id="CleanupInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <RemoveFolder Id="CleanupProgramsSubFolder" Directory="ProgramsFolder" On="uninstall" />
+      </Component>
+
+      <Component Id="AssetsComponent" Directory="AssetsFolder" Guid="8C17F3E4-2D95-4A81-91B6-34F0C8E15209">
+        <RegistryValue Root="HKCU" Key="Software\Savatarr\codeLess" Name="AssetsInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <File Id="AssetCodeLessIco" Source="assets\codeless.ico" />
+        <File Id="AssetSavatarrIco" Source="assets\savatarr.ico" />
+        <File Id="AssetSavatarrAppIco" Source="assets\savatarr_app.ico" />
+        <File Id="AssetSavatarrBoltPng" Source="assets\savatarr_bolt.png" />
+        <File Id="AssetSavatarrFullLogoPng" Source="assets\savatarr_full_logo.png" />
+        <RemoveFolder Id="CleanupAssetsFolder" Directory="AssetsFolder" On="uninstall" />
+      </Component>
+
+      <Component Id="ShortcutsAndShellMenuComponent" Directory="ApplicationProgramsFolder" Guid="D3E91A70-6B42-4F58-82C1-90A4B7D63E18">
+        <RegistryValue Root="HKCU" Key="Software\Savatarr\codeLess" Name="ShortcutsInstalled" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut
+          Id="StartMenuShortcut"
+          Name="codeLess IDE"
+          Description="codeLess — Lightweight Native Agentic IDE"
+          Target="[INSTALLFOLDER]codeLess.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="CodeLessAppIcon" />
+        <Shortcut
+          Id="DesktopShortcut"
+          Directory="DesktopFolder"
+          Name="codeLess IDE"
+          Description="codeLess — Lightweight Native Agentic IDE"
+          Target="[INSTALLFOLDER]codeLess.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="CodeLessAppIcon" />
+        <RemoveFolder Id="CleanupProgramMenuFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryKey Root="HKCU" Key="Software\Classes\Directory\Background\shell\codeLess">
+          <RegistryValue Type="string" Value="Open with codeLess" />
+          <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]codeLess.exe&quot;" />
+          <RegistryKey Key="command">
+            <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]codeLess.exe&quot; &quot;%V&quot;" />
+          </RegistryKey>
+        </RegistryKey>
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="ProductFeature" Title="codeLess IDE" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+  </Package>
+</Wix>

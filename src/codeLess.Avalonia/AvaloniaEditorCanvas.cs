@@ -81,6 +81,7 @@ namespace codeLess.AvaloniaApp
         private StudioTheme currentTheme = StudioTheme.DarkObsidian();
         private string workspaceRoot = "";
         private List<string> recentWorkspaces = new List<string>();
+        private string lastBreadcrumbStateKey = "";
 
         public event Action<EditorTabBuffer> BufferModified;
         public event Action<EditorTabBuffer> CaretMoved;
@@ -271,26 +272,53 @@ namespace codeLess.AvaloniaApp
             Canvas.ApplyTheme(theme);
         }
 
-        public void RefreshBreadcrumbs()
+        public void RefreshBreadcrumbs(bool onlyIfChanged = false)
         {
-            breadcrumbSegmentsPanel.Children.Clear();
             if (CurrentBuffer == null)
             {
+                if (breadcrumbSegmentsPanel.Children.Count > 0)
+                    breadcrumbSegmentsPanel.Children.Clear();
                 BreadcrumbText = "";
+                lastBreadcrumbStateKey = "";
                 return;
             }
+
+            string rel = !string.IsNullOrEmpty(CurrentBuffer.RelativePath)
+                ? CurrentBuffer.RelativePath
+                : CurrentBuffer.FileName;
+
+            AstSymbolItem activeSym = null;
+            if (CurrentBuffer.Symbols != null && CurrentBuffer.Symbols.Count > 0)
+            {
+                int curLine1 = CurrentBuffer.CursorLine + 1;
+                for (int i = 0; i < CurrentBuffer.Symbols.Count; i++)
+                {
+                    var cand = CurrentBuffer.Symbols[i];
+                    if (cand.LineNumber <= curLine1 && (activeSym == null || cand.LineNumber >= activeSym.LineNumber))
+                        activeSym = cand;
+                }
+                if (activeSym == null)
+                    activeSym = CurrentBuffer.Symbols[0];
+            }
+
+            string stateKey = $"{currentTheme?.Id}|{rel}|{activeSym?.Kind}:{activeSym?.Name}:{activeSym?.LineNumber}";
+            if (onlyIfChanged && string.Equals(stateKey, lastBreadcrumbStateKey, StringComparison.Ordinal))
+                return;
+            lastBreadcrumbStateKey = stateKey;
+
+            breadcrumbSegmentsPanel.Children.Clear();
 
             Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
             Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
             Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
 
             // Breadcrumb displays clean path hierarchy without dirty indicator
-            string rel = !string.IsNullOrEmpty(CurrentBuffer.RelativePath)
-                ? CurrentBuffer.RelativePath
-                : CurrentBuffer.FileName;
             string[] parts = (rel ?? "Untitled").Replace('\\', '/').Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
 
             var sb = new StringBuilder();
+            var secBrush = new SolidColorBrush(textSecondary);
+            var priBrush = new SolidColorBrush(textPrimary);
+            var accBrush = new SolidColorBrush(accent);
             for (int i = 0; i < parts.Length; i++)
             {
                 if (i > 0)
@@ -300,7 +328,7 @@ namespace codeLess.AvaloniaApp
                     {
                         Text = "›",
                         FontSize = 11.5,
-                        Foreground = new SolidColorBrush(textSecondary),
+                        Foreground = secBrush,
                         VerticalAlignment = VerticalAlignment.Center,
                         Margin = new Thickness(2, 0)
                     });
@@ -312,47 +340,37 @@ namespace codeLess.AvaloniaApp
                     Text = parts[i],
                     FontSize = 11.5,
                     FontWeight = isLast ? FontWeight.SemiBold : FontWeight.Normal,
-                    Foreground = new SolidColorBrush(isLast ? textPrimary : textSecondary),
+                    Foreground = isLast ? priBrush : secBrush,
                     VerticalAlignment = VerticalAlignment.Center
                 });
             }
 
-            // Active symbol at cursor line
-            if (CurrentBuffer.Symbols != null && CurrentBuffer.Symbols.Count > 0)
+            if (activeSym != null)
             {
-                int curLine1 = CurrentBuffer.CursorLine + 1;
-                var activeSym = CurrentBuffer.Symbols
-                    .Where(s => s.LineNumber <= curLine1)
-                    .OrderByDescending(s => s.LineNumber)
-                    .FirstOrDefault() ?? CurrentBuffer.Symbols[0];
-
-                if (activeSym != null)
+                sb.Append(" › ").Append(activeSym.Name);
+                breadcrumbSegmentsPanel.Children.Add(new TextBlock
                 {
-                    sb.Append(" › ").Append(activeSym.Name);
-                    breadcrumbSegmentsPanel.Children.Add(new TextBlock
-                    {
-                        Text = "›",
-                        FontSize = 11.5,
-                        Foreground = new SolidColorBrush(textSecondary),
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(2, 0)
-                    });
+                    Text = "›",
+                    FontSize = 11.5,
+                    Foreground = secBrush,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(2, 0)
+                });
 
-                    var symBtn = new Button
+                var symBtn = new Button
+                {
+                    Content = new LiteralTextBlock($"{activeSym.Kind}: {activeSym.Name} ▾")
                     {
-                        Content = new LiteralTextBlock($"{activeSym.Kind}: {activeSym.Name} ▾")
-                        {
-                            FontSize = 11,
-                            Foreground = new SolidColorBrush(accent)
-                        },
                         FontSize = 11,
-                        Padding = new Thickness(6, 1),
-                        Background = Brushes.Transparent,
-                        Foreground = new SolidColorBrush(accent)
-                    };
-                    symBtn.Click += (s, e) => OpenBreadcrumbSymbolMenu(symBtn);
-                    breadcrumbSegmentsPanel.Children.Add(symBtn);
-                }
+                        Foreground = accBrush
+                    },
+                    FontSize = 11,
+                    Padding = new Thickness(6, 1),
+                    Background = Brushes.Transparent,
+                    Foreground = accBrush
+                };
+                symBtn.Click += (s, e) => OpenBreadcrumbSymbolMenu(symBtn);
+                breadcrumbSegmentsPanel.Children.Add(symBtn);
             }
 
             BreadcrumbText = sb.ToString();
@@ -1293,7 +1311,7 @@ namespace codeLess.AvaloniaApp
         {
             if (CurrentBuffer != null)
             {
-                RefreshBreadcrumbs();
+                RefreshBreadcrumbs(onlyIfChanged: true);
                 RefreshDiffBanner();
                 BufferModified?.Invoke(CurrentBuffer);
             }
@@ -1303,7 +1321,7 @@ namespace codeLess.AvaloniaApp
         {
             if (CurrentBuffer != null)
             {
-                RefreshBreadcrumbs();
+                RefreshBreadcrumbs(onlyIfChanged: true);
                 CaretMoved?.Invoke(CurrentBuffer);
             }
         }
@@ -1339,9 +1357,19 @@ namespace codeLess.AvaloniaApp
         public double FontSizePx { get; set; } = 13.0;
         public double LineHeight => Math.Round(FontSizePx * 1.54);
         private double measuredCharWidth = 0;
+        private double measuredCharWidthFontSize = -1;
         public double CharWidth => measuredCharWidth > 3.0 ? measuredCharWidth : Math.Round(FontSizePx * 0.60, 2);
         public const double GutterWidth = 58.0;
         public const double MinimapWidth = 76.0;
+
+        private static readonly string CodeMonoFont = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            ? "Menlo, Monaco, SF Mono, monospace"
+            : "Cascadia Code, Consolas, DejaVu Sans Mono, monospace";
+
+        private static readonly Typeface CachedFontRegular = new Typeface(CodeMonoFont, FontStyle.Normal, FontWeight.Normal);
+        private static readonly Typeface CachedFontBold = new Typeface(CodeMonoFont, FontStyle.Normal, FontWeight.Bold);
+        private static readonly Typeface CachedFontItalic = new Typeface(CodeMonoFont, FontStyle.Italic, FontWeight.Normal);
+        private static readonly Typeface CachedUiFontBold = new Typeface("Inter, Segoe UI, sans-serif", FontStyle.Normal, FontWeight.SemiBold);
 
         public bool ShowMinimap { get; set; } = true;
         public bool ColumnSelectionMode { get; set; } = false;
@@ -1686,8 +1714,12 @@ namespace codeLess.AvaloniaApp
             int docLine = ScreenYToDocLine(pt.Y);
             if (docLine != hoveredLine)
             {
+                int prevHover = hoveredLine;
                 hoveredLine = docLine;
-                InvalidateVisual();
+                bool hadDiag = prevHover >= 0 && buf.Diagnostics != null && buf.Diagnostics.Any(d => d.LineNumber - 1 == prevHover);
+                bool hasDiag = docLine >= 0 && buf.Diagnostics != null && buf.Diagnostics.Any(d => d.LineNumber - 1 == docLine);
+                if (hadDiag || hasDiag || hunkActionHitBoxes.Count > 0)
+                    InvalidateVisual();
             }
 
             if (isMouseSelecting)
@@ -1734,10 +1766,14 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null || buf.Lines.Count == 0) return 0;
+            int rowOffset = Math.Max(0, (int)(y / LineHeight));
+            if (buf.FoldedBlockRanges == null || buf.FoldedBlockRanges.Count == 0)
+            {
+                return Math.Max(0, Math.Min(buf.Lines.Count - 1, buf.ScrollTopLine + rowOffset));
+            }
             var visLines = GetVisibleDocumentLines();
             int startIdx = visLines.BinarySearch(buf.ScrollTopLine);
             if (startIdx < 0) startIdx = Math.Min(visLines.Count - 1, ~startIdx);
-            int rowOffset = Math.Max(0, (int)(y / LineHeight));
             int targetIdx = Math.Max(0, Math.Min(visLines.Count - 1, startIdx + rowOffset));
             return visLines[targetIdx];
         }
@@ -2337,9 +2373,11 @@ namespace codeLess.AvaloniaApp
 
             if (forward)
             {
-                for (int l = line; l < buf.Lines.Count; l++)
+                int maxForwardLine = Math.Min(buf.Lines.Count - 1, line + 1500);
+                for (int l = line; l <= maxForwardLine; l++)
                 {
                     string ln = buf.Lines[l];
+                    if (ln.Length > 4000) continue;
                     int cStart = (l == line) ? checkCol : 0;
                     for (int c = cStart; c < ln.Length; c++)
                     {
@@ -2354,9 +2392,11 @@ namespace codeLess.AvaloniaApp
             }
             else
             {
-                for (int l = line; l >= 0; l--)
+                int minBackwardLine = Math.Max(0, line - 1500);
+                for (int l = line; l >= minBackwardLine; l--)
                 {
                     string ln = buf.Lines[l];
+                    if (ln.Length > 4000) continue;
                     int cStart = (l == line) ? checkCol : ln.Length - 1;
                     for (int c = cStart; c >= 0; c--)
                     {
@@ -2408,11 +2448,13 @@ namespace codeLess.AvaloniaApp
         private void FinalizeBufferEdit(EditorTabBuffer buf)
         {
             if (buf == null) return;
-            buf.SyncContentFromLines();
+            bool deferHeavyAnalysis = AvaloniaTerminalEmulatorControl.IsDesktopRuntime && buf.Lines != null && buf.Lines.Count > 250;
+            buf.SyncContentFromLines(recomputeGutterDiff: !deferHeavyAnalysis);
             buf.IsDirty = true;
-            buf.RefreshGutterDiff();
-            if (!buf.IsLargeFile)
+            if (!deferHeavyAnalysis && !buf.IsLargeFile)
+            {
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buf);
+            }
             EnsureCursorVisible();
             owner.NotifyBufferModified();
             owner.NotifyCaretMoved();
@@ -2423,7 +2465,8 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null || string.IsNullOrEmpty(text)) return;
-            buf.PushUndoSnapshot();
+            bool coalesce = ExtraCursors.Count == 0 && text.Length == 1 && text[0] != '\n' && text[0] != '\r' && !buf.HasSelection();
+            buf.PushUndoSnapshot(coalesceTyping: coalesce);
             buf.GhostTextSuggestion = "";
 
             if (ExtraCursors.Count == 0)
@@ -2474,7 +2517,8 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
-            buf.PushUndoSnapshot();
+            bool coalesce = ExtraCursors.Count == 0 && !buf.HasSelection() && buf.CursorCol > 0;
+            buf.PushUndoSnapshot(coalesceTyping: coalesce);
             if (ExtraCursors.Count == 0)
             {
                 buf.PerformBackspace();
@@ -3132,6 +3176,18 @@ namespace codeLess.AvaloniaApp
             return list;
         }
 
+        private static int LowerBoundFindMatchLine(List<FindMatchSpan> matches, int targetLine)
+        {
+            int lo = 0, hi = matches.Count;
+            while (lo < hi)
+            {
+                int mid = lo + ((hi - lo) >> 1);
+                if (matches[mid].Line < targetLine) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo;
+        }
+
         public override void Render(DrawingContext context)
         {
             base.Render(context);
@@ -3147,7 +3203,8 @@ namespace codeLess.AvaloniaApp
             Color selBg = AvaloniaColorHelper.ToAvColor(Theme.SelectionBg, 130);
             Color lineHighlight = AvaloniaColorHelper.ToAvColor(Theme.LineHighlightBg);
 
-            context.FillRectangle(new SolidColorBrush(bg), new Rect(0, 0, w, h));
+            var bgBrush = new SolidColorBrush(bg);
+            context.FillRectangle(bgBrush, new Rect(0, 0, w, h));
 
             var buf = Buffer;
             if (buf == null) return;
@@ -3156,40 +3213,70 @@ namespace codeLess.AvaloniaApp
             double codeAreaRight = ShowMinimap ? Math.Max(GutterWidth + 60, w - MinimapWidth) : w;
 
             // Gutter background & divider
-            context.FillRectangle(new SolidColorBrush(gutterBg), new Rect(0, 0, GutterWidth, h));
-            context.DrawLine(new Pen(new SolidColorBrush(borderCol), 1), new Point(GutterWidth, 0), new Point(GutterWidth, h));
+            var gutterBrush = new SolidColorBrush(gutterBg);
+            var borderBrush = new SolidColorBrush(borderCol);
+            var textPriBrush = new SolidColorBrush(textPrimary);
+            var textSecBrush = new SolidColorBrush(textSecondary);
+            var accentBrush = new SolidColorBrush(accent);
+            var lineHlBrush = new SolidColorBrush(lineHighlight);
+            var selBgBrush = new SolidColorBrush(selBg);
+            var findMatchBrush = new SolidColorBrush(Color.FromArgb(110, 234, 179, 8));
+            var gitAddBrush = new SolidColorBrush(Color.FromRgb(46, 160, 67));
+            var gitModBrush = new SolidColorBrush(Color.FromRgb(0, 122, 204));
+            var gitDelBrush = new SolidColorBrush(Color.FromRgb(241, 76, 76));
 
-            var fontRegular = new Typeface("Cascadia Code, Consolas, Menlo, monospace", FontStyle.Normal, FontWeight.Normal);
-            var fontBold = new Typeface("Cascadia Code, Consolas, Menlo, monospace", FontStyle.Normal, FontWeight.Bold);
-            var fontItalic = new Typeface("Cascadia Code, Consolas, Menlo, monospace", FontStyle.Italic, FontWeight.Normal);
-            var uiFontBold = new Typeface("Inter, Segoe UI, sans-serif", FontStyle.Normal, FontWeight.SemiBold);
+            context.FillRectangle(gutterBrush, new Rect(0, 0, GutterWidth, h));
+            context.DrawLine(new Pen(borderBrush, 1), new Point(GutterWidth, 0), new Point(GutterWidth, h));
 
-            var metricProbe = new FormattedText("M", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, fontRegular, FontSizePx, Brushes.White);
-            if (metricProbe.WidthIncludingTrailingWhitespace > 3.0)
-                measuredCharWidth = metricProbe.WidthIncludingTrailingWhitespace;
+            var fontRegular = CachedFontRegular;
+            var fontBold = CachedFontBold;
+            var fontItalic = CachedFontItalic;
+            var uiFontBold = CachedUiFontBold;
 
-            // Bracket match calculation
+            if (Math.Abs(measuredCharWidthFontSize - FontSizePx) > 0.01 || measuredCharWidth <= 3.0)
+            {
+                var metricProbe = new FormattedText("MMMMMMMMMM", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, fontRegular, FontSizePx, Brushes.White);
+                double w10 = metricProbe.WidthIncludingTrailingWhitespace / 10.0;
+                if (w10 > 3.0)
+                {
+                    measuredCharWidth = w10;
+                    measuredCharWidthFontSize = FontSizePx;
+                }
+            }
+
+            // Bracket match calculation (bounded to ±1500 lines)
             int matchBLine = -1, matchBCol = -1;
             TryFindMatchingBracket(buf, buf.CursorLine, buf.CursorCol, out matchBLine, out matchBCol);
 
-            var visLines = GetVisibleDocumentLines();
-            int startVisIdx = visLines.BinarySearch(buf.ScrollTopLine);
-            if (startVisIdx < 0) startVisIdx = Math.Min(visLines.Count - 1, ~startVisIdx);
-            if (startVisIdx < 0) startVisIdx = 0;
+            bool hasFolds = buf.FoldedBlockRanges != null && buf.FoldedBlockRanges.Count > 0;
+            List<int> visLines = hasFolds ? GetVisibleDocumentLines() : null;
+            int totalVisCount = hasFolds ? visLines.Count : buf.Lines.Count;
+            int startVisIdx;
+            if (hasFolds)
+            {
+                startVisIdx = visLines.BinarySearch(buf.ScrollTopLine);
+                if (startVisIdx < 0) startVisIdx = Math.Min(Math.Max(0, visLines.Count - 1), ~startVisIdx);
+            }
+            else
+            {
+                startVisIdx = Math.Max(0, Math.Min(Math.Max(0, buf.Lines.Count - 1), buf.ScrollTopLine));
+            }
 
             int maxRows = (int)(h / LineHeight) + 2;
             double codeBaseX = GutterWidth + 8 - buf.ScrollLeftPx;
+            int firstHorizCol = Math.Max(0, (int)(buf.ScrollLeftPx / CharWidth) - 8);
+            int maxHorizCols = Math.Max(120, (int)((codeAreaRight - GutterWidth) / CharWidth) + 24);
 
-            for (int r = 0; r < maxRows && (startVisIdx + r) < visLines.Count; r++)
+            for (int r = 0; r < maxRows && (startVisIdx + r) < totalVisCount; r++)
             {
-                int docLine = visLines[startVisIdx + r];
+                int docLine = hasFolds ? visLines[startVisIdx + r] : (startVisIdx + r);
                 double y = r * LineHeight;
                 string lineText = buf.Lines[docLine] ?? "";
 
                 // Active line highlight
                 if (docLine == buf.CursorLine)
                 {
-                    context.FillRectangle(new SolidColorBrush(lineHighlight), new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, LineHeight));
+                    context.FillRectangle(lineHlBrush, new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, LineHeight));
                 }
 
                 // Proposed inline diff highlight & per-hunk Accept/Reject pills
@@ -3217,16 +3304,19 @@ namespace codeLess.AvaloniaApp
                 }
 
                 // Selection highlight on this line (primary + extra cursors)
-                DrawLineSelectionHighlight(context, buf, docLine, y, codeBaseX, selBg);
+                DrawLineSelectionHighlight(context, buf, docLine, y, codeBaseX, selBgBrush);
 
-                // Find match highlights on this line
-                foreach (var fm in owner.FindMatches)
+                // Find match highlights on this line (O(log M) binary search instead of linear scan)
+                if (owner.FindMatches.Count > 0)
                 {
-                    if (fm.Line == docLine)
+                    int fmIdx = LowerBoundFindMatchLine(owner.FindMatches, docLine);
+                    while (fmIdx < owner.FindMatches.Count && owner.FindMatches[fmIdx].Line == docLine)
                     {
+                        var fm = owner.FindMatches[fmIdx++];
                         double fx = codeBaseX + fm.StartCol * CharWidth;
                         double fw = Math.Max(CharWidth, fm.Length * CharWidth);
-                        context.FillRectangle(new SolidColorBrush(Color.FromArgb(110, 234, 179, 8)), new Rect(fx, y + 1, fw, LineHeight - 2));
+                        if (fx + fw >= GutterWidth && fx <= codeAreaRight)
+                            context.FillRectangle(findMatchBrush, new Rect(fx, y + 1, fw, LineHeight - 2));
                     }
                 }
 
@@ -3237,24 +3327,27 @@ namespace codeLess.AvaloniaApp
                     FlowDirection.LeftToRight,
                     docLine == buf.CursorLine ? fontBold : fontRegular,
                     FontSizePx - 1.5,
-                    new SolidColorBrush(docLine == buf.CursorLine ? textPrimary : textSecondary));
+                    docLine == buf.CursorLine ? textPriBrush : textSecBrush);
                 context.DrawText(lnFt, new Point(Math.Max(4, GutterWidth - 22 - lnFt.Width), y + (LineHeight - lnFt.Height) / 2.0));
 
-                // Gutter Git diff indicator bar
-                if (buf.GutterDiffByLine != null && buf.GutterDiffByLine.TryGetValue(docLine, out int diffKind))
+                // Gutter Git diff indicator bar (O(1) HashSet lookup, zero dictionary allocations)
+                if (buf.GutterAddedLines != null && buf.GutterAddedLines.Contains(docLine))
                 {
-                    Color diffCol = diffKind == 1 ? Color.FromRgb(46, 160, 67) : Color.FromRgb(0, 122, 204);
-                    context.FillRectangle(new SolidColorBrush(diffCol), new Rect(GutterWidth - 5, y + 1, 3, LineHeight - 2));
+                    context.FillRectangle(gitAddBrush, new Rect(GutterWidth - 5, y + 1, 3, LineHeight - 2));
+                }
+                else if (buf.GutterModifiedLines != null && buf.GutterModifiedLines.Contains(docLine))
+                {
+                    context.FillRectangle(gitModBrush, new Rect(GutterWidth - 5, y + 1, 3, LineHeight - 2));
                 }
                 if (buf.GutterDeletedAfterLine != null && buf.GutterDeletedAfterLine.Contains(docLine))
                 {
-                    context.FillRectangle(new SolidColorBrush(Color.FromRgb(241, 76, 76)), new Rect(GutterWidth - 7, y + LineHeight - 3, 6, 3));
+                    context.FillRectangle(gitDelBrush, new Rect(GutterWidth - 7, y + LineHeight - 3, 6, 3));
                 }
 
                 // Gutter folding chevron
                 if (CanFoldLine(buf, docLine))
                 {
-                    bool isFolded = buf.FoldedBlockRanges.ContainsKey(docLine);
+                    bool isFolded = hasFolds && buf.FoldedBlockRanges.ContainsKey(docLine);
                     AvaloniaVectorIcons.DrawIcon(
                         context,
                         isFolded ? "chevron-right" : "chevron-down",
@@ -3263,25 +3356,39 @@ namespace codeLess.AvaloniaApp
                         1.4f);
                 }
 
-                // Syntax-highlighted tokens
-                var tokens = TokenizeLineForTheme(lineText, Theme);
+                // Syntax-highlighted tokens (horizontally windowed for ultra-long / minified lines)
                 double curX = codeBaseX;
-                foreach (var tk in tokens)
+                string renderLineText = lineText;
+                if (lineText.Length > 360)
                 {
-                    var tf = tk.IsBold ? fontBold : (tk.IsItalic ? fontItalic : fontRegular);
-                    var ft = new FormattedText(
-                        tk.Text,
-                        CultureInfo.InvariantCulture,
-                        FlowDirection.LeftToRight,
-                        tf,
-                        FontSizePx,
-                        new SolidColorBrush(tk.Color));
-                    context.DrawText(ft, new Point(curX, y + (LineHeight - ft.Height) / 2.0));
-                    curX += ft.WidthIncludingTrailingWhitespace;
+                    int sliceStart = Math.Min(lineText.Length, firstHorizCol);
+                    int sliceLen = Math.Min(lineText.Length - sliceStart, maxHorizCols);
+                    renderLineText = sliceLen > 0 ? lineText.Substring(sliceStart, sliceLen) : "";
+                    curX = codeBaseX + sliceStart * CharWidth;
+                }
+
+                if (renderLineText.Length > 0)
+                {
+                    var tokens = TokenizeLineForTheme(renderLineText, Theme);
+                    foreach (var tk in tokens)
+                    {
+                        var tf = tk.IsBold ? fontBold : (tk.IsItalic ? fontItalic : fontRegular);
+                        var ft = new FormattedText(
+                            tk.Text,
+                            CultureInfo.InvariantCulture,
+                            FlowDirection.LeftToRight,
+                            tf,
+                            FontSizePx,
+                            new SolidColorBrush(tk.Color));
+                        if (curX + ft.WidthIncludingTrailingWhitespace >= GutterWidth && curX <= codeAreaRight)
+                            context.DrawText(ft, new Point(curX, y + (LineHeight - ft.Height) / 2.0));
+                        curX += ft.WidthIncludingTrailingWhitespace;
+                        if (curX > codeAreaRight + 40) break;
+                    }
                 }
 
                 // Folded block placeholder pill
-                if (buf.FoldedBlockRanges != null && buf.FoldedBlockRanges.TryGetValue(docLine, out int foldedTo))
+                if (hasFolds && buf.FoldedBlockRanges.TryGetValue(docLine, out int foldedTo))
                 {
                     var pillFt = new FormattedText(
                         $" ⋯ ({foldedTo - docLine} lines folded) ",
@@ -3289,9 +3396,9 @@ namespace codeLess.AvaloniaApp
                         FlowDirection.LeftToRight,
                         fontItalic,
                         FontSizePx - 1.5,
-                        new SolidColorBrush(accent));
+                        accentBrush);
                     var pillRect = new Rect(curX + 6, y + 2, pillFt.Width + 6, LineHeight - 4);
-                    context.DrawRectangle(new SolidColorBrush(Color.FromArgb(40, accent.R, accent.G, accent.B)), new Pen(new SolidColorBrush(accent), 1), pillRect, 3, 3);
+                    context.DrawRectangle(new SolidColorBrush(Color.FromArgb(40, accent.R, accent.G, accent.B)), new Pen(accentBrush, 1), pillRect, 3, 3);
                     context.DrawText(pillFt, new Point(pillRect.X + 3, y + (LineHeight - pillFt.Height) / 2.0));
                 }
 
@@ -3299,7 +3406,8 @@ namespace codeLess.AvaloniaApp
                 if (docLine == buf.CursorLine && !string.IsNullOrEmpty(buf.GhostTextSuggestion))
                 {
                     double gx = Math.Max(curX + (lineText.Length > 0 ? 8 : 0), codeBaseX + buf.CursorCol * CharWidth);
-                    string firstGhostLine = buf.GhostTextSuggestion.Split('\n')[0];
+                    int nlIdx = buf.GhostTextSuggestion.IndexOf('\n');
+                    string firstGhostLine = nlIdx >= 0 ? buf.GhostTextSuggestion.Substring(0, nlIdx) : buf.GhostTextSuggestion;
                     var gft = new FormattedText(
                         firstGhostLine + "   [Tab to accept]",
                         CultureInfo.InvariantCulture,
@@ -3314,14 +3422,15 @@ namespace codeLess.AvaloniaApp
                 if (docLine == matchBLine && matchBCol >= 0)
                 {
                     double bx = codeBaseX + matchBCol * CharWidth;
-                    context.DrawRectangle(null, new Pen(new SolidColorBrush(accent), 1.3), new Rect(bx, y + 2, CharWidth + 1, LineHeight - 4));
+                    context.DrawRectangle(null, new Pen(accentBrush, 1.3), new Rect(bx, y + 2, CharWidth + 1, LineHeight - 4));
                 }
 
                 // Diagnostics squiggles on this line
                 if (buf.Diagnostics != null && buf.Diagnostics.Count > 0)
                 {
-                    foreach (var diag in buf.Diagnostics)
+                    for (int di = 0; di < buf.Diagnostics.Count; di++)
                     {
+                        var diag = buf.Diagnostics[di];
                         if (diag.LineNumber - 1 == docLine)
                         {
                             bool isErr = string.Equals(diag.Severity, "Error", StringComparison.OrdinalIgnoreCase);
@@ -3330,8 +3439,9 @@ namespace codeLess.AvaloniaApp
                                 : AvaloniaColorHelper.ToAvColor(Theme.DiagnosticWarning);
                             int firstChar = GetLeadingSpaces(lineText);
                             double sx = codeBaseX + firstChar * CharWidth;
-                            double sw = Math.Max(CharWidth * 4, (lineText.Length - firstChar) * CharWidth);
-                            DrawSquiggleUnderline(context, sx, y + LineHeight - 3, sw, sqCol);
+                            double sw = Math.Max(CharWidth * 4, Math.Min(codeAreaRight - sx, (lineText.Length - firstChar) * CharWidth));
+                            if (sw > 0)
+                                DrawSquiggleUnderline(context, sx, y + LineHeight - 3, sw, sqCol);
                         }
                     }
                 }
@@ -3342,14 +3452,15 @@ namespace codeLess.AvaloniaApp
                     if (docLine == buf.CursorLine)
                     {
                         double cx = codeBaseX + buf.CursorCol * CharWidth;
-                        context.FillRectangle(new SolidColorBrush(accent), new Rect(cx, y + 2, 2.0, LineHeight - 4));
+                        context.FillRectangle(accentBrush, new Rect(cx, y + 2, 2.0, LineHeight - 4));
                     }
-                    foreach (var ec in ExtraCursors)
+                    for (int eci = 0; eci < ExtraCursors.Count; eci++)
                     {
+                        var ec = ExtraCursors[eci];
                         if (ec.Line == docLine)
                         {
                             double ecx = codeBaseX + ec.Col * CharWidth;
-                            context.FillRectangle(new SolidColorBrush(accent), new Rect(ecx, y + 2, 2.0, LineHeight - 4));
+                            context.FillRectangle(accentBrush, new Rect(ecx, y + 2, 2.0, LineHeight - 4));
                         }
                     }
                 }
@@ -3386,7 +3497,7 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        private void DrawLineSelectionHighlight(DrawingContext context, EditorTabBuffer buf, int docLine, double y, double codeBaseX, Color selBg)
+        private void DrawLineSelectionHighlight(DrawingContext context, EditorTabBuffer buf, int docLine, double y, double codeBaseX, IBrush selBrush)
         {
             if (buf.HasSelection())
             {
@@ -3403,7 +3514,7 @@ namespace codeLess.AvaloniaApp
                     int endC = (docLine == l1) ? c1 : Math.Max(1, buf.Lines[docLine].Length);
                     if (endC > startC)
                     {
-                        context.FillRectangle(new SolidColorBrush(selBg), new Rect(codeBaseX + startC * CharWidth, y, (endC - startC) * CharWidth, LineHeight));
+                        context.FillRectangle(selBrush, new Rect(codeBaseX + startC * CharWidth, y, (endC - startC) * CharWidth, LineHeight));
                     }
                 }
             }
@@ -3416,7 +3527,7 @@ namespace codeLess.AvaloniaApp
                     int ecCol = Math.Max(ec.Col, ec.AnchorCol);
                     if (ecCol > sc)
                     {
-                        context.FillRectangle(new SolidColorBrush(selBg), new Rect(codeBaseX + sc * CharWidth, y, (ecCol - sc) * CharWidth, LineHeight));
+                        context.FillRectangle(selBrush, new Rect(codeBaseX + sc * CharWidth, y, (ecCol - sc) * CharWidth, LineHeight));
                     }
                 }
             }
@@ -3451,30 +3562,43 @@ namespace codeLess.AvaloniaApp
             double step = totalLines > maxMmLines ? (double)totalLines / maxMmLines : 1.0;
 
             byte barAlpha = (byte)(isLight ? 90 : 135);
-            Color kwCol = AvaloniaColorHelper.ToAvColor(Theme.SyntaxKeyword, barAlpha);
-            Color fnCol = AvaloniaColorHelper.ToAvColor(Theme.SyntaxFunction, barAlpha);
-            Color cmCol = AvaloniaColorHelper.ToAvColor(Theme.SyntaxComment, barAlpha);
-            Color txCol = AvaloniaColorHelper.ToAvColor(Theme.TextSecondary, barAlpha);
+            var kwBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.SyntaxKeyword, barAlpha));
+            var fnBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.SyntaxFunction, barAlpha));
+            var cmBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.SyntaxComment, barAlpha));
+            var txBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.TextSecondary, barAlpha));
 
             for (int r = 0; r < maxMmLines; r++)
             {
                 int idx = (int)(r * step);
                 if (idx >= totalLines) break;
-                string ln = buf.Lines[idx] ?? "";
-                if (string.IsNullOrWhiteSpace(ln)) continue;
+                string ln = buf.Lines[idx];
+                if (string.IsNullOrEmpty(ln)) continue;
 
-                int lead = GetLeadingSpaces(ln);
-                double mx = mmX + 6 + Math.Min(20, lead * 1.2);
-                double mw = Math.Max(4, Math.Min(mmW - 12 - (mx - mmX), ln.Trim().Length * 0.45));
+                int firstNonWs = 0;
+                int leadSpaces = 0;
+                while (firstNonWs < ln.Length && (ln[firstNonWs] == ' ' || ln[firstNonWs] == '\t'))
+                {
+                    leadSpaces += (ln[firstNonWs] == '\t') ? 4 : 1;
+                    firstNonWs++;
+                }
+                if (firstNonWs >= ln.Length) continue;
+
+                int nonWsLen = ln.Length - firstNonWs;
+                double mx = mmX + 6 + Math.Min(20, leadSpaces * 1.2);
+                double mw = Math.Max(4, Math.Min(mmW - 12 - (mx - mmX), Math.Min(120, nonWsLen) * 0.45));
                 double my = r * 3.0 + 4.0;
 
-                string tr = ln.TrimStart();
-                Color barColor = txCol;
-                if (tr.StartsWith("//") || tr.StartsWith("#")) barColor = cmCol;
-                else if (tr.StartsWith("public ") || tr.StartsWith("class ") || tr.StartsWith("def ") || tr.StartsWith("export ") || tr.StartsWith("fn ")) barColor = kwCol;
-                else if (tr.Contains("(")) barColor = fnCol;
+                char c0 = ln[firstNonWs];
+                char c1 = (firstNonWs + 1 < ln.Length) ? ln[firstNonWs + 1] : '\0';
+                IBrush barBrush = txBrush;
+                if ((c0 == '/' && c1 == '/') || c0 == '#')
+                    barBrush = cmBrush;
+                else if (ln.IndexOf('(', firstNonWs, Math.Min(80, nonWsLen)) >= 0)
+                    barBrush = fnBrush;
+                else if (c0 == 'p' || c0 == 'c' || c0 == 'd' || c0 == 'e' || c0 == 'f')
+                    barBrush = kwBrush;
 
-                context.FillRectangle(new SolidColorBrush(barColor), new Rect(mx, my, mw, 1.6));
+                context.FillRectangle(barBrush, new Rect(mx, my, mw, 1.6));
             }
 
             // Viewport slider highlight

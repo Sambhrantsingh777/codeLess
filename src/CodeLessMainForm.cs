@@ -3112,16 +3112,48 @@ if __name__ == '__main__':
             ctrl.OnRunFileRequested += async (buf) => await ExecuteActiveFileInTerminalAsync(buf);
             ctrl.OnCtrlKRequested += async (inst, buf) => await HandleCtrlKInlineEditAsync(inst, buf);
             ctrl.OnPinContextRequested += (buf) => AddContextPill("@" + buf.FileName);
+            EditorTabBuffer lastSyncedBuf = null;
+            bool lastSyncedDirty = false;
+            int lastSyncedCount = -1;
+            System.Windows.Forms.Timer outlineDebounceTimer = null;
             ctrl.OnBufferModified += (buf) =>
             {
+                bool previewCleared = false;
                 if (buf != null && buf.IsPreview)
+                {
                     buf.IsPreview = false;
-                RefreshTabStrip();
-                RefreshOpenEditorsSection();
-                RefreshOutlineAndProblems(activeTab);
+                    previewCleared = true;
+                }
+                bool curDirty = buf != null && buf.IsDirty;
+                if (previewCleared || !ReferenceEquals(buf, lastSyncedBuf) || curDirty != lastSyncedDirty || openTabs.Count != lastSyncedCount)
+                {
+                    RefreshTabStrip();
+                    RefreshOpenEditorsSection();
+                    UpdateWindowTitle();
+                    lastSyncedBuf = buf;
+                    lastSyncedDirty = curDirty;
+                    lastSyncedCount = openTabs.Count;
+                }
+                if (buf != null && buf.Lines != null && buf.Lines.Count > 350)
+                {
+                    if (outlineDebounceTimer == null)
+                    {
+                        outlineDebounceTimer = new System.Windows.Forms.Timer { Interval = 300 };
+                        outlineDebounceTimer.Tick += (s, ev) =>
+                        {
+                            outlineDebounceTimer.Stop();
+                            if (!this.IsDisposed) RefreshOutlineAndProblems(activeTab);
+                        };
+                    }
+                    outlineDebounceTimer.Stop();
+                    outlineDebounceTimer.Start();
+                }
+                else
+                {
+                    RefreshOutlineAndProblems(activeTab);
+                }
                 RefreshChangesetReviewBar();
                 UpdateStatusBarCursorAndLanguage(buf);
-                UpdateWindowTitle();
             };
             ctrl.OnCursorOrSelectionChanged += (buf) =>
             {

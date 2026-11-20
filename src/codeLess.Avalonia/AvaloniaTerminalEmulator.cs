@@ -228,6 +228,9 @@ namespace codeLess.AvaloniaApp
 
         private int repaintQueued = 0;
 
+        public static bool IsDesktopRuntime =>
+            Application.Current?.ApplicationLifetime is global::Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
+
         public bool StartShell(string workingDir, string customShellCommand = null)
         {
             StopShell(notifyExit: false);
@@ -242,8 +245,16 @@ namespace codeLess.AvaloniaApp
                 : customShellCommand;
             ShellDisplayName = NormalizeShellLabel(resolvedCmd);
 
-            int cols = Math.Max(40, gridCanvas.CalcColumns());
-            int rows = Math.Max(10, gridCanvas.CalcRows());
+            int cols = Math.Max(20, gridCanvas.CalcColumns());
+            int rows = Math.Max(6, gridCanvas.CalcRows());
+
+            // In headless unit tests (UseHeadlessDrawing), keep fast deterministic FallbackBuffer instead of spawning 40 OS login shells
+            if (!IsDesktopRuntime)
+            {
+                FallbackBuffer?.Resize(cols, rows);
+                gridCanvas.InvalidateVisual();
+                return false;
+            }
 
             try
             {
@@ -376,10 +387,43 @@ namespace codeLess.AvaloniaApp
     internal class AvaloniaTerminalGridCanvas : Control
     {
         private readonly AvaloniaTerminalEmulatorControl owner;
-        public const double CellW = 8.0;
+        public const double DefaultCellW = 7.6;
         public const double CellH = 17.0;
         public const double PadLeft = 10.0;
         public const double PadTop = 6.0;
+        private const double TermFontSize = 12.5;
+
+        private static readonly string MonoFontFamilyName = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            ? "Menlo, Monaco, SF Mono, monospace"
+            : (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? "Cascadia Code, Consolas, monospace"
+                : "DejaVu Sans Mono, Liberation Mono, Ubuntu Mono, monospace");
+
+        private static readonly Typeface FontRegular = new Typeface(MonoFontFamilyName, FontStyle.Normal, FontWeight.Normal);
+        private static readonly Typeface FontBold = new Typeface(MonoFontFamilyName, FontStyle.Normal, FontWeight.Bold);
+        private static readonly Typeface FontItalic = new Typeface(MonoFontFamilyName, FontStyle.Italic, FontWeight.Normal);
+
+        private double measuredCellW = 0;
+        public double CellW
+        {
+            get
+            {
+                if (measuredCellW <= 3.0)
+                {
+                    try
+                    {
+                        var probe = new FormattedText("MMMMMMMMMM", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, FontRegular, TermFontSize, Brushes.White);
+                        double w10 = probe.WidthIncludingTrailingWhitespace / 10.0;
+                        measuredCellW = (w10 > 4.0 && w10 < 16.0) ? w10 : DefaultCellW;
+                    }
+                    catch
+                    {
+                        measuredCellW = DefaultCellW;
+                    }
+                }
+                return measuredCellW;
+            }
+        }
 
         private int scrollbackOffset = 0;
         private bool isSelecting = false;
@@ -393,8 +437,8 @@ namespace codeLess.AvaloniaApp
             ClipToBounds = true;
         }
 
-        public int CalcColumns() => Bounds.Width > 160 ? Math.Max(100, (int)((Bounds.Width - PadLeft * 2 - 8) / CellW)) : 100;
-        public int CalcRows() => Bounds.Height > 80 ? Math.Max(10, (int)((Bounds.Height - PadTop * 2) / CellH)) : 24;
+        public int CalcColumns() => Bounds.Width > 260 ? Math.Max(32, (int)((Bounds.Width - PadLeft * 2 - 4) / CellW)) : 100;
+        public int CalcRows() => Bounds.Height > 90 ? Math.Max(6, (int)((Bounds.Height - PadTop * 2) / CellH)) : 24;
 
         protected override void OnSizeChanged(SizeChangedEventArgs e)
         {
@@ -734,13 +778,25 @@ namespace codeLess.AvaloniaApp
         {
             base.OnTextInput(e);
             if (string.IsNullOrEmpty(e.Text)) return;
-            scrollbackOffset = 0;
-            ClearSelection();
+
+            // Filter out control characters (Enter, Backspace, Escape, Tab, Ctrl+A..Z) already handled in OnKeyDown
+            var clean = new StringBuilder(e.Text.Length);
             foreach (char ch in e.Text)
             {
-                if (ch >= 32) lineInputTracker.Append(ch);
+                if (ch >= 32 && ch != 127)
+                {
+                    clean.Append(ch);
+                    lineInputTracker.Append(ch);
+                }
             }
-            owner.WriteAutomatedInput(e.Text);
+            if (clean.Length == 0)
+            {
+                e.Handled = true;
+                return;
+            }
+            scrollbackOffset = 0;
+            ClearSelection();
+            owner.WriteAutomatedInput(clean.ToString());
             e.Handled = true;
         }
 
@@ -749,83 +805,105 @@ namespace codeLess.AvaloniaApp
             base.Render(context);
             double w = Bounds.Width;
             double h = Bounds.Height;
-            context.FillRectangle(new SolidColorBrush(owner.TermBgColor), new Rect(0, 0, w, h));
+            double cellW = CellW;
+            var termBgBrush = new SolidColorBrush(owner.TermBgColor);
+            context.FillRectangle(termBgBrush, new Rect(0, 0, w, h));
 
             var buf = owner.ActiveBuffer;
             if (buf == null) return;
 
-            var fontRegular = new Typeface("Cascadia Code, Consolas, Menlo, monospace", FontStyle.Normal, FontWeight.Normal);
-            var fontBold = new Typeface("Cascadia Code, Consolas, Menlo, monospace", FontStyle.Normal, FontWeight.Bold);
-            var fontItalic = new Typeface("Cascadia Code, Consolas, Menlo, monospace", FontStyle.Italic, FontWeight.Normal);
-
             int rows = buf.Rows;
             int cols = buf.Cols;
+            int maxVisCols = Math.Min(cols, Math.Max(1, (int)((w - PadLeft) / cellW) + 1));
+            var selHighlightCol = Color.FromArgb(120, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B);
+            var selHighlightBrush = new SolidColorBrush(selHighlightCol);
+            var runSb = new StringBuilder(128);
+
             for (int r = 0; r < rows; r++)
             {
                 double y = PadTop + r * CellH;
                 if (y + CellH < 0 || y > h) continue;
 
-                for (int c = 0; c < cols; c++)
+                // Pass 1: Draw non-default cell backgrounds & selection highlights (coalesced horizontal spans)
+                int cBg = 0;
+                while (cBg < maxVisCols)
                 {
-                    double x = PadLeft + c * CellW;
-                    if (x > w) break;
+                    Color cellBg = ResolveCellColors(buf.GetViewportCell(r, cBg, scrollbackOffset), IsCellSelected(r, cBg), selHighlightCol, out _, out _, out _, out _);
+                    if (cellBg == owner.TermBgColor)
+                    {
+                        cBg++;
+                        continue;
+                    }
+                    int runEnd = cBg + 1;
+                    while (runEnd < maxVisCols)
+                    {
+                        Color nextBg = ResolveCellColors(buf.GetViewportCell(r, runEnd, scrollbackOffset), IsCellSelected(r, runEnd), selHighlightCol, out _, out _, out _, out _);
+                        if (nextBg != cellBg) break;
+                        runEnd++;
+                    }
+                    var bgBrush = (cellBg == selHighlightCol) ? selHighlightBrush : new SolidColorBrush(cellBg);
+                    context.FillRectangle(bgBrush, new Rect(PadLeft + cBg * cellW, y, (runEnd - cBg) * cellW + 0.5, CellH + 0.5));
+                    cBg = runEnd;
+                }
 
+                // Pass 2: Draw ASCII text in batched runs + non-ASCII glyphs pinned to exact cell X
+                int c = 0;
+                while (c < maxVisCols)
+                {
                     TermCell cell = buf.GetViewportCell(r, c, scrollbackOffset);
-                    bool inverse = (cell.Flags & TermCell.FLAG_INVERSE) != 0;
-                    bool isDefBg = (cell.Flags & TermCell.FLAG_DEFAULT_BG) != 0 ||
-                                   (cell.Bg.R == 0 && cell.Bg.G == 0 && cell.Bg.B == 0) ||
-                                   (owner.IsLightTerminal && cell.Bg.R < 45 && cell.Bg.G < 45 && cell.Bg.B < 55) ||
-                                   (!owner.IsLightTerminal && cell.Bg.R > 235 && cell.Bg.G > 235 && cell.Bg.B > 235);
-                    bool isDefFg = (cell.Flags & TermCell.FLAG_DEFAULT_FG) != 0 ||
-                                   (owner.IsLightTerminal && cell.Fg.R > 195 && cell.Fg.G > 195 && cell.Fg.B > 195) ||
-                                   (!owner.IsLightTerminal && cell.Fg.R < 50 && cell.Fg.G < 50 && cell.Fg.B < 55 && (cell.Fg.R + cell.Fg.G + cell.Fg.B) > 0);
-
-                    Color fg = isDefFg ? owner.TermFgColor : AvaloniaColorHelper.ToAvColor(cell.Fg);
-                    Color bg = isDefBg ? owner.TermBgColor : AvaloniaColorHelper.ToAvColor(cell.Bg);
-
-                    if (owner.IsLightTerminal && !isDefFg)
-                    {
-                        if (fg.R > 200 && fg.G > 180 && fg.B < 100) fg = Color.FromRgb(148, 104, 0);
-                        else if (fg.R < 80 && fg.G > 180 && fg.B > 180) fg = Color.FromRgb(5, 122, 155);
-                        else if (fg.R < 80 && fg.G > 180 && fg.B < 150) fg = Color.FromRgb(16, 124, 65);
-                    }
-
-                    if (inverse)
-                    {
-                        var tmp = fg; fg = bg; bg = tmp;
-                    }
-
-                    bool selected = IsCellSelected(r, c);
-                    if (selected)
-                    {
-                        bg = Color.FromArgb(120, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B);
-                    }
-                    if (bg != owner.TermBgColor || selected)
-                    {
-                        context.FillRectangle(new SolidColorBrush(bg), new Rect(x, y, CellW + 0.5, CellH + 0.5));
-                    }
-
                     char ch = cell.Char;
-                    if (ch > ' ' && ch != '\0')
+                    ResolveCellColors(cell, IsCellSelected(r, c), selHighlightCol, out Color fg, out bool bold, out bool italic, out bool underline);
+
+                    if (ch <= ' ' || ch == '\0')
                     {
-                        bool bold = (cell.Flags & TermCell.FLAG_BOLD) != 0;
-                        bool italic = (cell.Flags & TermCell.FLAG_ITALIC) != 0;
-                        bool dim = (cell.Flags & TermCell.FLAG_DIM) != 0;
-                        if (dim) fg = Color.FromArgb(165, fg.R, fg.G, fg.B);
-
-                        var ft = new FormattedText(
-                            ch.ToString(),
-                            CultureInfo.InvariantCulture,
-                            FlowDirection.LeftToRight,
-                            bold ? fontBold : (italic ? fontItalic : fontRegular),
-                            12.5,
-                            new SolidColorBrush(fg));
-                        context.DrawText(ft, new Point(x, y + 1));
-
-                        if ((cell.Flags & TermCell.FLAG_UNDERLINE) != 0)
+                        if (underline)
                         {
-                            context.DrawLine(new Pen(new SolidColorBrush(fg), 1), new Point(x, y + CellH - 2), new Point(x + CellW, y + CellH - 2));
+                            double ux = PadLeft + c * cellW;
+                            context.DrawLine(new Pen(new SolidColorBrush(fg), 1), new Point(ux, y + CellH - 2), new Point(ux + cellW, y + CellH - 2));
                         }
+                        c++;
+                        continue;
+                    }
+
+                    // Non-ASCII symbol/box-drawing glyph: draw individually at exact column coordinate so fallback fonts never shift cursor
+                    if (ch > 126)
+                    {
+                        double gx = PadLeft + c * cellW;
+                        var tfGlyph = bold ? FontBold : (italic ? FontItalic : FontRegular);
+                        var fgBrush = new SolidColorBrush(fg);
+                        var ftGlyph = new FormattedText(ch.ToString(), CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tfGlyph, TermFontSize, fgBrush);
+                        context.DrawText(ftGlyph, new Point(gx, y + 1));
+                        if (underline)
+                            context.DrawLine(new Pen(fgBrush, 1), new Point(gx, y + CellH - 2), new Point(gx + cellW, y + CellH - 2));
+                        c++;
+                        continue;
+                    }
+
+                    // Contiguous ASCII run sharing identical style & foreground color
+                    int startCol = c;
+                    runSb.Clear();
+                    runSb.Append(ch);
+                    c++;
+                    while (c < maxVisCols)
+                    {
+                        TermCell next = buf.GetViewportCell(r, c, scrollbackOffset);
+                        char nch = next.Char;
+                        if (nch < 32 || nch > 126) break;
+                        ResolveCellColors(next, IsCellSelected(r, c), selHighlightCol, out Color nfg, out bool nbold, out bool nitalic, out bool nunderline);
+                        if (nfg != fg || nbold != bold || nitalic != italic || nunderline != underline)
+                            break;
+                        runSb.Append(nch);
+                        c++;
+                    }
+
+                    double rx = PadLeft + startCol * cellW;
+                    var tf = bold ? FontBold : (italic ? FontItalic : FontRegular);
+                    var runBrush = new SolidColorBrush(fg);
+                    var ft = new FormattedText(runSb.ToString(), CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, TermFontSize, runBrush);
+                    context.DrawText(ft, new Point(rx, y + 1));
+                    if (underline)
+                    {
+                        context.DrawLine(new Pen(runBrush, 1), new Point(rx, y + CellH - 2), new Point(rx + (c - startCol) * cellW, y + CellH - 2));
                     }
                 }
             }
@@ -833,13 +911,53 @@ namespace codeLess.AvaloniaApp
             // Draw terminal cursor when at bottom of scrollback
             if (scrollbackOffset == 0 && buf.CursorVisible && owner.CursorBlinkOn)
             {
-                double cx = PadLeft + buf.CursorCol * CellW;
+                double cx = PadLeft + buf.CursorCol * cellW;
                 double cy = PadTop + buf.CursorRow * CellH;
-                var cursorRect = new Rect(cx, cy + 1, CellW, CellH - 2);
+                var cursorRect = new Rect(cx, cy + 1, cellW, CellH - 2);
                 context.FillRectangle(
                     new SolidColorBrush(Color.FromArgb(185, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B)),
                     cursorRect);
             }
+        }
+
+        private Color ResolveCellColors(TermCell cell, bool selected, Color selHighlightCol, out Color fg, out bool bold, out bool italic, out bool underline)
+        {
+            bool inverse = (cell.Flags & TermCell.FLAG_INVERSE) != 0;
+            bool isDefBg = (cell.Flags & TermCell.FLAG_DEFAULT_BG) != 0 ||
+                           (cell.Bg.R == 0 && cell.Bg.G == 0 && cell.Bg.B == 0) ||
+                           (owner.IsLightTerminal && cell.Bg.R < 45 && cell.Bg.G < 45 && cell.Bg.B < 55) ||
+                           (!owner.IsLightTerminal && cell.Bg.R > 235 && cell.Bg.G > 235 && cell.Bg.B > 235);
+            bool isDefFg = (cell.Flags & TermCell.FLAG_DEFAULT_FG) != 0 ||
+                           (owner.IsLightTerminal && cell.Fg.R > 195 && cell.Fg.G > 195 && cell.Fg.B > 195) ||
+                           (!owner.IsLightTerminal && cell.Fg.R < 50 && cell.Fg.G < 50 && cell.Fg.B < 55 && (cell.Fg.R + cell.Fg.G + cell.Fg.B) > 0);
+
+            fg = isDefFg ? owner.TermFgColor : AvaloniaColorHelper.ToAvColor(cell.Fg);
+            Color bg = isDefBg ? owner.TermBgColor : AvaloniaColorHelper.ToAvColor(cell.Bg);
+
+            if (owner.IsLightTerminal && !isDefFg)
+            {
+                if (fg.R > 200 && fg.G > 180 && fg.B < 100) fg = Color.FromRgb(148, 104, 0);
+                else if (fg.R < 80 && fg.G > 180 && fg.B > 180) fg = Color.FromRgb(5, 122, 155);
+                else if (fg.R < 80 && fg.G > 180 && fg.B < 150) fg = Color.FromRgb(16, 124, 65);
+            }
+
+            if (inverse)
+            {
+                var tmp = fg; fg = bg; bg = tmp;
+            }
+            if ((cell.Flags & TermCell.FLAG_DIM) != 0)
+            {
+                fg = Color.FromArgb(165, fg.R, fg.G, fg.B);
+            }
+            if (selected)
+            {
+                bg = selHighlightCol;
+            }
+
+            bold = (cell.Flags & TermCell.FLAG_BOLD) != 0;
+            italic = (cell.Flags & TermCell.FLAG_ITALIC) != 0;
+            underline = (cell.Flags & TermCell.FLAG_UNDERLINE) != 0;
+            return bg;
         }
     }
 }

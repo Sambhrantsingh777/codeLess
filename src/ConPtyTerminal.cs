@@ -449,7 +449,7 @@ namespace codeLess.Studio
                 slaveName = Marshal.PtrToStringAnsi(ptr);
                 winsize ws = new winsize((ushort)Math.Max((short)1, rows), (ushort)Math.Max((short)1, cols));
                 ioctl(fd, GetTiocswinszRequest(), ref ws);
-                try { fcntl_int(fd, F_SETFD, FD_CLOEXEC); } catch { }
+                try { SetCloseOnExec(fd); } catch { }
                 masterFd = fd;
                 return true;
             }
@@ -463,39 +463,48 @@ namespace codeLess.Studio
         public const int F_SETFD = 2;
         public const int FD_CLOEXEC = 1;
         public const short POSIX_SPAWN_SETSID_DARWIN = 0x0400;
+        public const short POSIX_SPAWN_CLOEXEC_DEFAULT_DARWIN = 0x4000;
+        public const short POSIX_SPAWN_SETSID_LINUX = 0x0080;
 
+        // ABI-safe variadic fcntl(int fd, int cmd, ...) for both x64/Linux-arm64 (register r2) and Apple Silicon osx-arm64 (stackArg0).
         [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
-        public static extern int fcntl_int(int fd, int cmd, int arg);
+        private static extern int fcntl_vararg(
+            int fd, int cmd,
+            IntPtr r2, IntPtr r3, IntPtr r4, IntPtr r5, IntPtr r6, IntPtr r7,
+            IntPtr stackArg0);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawnattr_init(out IntPtr attr);
+        public static int SetCloseOnExec(int fd)
+        {
+            IntPtr val = new IntPtr(FD_CLOEXEC);
+            return fcntl_vararg(fd, F_SETFD, val, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, val);
+        }
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawnattr_destroy(ref IntPtr attr);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawnattr_init(IntPtr attr);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawnattr_setflags(ref IntPtr attr, short flags);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawnattr_destroy(IntPtr attr);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawn_file_actions_init(out IntPtr file_actions);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawnattr_setflags(IntPtr attr, short flags);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawn_file_actions_destroy(ref IntPtr file_actions);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_init(IntPtr file_actions);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawn_file_actions_addopen(ref IntPtr file_actions, int filedes, IntPtr path, int oflag, ushort mode);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_destroy(IntPtr file_actions);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawn_file_actions_adddup2(ref IntPtr file_actions, int filedes, int newfiledes);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_addopen(IntPtr file_actions, int filedes, IntPtr path, int oflag, ushort mode);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawn_file_actions_addchdir_np(ref IntPtr file_actions, IntPtr path);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_adddup2(IntPtr file_actions, int filedes, int newfiledes);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern IntPtr _NSGetEnviron();
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_addchdir_np(IntPtr file_actions, IntPtr path);
 
-        [DllImport("libSystem.B.dylib", SetLastError = true)]
-        public static extern int posix_spawn(out int pid, IntPtr path, ref IntPtr file_actions, ref IntPtr attrp, IntPtr argv, IntPtr envp);
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawn(out int pid, IntPtr path, IntPtr file_actions, IntPtr attrp, IntPtr argv, IntPtr envp);
     }
 
     // =========================================================================
@@ -2270,197 +2279,186 @@ namespace codeLess.Studio
             return "powershell.exe -NoLogo";
         }
 
+        private static List<string> SplitUnixCommandArgs(string commandLine)
+        {
+            var tokens = new List<string>();
+            if (string.IsNullOrWhiteSpace(commandLine)) return tokens;
+            var cur = new StringBuilder();
+            bool inSingle = false;
+            bool inDouble = false;
+            for (int i = 0; i < commandLine.Length; i++)
+            {
+                char ch = commandLine[i];
+                if (ch == '\\' && i + 1 < commandLine.Length && !inSingle)
+                {
+                    cur.Append(commandLine[++i]);
+                    continue;
+                }
+                if (ch == '\'' && !inDouble) { inSingle = !inSingle; continue; }
+                if (ch == '"' && !inSingle) { inDouble = !inDouble; continue; }
+                if (char.IsWhiteSpace(ch) && !inSingle && !inDouble)
+                {
+                    if (cur.Length > 0) { tokens.Add(cur.ToString()); cur.Clear(); }
+                    continue;
+                }
+                cur.Append(ch);
+            }
+            if (cur.Length > 0) tokens.Add(cur.ToString());
+            return tokens;
+        }
+
         private bool StartUnixPtyProcess(string commandLine, string workingDir, short cols, short rows)
         {
             IntPtr unmanagedShell = IntPtr.Zero;
-            IntPtr unmanagedArg0 = IntPtr.Zero;
-            IntPtr unmanagedArg1 = IntPtr.Zero;
             IntPtr unmanagedWorkDir = IntPtr.Zero;
             IntPtr unmanagedArgv = IntPtr.Zero;
+            IntPtr unmanagedEnvp = IntPtr.Zero;
             IntPtr unmanagedSlavePath = IntPtr.Zero;
+            var unmanagedArgStrs = new List<IntPtr>();
+            var unmanagedEnvStrs = new List<IntPtr>();
+
             try
             {
                 string shellExe = GetUserUnixShell();
-                string shellArg = "-l";
-                if (!string.IsNullOrWhiteSpace(commandLine))
+                var shellArgs = new List<string> { "-l" };
+
+                var parsed = SplitUnixCommandArgs(commandLine);
+                if (parsed.Count > 0)
                 {
-                    string[] parts = commandLine.Trim().Split(new char[] { ' ' }, 2, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length > 0)
+                    string candidate = parsed[0];
+                    if (!candidate.StartsWith("/") && !File.Exists(candidate))
                     {
-                        string candidate = parts[0];
-                        if (!candidate.StartsWith("/") && !File.Exists(candidate))
+                        string[] searchDirs = { "/bin", "/usr/bin", "/opt/homebrew/bin", "/usr/local/bin" };
+                        foreach (string dir in searchDirs)
                         {
-                            string[] searchDirs = { "/bin", "/usr/bin", "/opt/homebrew/bin", "/usr/local/bin" };
-                            foreach (string dir in searchDirs)
+                            string fullCand = Path.Combine(dir, candidate);
+                            if (File.Exists(fullCand))
                             {
-                                string fullCand = Path.Combine(dir, candidate);
-                                if (File.Exists(fullCand))
-                                {
-                                    candidate = fullCand;
-                                    break;
-                                }
+                                candidate = fullCand;
+                                break;
                             }
                         }
-                        if (candidate.StartsWith("/") || File.Exists(candidate))
+                    }
+                    if (candidate.StartsWith("/") && File.Exists(candidate))
+                    {
+                        shellExe = candidate;
+                        shellArgs.Clear();
+                        if (parsed.Count > 1)
                         {
-                            shellExe = candidate;
-                            shellArg = parts.Length > 1 ? parts[1] : "-l";
+                            for (int i = 1; i < parsed.Count; i++)
+                                shellArgs.Add(parsed[i]);
+                        }
+                        else
+                        {
+                            shellArgs.Add("-l");
                         }
                     }
                 }
 
-                try
-                {
-                    Environment.SetEnvironmentVariable("TERM", "xterm-256color");
-                    Environment.SetEnvironmentVariable("COLORTERM", "truecolor");
-                }
-                catch { }
+                string effectiveWorkDir = (!string.IsNullOrEmpty(workingDir) && workingDir != "/" && Directory.Exists(workingDir))
+                    ? workingDir
+                    : GetDefaultHomeDirectory();
 
                 unmanagedShell = UnixPtyNative.AllocUtf8HGlobal(shellExe);
-                unmanagedArg0 = UnixPtyNative.AllocUtf8HGlobal(Path.GetFileName(shellExe));
-                unmanagedArg1 = UnixPtyNative.AllocUtf8HGlobal(shellArg);
-                unmanagedWorkDir = UnixPtyNative.AllocUtf8HGlobal(string.IsNullOrEmpty(workingDir) ? GetDefaultHomeDirectory() : workingDir);
-                unmanagedArgv = Marshal.AllocHGlobal(IntPtr.Size * 3);
-                Marshal.WriteIntPtr(unmanagedArgv, 0, unmanagedArg0);
-                Marshal.WriteIntPtr(unmanagedArgv, IntPtr.Size, unmanagedArg1);
-                Marshal.WriteIntPtr(unmanagedArgv, IntPtr.Size * 2, IntPtr.Zero);
+                unmanagedWorkDir = UnixPtyNative.AllocUtf8HGlobal(effectiveWorkDir);
+
+                unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal(Path.GetFileName(shellExe)));
+                foreach (string a in shellArgs)
+                    unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal(a));
+
+                unmanagedArgv = Marshal.AllocHGlobal(IntPtr.Size * (unmanagedArgStrs.Count + 1));
+                for (int i = 0; i < unmanagedArgStrs.Count; i++)
+                    Marshal.WriteIntPtr(unmanagedArgv, i * IntPtr.Size, unmanagedArgStrs[i]);
+                Marshal.WriteIntPtr(unmanagedArgv, unmanagedArgStrs.Count * IntPtr.Size, IntPtr.Zero);
+
+                // Build clean UTF-8 environment with UTF-8 locale and xterm-256color so Finder-launched macOS apps render UTF-8 prompts cleanly
+                var envMap = new Dictionary<string, string>(StringComparer.Ordinal);
+                try
+                {
+                    foreach (System.Collections.DictionaryEntry de in Environment.GetEnvironmentVariables())
+                    {
+                        string k = de.Key != null ? de.Key.ToString() : null;
+                        if (!string.IsNullOrEmpty(k))
+                            envMap[k] = de.Value != null ? de.Value.ToString() : "";
+                    }
+                }
+                catch { }
+                envMap["TERM"] = "xterm-256color";
+                envMap["COLORTERM"] = "truecolor";
+                envMap["PROMPT_EOL_MARK"] = "";
+                if (!envMap.ContainsKey("LANG") || string.IsNullOrWhiteSpace(envMap["LANG"]))
+                    envMap["LANG"] = "en_US.UTF-8";
+                if (!envMap.ContainsKey("HOME") || string.IsNullOrWhiteSpace(envMap["HOME"]))
+                    envMap["HOME"] = GetDefaultHomeDirectory();
+
+                foreach (var kv in envMap)
+                    unmanagedEnvStrs.Add(UnixPtyNative.AllocUtf8HGlobal(kv.Key + "=" + kv.Value));
+
+                unmanagedEnvp = Marshal.AllocHGlobal(IntPtr.Size * (unmanagedEnvStrs.Count + 1));
+                for (int i = 0; i < unmanagedEnvStrs.Count; i++)
+                    Marshal.WriteIntPtr(unmanagedEnvp, i * IntPtr.Size, unmanagedEnvStrs[i]);
+                Marshal.WriteIntPtr(unmanagedEnvp, unmanagedEnvStrs.Count * IntPtr.Size, IntPtr.Zero);
 
                 UnixPtyNative.winsize ws = new UnixPtyNative.winsize((ushort)Math.Max((short)6, rows), (ushort)Math.Max((short)20, cols));
                 int masterFd = -1;
                 int pid = -1;
                 bool spawned = false;
 
-                // On macOS (Apple Silicon arm64 & Intel x64), spawn the shell on a POSIX PTY via posix_spawn
-                // (POSIX_SPAWN_SETSID + file_actions_addopen) to avoid calling fork() inside Cocoa / CoreCLR.
-                if (ConPtyNative.IsMacPlatform())
+                string slavePath;
+                if (UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out slavePath) && masterFd >= 0 && !string.IsNullOrEmpty(slavePath))
                 {
-                    string macSlavePath;
-                    if (UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out macSlavePath) && masterFd >= 0 && !string.IsNullOrEmpty(macSlavePath))
+                    // 512-byte zeroed buffers safely hold both Darwin pointer-backed and glibc struct-backed spawn descriptors
+                    IntPtr spawnAttr = Marshal.AllocHGlobal(512);
+                    IntPtr spawnActions = Marshal.AllocHGlobal(512);
+                    for (int z = 0; z < 512; z++)
                     {
-                        IntPtr spawnAttr = IntPtr.Zero;
-                        IntPtr spawnActions = IntPtr.Zero;
-                        bool attrInited = false;
-                        bool actionsInited = false;
-                        try
-                        {
-                            unmanagedSlavePath = UnixPtyNative.AllocUtf8HGlobal(macSlavePath);
-                            if (UnixPtyNative.posix_spawnattr_init(out spawnAttr) == 0)
-                            {
-                                attrInited = true;
-                                UnixPtyNative.posix_spawnattr_setflags(ref spawnAttr, UnixPtyNative.POSIX_SPAWN_SETSID_DARWIN);
-                            }
-                            if (UnixPtyNative.posix_spawn_file_actions_init(out spawnActions) == 0)
-                            {
-                                actionsInited = true;
-                                UnixPtyNative.posix_spawn_file_actions_addopen(ref spawnActions, 0, unmanagedSlavePath, UnixPtyNative.O_RDWR, 0);
-                                UnixPtyNative.posix_spawn_file_actions_adddup2(ref spawnActions, 0, 1);
-                                UnixPtyNative.posix_spawn_file_actions_adddup2(ref spawnActions, 0, 2);
-                                try { UnixPtyNative.posix_spawn_file_actions_addchdir_np(ref spawnActions, unmanagedWorkDir); } catch { }
-                            }
-                            IntPtr envPtrPtr = UnixPtyNative._NSGetEnviron();
-                            IntPtr envp = envPtrPtr != IntPtr.Zero ? Marshal.ReadIntPtr(envPtrPtr) : IntPtr.Zero;
-                            int rc = UnixPtyNative.posix_spawn(out pid, unmanagedShell, ref spawnActions, ref spawnAttr, unmanagedArgv, envp);
-                            if (rc == 0 && pid > 0)
-                            {
-                                spawned = true;
-                            }
-                            else
-                            {
-                                try { UnixPtyNative.close(masterFd); } catch { }
-                                masterFd = -1;
-                            }
-                        }
-                        catch
-                        {
-                            if (masterFd >= 0) { try { UnixPtyNative.close(masterFd); } catch { } masterFd = -1; }
-                        }
-                        finally
-                        {
-                            if (actionsInited) { try { UnixPtyNative.posix_spawn_file_actions_destroy(ref spawnActions); } catch { } }
-                            if (attrInited) { try { UnixPtyNative.posix_spawnattr_destroy(ref spawnAttr); } catch { } }
-                        }
+                        Marshal.WriteByte(spawnAttr, z, 0);
+                        Marshal.WriteByte(spawnActions, z, 0);
                     }
-                }
-
-                if (!spawned && !ConPtyNative.IsMacPlatform())
-                {
-                    bool usedForkPty = false;
+                    bool attrInited = false;
+                    bool actionsInited = false;
                     try
                     {
-                        pid = UnixPtyNative.forkpty(out masterFd, IntPtr.Zero, IntPtr.Zero, ref ws);
-                        usedForkPty = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        if (!(ex is DllNotFoundException) && !(ex is EntryPointNotFoundException))
-                            throw;
-                        try
-                        {
-                            pid = UnixPtyNative.forkpty_libutil(out masterFd, IntPtr.Zero, IntPtr.Zero, ref ws);
-                            usedForkPty = true;
-                        }
-                        catch (Exception ex2)
-                        {
-                            if (!(ex2 is DllNotFoundException) && !(ex2 is EntryPointNotFoundException))
-                                throw;
-                            usedForkPty = false;
-                        }
-                    }
-
-                    if (!usedForkPty)
-                    {
-                        string slavePath;
-                        if (!UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out slavePath) || masterFd < 0 || string.IsNullOrEmpty(slavePath))
-                        {
-                            return false;
-                        }
                         unmanagedSlavePath = UnixPtyNative.AllocUtf8HGlobal(slavePath);
-                        pid = UnixPtyNative.fork();
-                        if (pid < 0)
+                        if (UnixPtyNative.posix_spawnattr_init(spawnAttr) == 0)
+                        {
+                            attrInited = true;
+                            short flags = ConPtyNative.IsMacPlatform()
+                                ? (short)(UnixPtyNative.POSIX_SPAWN_SETSID_DARWIN | UnixPtyNative.POSIX_SPAWN_CLOEXEC_DEFAULT_DARWIN)
+                                : UnixPtyNative.POSIX_SPAWN_SETSID_LINUX;
+                            UnixPtyNative.posix_spawnattr_setflags(spawnAttr, flags);
+                        }
+                        if (UnixPtyNative.posix_spawn_file_actions_init(spawnActions) == 0)
+                        {
+                            actionsInited = true;
+                            UnixPtyNative.posix_spawn_file_actions_addopen(spawnActions, 0, unmanagedSlavePath, UnixPtyNative.O_RDWR, 0);
+                            UnixPtyNative.posix_spawn_file_actions_adddup2(spawnActions, 0, 1);
+                            UnixPtyNative.posix_spawn_file_actions_adddup2(spawnActions, 0, 2);
+                            try { UnixPtyNative.posix_spawn_file_actions_addchdir_np(spawnActions, unmanagedWorkDir); } catch { }
+                        }
+
+                        int rc = UnixPtyNative.posix_spawn(out pid, unmanagedShell, spawnActions, spawnAttr, unmanagedArgv, unmanagedEnvp);
+                        if (rc == 0 && pid > 0)
+                        {
+                            try { UnixPtyNative.ioctl(masterFd, UnixPtyNative.GetTiocswinszRequest(), ref ws); } catch { }
+                            spawned = true;
+                        }
+                        else
                         {
                             try { UnixPtyNative.close(masterFd); } catch { }
-                            return false;
+                            masterFd = -1;
                         }
-                        if (pid == 0)
-                        {
-                            UnixPtyNative.close(masterFd);
-                            UnixPtyNative.setsid();
-                            int slaveFd = UnixPtyNative.open_ptr(unmanagedSlavePath, UnixPtyNative.O_RDWR);
-                            if (slaveFd < 0)
-                            {
-                                UnixPtyNative._exit(126);
-                                return false;
-                            }
-                            UnixPtyNative.ioctl(slaveFd, UnixPtyNative.GetTiocscttyRequest(), 0);
-                            UnixPtyNative.dup2(slaveFd, 0);
-                            UnixPtyNative.dup2(slaveFd, 1);
-                            UnixPtyNative.dup2(slaveFd, 2);
-                            if (slaveFd > 2)
-                            {
-                                UnixPtyNative.close(slaveFd);
-                            }
-                            UnixPtyNative.chdir(unmanagedWorkDir);
-                            UnixPtyNative.execvp(unmanagedShell, unmanagedArgv);
-                            UnixPtyNative._exit(127);
-                            return false;
-                        }
-                        spawned = true;
                     }
-                    else
+                    catch
                     {
-                        if (pid < 0)
-                        {
-                            return false;
-                        }
-                        if (pid == 0)
-                        {
-                            UnixPtyNative.chdir(unmanagedWorkDir);
-                            UnixPtyNative.execvp(unmanagedShell, unmanagedArgv);
-                            UnixPtyNative._exit(127);
-                            return false;
-                        }
-                        try { UnixPtyNative.fcntl_int(masterFd, UnixPtyNative.F_SETFD, UnixPtyNative.FD_CLOEXEC); } catch { }
-                        spawned = true;
+                        if (masterFd >= 0) { try { UnixPtyNative.close(masterFd); } catch { } masterFd = -1; }
+                    }
+                    finally
+                    {
+                        if (actionsInited) { try { UnixPtyNative.posix_spawn_file_actions_destroy(spawnActions); } catch { } }
+                        if (attrInited) { try { UnixPtyNative.posix_spawnattr_destroy(spawnAttr); } catch { } }
+                        Marshal.FreeHGlobal(spawnActions);
+                        Marshal.FreeHGlobal(spawnAttr);
                     }
                 }
 
@@ -2495,11 +2493,12 @@ namespace codeLess.Studio
             finally
             {
                 if (unmanagedShell != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedShell);
-                if (unmanagedArg0 != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedArg0);
-                if (unmanagedArg1 != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedArg1);
                 if (unmanagedWorkDir != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedWorkDir);
-                if (unmanagedArgv != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedArgv);
                 if (unmanagedSlavePath != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedSlavePath);
+                foreach (IntPtr p in unmanagedArgStrs) { if (p != IntPtr.Zero) Marshal.FreeHGlobal(p); }
+                foreach (IntPtr p in unmanagedEnvStrs) { if (p != IntPtr.Zero) Marshal.FreeHGlobal(p); }
+                if (unmanagedArgv != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedArgv);
+                if (unmanagedEnvp != IntPtr.Zero) Marshal.FreeHGlobal(unmanagedEnvp);
             }
         }
 

@@ -1038,23 +1038,27 @@ namespace codeLess.AvaloniaApp
                 if (open != null)
                     CloseTab(open, forceWithoutPrompt: true);
 
+                bool movedToTrash = false;
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
-                    string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                    string trashDir = Path.Combine(userHome, ".Trash");
-                    if (Directory.Exists(trashDir))
+                    try
                     {
-                        string dest = Path.Combine(trashDir, Path.GetFileName(fullPath) + "_" + DateTime.Now.Ticks);
-                        if (File.Exists(fullPath)) File.Move(fullPath, dest);
-                        else if (Directory.Exists(fullPath)) Directory.Move(fullPath, dest);
+                        string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                        string trashDir = Path.Combine(userHome, ".Trash");
+                        if (Directory.Exists(trashDir))
+                        {
+                            string dest = Path.Combine(trashDir, Path.GetFileName(fullPath) + "_" + DateTime.Now.Ticks);
+                            if (File.Exists(fullPath)) { File.Move(fullPath, dest); movedToTrash = true; }
+                            else if (Directory.Exists(fullPath)) { Directory.Move(fullPath, dest); movedToTrash = true; }
+                        }
                     }
-                    else
+                    catch
                     {
-                        if (File.Exists(fullPath)) File.Delete(fullPath);
-                        else if (Directory.Exists(fullPath)) Directory.Delete(fullPath, true);
+                        movedToTrash = false;
                     }
                 }
-                else
+
+                if (!movedToTrash)
                 {
                     if (File.Exists(fullPath)) File.Delete(fullPath);
                     else if (Directory.Exists(fullPath)) Directory.Delete(fullPath, true);
@@ -1210,8 +1214,16 @@ namespace codeLess.AvaloniaApp
             }
 
             string branch = LlmHarnessAndAgentEngine.GetGitBranch(workspaceRoot);
-            currentGitEntries = LlmHarnessAndAgentEngine.GetGitStatusEntries(workspaceRoot) ?? new List<GitStatusEntry>();
+            bool noGit = string.IsNullOrEmpty(branch) || branch == "no-git";
+            var entries = noGit
+                ? new List<GitStatusEntry>()
+                : (LlmHarnessAndAgentEngine.GetGitStatusEntries(workspaceRoot) ?? new List<GitStatusEntry>());
+            ApplyGitEntriesToUi(branch, entries);
+        }
 
+        private void ApplyGitEntriesToUi(string branch, List<GitStatusEntry> entries)
+        {
+            currentGitEntries = entries ?? new List<GitStatusEntry>();
             bool noGit = string.IsNullOrEmpty(branch) || branch == "no-git";
             scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
             statusBranchBtn.Content = new LiteralTextBlock(noGit ? "⎇ no-git" : $"⎇ {branch}");
@@ -1435,10 +1447,10 @@ namespace codeLess.AvaloniaApp
             }
             catch { started = false; }
 
-            // Seed rich VT100 prompt header so even before shell output or in headless mode the VT100 buffer has realistic ANSI state
+            // Only seed synthetic VT100 prompt into FallbackBuffer when no live OS shell was started (e.g., headless tests)
             string folderLeaf = Path.GetFileName(workDir.TrimEnd('\\', '/'));
             if (string.IsNullOrEmpty(folderLeaf)) folderLeaf = "workspace";
-            if (!started || string.IsNullOrWhiteSpace(termCtrl.GetVisibleScreenText()))
+            if (!started)
             {
                 termCtrl.SeedInitialPrompt(
                     $"\x1b[1;34m{cleanTitle}\x1b[0m \x1b[32m➜\x1b[0m \x1b[1;36m{folderLeaf}\x1b[0m \x1b[33mgit:(main)\x1b[0m $ ");

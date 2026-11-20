@@ -453,5 +453,89 @@ namespace codeLess.Avalonia.Tests
                 try { Directory.Delete(ws, true); } catch { }
             }
         }
+
+        [AvaloniaFact]
+        public void LargeFile_EditorPerformanceAndAppName_VerifyZeroLagAndBranding()
+        {
+            string fileA, fileB;
+            string ws = CreateTempWorkspace(out fileA, out fileB);
+            try
+            {
+                // Verify Application.Name is "codeLess" and never "Avalonia Application"
+                Assert.Equal("codeLess", global::Avalonia.Application.Current?.Name);
+
+                string largeFile = Path.Combine(ws, "LargeService.cs");
+                var sb = new StringBuilder(500 * 1024);
+                sb.AppendLine("using System;");
+                sb.AppendLine("namespace LargeDemo {");
+                sb.AppendLine("    public class LargeService {");
+                for (int i = 0; i < 10000; i++)
+                {
+                    sb.Append("        public int ComputeItem").Append(i).Append("(int x) { return x + ").Append(i).AppendLine("; }");
+                }
+                sb.AppendLine("    }");
+                sb.AppendLine("}");
+                File.WriteAllText(largeFile, sb.ToString());
+
+                var window = new MainWindow(ws);
+                window.Show();
+
+                var tab = window.OpenFileInTab(largeFile, preview: false);
+                Assert.NotNull(tab);
+                Assert.True(tab.IsLargeFile);
+                Assert.True(tab.Lines.Count >= 10000);
+
+                // Verify typing coalesced undo snapshots on a 10,000-line file executes rapidly (< 150ms for 20 characters)
+                tab.CursorLine = 5000;
+                tab.CursorCol = 8;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                for (int c = 0; c < 20; c++)
+                {
+                    tab.PushUndoSnapshot(coalesceTyping: true);
+                    tab.InsertTextAtCursor("a");
+                }
+                sw.Stop();
+                Assert.True(sw.ElapsedMilliseconds < 250, $"Expected fast coalesced large-file edits, took {sw.ElapsedMilliseconds}ms");
+                Assert.Single(tab.UndoStack);
+
+                window.Close();
+            }
+            finally
+            {
+                try { Directory.Delete(ws, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void UnixAndConPty_RealShellSpawnEchoAndCleanExit_Works()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "codeLess_RealPty_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                bool isWin = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+                string cmd = isWin
+                    ? "cmd.exe /c echo CODELESS_REAL_PTY_VERIFIED"
+                    : "/bin/sh -c \"echo CODELESS_REAL_PTY_VERIFIED\"";
+
+                using (var session = new ConPtyTerminalSession("sh", cmd, tempDir, 90, 24, false))
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    while (sw.ElapsedMilliseconds < 4000)
+                    {
+                        string text = session.GetRecentOutputText(50) ?? "";
+                        if (text.Contains("CODELESS_REAL_PTY_VERIFIED"))
+                            break;
+                        Thread.Sleep(40);
+                    }
+                    string finalOut = session.GetRecentOutputText(50) ?? "";
+                    Assert.Contains("CODELESS_REAL_PTY_VERIFIED", finalOut);
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
     }
 }

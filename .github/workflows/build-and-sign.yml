@@ -74,7 +74,12 @@ jobs:
               throw "Authenticode signature on codeLess.exe is not Valid: $($sig.Status)"
           }
 
-      - name: Build Inno Setup Installer (codeLess-Setup.exe)
+      - name: Setup .NET 8 SDK (for WiX MSI Builder)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build Inno Setup Installer (codeLess-Setup.exe) and WiX MSI (codeLess-Setup.msi)
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -84,6 +89,12 @@ jobs:
           & $iscc /Q Installer.iss
           if (-not (Test-Path "Output\codeLess-Setup.exe")) {
               throw "Inno Setup failed to produce Output\codeLess-Setup.exe"
+          }
+          dotnet tool install --global wix --version 5.0.2
+          $wixExe = Join-Path $env:USERPROFILE ".dotnet\tools\wix.exe"
+          & $wixExe build Installer.wxs -arch x64 -o "Output\codeLess-Setup.msi"
+          if (-not (Test-Path "Output\codeLess-Setup.msi")) {
+              throw "WiX failed to produce Output\codeLess-Setup.msi"
           }
 
       - name: Upload unsigned codeLess-Setup.exe artifact for SignPath origin verification
@@ -124,6 +135,7 @@ jobs:
           path: |
             codeLess.exe
             Output/codeLess-Setup.exe
+            Output/codeLess-Setup.msi
 
   build-macos:
     name: Build & Smoke-Test macOS (Apple Silicon arm64 & Intel x64)
@@ -216,7 +228,7 @@ jobs:
       - name: Flatten release binaries & generate SHA256SUMS.txt
         run: |
           mkdir -p release-files
-          find release-stage/codeLess-Windows -type f \( -name "*.exe" \) -exec cp {} release-files/ \;
+          find release-stage/codeLess-Windows -type f \( -name "*.exe" -o -name "*.msi" \) -exec cp {} release-files/ \;
           find release-stage/codeLess-macOS -type f \( -name "*.dmg" -o -name "*.zip" \) -exec cp {} release-files/ \;
           find release-stage/codeLess-Linux -type f \( -name "*.deb" -o -name "*.tar.gz" \) -exec cp {} release-files/ \;
           cd release-files

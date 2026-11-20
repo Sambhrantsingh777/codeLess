@@ -943,14 +943,47 @@ namespace codeLess.Studio
         public List<DiagnosticItem> Diagnostics = new List<DiagnosticItem>();
         public List<AstSymbolItem> Symbols = new List<AstSymbolItem>();
         public bool IsLargeFile = false;
+        public int GutterDiffVersion = 0;
+
+        private string _cachedSavedRef;
+        private string _cachedNormSaved;
+        private string _cachedBaseRef;
+        private string[] _cachedBaseLines;
+
+        private string GetCachedNormalizedSaved()
+        {
+            string raw = SavedContent ?? "";
+            if (!ReferenceEquals(raw, _cachedSavedRef) || _cachedNormSaved == null)
+            {
+                _cachedSavedRef = raw;
+                _cachedNormSaved = raw.IndexOf('\r') >= 0 ? raw.Replace("\r\n", "\n").Replace("\r", "\n") : raw;
+            }
+            return _cachedNormSaved;
+        }
+
+        private string[] GetCachedBaseLines()
+        {
+            string baseText = (GitHeadContent != null) ? GitHeadContent : SavedContent;
+            if (baseText == null) return null;
+            if (!ReferenceEquals(baseText, _cachedBaseRef) || _cachedBaseLines == null)
+            {
+                _cachedBaseRef = baseText;
+                string norm = baseText.IndexOf('\r') >= 0 ? baseText.Replace("\r\n", "\n").Replace("\r", "\n") : baseText;
+                _cachedBaseLines = norm.Split('\n');
+            }
+            return _cachedBaseLines;
+        }
 
         public void SyncLinesFromContent()
         {
-            string raw = (Content ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            string raw = Content ?? "";
+            if (raw.IndexOf('\r') >= 0)
+                raw = raw.Replace("\r\n", "\n").Replace("\r", "\n");
             Content = raw;
             if (raw.Length == 0)
             {
                 Lines = new List<string> { "" };
+                IsLargeFile = false;
                 ClampCursor();
                 RefreshGutterDiff();
                 return;
@@ -968,18 +1001,29 @@ namespace codeLess.Studio
             }
             list.Add(raw.Substring(start, len - start));
             Lines = list;
+            IsLargeFile = list.Count > 2500 || raw.Length > 180 * 1024;
             ClampCursor();
-            RefreshGutterDiff();
+            if (!IsLargeFile)
+                RefreshGutterDiff();
+            else
+                GutterDiffVersion++;
         }
 
         public void SyncContentFromLines()
         {
+            SyncContentFromLines(recomputeGutterDiff: true);
+        }
+
+        public void SyncContentFromLines(bool recomputeGutterDiff)
+        {
             if (Lines == null || Lines.Count == 0)
                 Lines = new List<string> { "" };
             Content = string.Join("\n", Lines);
-            string normSaved = (SavedContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            IsLargeFile = Lines.Count > 2500 || Content.Length > 180 * 1024;
+            string normSaved = GetCachedNormalizedSaved();
             IsDirty = !string.Equals(Content, normSaved, StringComparison.Ordinal);
-            RefreshGutterDiff();
+            if (recomputeGutterDiff && !IsLargeFile)
+                RefreshGutterDiff();
         }
 
         public void RefreshGutterDiff()
@@ -989,26 +1033,35 @@ namespace codeLess.Studio
             if (GutterAddedLines == null) GutterAddedLines = new HashSet<int>();
             else GutterAddedLines.Clear();
             ChangedLineCount = 0;
+            GutterDiffVersion++;
 
-            string baseText = (GitHeadContent != null) ? GitHeadContent : SavedContent;
-            if (baseText == null) return;
+            string[] oldLines = GetCachedBaseLines();
+            if (oldLines == null || Lines == null) return;
 
-            string normBase = baseText.Replace("\r\n", "\n").Replace("\r", "\n");
-            string normCur = GetNormalizedContentRespectingFinalNewline();
-            if (string.Equals(normBase, normCur, StringComparison.Ordinal))
-                return;
-
-            string[] oldLines = normBase.Split('\n');
-            string[] newLines = normCur.Split('\n');
+            int newCount = Lines.Count;
+            if (newCount > 1 && HasFinalNewline && string.IsNullOrEmpty(Lines[newCount - 1]) && oldLines.Length > 0 && !string.IsNullOrEmpty(oldLines[oldLines.Length - 1]))
+            {
+                // Keep exact line parity
+            }
 
             int start = 0;
             int oldEnd = oldLines.Length - 1;
-            int newEnd = newLines.Length - 1;
+            int newEnd = newCount - 1;
 
-            while (start <= oldEnd && start <= newEnd && string.Equals(oldLines[start], newLines[start], StringComparison.Ordinal))
+            // Ignore trailing empty element caused by final '\n' when comparing against SavedContent/GitHeadContent
+            if (oldEnd >= 0 && newEnd >= 0 && string.Equals(oldLines[oldEnd], Lines[newEnd], StringComparison.Ordinal))
+            {
+                // matched tail
+            }
+            else if (oldEnd > 0 && string.IsNullOrEmpty(oldLines[oldEnd]) && (newEnd < 0 || !string.IsNullOrEmpty(Lines[newEnd])))
+            {
+                oldEnd--;
+            }
+
+            while (start <= oldEnd && start <= newEnd && string.Equals(oldLines[start], Lines[start], StringComparison.Ordinal))
                 start++;
 
-            while (oldEnd >= start && newEnd >= start && string.Equals(oldLines[oldEnd], newLines[newEnd], StringComparison.Ordinal))
+            while (oldEnd >= start && newEnd >= start && string.Equals(oldLines[oldEnd], Lines[newEnd], StringComparison.Ordinal))
             {
                 oldEnd--;
                 newEnd--;
@@ -1026,14 +1079,14 @@ namespace codeLess.Studio
             }
             else if (newLen <= 0)
             {
-                int anchor = Math.Max(0, Math.Min(newLines.Length - 1, start));
+                int anchor = Math.Max(0, Math.Min(newCount - 1, start));
                 GutterModifiedLines.Add(anchor);
             }
             else if (oldLen == 1 && newLen == 1)
             {
                 GutterModifiedLines.Add(start);
             }
-            else if ((long)oldLen * newLen <= 400000L)
+            else if ((long)oldLen * newLen <= 250000L)
             {
                 int[,] dp = new int[oldLen + 1, newLen + 1];
                 for (int i = oldLen - 1; i >= 0; i--)
@@ -1041,7 +1094,7 @@ namespace codeLess.Studio
                     string oLine = oldLines[start + i];
                     for (int j = newLen - 1; j >= 0; j--)
                     {
-                        if (string.Equals(oLine, newLines[start + j], StringComparison.Ordinal))
+                        if (string.Equals(oLine, Lines[start + j], StringComparison.Ordinal))
                             dp[i, j] = 1 + dp[i + 1, j + 1];
                         else
                             dp[i, j] = Math.Max(dp[i + 1, j], dp[i, j + 1]);
@@ -1053,7 +1106,7 @@ namespace codeLess.Studio
                 List<int> pendingAdded = new List<int>();
                 while (ci < oldLen || cj < newLen)
                 {
-                    if (ci < oldLen && cj < newLen && string.Equals(oldLines[start + ci], newLines[start + cj], StringComparison.Ordinal))
+                    if (ci < oldLen && cj < newLen && string.Equals(oldLines[start + ci], Lines[start + cj], StringComparison.Ordinal))
                     {
                         FlushGutterChunk(pendingRemoved, pendingAdded);
                         pendingRemoved = 0;
@@ -1178,14 +1231,14 @@ namespace codeLess.Studio
 
         public void PushUndoSnapshot(bool coalesceTyping = false)
         {
-            SyncContentFromLines();
             long now = Environment.TickCount;
-            if (coalesceTyping && UndoStack.Count > 0 && LastTypingUndoLine == CursorLine && Math.Abs(now - LastTypingUndoTick) < 1200)
+            if (coalesceTyping && UndoStack.Count > 0 && LastTypingUndoLine == CursorLine && Math.Abs(unchecked(now - LastTypingUndoTick)) < 1200)
             {
                 LastTypingUndoTick = now;
                 RedoStack.Clear();
                 return;
             }
+            SyncContentFromLines(recomputeGutterDiff: false);
             if (UndoStack.Count == 0 || UndoStack.Peek().Content != Content)
             {
                 UndoStack.Push(new BufferSnapshot

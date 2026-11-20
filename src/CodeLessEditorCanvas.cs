@@ -2032,20 +2032,49 @@ namespace codeLess.Studio
                 OnCursorOrSelectionChanged(CurrentBuffer);
         }
 
+        private System.Windows.Forms.Timer largeFileAstDebounceTimer;
+        private EditorTabBuffer pendingAstBuffer;
+
         public void NotifyBufferContentChanged()
         {
             if (CurrentBuffer == null) return;
-            CurrentBuffer.SyncContentFromLines();
-            if (!CurrentBuffer.IsLargeFile && (CurrentBuffer.Content == null || CurrentBuffer.Content.Length <= 512 * 1024))
+            bool deferLargeAnalysis = CurrentBuffer.Lines != null && CurrentBuffer.Lines.Count > 350;
+            CurrentBuffer.SyncContentFromLines(recomputeGutterDiff: !deferLargeAnalysis);
+            if (!deferLargeAnalysis && !CurrentBuffer.IsLargeFile && (CurrentBuffer.Content == null || CurrentBuffer.Content.Length <= 512 * 1024))
             {
-                CurrentBuffer.RefreshGutterDiff();
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
+            }
+            else if (deferLargeAnalysis)
+            {
+                pendingAstBuffer = CurrentBuffer;
+                if (largeFileAstDebounceTimer == null)
+                {
+                    largeFileAstDebounceTimer = new System.Windows.Forms.Timer { Interval = 260 };
+                    largeFileAstDebounceTimer.Tick += (s, e) =>
+                    {
+                        largeFileAstDebounceTimer.Stop();
+                        var target = pendingAstBuffer;
+                        pendingAstBuffer = null;
+                        if (target == null || this.IsDisposed) return;
+                        if (target.Lines != null && target.Lines.Count <= 12000)
+                            target.RefreshGutterDiff();
+                        LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
+                        if (ReferenceEquals(target, CurrentBuffer))
+                        {
+                            LayoutBreadcrumbButtons();
+                            UpdateCursorStatusLabel();
+                            if (virtualCanvas != null) virtualCanvas.Invalidate();
+                        }
+                    };
+                }
+                largeFileAstDebounceTimer.Stop();
+                largeFileAstDebounceTimer.Start();
             }
 
             ghostRequestVersion++;
             if (ghostDebounceTimer != null) ghostDebounceTimer.Stop();
 
-            if (EnableGhostCompletions)
+            if (EnableGhostCompletions && !deferLargeAnalysis)
             {
                 string ghost = LlmHarnessAndAgentEngine.GenerateInlineGhostCompletion(CurrentBuffer);
                 CurrentBuffer.GhostText = ghost;
@@ -2061,10 +2090,11 @@ namespace codeLess.Studio
                 CurrentBuffer.GhostText = null;
             }
 
-            UpdateBreadcrumbTitle();
+            if (!deferLargeAnalysis)
+                UpdateBreadcrumbTitle();
             UpdateCursorStatusLabel();
             UpdateAutocompletePopup();
-            if (findBar != null && findBar.Visible)
+            if (findBar != null && findBar.Visible && !deferLargeAnalysis)
                 UpdateSearchMatches(false);
             if (OnBufferModified != null) OnBufferModified(CurrentBuffer);
         }
