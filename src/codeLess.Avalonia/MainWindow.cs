@@ -246,10 +246,18 @@ namespace codeLess.AvaloniaApp
             string startPath = initialPath;
             if (string.IsNullOrWhiteSpace(startPath))
             {
-                if (settings.RecentWorkspaces != null && settings.RecentWorkspaces.Count > 0 && Directory.Exists(settings.RecentWorkspaces[0]))
-                    startPath = settings.RecentWorkspaces[0];
-                else
+                string validRecent = settings.RecentWorkspaces?.FirstOrDefault(p =>
+                    !string.IsNullOrWhiteSpace(p) &&
+                    Directory.Exists(p) &&
+                    !IsUnsafeDefaultStartupDirectory(p));
+                if (!string.IsNullOrEmpty(validRecent))
+                {
+                    startPath = validRecent;
+                }
+                else if (!IsUnsafeDefaultStartupDirectory(Environment.CurrentDirectory))
+                {
                     startPath = Environment.CurrentDirectory;
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(startPath))
@@ -257,7 +265,7 @@ namespace codeLess.AvaloniaApp
                 if (File.Exists(startPath))
                 {
                     string dir = Path.GetDirectoryName(Path.GetFullPath(startPath));
-                    if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                    if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir) && !IsUnsafeDefaultStartupDirectory(dir))
                         LoadWorkspace(dir);
                     OpenFileInTab(Path.GetFullPath(startPath), preview: false);
                 }
@@ -266,10 +274,44 @@ namespace codeLess.AvaloniaApp
                     LoadWorkspace(Path.GetFullPath(startPath));
                 }
             }
+            else
+            {
+                CloseWorkspaceFolder();
+            }
 
             EnsureInitialTerminalSession();
             UpdateWindowTitle();
             UpdateStatusBar();
+        }
+
+        private static bool IsUnsafeDefaultStartupDirectory(string dir)
+        {
+            if (string.IsNullOrWhiteSpace(dir)) return true;
+            try
+            {
+                string norm = Path.GetFullPath(dir).TrimEnd('\\', '/');
+                if (string.IsNullOrEmpty(norm) || norm == "/" || norm == "\\")
+                    return true;
+                if (norm.IndexOf(".app/Contents", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+                if (string.Equals(norm, "/Applications", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(norm, "/System", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(norm, "/Library", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(norm, "/Users", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(norm, "/usr", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(norm, "/bin", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                string appBase = (AppContext.BaseDirectory ?? "").TrimEnd('\\', '/');
+                if (!string.IsNullOrEmpty(appBase) && string.Equals(norm, appBase, StringComparison.OrdinalIgnoreCase) && !File.Exists(Path.Combine(norm, "codeLess.sln")))
+                    return true;
+                if (IdePersistentSettings.IsInstallerProgramDirectory(norm))
+                    return true;
+            }
+            catch
+            {
+                return true;
+            }
+            return false;
         }
 
         protected override void OnClosed(EventArgs e)

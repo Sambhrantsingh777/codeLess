@@ -226,13 +226,16 @@ namespace codeLess.AvaloniaApp
             return string.IsNullOrEmpty(leaf) ? "zsh" : leaf;
         }
 
+        private int repaintQueued = 0;
+
         public bool StartShell(string workingDir, string customShellCommand = null)
         {
             StopShell(notifyExit: false);
             exitedNotified = false;
-            WorkingDirectory = !string.IsNullOrEmpty(workingDir) && Directory.Exists(workingDir)
+            if (!cursorTimer.IsEnabled) cursorTimer.Start();
+            WorkingDirectory = (!string.IsNullOrEmpty(workingDir) && workingDir != "/" && Directory.Exists(workingDir))
                 ? workingDir
-                : Environment.CurrentDirectory;
+                : ConPtyTerminalSession.GetDefaultHomeDirectory();
 
             string resolvedCmd = string.IsNullOrWhiteSpace(customShellCommand)
                 ? ResolveDefaultShellCommand()
@@ -247,10 +250,14 @@ namespace codeLess.AvaloniaApp
                 Session = new ConPtyTerminalSession(ShellDisplayName, resolvedCmd, WorkingDirectory, cols, rows, IsLightTerminal);
                 Session.OutputReceived += () =>
                 {
+                    if (System.Threading.Interlocked.Exchange(ref repaintQueued, 1) != 0)
+                        return;
                     Dispatcher.UIThread.Post(() =>
                     {
+                        System.Threading.Interlocked.Exchange(ref repaintQueued, 0);
                         gridCanvas.InvalidateVisual();
-                        OutputReceived?.Invoke(GetVisibleScreenText());
+                        if (OutputReceived != null)
+                            OutputReceived.Invoke(GetVisibleScreenText());
                     });
                 };
                 Session.ProcessExited += code =>

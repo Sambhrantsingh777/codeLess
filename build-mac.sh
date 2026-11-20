@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# codeLess Studio — Native macOS Build, Ad-Hoc Codesign & DMG Packaging Script
+# codeLess — Native macOS Build, Ad-Hoc Codesign & DMG Packaging Script
 # Publisher: Savatarr | Bundle ID: com.savatarr.codeless
 # ==============================================================================
 set -euo pipefail
@@ -13,6 +13,7 @@ BUNDLE_ID="com.savatarr.codeless"
 PUBLISHER="Savatarr"
 VERSION="3.2.0"
 CSPROJ="src/codeLess.Avalonia/codeLess.Avalonia.csproj"
+ENTITLEMENTS="$SCRIPT_DIR/macos/entitlements.plist"
 
 # Detect host Mac architecture by default (arm64 = Apple Silicon, x86_64 = Intel)
 HOST_ARCH="$(uname -m)"
@@ -54,6 +55,7 @@ build_mac_bundle() {
         -r "$rid" \
         --self-contained true \
         -p:PublishSingleFile=false \
+        -p:UseAppHost=true \
         -o "$pub_dir"
 
     echo "======================================================================"
@@ -64,24 +66,26 @@ build_mac_bundle() {
 
     cp -R "$pub_dir/"* "$bundle_dir/Contents/MacOS/"
     chmod +x "$bundle_dir/Contents/MacOS/$APP_NAME"
+    [[ -f "$bundle_dir/Contents/MacOS/createdump" ]] && chmod +x "$bundle_dir/Contents/MacOS/createdump"
 
-    # Generate codeLess.icns from assets/savatarr_logo_source.png using macOS sips + iconutil
-    local src_png="$SCRIPT_DIR/assets/savatarr_logo_source.png"
+    # Generate codeLess.icns from square RGBA assets/savatarr_bolt.png (falling back to assets/codeLess.icns)
+    local src_png="$SCRIPT_DIR/assets/savatarr_bolt.png"
+    [[ ! -f "$src_png" ]] && src_png="$SCRIPT_DIR/assets/savatarr_logo_source.png"
     local icns_out="$bundle_dir/Contents/Resources/$APP_NAME.icns"
+    if [[ -f "$SCRIPT_DIR/assets/$APP_NAME.icns" ]]; then
+        cp "$SCRIPT_DIR/assets/$APP_NAME.icns" "$icns_out"
+    fi
     if [[ -f "$src_png" ]] && command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
         local iconset_dir="$SCRIPT_DIR/dist/tmp.iconset"
         rm -rf "$iconset_dir"
         mkdir -p "$iconset_dir"
         for sz in 16 32 128 256 512; do
-            sips -z "$sz" "$sz" "$src_png" --out "$iconset_dir/icon_${sz}x${sz}.png" >/dev/null 2>&1 || true
+            sips -s format png -z "$sz" "$sz" "$src_png" --out "$iconset_dir/icon_${sz}x${sz}.png" >/dev/null 2>&1 || true
             local sz2=$((sz * 2))
-            sips -z "$sz2" "$sz2" "$src_png" --out "$iconset_dir/icon_${sz}x${sz}@2x.png" >/dev/null 2>&1 || true
+            sips -s format png -z "$sz2" "$sz2" "$src_png" --out "$iconset_dir/icon_${sz}x${sz}@2x.png" >/dev/null 2>&1 || true
         done
-        iconutil -c icns "$iconset_dir" -o "$icns_out" || true
+        iconutil -c icns "$iconset_dir" -o "$icns_out" >/dev/null 2>&1 || true
         rm -rf "$iconset_dir"
-    fi
-    if [[ ! -f "$icns_out" && -f "$SCRIPT_DIR/assets/$APP_NAME.icns" ]]; then
-        cp "$SCRIPT_DIR/assets/$APP_NAME.icns" "$icns_out"
     fi
 
     cat > "$bundle_dir/Contents/Info.plist" <<EOF
@@ -111,21 +115,32 @@ build_mac_bundle() {
     <string>11.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 ${PUBLISHER}. All rights reserved.</string>
+    <string>Copyright © 2026 ${PUBLISHER}. Released under the MIT License.</string>
 </dict>
 </plist>
 EOF
 
     echo "======================================================================"
-    echo " [3/5] Ad-Hoc Code Signing (required by Apple Silicon / arm64)..."
+    echo " [3/5] Ad-Hoc Code Signing with CoreCLR JIT Entitlements ($rid)..."
     echo "======================================================================"
     if command -v xattr >/dev/null 2>&1; then
         xattr -cr "$bundle_dir" || true
     fi
     if command -v codesign >/dev/null 2>&1; then
-        codesign --force --deep -s - "$bundle_dir"
-        codesign --verify --verbose=2 "$bundle_dir" || true
+        # Sign native Mach-O dylibs and helper binaries individually first, then sign the bundle with JIT entitlements
+        find "$bundle_dir/Contents/MacOS" -type f \( -name "*.dylib" -o -name "createdump" \) -print0 | while IFS= read -r -d '' bin_file; do
+            codesign --force -s - "$bin_file"
+        done
+        if [[ -f "$ENTITLEMENTS" ]]; then
+            codesign --force --entitlements "$ENTITLEMENTS" -s - "$bundle_dir/Contents/MacOS/$APP_NAME"
+            codesign --force --deep --entitlements "$ENTITLEMENTS" -s - "$bundle_dir"
+        else
+            codesign --force --deep -s - "$bundle_dir"
+        fi
+        codesign --verify --deep --strict --verbose=2 "$bundle_dir"
     else
         echo "[!] 'codesign' not found (non-macOS host). Run on macOS to apply ad-hoc signature."
     fi
@@ -143,7 +158,7 @@ EOF
     echo "======================================================================"
     if command -v hdiutil >/dev/null 2>&1; then
         mkdir -p "$dmg_staging"
-        cp -R "$bundle_dir" "$dmg_staging/"
+        ditto "$bundle_dir" "$dmg_staging/$APP_NAME.app"
         ln -s /Applications "$dmg_staging/Applications" || true
         rm -f "$dmg_out"
         hdiutil create \
@@ -173,22 +188,13 @@ fi
 cat <<'GATEKEEPER_EOF'
 
 ======================================================================
-  macOS Gatekeeper & First-Run Instructions (No Developer ID / Unnotarized)
+  macOS Gatekeeper & First-Run Instructions
 ======================================================================
-Because this build is ad-hoc signed (`codesign --force --deep -s -`) without
-an Apple Developer ID certificate or Apple notarization:
-
-Option A — Terminal (Recommended, one command):
-  1. Copy codeLess.app to /Applications (or your preferred folder).
-  2. Clear the quarantine extended attribute and ensure ad-hoc signature:
-       xattr -dr com.apple.quarantine /Applications/codeLess.app
-       codesign --force --deep -s - /Applications/codeLess.app
-  3. Launch:
-       open /Applications/codeLess.app
-
-Option B — Finder UI:
-  1. In Finder, Control-click (or right-click) `codeLess.app` and choose "Open".
-  2. If macOS Sequoia / Sonoma blocks launch, open:
-       System Settings → Privacy & Security → scroll down and click "Open Anyway".
+1. Open the .dmg and drag codeLess.app into /Applications.
+2. Clear the browser download quarantine flag once in Terminal:
+     xattr -cr /Applications/codeLess.app
+     open /Applications/codeLess.app
+   (Or Control-click codeLess.app in Finder -> Open -> System Settings ->
+    Privacy & Security -> Open Anyway.)
 ======================================================================
 GATEKEEPER_EOF

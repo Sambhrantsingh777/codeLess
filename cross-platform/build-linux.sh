@@ -13,21 +13,22 @@ CSPROJ="$ROOT_DIR/src/codeLess.Avalonia/codeLess.Avalonia.csproj"
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" == "aarch64" || "$HOST_ARCH" == "arm64" ]]; then
     DEFAULT_RID="linux-arm64"
-    DEB_ARCH="arm64"
 else
     DEFAULT_RID="linux-x64"
-    DEB_ARCH="amd64"
 fi
 
 TARGET_RID="${1:-$DEFAULT_RID}"
 if [[ "$TARGET_RID" == "linux-arm64" ]]; then
     DEB_ARCH="arm64"
+    ARCH_SHORT="arm64"
 else
     DEB_ARCH="amd64"
+    ARCH_SHORT="x64"
 fi
 
 BUILD_DIR="$ROOT_DIR/Output/$TARGET_RID"
 DEB_ROOT="$ROOT_DIR/Output/deb-pkg-$DEB_ARCH"
+mkdir -p "$ROOT_DIR/Output"
 
 if ! command -v dotnet >/dev/null 2>&1; then
     if [[ -x "$HOME/.dotnet/dotnet" ]]; then
@@ -41,7 +42,7 @@ if ! command -v dotnet >/dev/null 2>&1; then
     fi
 fi
 
-echo "[1/2] Publishing self-contained $CSPROJ for $TARGET_RID..."
+echo "[1/3] Publishing self-contained $CSPROJ for $TARGET_RID..."
 rm -rf "$BUILD_DIR" "$DEB_ROOT"
 dotnet publish "$CSPROJ" \
     -c Release \
@@ -52,16 +53,24 @@ dotnet publish "$CSPROJ" \
 
 chmod +x "$BUILD_DIR/codeLess"
 
-echo "[2/2] Assembling Debian (.deb) package structure..."
-mkdir -p "$DEB_ROOT/DEBIAN" "$DEB_ROOT/usr/lib/codeless" "$DEB_ROOT/usr/bin" "$DEB_ROOT/usr/share/applications"
+echo "[2/3] Creating portable Linux tarball: Output/codeLess-linux-${ARCH_SHORT}.tar.gz..."
+tar -czf "$ROOT_DIR/Output/codeLess-linux-${ARCH_SHORT}.tar.gz" -C "$BUILD_DIR" .
+
+echo "[3/3] Assembling Debian (.deb) package structure..."
+mkdir -p "$DEB_ROOT/DEBIAN" "$DEB_ROOT/usr/lib/codeless" "$DEB_ROOT/usr/bin" "$DEB_ROOT/usr/share/applications" "$DEB_ROOT/usr/share/pixmaps"
 cp -R "$BUILD_DIR/"* "$DEB_ROOT/usr/lib/codeless/"
+chmod +x "$DEB_ROOT/usr/lib/codeless/codeLess"
 ln -sf /usr/lib/codeless/codeLess "$DEB_ROOT/usr/bin/codeless"
+if [[ -f "$ROOT_DIR/assets/savatarr_bolt.png" ]]; then
+    cp "$ROOT_DIR/assets/savatarr_bolt.png" "$DEB_ROOT/usr/share/pixmaps/codeless.png"
+fi
 
 cat > "$DEB_ROOT/usr/share/applications/codeless.desktop" << 'EOF'
 [Desktop Entry]
 Name=codeLess
 Comment=Lightweight Native Agentic IDE & Multi-Harness Workbench
 Exec=/usr/bin/codeless %F
+Icon=codeless
 Terminal=false
 Type=Application
 Categories=Development;IDE;TextEditor;
@@ -80,6 +89,7 @@ EOF
 
 if command -v dpkg-deb >/dev/null 2>&1; then
     dpkg-deb --build "$DEB_ROOT" "$ROOT_DIR/Output/codeless-ide_${VERSION}_${DEB_ARCH}.deb"
-    echo "✓ Built Linux Debian package: $ROOT_DIR/Output/codeless-ide_${VERSION}_${DEB_ARCH}.deb"
+    cp "$ROOT_DIR/Output/codeless-ide_${VERSION}_${DEB_ARCH}.deb" "$ROOT_DIR/Output/codeLess-linux-${ARCH_SHORT}.deb"
+    echo "✓ Built Linux Debian package: $ROOT_DIR/Output/codeLess-linux-${ARCH_SHORT}.deb"
 fi
-echo "✓ Built native Linux bundle in: $BUILD_DIR"
+echo "✓ Built native Linux bundle & tarball in: $ROOT_DIR/Output"

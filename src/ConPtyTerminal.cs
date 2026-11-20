@@ -449,6 +449,7 @@ namespace codeLess.Studio
                 slaveName = Marshal.PtrToStringAnsi(ptr);
                 winsize ws = new winsize((ushort)Math.Max((short)1, rows), (ushort)Math.Max((short)1, cols));
                 ioctl(fd, GetTiocswinszRequest(), ref ws);
+                try { fcntl_int(fd, F_SETFD, FD_CLOEXEC); } catch { }
                 masterFd = fd;
                 return true;
             }
@@ -458,6 +459,43 @@ namespace codeLess.Studio
                 return false;
             }
         }
+
+        public const int F_SETFD = 2;
+        public const int FD_CLOEXEC = 1;
+        public const short POSIX_SPAWN_SETSID_DARWIN = 0x0400;
+
+        [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
+        public static extern int fcntl_int(int fd, int cmd, int arg);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawnattr_init(out IntPtr attr);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawnattr_destroy(ref IntPtr attr);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawnattr_setflags(ref IntPtr attr, short flags);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_init(out IntPtr file_actions);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_destroy(ref IntPtr file_actions);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_addopen(ref IntPtr file_actions, int filedes, IntPtr path, int oflag, ushort mode);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_adddup2(ref IntPtr file_actions, int filedes, int newfiledes);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawn_file_actions_addchdir_np(ref IntPtr file_actions, IntPtr path);
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern IntPtr _NSGetEnviron();
+
+        [DllImport("libSystem.B.dylib", SetLastError = true)]
+        public static extern int posix_spawn(out int pid, IntPtr path, ref IntPtr file_actions, ref IntPtr attrp, IntPtr argv, IntPtr envp);
     }
 
     // =========================================================================
@@ -2290,82 +2328,145 @@ namespace codeLess.Studio
                 UnixPtyNative.winsize ws = new UnixPtyNative.winsize((ushort)Math.Max((short)6, rows), (ushort)Math.Max((short)20, cols));
                 int masterFd = -1;
                 int pid = -1;
-                bool usedForkPty = false;
+                bool spawned = false;
 
-                try
+                // On macOS (Apple Silicon arm64 & Intel x64), spawn the shell on a POSIX PTY via posix_spawn
+                // (POSIX_SPAWN_SETSID + file_actions_addopen) to avoid calling fork() inside Cocoa / CoreCLR.
+                if (ConPtyNative.IsMacPlatform())
                 {
-                    pid = UnixPtyNative.forkpty(out masterFd, IntPtr.Zero, IntPtr.Zero, ref ws);
-                    usedForkPty = true;
+                    string macSlavePath;
+                    if (UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out macSlavePath) && masterFd >= 0 && !string.IsNullOrEmpty(macSlavePath))
+                    {
+                        IntPtr spawnAttr = IntPtr.Zero;
+                        IntPtr spawnActions = IntPtr.Zero;
+                        bool attrInited = false;
+                        bool actionsInited = false;
+                        try
+                        {
+                            unmanagedSlavePath = UnixPtyNative.AllocUtf8HGlobal(macSlavePath);
+                            if (UnixPtyNative.posix_spawnattr_init(out spawnAttr) == 0)
+                            {
+                                attrInited = true;
+                                UnixPtyNative.posix_spawnattr_setflags(ref spawnAttr, UnixPtyNative.POSIX_SPAWN_SETSID_DARWIN);
+                            }
+                            if (UnixPtyNative.posix_spawn_file_actions_init(out spawnActions) == 0)
+                            {
+                                actionsInited = true;
+                                UnixPtyNative.posix_spawn_file_actions_addopen(ref spawnActions, 0, unmanagedSlavePath, UnixPtyNative.O_RDWR, 0);
+                                UnixPtyNative.posix_spawn_file_actions_adddup2(ref spawnActions, 0, 1);
+                                UnixPtyNative.posix_spawn_file_actions_adddup2(ref spawnActions, 0, 2);
+                                try { UnixPtyNative.posix_spawn_file_actions_addchdir_np(ref spawnActions, unmanagedWorkDir); } catch { }
+                            }
+                            IntPtr envPtrPtr = UnixPtyNative._NSGetEnviron();
+                            IntPtr envp = envPtrPtr != IntPtr.Zero ? Marshal.ReadIntPtr(envPtrPtr) : IntPtr.Zero;
+                            int rc = UnixPtyNative.posix_spawn(out pid, unmanagedShell, ref spawnActions, ref spawnAttr, unmanagedArgv, envp);
+                            if (rc == 0 && pid > 0)
+                            {
+                                spawned = true;
+                            }
+                            else
+                            {
+                                try { UnixPtyNative.close(masterFd); } catch { }
+                                masterFd = -1;
+                            }
+                        }
+                        catch
+                        {
+                            if (masterFd >= 0) { try { UnixPtyNative.close(masterFd); } catch { } masterFd = -1; }
+                        }
+                        finally
+                        {
+                            if (actionsInited) { try { UnixPtyNative.posix_spawn_file_actions_destroy(ref spawnActions); } catch { } }
+                            if (attrInited) { try { UnixPtyNative.posix_spawnattr_destroy(ref spawnAttr); } catch { } }
+                        }
+                    }
                 }
-                catch (Exception ex)
+
+                if (!spawned && !ConPtyNative.IsMacPlatform())
                 {
-                    if (!(ex is DllNotFoundException) && !(ex is EntryPointNotFoundException))
-                        throw;
+                    bool usedForkPty = false;
                     try
                     {
-                        pid = UnixPtyNative.forkpty_libutil(out masterFd, IntPtr.Zero, IntPtr.Zero, ref ws);
+                        pid = UnixPtyNative.forkpty(out masterFd, IntPtr.Zero, IntPtr.Zero, ref ws);
                         usedForkPty = true;
                     }
-                    catch (Exception ex2)
+                    catch (Exception ex)
                     {
-                        if (!(ex2 is DllNotFoundException) && !(ex2 is EntryPointNotFoundException))
+                        if (!(ex is DllNotFoundException) && !(ex is EntryPointNotFoundException))
                             throw;
-                        usedForkPty = false;
+                        try
+                        {
+                            pid = UnixPtyNative.forkpty_libutil(out masterFd, IntPtr.Zero, IntPtr.Zero, ref ws);
+                            usedForkPty = true;
+                        }
+                        catch (Exception ex2)
+                        {
+                            if (!(ex2 is DllNotFoundException) && !(ex2 is EntryPointNotFoundException))
+                                throw;
+                            usedForkPty = false;
+                        }
+                    }
+
+                    if (!usedForkPty)
+                    {
+                        string slavePath;
+                        if (!UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out slavePath) || masterFd < 0 || string.IsNullOrEmpty(slavePath))
+                        {
+                            return false;
+                        }
+                        unmanagedSlavePath = UnixPtyNative.AllocUtf8HGlobal(slavePath);
+                        pid = UnixPtyNative.fork();
+                        if (pid < 0)
+                        {
+                            try { UnixPtyNative.close(masterFd); } catch { }
+                            return false;
+                        }
+                        if (pid == 0)
+                        {
+                            UnixPtyNative.close(masterFd);
+                            UnixPtyNative.setsid();
+                            int slaveFd = UnixPtyNative.open_ptr(unmanagedSlavePath, UnixPtyNative.O_RDWR);
+                            if (slaveFd < 0)
+                            {
+                                UnixPtyNative._exit(126);
+                                return false;
+                            }
+                            UnixPtyNative.ioctl(slaveFd, UnixPtyNative.GetTiocscttyRequest(), 0);
+                            UnixPtyNative.dup2(slaveFd, 0);
+                            UnixPtyNative.dup2(slaveFd, 1);
+                            UnixPtyNative.dup2(slaveFd, 2);
+                            if (slaveFd > 2)
+                            {
+                                UnixPtyNative.close(slaveFd);
+                            }
+                            UnixPtyNative.chdir(unmanagedWorkDir);
+                            UnixPtyNative.execvp(unmanagedShell, unmanagedArgv);
+                            UnixPtyNative._exit(127);
+                            return false;
+                        }
+                        spawned = true;
+                    }
+                    else
+                    {
+                        if (pid < 0)
+                        {
+                            return false;
+                        }
+                        if (pid == 0)
+                        {
+                            UnixPtyNative.chdir(unmanagedWorkDir);
+                            UnixPtyNative.execvp(unmanagedShell, unmanagedArgv);
+                            UnixPtyNative._exit(127);
+                            return false;
+                        }
+                        try { UnixPtyNative.fcntl_int(masterFd, UnixPtyNative.F_SETFD, UnixPtyNative.FD_CLOEXEC); } catch { }
+                        spawned = true;
                     }
                 }
 
-                if (!usedForkPty)
+                if (!spawned || masterFd < 0 || pid <= 0)
                 {
-                    string slavePath;
-                    if (!UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out slavePath) || masterFd < 0 || string.IsNullOrEmpty(slavePath))
-                    {
-                        return false;
-                    }
-                    unmanagedSlavePath = UnixPtyNative.AllocUtf8HGlobal(slavePath);
-                    pid = UnixPtyNative.fork();
-                    if (pid < 0)
-                    {
-                        try { UnixPtyNative.close(masterFd); } catch { }
-                        return false;
-                    }
-                    if (pid == 0)
-                    {
-                        UnixPtyNative.close(masterFd);
-                        UnixPtyNative.setsid();
-                        int slaveFd = UnixPtyNative.open_ptr(unmanagedSlavePath, UnixPtyNative.O_RDWR);
-                        if (slaveFd < 0)
-                        {
-                            UnixPtyNative._exit(126);
-                            return false;
-                        }
-                        UnixPtyNative.ioctl(slaveFd, UnixPtyNative.GetTiocscttyRequest(), 0);
-                        UnixPtyNative.dup2(slaveFd, 0);
-                        UnixPtyNative.dup2(slaveFd, 1);
-                        UnixPtyNative.dup2(slaveFd, 2);
-                        if (slaveFd > 2)
-                        {
-                            UnixPtyNative.close(slaveFd);
-                        }
-                        UnixPtyNative.chdir(unmanagedWorkDir);
-                        UnixPtyNative.execvp(unmanagedShell, unmanagedArgv);
-                        UnixPtyNative._exit(127);
-                        return false;
-                    }
-                }
-                else
-                {
-                    if (pid < 0)
-                    {
-                        return false;
-                    }
-                    if (pid == 0)
-                    {
-                        // Child process: execute only unmanaged libc calls with pre-allocated pointers
-                        UnixPtyNative.chdir(unmanagedWorkDir);
-                        UnixPtyNative.execvp(unmanagedShell, unmanagedArgv);
-                        UnixPtyNative._exit(127);
-                        return false;
-                    }
+                    return false;
                 }
 
                 // Parent process
@@ -2404,17 +2505,33 @@ namespace codeLess.Studio
 
         private void UnixPtyReadLoop(int gen, int masterFd)
         {
-            byte[] buf = new byte[4096];
+            byte[] buf = new byte[8192];
+            int lastSnapshotTick = 0;
             try
             {
                 while (!isDisposed && gen == sessionGeneration && masterFd >= 0)
                 {
                     IntPtr n = UnixPtyNative.read(masterFd, buf, (IntPtr)buf.Length);
-                    int readCount = n.ToInt32();
-                    if (readCount <= 0 || gen != sessionGeneration || isDisposed) break;
+                    long rawCount = n.ToInt64();
+                    if (rawCount < 0)
+                    {
+                        int err = Marshal.GetLastWin32Error();
+                        // Retry on EINTR (4) or EAGAIN (35 on macOS, 11 on Linux)
+                        if (err == 4 || err == 35 || err == 11)
+                            continue;
+                        break;
+                    }
+                    if (rawCount == 0 || gen != sessionGeneration || isDisposed)
+                        break;
 
+                    int readCount = (int)rawCount;
                     Buffer.ProcessBytes(buf, readCount);
-                    SyncTranscriptSnapshot();
+                    int nowTick = Environment.TickCount;
+                    if (unchecked(nowTick - lastSnapshotTick) >= 250 || lastSnapshotTick == 0)
+                    {
+                        lastSnapshotTick = nowTick;
+                        SyncTranscriptSnapshot();
+                    }
 
                     Action handler = OutputReceived;
                     if (handler != null)
@@ -2422,6 +2539,7 @@ namespace codeLess.Studio
                         try { handler(); } catch { }
                     }
                 }
+                SyncTranscriptSnapshot();
             }
             catch
             {
@@ -2434,10 +2552,15 @@ namespace codeLess.Studio
             {
                 if (childPid <= 0) return;
                 int status = 0;
-                UnixPtyNative.waitpid(childPid, out status, 0);
+                int rc;
+                do
+                {
+                    rc = UnixPtyNative.waitpid(childPid, out status, 0);
+                } while (rc < 0 && Marshal.GetLastWin32Error() == 4 && !isDisposed && gen == sessionGeneration);
+
                 if (isDisposed || gen != sessionGeneration) return;
 
-                ExitCode = (status >> 8) & 0xFF;
+                ExitCode = rc > 0 ? ((status >> 8) & 0xFF) : 0;
                 HasExited = true;
 
                 string exitMsg = string.Format("\r\n\x1b[90m[process exited with code {0}]\x1b[0m\r\n", ExitCode);
