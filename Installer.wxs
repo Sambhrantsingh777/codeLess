@@ -2,7 +2,7 @@
   <Package
     Name="codeLess"
     Manufacturer="Savatarr"
-    Version="3.2.0.0"
+    Version="3.2.1.0"
     UpgradeCode="8F9E4A12-3C7B-4D9A-9E15-7C8A2B4F6031"
     Scope="perUser"
     InstallerVersion="500"

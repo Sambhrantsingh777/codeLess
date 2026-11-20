@@ -3385,7 +3385,7 @@ namespace codeLess.Studio
                 Location = new Point(24, 68),
                 Size = new Size(412, 132),
                 Text = string.Format(
-                    "Version: 3.2.0 (Publisher: Savatarr)\n" +
+                    "Version: 3.2.1 (Publisher: Savatarr)\n" +
                     "CLR Runtime: .NET {0} ({1}-bit)\n" +
                     "OS Version: {2}\n" +
                     "Process Working Set: {3:F1} MB (Private: {4:F1} MB)\n" +
