@@ -9,6 +9,7 @@
     <Product>codeLess</Product>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <NoWarn>1701;1702;SYSLIB0014;CS0618;CS0649;CS0169;CS8981</NoWarn>
   </PropertyGroup>
 

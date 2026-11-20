@@ -9,6 +9,7 @@
     <Version>3.2.0</Version>
     <Company>Savatarr</Company>
     <Product>codeLess</Product>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>

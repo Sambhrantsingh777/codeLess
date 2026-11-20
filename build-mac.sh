@@ -64,13 +64,15 @@ build_mac_bundle() {
     mkdir -p "$bundle_dir/Contents/MacOS"
     mkdir -p "$bundle_dir/Contents/Resources"
 
-    # Place non-code asset subdirectories into Contents/Resources so Contents/MacOS remains strictly flat for Apple codesign
+    # Place non-code asset subdirectories into Contents/Resources and copy only flat files into Contents/MacOS
     if [[ -d "$pub_dir/assets" ]]; then
         cp -R "$pub_dir/assets" "$bundle_dir/Contents/Resources/assets"
-        rm -rf "$pub_dir/assets"
     fi
 
-    cp -R "$pub_dir/"* "$bundle_dir/Contents/MacOS/"
+    while IFS= read -r -d '' flat_file; do
+        cp "$flat_file" "$bundle_dir/Contents/MacOS/"
+    done < <(find "$pub_dir" -maxdepth 1 -type f ! -name "*.pdb" -print0)
+
     chmod +x "$bundle_dir/Contents/MacOS/$APP_NAME"
     if [[ -f "$bundle_dir/Contents/MacOS/createdump" ]]; then
         chmod +x "$bundle_dir/Contents/MacOS/createdump"
