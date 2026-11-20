@@ -64,13 +64,23 @@ build_mac_bundle() {
     mkdir -p "$bundle_dir/Contents/MacOS"
     mkdir -p "$bundle_dir/Contents/Resources"
 
+    # Place non-code asset subdirectories into Contents/Resources so Contents/MacOS remains strictly flat for Apple codesign
+    if [[ -d "$pub_dir/assets" ]]; then
+        cp -R "$pub_dir/assets" "$bundle_dir/Contents/Resources/assets"
+        rm -rf "$pub_dir/assets"
+    fi
+
     cp -R "$pub_dir/"* "$bundle_dir/Contents/MacOS/"
     chmod +x "$bundle_dir/Contents/MacOS/$APP_NAME"
-    [[ -f "$bundle_dir/Contents/MacOS/createdump" ]] && chmod +x "$bundle_dir/Contents/MacOS/createdump"
+    if [[ -f "$bundle_dir/Contents/MacOS/createdump" ]]; then
+        chmod +x "$bundle_dir/Contents/MacOS/createdump"
+    fi
 
     # Generate codeLess.icns from square RGBA assets/savatarr_bolt.png (falling back to assets/codeLess.icns)
     local src_png="$SCRIPT_DIR/assets/savatarr_bolt.png"
-    [[ ! -f "$src_png" ]] && src_png="$SCRIPT_DIR/assets/savatarr_logo_source.png"
+    if [[ ! -f "$src_png" ]]; then
+        src_png="$SCRIPT_DIR/assets/savatarr_logo_source.png"
+    fi
     local icns_out="$bundle_dir/Contents/Resources/$APP_NAME.icns"
     if [[ -f "$SCRIPT_DIR/assets/$APP_NAME.icns" ]]; then
         cp "$SCRIPT_DIR/assets/$APP_NAME.icns" "$icns_out"
@@ -136,10 +146,10 @@ EOF
         xattr -cr "$bundle_dir" || true
     fi
     if command -v codesign >/dev/null 2>&1; then
-        # Sign native Mach-O dylibs and helper binaries individually first, then sign the bundle with JIT entitlements
-        find "$bundle_dir/Contents/MacOS" -type f \( -name "*.dylib" -o -name "createdump" \) -print0 | while IFS= read -r -d '' bin_file; do
+        while IFS= read -r -d '' bin_file; do
             codesign --force -s - "$bin_file"
-        done
+        done < <(find "$bundle_dir/Contents/MacOS" -type f \( -name "*.dylib" -o -name "createdump" \) -print0)
+
         if [[ -f "$ENTITLEMENTS" ]]; then
             codesign --force --entitlements "$ENTITLEMENTS" -s - "$bundle_dir/Contents/MacOS/$APP_NAME"
             codesign --force --deep --entitlements "$ENTITLEMENTS" -s - "$bundle_dir"
@@ -170,6 +180,7 @@ EOF
         hdiutil create \
             -volname "codeLess" \
             -srcfolder "$dmg_staging" \
+            -fs HFS+ \
             -ov \
             -format UDZO \
             "$dmg_out"
@@ -180,8 +191,12 @@ EOF
 
     echo ""
     echo "✓ Built App Bundle: $bundle_dir"
-    [[ -f "$dmg_out" ]] && echo "✓ Built Disk Image: $dmg_out"
-    [[ -f "$zip_out" ]] && echo "✓ Built Zip Bundle: $zip_out"
+    if [[ -f "$dmg_out" ]]; then
+        echo "✓ Built Disk Image: $dmg_out"
+    fi
+    if [[ -f "$zip_out" ]]; then
+        echo "✓ Built Zip Bundle: $zip_out"
+    fi
 }
 
 if [[ "$TARGET_RID" == "both" || "$TARGET_RID" == "all" ]]; then

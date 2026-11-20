@@ -342,9 +342,11 @@ namespace codeLess.AvaloniaApp
                 string[] candidates = new[]
                 {
                     Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_bolt.png"),
+                    Path.Combine(AppContext.BaseDirectory, "..", "Resources", "assets", "savatarr_bolt.png"),
                     Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_bolt.png"),
                     Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_bolt.png"),
                     Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_logo_source.png"),
+                    Path.Combine(AppContext.BaseDirectory, "..", "Resources", "assets", "savatarr_logo_source.png"),
                     Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_logo_source.png"),
                     Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_logo_source.png")
                 };
