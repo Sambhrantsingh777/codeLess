@@ -1275,6 +1275,24 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "rename_symbol"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Editor", "Format Active Document", "Shift+Alt+F",
                 () => { SelectedCommandId = "format_doc"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Go", "Go: Go to Type Definition", "",
+                () => { SelectedCommandId = "lsp_typedef"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Go", "Go: Go to Implementation", "Ctrl+F12",
+                () => { SelectedCommandId = "lsp_impl"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Go", "Go: Find All References", "Shift+F12",
+                () => { SelectedCommandId = "lsp_refs"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Editor", "Rename Symbol (Language Server)", "F2",
+                () => { SelectedCommandId = "lsp_rename"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Editor", "Format Document (Language Server)", "Shift+Alt+F",
+                () => { SelectedCommandId = "lsp_format"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Editor", "Quick Fix...", "Ctrl+.",
+                () => { SelectedCommandId = "lsp_quickfix"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Language Server", "Language Server: Restart Language Server", "",
+                () => { SelectedCommandId = "lsp_restart"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Language Server", "Language Server: Show Language Server Log", "",
+                () => { SelectedCommandId = "lsp_log"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Language Server", "Language Server: Configure Language Servers...", "",
+                () => { SelectedCommandId = "lsp_config"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Context", "Open Prompt, RepoMap & BM25 Context Inspector", "",
                 () => { SelectedCommandId = "open_context"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Extensions", "Install VS Code Extension from .VSIX File...", "Ctrl+Shift+X",

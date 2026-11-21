@@ -349,7 +349,7 @@ namespace codeLess.Studio
         public static new StudioSettings Load()
         {
             var baseLoaded = IdePersistentSettings.Load();
-            return new StudioSettings
+            var loaded = new StudioSettings
             {
                 ActiveThemeId = baseLoaded.ActiveThemeId,
                 ActiveVendorId = baseLoaded.ActiveVendorId,
@@ -385,6 +385,8 @@ namespace codeLess.Studio
                 OpenTabPaths = baseLoaded.OpenTabPaths ?? new List<string>(),
                 Vendors = baseLoaded.Vendors ?? new List<SavedVendorEntry>()
             };
+            loaded.CopyLanguageServerSettingsFrom(baseLoaded);
+            return loaded;
         }
     }
 

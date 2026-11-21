@@ -193,7 +193,11 @@ namespace codeLess.AvaloniaApp
 
             Grid.SetRow(bodyOverlayGrid, 2);
             Children.Add(bodyOverlayGrid);
+            OverlayHost = bodyOverlayGrid;
         }
+
+        /// <summary>Grid stacked over the editor body; hosts floating widgets (find bar, LSP completion / hover popups).</summary>
+        public Grid OverlayHost { get; private set; }
 
         public bool IsFindOverlayVisible => findReplaceOverlay.IsVisible;
         public bool IsReplaceRowVisible => replaceRowPanel.IsVisible;
@@ -1722,6 +1726,7 @@ namespace codeLess.AvaloniaApp
         protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
         {
             base.OnPointerWheelChanged(e);
+            PointerLeftCanvas?.Invoke();
             var buf = Buffer;
             if (buf == null) return;
             if (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta))
@@ -1774,6 +1779,20 @@ namespace codeLess.AvaloniaApp
         /// <summary>The link currently underlined under the pointer while Cmd (macOS) / Ctrl is held, or null.</summary>
         public EditorLinkTarget HoveredLink => linkHover;
         public int HoveredLinkLine => linkHoverLine;
+
+        /// <summary>Caret rectangle from the last rendered frame (canvas coordinates); used to place LSP popups.</summary>
+        public Rect CaretRect => imeCaretRect;
+
+        /// <summary>Document position of the character under <paramref name="pt"/> (canvas coordinates); false over gutter / minimap / past line end.</summary>
+        public bool TryHitTestText(Point pt, out int line, out int col)
+        {
+            line = -1;
+            col = -1;
+            if (Buffer == null || pt.X < GutterWidth || pt.X >= CodeAreaRight || pt.Y < 0 || pt.Y >= Bounds.Height) return false;
+            line = ScreenYToDocLine(pt.Y);
+            col = CharIndexUnderPoint(line, pt.X);
+            return line >= 0 && col >= 0;
+        }
 
         private static Cursor GetCachedCursor(StandardCursorType type)
         {
@@ -1878,6 +1897,7 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerExited(e);
             ClearLinkHover();
+            PointerLeftCanvas?.Invoke();
         }
 
         protected override void OnLostFocus(global::Avalonia.Interactivity.RoutedEventArgs e)
@@ -2120,6 +2140,7 @@ namespace codeLess.AvaloniaApp
             var pt = e.GetPosition(this);
             lastHoverPt = pt;
             if (buf == null) { SetPointerCursor(StandardCursorType.Arrow); return; }
+            PointerMovedOverCanvas?.Invoke(pt);
 
             if (isMinimapDragging)
             {
@@ -2963,6 +2984,15 @@ namespace codeLess.AvaloniaApp
             FinalizeBufferEdit(buf);
         }
 
+        /// <summary>Finishes an edit made directly on the buffer (LSP completion / rename / format): re-sync, analyze, notify, redraw.</summary>
+        public void CommitExternalEdit()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            ExtraCursors.Clear();
+            FinalizeBufferEdit(buf);
+        }
+
         private void FinalizeBufferEdit(EditorTabBuffer buf)
         {
             if (buf == null) return;
@@ -3178,6 +3208,8 @@ namespace codeLess.AvaloniaApp
 
             // While an IME composition is active, Enter / Backspace / arrows belong to the input method.
             if (IsImeComposing) return;
+            // Language-server popups (completion list, signature help) get first look at navigation keys.
+            if (PreviewKeyHandler != null && PreviewKeyHandler(e)) { e.Handled = true; return; }
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
             bool meta = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
             // Cmd on macOS, Ctrl on Windows/Linux (plain Ctrl on macOS is reserved for Cocoa/emacs editing keys).
@@ -3837,7 +3869,17 @@ namespace codeLess.AvaloniaApp
             HidePointerWhileTyping();
             InsertTextAcrossCursors(e.Text);
             e.Handled = true;
+            TextTyped?.Invoke(e.Text);
         }
+
+        /// <summary>Called before the editor handles a key; return true to swallow it (LSP completion / signature popups).</summary>
+        public Func<KeyEventArgs, bool> PreviewKeyHandler;
+        /// <summary>Raised after typed text was inserted at the caret (as-you-type completion, signature help triggers).</summary>
+        public event Action<string> TextTyped;
+        /// <summary>Raised on every pointer move over the canvas (canvas coordinates); used for LSP hover.</summary>
+        public event Action<Point> PointerMovedOverCanvas;
+        /// <summary>Raised when the pointer leaves the canvas, the view scrolls or focus is lost.</summary>
+        public event Action PointerLeftCanvas;
 
         public static List<SyntaxTokenSpan> TokenizeLineForTheme(string line, StudioTheme theme)
         {
@@ -4253,6 +4295,14 @@ namespace codeLess.AvaloniaApp
                             int firstChar = GetLeadingSpaces(lineText);
                             double sx = codeBaseX + ColX(buf, docLine, firstChar);
                             double sw = Math.Max(CharWidth * 4, Math.Min(codeAreaRight - sx, ColX(buf, docLine, lineText.Length) - ColX(buf, docLine, firstChar)));
+                            if (diag.IsLanguageServer && diag.EndColumn > 0)
+                            {
+                                // Language-server diagnostics carry an exact range: underline just that span.
+                                int c0 = Math.Max(0, Math.Min(lineText.Length, diag.Column - 1));
+                                int c1 = Math.Max(c0, Math.Min(lineText.Length, diag.EndColumn - 1));
+                                sx = codeBaseX + ColX(buf, docLine, c0);
+                                sw = Math.Max(CharWidth, Math.Min(codeAreaRight - sx, ColX(buf, docLine, c1) - ColX(buf, docLine, c0)));
+                            }
                             if (sw > 0)
                                 DrawSquiggleUnderline(context, sx, y + LineHeight - 3, sw, sqCol);
                         }

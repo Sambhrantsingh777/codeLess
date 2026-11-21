@@ -143,6 +143,7 @@ $sourceFiles = @(
     "src\NetworkActivityForm.cs",
     "src\CodeLessEditorCanvas.Debug.cs",
     "src\CodeLessMainForm.Debug.cs",
+    "src\LanguageServerWinForms.cs",
     "src\CodeLessMainForm.cs"
 )
 

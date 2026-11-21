@@ -243,6 +243,8 @@ namespace codeLess.Studio
         private Label statusEncodingItem;
         private Label statusEolItem;
         private Label statusLangItem;
+        private Label statusLspItem;
+        private WinFormsLanguageServerController lspController;
         private Label statusChordLabel;
 
         // Navigation History (Go -> Back / Forward) & Chord State
@@ -338,6 +340,7 @@ namespace codeLess.Studio
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
             this.vsixEngine = new VsixAndPluginHostEngine(themes);
             this.networkPrivacy = new WinFormsNetworkPrivacyController(this, settings, () => activeTheme);
+            InitLanguageServerController();
 
             this.aiEngine.OnRequestToolApproval = (toolName, detail) =>
             {
@@ -835,6 +838,7 @@ namespace codeLess.Studio
         private void UpdateStatusBarCursorAndLanguage(EditorTabBuffer buf)
         {
             if (statusCursorLangLabel == null) return;
+            if (lspController != null) lspController.UpdateStatusItem();
             int effTabSize = (buf != null && buf.CustomTabSize.HasValue && buf.CustomTabSize.Value > 0)
                 ? buf.CustomTabSize.Value
                 : (settings != null && settings.TabSize > 0 ? settings.TabSize : 4);
@@ -1467,6 +1471,7 @@ namespace codeLess.Studio
             activeTab = null;
             workspaceRoot = "";
             additionalWorkspaceFolders.Clear();
+            if (lspController != null) { lspController.SetWorkspaceRoot(null); lspController.SyncTabs(); }
             terminalWorkingDir = ConPtyTerminalSession.GetDefaultHomeDirectory();
             SyncTerminalsToWorkingDirectory(terminalWorkingDir);
             workspaceFiles.Clear();
@@ -2123,6 +2128,9 @@ namespace codeLess.Studio
             statusEncodingItem = createStatusItem("UTF-8", "Select Encoding", showEncodingMenu);
             statusEolItem = createStatusItem("CRLF", "Select End of Line Sequence", showEolMenu);
             statusLangItem = createStatusItem("Plain Text", "Select Language Mode", showLangMenu);
+            statusLspItem = createStatusItem("", "Language Server: log, restart, configure", (ctrl) => { if (lspController != null) lspController.ShowStatusMenu(ctrl); });
+            statusLspItem.Visible = false;
+            if (lspController != null) lspController.StatusItem = statusLspItem;
 
             statusIndentLabel = new Label { AutoSize = true, Visible = false, Text = "Spaces: 4" };
             statusEolLabel = new Label { AutoSize = true, Visible = false, Text = "CRLF" };
@@ -2137,7 +2145,7 @@ namespace codeLess.Studio
             statusBar.Controls.AddRange(new Control[]
             {
                 statusLeftLabel, statusProblemsPanel, statusProblemsLabel, statusChordLabel,
-                statusLnColItem, statusSpacesItem, statusEncodingItem, statusEolItem, statusLangItem,
+                statusLnColItem, statusSpacesItem, statusEncodingItem, statusEolItem, statusLangItem, statusLspItem,
                 statusRightLabel, statusCursorLangLabel, statusIndentLabel, statusEolLabel, statusLangLabel, statusWrapLabel
             });
             statusBar.Resize += (s, e) => LayoutStatusBarItems();
@@ -2460,6 +2468,7 @@ namespace codeLess.Studio
             {
                 statusNetworkItem,
                 statusRightLabel,
+                statusLspItem,
                 statusLangItem,
                 statusPythonItem,
                 statusEolItem,
@@ -2940,6 +2949,7 @@ namespace codeLess.Studio
             }));
             goMenu.DropDownItems.Add(CreateMenuItem("Go to Line/Column...", "Ctrl+G", () => OpenCommandPalette(":")));
             goMenu.DropDownItems.Add(CreateMenuItem("Go to Bracket", "Ctrl+Shift+\\", () => editorControl.GoToMatchingBracket()));
+            if (lspController != null) lspController.AddMenuItems(goMenu, CreateMenuItem);
             goMenu.DropDownItems.Add(new ToolStripSeparator());
             goMenu.DropDownItems.Add(CreateMenuItem("Next Problem", "F8", () => JumpToProblemOffset(1)));
             goMenu.DropDownItems.Add(CreateMenuItem("Previous Problem", "Shift+F8", () => JumpToProblemOffset(-1)));
@@ -3124,8 +3134,33 @@ if __name__ == '__main__':
             }
         }
 
+        private void InitLanguageServerController()
+        {
+            lspController = new WinFormsLanguageServerController(this, settings);
+            lspController.GetOpenTabs = () => openTabs;
+            lspController.GetActiveTab = () => activeTab;
+            lspController.GetWorkspaceRoot = () => workspaceRoot;
+            lspController.GetTheme = () => activeTheme;
+            lspController.SetStatus = msg => { if (statusLeftLabel != null) statusLeftLabel.Text = msg; };
+            lspController.OpenFile = path => OpenFileInTab(path);
+            lspController.JumpTo = (line, col) => editorControl.JumpToLineAndColumn(line, col);
+            lspController.RefreshProblems = buf => RefreshOutlineAndProblems(buf);
+            lspController.RefreshTabs = () => { RefreshTabStrip(); RefreshOpenEditorsSection(); UpdateWindowTitle(); };
+            lspController.LayoutStatusBar = () => LayoutStatusBarItems();
+            lspController.TypeInTerminal = cmd =>
+            {
+                SwitchBottomDockTab("terminal");
+                if (conPtyTerminalControl != null && conPtyTerminalControl.ActiveSession != null && conPtyTerminalControl.ActiveSession.IsRunning)
+                {
+                    conPtyTerminalControl.ActiveSession.WriteInput(cmd);
+                    conPtyTerminalControl.Focus();
+                }
+            };
+        }
+
         private void WireEditorEvents(CodeLessEditorControl ctrl)
         {
+            if (lspController != null) lspController.Attach(ctrl);
             ctrl.OnSaveRequested += (buf) => SaveTabBuffer(buf);
             ctrl.OnRunFileRequested += async (buf) => await ExecuteActiveFileInTerminalAsync(buf);
             ctrl.OnCtrlKRequested += async (inst, buf) => await HandleCtrlKInlineEditAsync(inst, buf);
@@ -3136,6 +3171,7 @@ if __name__ == '__main__':
             System.Windows.Forms.Timer outlineDebounceTimer = null;
             ctrl.OnBufferModified += (buf) =>
             {
+                if (lspController != null) lspController.OnBufferModified(buf);
                 bool previewCleared = false;
                 if (buf != null && buf.IsPreview)
                 {
@@ -3195,7 +3231,12 @@ if __name__ == '__main__':
             };
             ctrl.OnGoToDefinitionRequested += HandleGoToDefinition;
             ctrl.WorkspaceRootProvider = () => workspaceRoot;
-            ctrl.OnLinkActivated += (buf, target) => HandleEditorLinkActivated(buf, target);
+            ctrl.OnLinkActivated += (buf, target) =>
+            {
+                // Identifiers go to the language server first; imports / paths / URLs keep the built-in resolver.
+                if (lspController != null && lspController.TryFollowSymbolLink(buf, target, () => HandleEditorLinkActivated(buf, target))) return;
+                HandleEditorLinkActivated(buf, target);
+            };
             ctrl.OnGoToReferencesRequested += (buf, sym) => HandleGoToReferences(sym);
             ctrl.OnPeekDefinitionRequested += (buf, sym) => HandlePeekDefinition(sym);
             ctrl.OnCommandPaletteRequested += () => OpenCommandPalette(">");
@@ -7905,6 +7946,7 @@ if __name__ == '__main__':
             if (!keepCurrentTabs)
                 additionalWorkspaceFolders.Clear();
             workspaceRoot = rootDir;
+            if (lspController != null) lspController.SetWorkspaceRoot(rootDir);
             terminalWorkingDir = rootDir;
             SyncTerminalsToWorkingDirectory(rootDir);
             settings.AddRecentWorkspace(rootDir);
@@ -8784,6 +8826,11 @@ if __name__ == '__main__':
                 return;
             }
             KillAllTerminalChildProcesses();
+            if (lspController != null)
+            {
+                try { lspController.Dispose(); } catch { }
+                lspController = null;
+            }
             if (workspaceFileWatcher != null)
             {
                 try { workspaceFileWatcher.Dispose(); } catch { }
@@ -9281,6 +9328,7 @@ if __name__ == '__main__':
             tabStrip.ResumeLayout();
             RefreshOpenEditorsSection();
             UpdateWindowTitle();
+            if (lspController != null) lspController.SyncTabs();
         }
 
         public bool SaveTabBuffer(EditorTabBuffer buf)
@@ -9321,6 +9369,7 @@ if __name__ == '__main__':
                     RefreshGitSidebarStatus();
                 UpdateWindowTitle();
                 statusLeftLabel.Text = "Saved " + buf.FileName;
+                if (lspController != null) lspController.OnSaved(buf);
                 return true;
             }
             catch (Exception ex)
@@ -10544,6 +10593,11 @@ if __name__ == '__main__':
         {
             if (string.IsNullOrEmpty(cmdId)) return;
             if (TryExecuteDebugCommand(cmdId)) return;
+            if (cmdId.StartsWith("lsp_", StringComparison.Ordinal))
+            {
+                if (lspController != null) lspController.ExecuteCommand(cmdId, editorControl);
+                return;
+            }
             if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
@@ -11340,6 +11394,7 @@ if __name__ == '__main__':
             if (statusEolItem != null) statusEolItem.ForeColor = statusFg;
             if (statusLangItem != null) statusLangItem.ForeColor = statusFg;
             if (statusPythonItem != null) statusPythonItem.ForeColor = statusFg;
+            if (statusLspItem != null) statusLspItem.ForeColor = statusFg;
             if (statusChordLabel != null) statusChordLabel.ForeColor = statusFg;
             statusRightLabel.ForeColor = statusFg;
             if (statusNetworkItem != null) { statusNetworkItem.ForeColor = statusFg; statusNetworkItem.Invalidate(); }

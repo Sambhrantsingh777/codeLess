@@ -683,6 +683,9 @@ namespace codeLess.Studio
                     Source = "codeLess Syntax Verifier"
                 });
             }
+            // Keep language-server diagnostics (published asynchronously) next to the heuristic ones.
+            LspDiagnosticsStore.MergeInto(buf);
+            LspSymbolsStore.ApplyTo(buf);
         }
 
         public static string GenerateInlineGhostCompletion(EditorTabBuffer buf)

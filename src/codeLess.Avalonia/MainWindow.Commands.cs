@@ -709,11 +709,15 @@ namespace codeLess.AvaloniaApp
         }
 
         /// <summary>F12 / context menu "Go to Definition": same resolution as Cmd/Ctrl+Click at the caret.</summary>
-        public void GoToDefinitionAtCursor()
+        public async void GoToDefinitionAtCursor()
         {
             if (activeTab == null) return;
             int line = activeTab.CursorLine;
             int col = activeTab.CursorCol;
+            // A running language server answers first; the built-in resolver is the fallback.
+            var srcTab = activeTab;
+            if (await TryLspNavigateAsync(srcTab, line, col, "textDocument/definition", "definitions")) return;
+            if (!ReferenceEquals(srcTab, activeTab)) return;
             var target = PrimaryEditor.ResolveLinkAt(activeTab, line, col);
             if (target == null && col > 0) target = PrimaryEditor.ResolveLinkAt(activeTab, line, col - 1);
             if (target == null)
@@ -868,6 +872,7 @@ namespace codeLess.AvaloniaApp
             if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, CloseWorkspaceFolder)) return;
             StopWorkspaceWatcher();
             workspaceRoot = "";
+            LspOnWorkspaceChanged();
             workspaceFiles.Clear();
             ExplorerTree.Nodes.Clear();
             ExplorerTree.RebuildTreeLayout(false);
@@ -1016,8 +1021,13 @@ namespace codeLess.AvaloniaApp
                     }),
                     new Separator(),
                     MakeCtxItem("Go to Definition   (F12)", GoToDefinitionAtCursor),
+                    MakeCtxItem("Go to Type Definition", GoToTypeDefinitionAtCursor),
+                    MakeCtxItem("Go to Implementation", GoToImplementationAtCursor),
+                    MakeCtxItem("Find All References   (Shift+F12)", FindAllReferencesAtCursor),
                     MakeCtxItem($"Go to Symbol in Editor...   ({scSym})", () => OpenCommandPalette("@")),
-                    MakeCtxItem("Rename Symbol   (F2)", () => PrimaryEditor.ShowFindBar(true)),
+                    MakeCtxItem("Rename Symbol   (F2)", RenameSymbolAtCursor),
+                    MakeCtxItem("Quick Fix...   (" + AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+.") + ")", ShowQuickFixes),
+                    MakeCtxItem("Format Document   (" + AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Shift+Alt+F") + ")", () => FormatDocumentOrSelection(false)),
                     MakeCtxItem("Change All Occurrences   (Ctrl+Shift+L)", () => PrimaryEditor.Canvas.SelectAllFindOccurrences()),
                     new Separator(),
                     MakeCtxItem($"Find   ({scF})", () => PrimaryEditor.ShowFindBar(false)),
@@ -2502,7 +2512,7 @@ namespace codeLess.AvaloniaApp
                 BuildDebugPaletteCommands(),
                 new PaletteEntryItem { Category = "Help", Title = "Welcome", Execute = OpenWelcomeTab },
                 new PaletteEntryItem { Category = "Help", Title = "About codeLess", Execute = ShowAboutModal }
-            };
+            }.Concat(BuildLanguageServerPaletteCommands()).ToList();
         }
 
         /// <summary>
