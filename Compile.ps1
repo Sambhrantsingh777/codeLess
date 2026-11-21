@@ -148,6 +148,7 @@ $sourceFiles = @(
     "src\DevToolsWinForms.cs",
     "src\CodeLessMainForm.DevTools.cs",
     "src\LargeFileViewerWinForms.cs",
+    "src\CodeLessMainForm.Smoke.cs",
     "src\CodeLessMainForm.cs"
 )
 

@@ -52,6 +52,17 @@ jobs:
         shell: pwsh
         run: ./Compile.ps1 -SkipInstaller
 
+      - name: Launch smoke test of the WinForms UI (open workspace + files, paint every control)
+        shell: pwsh
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP "winforms-smoke.txt"
+          $p = Start-Process -FilePath ".\codeLess.exe" -ArgumentList @("--smoke-test", "`"$report`"", "`"$PWD`"") -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "codeLess.exe smoke test timed out" }
+          if (Test-Path $report) { Get-Content $report }
+          $crash = Join-Path $env:APPDATA "codeLess\crash.log"
+          if (Test-Path $crash) { Write-Host "--- crash.log ---"; Get-Content $crash -Tail 80 }
+          if ($p.ExitCode -ne 0) { throw "codeLess.exe smoke test failed with exit code $($p.ExitCode)" }
+
       - name: Upload unsigned codeLess.exe artifact for SignPath origin verification
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4

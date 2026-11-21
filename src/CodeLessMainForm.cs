@@ -12101,6 +12101,7 @@ if __name__ == '__main__':
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static void Run(string[] args)
         {
+            if (CodeLessMainForm.TryRunSmokeTest(args)) return; // CI: codeLess.exe --smoke-test report.txt [workspace]
             try { CodeLessMainForm.SetCurrentProcessExplicitAppUserModelID("Savatarr.codeLess"); } catch { }
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (s, e) => LogUnhandledException("UIThread", e.Exception);
