@@ -1349,6 +1349,36 @@ namespace codeLess.AvaloniaApp
         public bool IsItalic;
     }
 
+    /// <summary>
+    /// Platform input-method bridge (macOS press-and-hold accents, dead keys, Japanese / Chinese / Korean IMEs,
+    /// Linux IBus/Fcitx, Windows TSF): reports the caret rectangle for the candidate window and receives the
+    /// in-progress composition ("preedit"), which the canvas draws underlined at the caret. Committed text still
+    /// arrives through OnTextInput.
+    /// </summary>
+    internal sealed class EditorImeClient : global::Avalonia.Input.TextInput.TextInputMethodClient
+    {
+        private readonly AvaloniaVirtualEditorCanvas canvas;
+        public EditorImeClient(AvaloniaVirtualEditorCanvas canvas) { this.canvas = canvas; }
+        public override Visual TextViewVisual => canvas;
+        public override bool SupportsPreedit => true;
+        public override bool SupportsSurroundingText => true;
+        public override string SurroundingText => canvas.ImeSurroundingText;
+        public override Rect CursorRectangle => canvas.ImeCaretRect;
+        public override global::Avalonia.Input.TextInput.TextSelection Selection
+        {
+            get => new global::Avalonia.Input.TextInput.TextSelection(canvas.ImeCaretColumn, canvas.ImeCaretColumn);
+            set { }
+        }
+        public override void SetPreeditText(string preeditText) => canvas.SetImePreedit(preeditText);
+        public override void SetPreeditText(string preeditText, int? cursorPos) => canvas.SetImePreedit(preeditText);
+        public void NotifyCaretChanged()
+        {
+            RaiseCursorRectangleChanged();
+            RaiseSelectionChanged();
+            RaiseSurroundingTextChanged();
+        }
+    }
+
     public class AvaloniaVirtualEditorCanvas : Control
     {
         private readonly AvaloniaEditorControl owner;
@@ -1365,6 +1395,27 @@ namespace codeLess.AvaloniaApp
         // the next tab stop, CJK / emoji occupy 2 cells, combining marks 0. (Previously text was drawn with
         // measured glyph widths while carets used column * CharWidth, so they drifted apart on such lines.)
         public static int DisplayTabSize = 4;
+
+        private readonly EditorImeClient imeClient;
+        private string imePreedit;
+        private Rect imeCaretRect = new Rect(0, 0, 2, 16);
+        internal Rect ImeCaretRect => imeCaretRect;
+        internal int ImeCaretColumn => Buffer?.CursorCol ?? 0;
+        internal string ImeSurroundingText
+        {
+            get
+            {
+                var b = Buffer;
+                return b != null && b.CursorLine >= 0 && b.CursorLine < b.Lines.Count ? b.Lines[b.CursorLine] : "";
+            }
+        }
+        public bool IsImeComposing => !string.IsNullOrEmpty(imePreedit);
+
+        internal void SetImePreedit(string text)
+        {
+            imePreedit = string.IsNullOrEmpty(text) ? null : text;
+            InvalidateVisual();
+        }
 
         private static int CellsForChar(string s, int i)
         {
@@ -1468,6 +1519,9 @@ namespace codeLess.AvaloniaApp
             this.owner = owner;
             Focusable = true;
             ClipToBounds = true;
+            imeClient = new EditorImeClient(this);
+            TextInputMethodClientRequested += (s, e) => e.Client = imeClient;
+            global::Avalonia.Input.InputMethod.SetIsInputMethodEnabled(this, true);
 
             blinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
             blinkTimer.Tick += (s, e) =>
@@ -2777,6 +2831,8 @@ namespace codeLess.AvaloniaApp
             var buf = Buffer;
             if (buf == null) return;
 
+            // While an IME composition is active, Enter / Backspace / arrows belong to the input method.
+            if (IsImeComposing) return;
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
             bool meta = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
             // Cmd on macOS, Ctrl on Windows/Linux (plain Ctrl on macOS is reserved for Cocoa/emacs editing keys).
@@ -3788,6 +3844,26 @@ namespace codeLess.AvaloniaApp
                     context.DrawText(gft, new Point(gx, y + (LineHeight - gft.Height) / 2.0));
                 }
 
+                // IME caret geometry + in-progress composition (drawn even while the caret blink is off)
+                if (docLine == buf.CursorLine)
+                {
+                    double icx = codeBaseX + ColX(buf, docLine, buf.CursorCol);
+                    var newRect = new Rect(icx, y, 2, LineHeight);
+                    if (newRect != imeCaretRect)
+                    {
+                        imeCaretRect = newRect;
+                        Dispatcher.UIThread.Post(() => imeClient.NotifyCaretChanged(), DispatcherPriority.Background);
+                    }
+                    if (IsImeComposing)
+                    {
+                        var pft = new FormattedText(imePreedit, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, fontRegular, FontSizePx, accentBrush);
+                        pft.SetTextDecorations(TextDecorations.Underline);
+                        context.FillRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.EditorBg)), new Rect(icx, y + 1, pft.WidthIncludingTrailingWhitespace + 3, LineHeight - 2));
+                        context.DrawText(pft, new Point(icx, y + (LineHeight - pft.Height) / 2.0));
+                        context.FillRectangle(accentBrush, new Rect(icx + pft.WidthIncludingTrailingWhitespace + 1, y + 2, 2.0, LineHeight - 4));
+                    }
+                }
+
                 // Matching bracket highlight box
                 if (docLine == matchBLine && matchBCol >= 0)
                 {
@@ -3822,7 +3898,8 @@ namespace codeLess.AvaloniaApp
                     if (docLine == buf.CursorLine)
                     {
                         double cx = codeBaseX + ColX(buf, docLine, buf.CursorCol);
-                        context.FillRectangle(accentBrush, new Rect(cx, y + 2, 2.0, LineHeight - 4));
+                        if (!IsImeComposing)
+                            context.FillRectangle(accentBrush, new Rect(cx, y + 2, 2.0, LineHeight - 4));
                     }
                     for (int eci = 0; eci < ExtraCursors.Count; eci++)
                     {

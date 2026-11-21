@@ -445,3 +445,55 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    [Collection("SequentialWorkbench")]
+    public class ImeInputTests : IDisposable
+    {
+        private readonly string _settingsFilePath = IdePersistentSettings.GetSettingsFilePath();
+        private readonly string _settingsBackup;
+        private readonly string _root;
+        public ImeInputTests()
+        {
+            _settingsBackup = File.Exists(_settingsFilePath) ? File.ReadAllText(_settingsFilePath) : null;
+            _root = Path.Combine(Path.GetTempPath(), "codeLess_IME_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(_root);
+        }
+        public void Dispose()
+        {
+            try { if (_settingsBackup != null) File.WriteAllText(_settingsFilePath, _settingsBackup); else if (File.Exists(_settingsFilePath)) File.Delete(_settingsFilePath); } catch { }
+            try { Directory.Delete(_root, true); } catch { }
+        }
+
+        [AvaloniaFact]
+        public void ImeComposition_IsShownNotApplied_UntilCommitted()
+        {
+            string f = Path.Combine(_root, "j.txt");
+            File.WriteAllText(f, "ab\n");
+            var w = new MainWindow(_root);
+            w.SuppressUnsavedPrompts = true;
+            w.Show();
+            var tab = w.OpenFileInTab(f);
+            tab.CursorLine = 0; tab.CursorCol = 2; tab.ClearSelection();
+            var canvas = w.PrimaryEditor.Canvas;
+
+            var req = new global::Avalonia.Input.TextInput.TextInputMethodClientRequestedEventArgs { RoutedEvent = global::Avalonia.Input.InputElement.TextInputMethodClientRequestedEvent };
+            canvas.RaiseEvent(req);
+            Assert.NotNull(req.Client);
+            Assert.True(req.Client.SupportsPreedit);
+            Assert.Equal("ab", req.Client.SurroundingText);
+
+            req.Client.SetPreeditText("にほ");
+            Assert.True(canvas.IsImeComposing);
+            w.SimulateShortcut(global::Avalonia.Input.Key.Back, global::Avalonia.Input.KeyModifiers.None);
+            Assert.Equal("ab", tab.Lines[0]); // Backspace belongs to the IME during composition
+
+            req.Client.SetPreeditText(null);
+            canvas.RaiseEvent(new global::Avalonia.Input.TextInputEventArgs { RoutedEvent = global::Avalonia.Input.InputElement.TextInputEvent, Text = "日本" });
+            Assert.False(canvas.IsImeComposing);
+            Assert.Equal("ab日本", tab.Lines[0]);
+            w.Close();
+        }
+    }
+}

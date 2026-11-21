@@ -381,8 +381,39 @@ namespace codeLess.AvaloniaApp
         public void FocusTerminalCanvas() => gridCanvas.Focus();
     }
 
+    /// <summary>Input-method bridge for the terminal (composition drawn at the cursor cell, committed text via OnTextInput).</summary>
+    internal sealed class TerminalImeClient : global::Avalonia.Input.TextInput.TextInputMethodClient
+    {
+        private readonly AvaloniaTerminalGridCanvas canvas;
+        public TerminalImeClient(AvaloniaTerminalGridCanvas canvas) { this.canvas = canvas; }
+        public override Visual TextViewVisual => canvas;
+        public override bool SupportsPreedit => true;
+        public override bool SupportsSurroundingText => false;
+        public override string SurroundingText => "";
+        public override Rect CursorRectangle => canvas.ImeCaretRect;
+        public override global::Avalonia.Input.TextInput.TextSelection Selection
+        {
+            get => new global::Avalonia.Input.TextInput.TextSelection(0, 0);
+            set { }
+        }
+        public override void SetPreeditText(string preeditText) => canvas.SetImePreedit(preeditText);
+        public override void SetPreeditText(string preeditText, int? cursorPos) => canvas.SetImePreedit(preeditText);
+        public void NotifyCaretChanged() => RaiseCursorRectangleChanged();
+    }
+
     internal class AvaloniaTerminalGridCanvas : Control
     {
+        private TerminalImeClient imeClient;
+        private string imePreedit;
+        private Rect imeCaretRect = new Rect(0, 0, 8, 16);
+        internal Rect ImeCaretRect => imeCaretRect;
+        internal bool IsImeComposing => !string.IsNullOrEmpty(imePreedit);
+        internal void SetImePreedit(string text)
+        {
+            imePreedit = string.IsNullOrEmpty(text) ? null : text;
+            InvalidateVisual();
+        }
+
         private readonly AvaloniaTerminalEmulatorControl owner;
         public const double DefaultCellW = 7.6;
         public const double CellH = 17.0;
@@ -502,6 +533,9 @@ namespace codeLess.AvaloniaApp
             this.owner = owner;
             Focusable = true;
             ClipToBounds = true;
+            imeClient = new TerminalImeClient(this);
+            TextInputMethodClientRequested += (s, e) => e.Client = imeClient;
+            global::Avalonia.Input.InputMethod.SetIsInputMethodEnabled(this, true);
         }
 
         // Rows fall back to a default only before layout (zero height). For a real but short panel, report the
@@ -745,6 +779,7 @@ namespace codeLess.AvaloniaApp
             // dangling flag swallowed the next typed character.
             suppressNextTextInput = false;
             base.OnKeyDown(e);
+            if (IsImeComposing) return; // Enter / Backspace / arrows belong to the input method while composing
             bool isMac = MacKeymap.IsMacOS;
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
             bool meta = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
@@ -1141,8 +1176,27 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
+            // IME caret geometry + composition preview at the cursor cell
+            {
+                double icx = PadLeft + buf.CursorCol * cellW;
+                double icy = PadTop + buf.CursorRow * CellH;
+                var newRect = new Rect(icx, icy, cellW, CellH);
+                if (newRect != imeCaretRect)
+                {
+                    imeCaretRect = newRect;
+                    Dispatcher.UIThread.Post(() => imeClient.NotifyCaretChanged(), DispatcherPriority.Background);
+                }
+                if (IsImeComposing && scrollbackOffset == 0)
+                {
+                    var pft = new FormattedText(imePreedit, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, FontRegular, TermFontSize, GetBrush(owner.AccentColor));
+                    pft.SetTextDecorations(TextDecorations.Underline);
+                    context.FillRectangle(termBgBrush, new Rect(icx, icy, pft.WidthIncludingTrailingWhitespace + 2, CellH));
+                    context.DrawText(pft, new Point(icx, icy + textTop));
+                }
+            }
+
             // Draw terminal cursor when at bottom of scrollback
-            if (scrollbackOffset == 0 && buf.CursorVisible && owner.CursorBlinkOn)
+            if (scrollbackOffset == 0 && buf.CursorVisible && owner.CursorBlinkOn && !IsImeComposing)
             {
                 double cx = PadLeft + buf.CursorCol * cellW;
                 double cy = PadTop + buf.CursorRow * CellH;
