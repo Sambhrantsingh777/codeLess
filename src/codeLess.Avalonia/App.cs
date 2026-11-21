@@ -91,6 +91,10 @@ namespace codeLess.AvaloniaApp
                     };
                 }
 
+                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath);
+                if (!automatedRun)
+                    mainWindow.Opened += (s, e) => Dispatcher.UIThread.Post(mainWindow.MaybeAutoCheckForUpdates, DispatcherPriority.Background);
+
                 if (!string.IsNullOrWhiteSpace(SmokeQuitReportPath))
                 {
                     mainWindow.Opened += async (s, e) => await mainWindow.RunSmokeQuitAsync(SmokeQuitReportPath);

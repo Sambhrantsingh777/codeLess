@@ -36,3 +36,27 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    public class UpdateCheckerTests
+    {
+        [Fact]
+        public void VersionComparison_HandlesTagsAndFourPartVersions()
+        {
+            Assert.True(codeLess.Studio.UpdateChecker.IsNewerVersion("v3.2.3", "3.2.2.0"));
+            Assert.True(codeLess.Studio.UpdateChecker.IsNewerVersion("3.10.0", "3.9.9"));
+            Assert.False(codeLess.Studio.UpdateChecker.IsNewerVersion("v3.2.2", "3.2.2"));
+            Assert.False(codeLess.Studio.UpdateChecker.IsNewerVersion("3.2.1", "3.2.2"));
+            Assert.False(codeLess.Studio.UpdateChecker.IsNewerVersion("v3.3.0-beta", "garbage"));
+            Assert.True(codeLess.Studio.UpdateChecker.IsNewerVersion("v4.0.0-rc1", "3.2.2"));
+        }
+
+        [Fact]
+        public void PlatformAsset_MatchesReleaseArtifactNames()
+        {
+            string a = codeLess.Studio.UpdateChecker.GetPlatformAssetName();
+            Assert.Contains(a, new[] { "codeLess-Setup.exe", "codeLess-mac-arm64.dmg", "codeLess-mac-x64.dmg", "codeLess-linux-x64.deb", "codeLess-linux-arm64.deb" });
+        }
+    }
+}

@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Savatarr")]
 [assembly: AssemblyProduct("codeLess")]
 [assembly: AssemblyCopyright("Copyright © 2026 Savatarr. All rights reserved.")]
-[assembly: AssemblyVersion("3.2.1.0")]
-[assembly: AssemblyFileVersion("3.2.1.0")]
+[assembly: AssemblyVersion("3.2.2.0")]
+[assembly: AssemblyFileVersion("3.2.2.0")]
 
 namespace codeLess.Studio
 {
@@ -477,6 +477,7 @@ namespace codeLess.Studio
                 }
             });
 
+            this.Shown += (s, e) => MaybeAutoCheckForUpdates();
             this.Shown += (s, e) =>
             {
                 UpdateTelemetryBadges();
@@ -3022,6 +3023,7 @@ namespace codeLess.Studio
                 using (var d = new DeveloperToolsDialog(activeTheme, workspaceRoot, aiEngine != null && aiEngine.IndexedChunks != null ? aiEngine.IndexedChunks.Count : 0))
                     d.ShowDialog(this);
             }));
+            helpMenu.DropDownItems.Add(CreateMenuItem("Check for Updates...", "", () => RunUpdateCheck(true)));
             helpMenu.DropDownItems.Add(CreateMenuItem("About", "", () =>
             {
                 using (var a = new AboutDialog(activeTheme))
@@ -8787,6 +8789,79 @@ if __name__ == '__main__':
             bottomDockPanel.Visible = true;
             SwitchBottomDockTab("terminal");
             await ExecuteTerminalCommandAsync(runCmd);
+        }
+
+        private bool updateCheckInFlight;
+
+        private static string CurrentAppVersionString()
+        {
+            Version v = typeof(CodeLessMainForm).Assembly.GetName().Version;
+            return v == null ? "0.0.0" : (v.Major + "." + v.Minor + "." + Math.Max(0, v.Build));
+        }
+
+        /// <summary>Automatic check: at most once per 24 h, silent unless a newer, non-skipped release exists.</summary>
+        private void MaybeAutoCheckForUpdates()
+        {
+            if (settings == null || !settings.AutoCheckForUpdates || SuppressUnsavedPrompts) return;
+            DateTime last;
+            if (DateTime.TryParse(settings.LastUpdateCheckUtc, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out last) &&
+                (DateTime.UtcNow - last).TotalHours < 24)
+                return;
+            RunUpdateCheck(false);
+        }
+
+        /// <summary>Help > Check for Updates (interactive) or the background launch check.</summary>
+        private void RunUpdateCheck(bool interactive)
+        {
+            if (updateCheckInFlight) return;
+            updateCheckInFlight = true;
+            string current = CurrentAppVersionString();
+            if (interactive && statusLeftLabel != null) statusLeftLabel.Text = "Checking for updates...";
+            Task.Run(() =>
+            {
+                UpdateCheckResult r = UpdateChecker.Check(current, 8000);
+                Action show = () =>
+                {
+                    updateCheckInFlight = false;
+                    if (r.Success)
+                    {
+                        settings.LastUpdateCheckUtc = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+                        try { settings.Save(); } catch { }
+                    }
+                    if (!r.Success)
+                    {
+                        if (interactive) MessageBox.Show(this, "Could not check for updates.\n\n" + r.Error, "Check for Updates", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    if (!r.IsNewer)
+                    {
+                        if (interactive) MessageBox.Show(this, "codeLess " + current + " is the latest version.", "Check for Updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+                    if (!interactive && string.Equals(settings.SkippedUpdateVersion, r.LatestVersion, StringComparison.OrdinalIgnoreCase))
+                        return;
+                    string notes = (r.ReleaseNotes ?? "").Trim();
+                    if (notes.Length > 900) notes = notes.Substring(0, 900) + "\n...";
+                    DialogResult choice = MessageBox.Show(this,
+                        "codeLess " + r.LatestVersion + " is available - you have " + current + ".\n\n" +
+                        (notes.Length > 0 ? notes + "\n\n" : "") +
+                        "Yes = Download now      No = Remind me later      Cancel = Skip this version",
+                        "Update Available", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Information);
+                    if (choice == DialogResult.Yes)
+                    {
+                        UpdateChecker.OpenInBrowser(r.DownloadUrl);
+                        if (statusLeftLabel != null) statusLeftLabel.Text = "Downloading codeLess " + r.LatestVersion + " - close codeLess before installing.";
+                    }
+                    else if (choice == DialogResult.Cancel)
+                    {
+                        settings.SkippedUpdateVersion = r.LatestVersion;
+                        try { settings.Save(); } catch { }
+                    }
+                };
+                if (this.IsHandleCreated && !this.IsDisposed) this.BeginInvoke(show);
+                else updateCheckInFlight = false;
+            });
         }
 
         public string GetEffectiveTerminalWorkingDirectory()

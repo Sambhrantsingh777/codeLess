@@ -1,7 +1,7 @@
 # codeLess — Lightweight Native Agentic IDE & Multi-Harness Coding Workbench
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-3.2.1-0ea5e9.svg)](https://github.com/Sambhrantsingh777/codeLess/releases)
+[![Version](https://img.shields.io/badge/version-3.2.2-0ea5e9.svg)](https://github.com/Sambhrantsingh777/codeLess/releases)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-10b981.svg)](#installation--building-from-source)
 [![BYOK](https://img.shields.io/badge/AI-100%25%20BYOK%20%26%20Local%20Ollama-8b5cf6.svg)](#multi-profile-llm-harness--byok-providers)
 
@@ -19,7 +19,8 @@ Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders
 | **Shared Core Engine (`codeLess.Core.dll`)** | **`212 KB`** (`net48` / `netstandard2.0` / `net8.0`) |
 | **Windows Setup Installer (`codeLess-Setup.exe`)** | **`2.38 MB`** (Inno Setup LZMA2, per-user `PrivilegesRequired=lowest`) |
 | **macOS Self-Contained Disk Image (`.dmg`)** | **`45.6 MB`** (`osx-arm64`) / **`47.1 MB`** (`osx-x64`) *(bundles `.NET 8` + Skia runtime)* |
-| **Managed Heap Memory (Full Workbench Loaded)** | **`~40 MB` RAM** |
+| **Managed (.NET GC) Heap (Full Workbench Loaded)** | **`~30 MB`** |
+| **Total Memory Footprint, macOS (Retina, Metal, incl. GPU surfaces)** | **`~250 MB`** steady · **`~300 MB`** startup peak *(Activity Monitor "Memory")* |
 | **20,000-File Repository Async Open** | **`30 ms` return**, **`23 ms` first tree paint** (non-blocking background indexing) |
 | **6 MB (`70,000+`-Line) Source File Open** | **`< 200 ms`** (viewport-virtualized line rendering) |
 

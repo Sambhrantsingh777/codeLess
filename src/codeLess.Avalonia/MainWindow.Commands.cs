@@ -2477,6 +2477,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Go", Title = "Go to Definition", Shortcut = "F12", Execute = GoToDefinitionAtCursor },
                 new PaletteEntryItem { Category = "Go", Title = "Go to Bracket", Shortcut = "Ctrl+Shift+\\", Execute = () => PrimaryEditor.Canvas.JumpToMatchingBracket() },
                 new PaletteEntryItem { Category = "Terminal", Title = "Create New Terminal", Shortcut = "Ctrl+Shift+`", Execute = () => RequestNewTerminal() },
+                new PaletteEntryItem { Category = "Help", Title = "Check for Updates...", Execute = CheckForUpdatesInteractive },
                 new PaletteEntryItem { Category = "Terminal", Title = "Split Terminal", Shortcut = "Ctrl+Shift+5", Execute = ToggleSplitTerminal },
                 new PaletteEntryItem { Category = "Terminal", Title = "Rename Active Terminal...", Execute = PromptRenameActiveTerminalSession },
                 new PaletteEntryItem { Category = "Terminal", Title = "Kill Active Terminal", Execute = () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); } },
@@ -2624,7 +2625,7 @@ namespace codeLess.AvaloniaApp
             var stack = new StackPanel { Spacing = 8 };
             stack.Children.Add(new TextBlock
             {
-                Text = "codeLess v3.2.1",
+                Text = "codeLess v3.2.2",
                 FontSize = 18,
                 FontWeight = FontWeight.Bold,
                 Foreground = new SolidColorBrush(textPrimary)

@@ -791,6 +791,7 @@ namespace codeLess.AvaloniaApp
                     Mi("Keyboard Shortcuts Reference", "Ctrl+K Ctrl+S", ShowKeyboardShortcutsModal),
                     Mi("BYOK AI Provider & Harness Setup", "", ShowByokAndHarnessModal),
                     new Separator(),
+                    Mi("Check for Updates...", "", CheckForUpdatesInteractive),
                     Mi("About codeLess", "", ShowAboutModal)
                 }
             };
@@ -826,6 +827,7 @@ namespace codeLess.AvaloniaApp
                 var appSub = new NativeMenu
                 {
                     Nmi("About codeLess", ShowAboutModal),
+                    Nmi("Check for Updates...", CheckForUpdatesInteractive),
                     new NativeMenuItemSeparator(),
                     Nmi("Settings...", ShowSettingsModal, Key.OemComma, meta),
                     Nmi("Keyboard Shortcuts...", ShowKeyboardShortcutsModal),
@@ -932,6 +934,7 @@ namespace codeLess.AvaloniaApp
                     Nmi("Welcome", OpenWelcomeTab),
                     Nmi("Show All Commands", () => OpenCommandPalette(">")),
                     Nmi("Keyboard Shortcuts Reference", ShowKeyboardShortcutsModal),
+                    Nmi("Check for Updates...", CheckForUpdatesInteractive),
                     Nmi("About codeLess", ShowAboutModal)
                 };
                 rootMenu.Add(new NativeMenuItem("Help") { Menu = helpSub });

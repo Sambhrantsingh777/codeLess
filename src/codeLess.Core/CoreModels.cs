@@ -1511,6 +1511,10 @@ namespace codeLess.Studio
         public bool WordWrap { get; set; }
         public bool AutoSave { get; set; }
         public bool RequireAgentToolApproval { get; set; }
+        /// <summary>Check GitHub Releases for a newer codeLess at most once a day (anonymous request, can be disabled).</summary>
+        public bool AutoCheckForUpdates { get; set; }
+        public string LastUpdateCheckUtc { get; set; }
+        public string SkippedUpdateVersion { get; set; }
         public bool EnableInlineGhostText { get; set; }
         public bool ShowMinimap { get; set; }
         public bool ShowBreadcrumbs { get; set; }
@@ -1541,6 +1545,7 @@ namespace codeLess.Studio
             WordWrap = false;
             AutoSave = false;
             RequireAgentToolApproval = true;
+            AutoCheckForUpdates = true;
             EnableInlineGhostText = true;
             ShowMinimap = true;
             ShowBreadcrumbs = true;
