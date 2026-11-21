@@ -1445,6 +1445,14 @@ namespace codeLess.AvaloniaApp
                 buf.ScrollTopLine = Math.Max(0, buf.CursorLine);
             else if (buf.CursorLine >= buf.ScrollTopLine + visRows)
                 buf.ScrollTopLine = Math.Max(0, buf.CursorLine - visRows + 1);
+            // Horizontal: keep the caret inside the viewport when typing past the right edge (was never scrolled).
+            if (!buf.WordWrap && Bounds.Width > GutterWidth + 40)
+            {
+                double caretX = buf.CursorCol * CharWidth;
+                double viewW = Bounds.Width - GutterWidth - 24;
+                if (caretX < buf.ScrollLeftPx) buf.ScrollLeftPx = Math.Max(0, caretX - CharWidth * 4);
+                else if (caretX > buf.ScrollLeftPx + viewW) buf.ScrollLeftPx = caretX - viewW + CharWidth * 4;
+            }
         }
 
         public void FoldAtLine(int lineIdx)
@@ -1574,16 +1582,40 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
             if (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta))
             {
-                FontSizePx = Math.Max(9.0, Math.Min(28.0, FontSizePx + (e.Delta.Y > 0 ? 1.0 : -1.0)));
-                InvalidateVisual();
+                // Accumulate so a trackpad's stream of tiny deltas doesn't swing the font size every event.
+                zoomAccum += e.Delta.Y;
+                if (Math.Abs(zoomAccum) >= 1.0)
+                {
+                    FontSizePx = Math.Max(9.0, Math.Min(28.0, FontSizePx + (zoomAccum > 0 ? 1.0 : -1.0)));
+                    zoomAccum = 0;
+                    InvalidateVisual();
+                }
                 e.Handled = true;
                 return;
             }
-            int deltaLines = (int)(-e.Delta.Y * 3);
-            buf.ScrollTopLine = Math.Max(0, Math.Min(Math.Max(0, buf.Lines.Count - 1), buf.ScrollTopLine + deltaLines));
+            double dy = e.Delta.Y;
+            double dx = e.Delta.X;
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift) && Math.Abs(dx) < 0.001) { dx = dy; dy = 0; } // Shift+wheel scrolls horizontally
+            // Fractional accumulation: truncating each small trackpad delta to 0 lines made scrolling dead/jerky.
+            wheelAccumY += -dy * 3;
+            int deltaLines = (int)wheelAccumY;
+            wheelAccumY -= deltaLines;
+            if (deltaLines != 0)
+                buf.ScrollTopLine = Math.Max(0, Math.Min(Math.Max(0, buf.Lines.Count - 1), buf.ScrollTopLine + deltaLines));
+            if (Math.Abs(dx) > 0.001)
+            {
+                int longest = 0;
+                int first = Math.Max(0, buf.ScrollTopLine);
+                for (int i = first; i < Math.Min(buf.Lines.Count, first + 400); i++) longest = Math.Max(longest, buf.Lines[i].Length);
+                double maxPx = Math.Max(0, longest * CharWidth - Math.Max(0, Bounds.Width - GutterWidth - 40));
+                buf.ScrollLeftPx = Math.Max(0, Math.Min(maxPx, buf.ScrollLeftPx - dx * CharWidth * 3));
+            }
             InvalidateVisual();
             e.Handled = true;
         }
+
+        private double wheelAccumY;
+        private double zoomAccum;
 
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
@@ -2118,6 +2150,43 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
+        private void ClampExtraCursors(EditorTabBuffer buf)
+        {
+            if (ExtraCursors.Count == 0 || buf == null) return;
+            ExtraCursors.RemoveAll(c => c.Line < 0 || c.Line >= buf.Lines.Count);
+        }
+
+        /// <summary>Cmd+Backspace / Cmd+Delete / Ctrl+K on macOS: delete from the caret to line start or end.</summary>
+        private void DeleteToLineBoundary(EditorTabBuffer buf, bool toEnd)
+        {
+            if (buf == null) return;
+            if (buf.HasSelection())
+            {
+                buf.PushUndoSnapshot();
+                buf.DeleteSelection();
+                FinalizeBufferEdit(buf);
+                return;
+            }
+            string line = buf.Lines[buf.CursorLine];
+            int col = Math.Max(0, Math.Min(line.Length, buf.CursorCol));
+            if (toEnd && col == line.Length) { buf.PushUndoSnapshot(); buf.PerformDelete(); FinalizeBufferEdit(buf); return; } // join next line
+            if (!toEnd && col == 0) { PerformBackspaceAcrossCursors(); return; }
+            buf.PushUndoSnapshot();
+            if (toEnd)
+                buf.Lines[buf.CursorLine] = line.Substring(0, col);
+            else
+            {
+                int indent = 0;
+                while (indent < line.Length && (line[indent] == ' ' || line[indent] == '\t')) indent++;
+                int stop = col > indent ? indent : 0; // like VS Code: first press keeps indentation
+                buf.Lines[buf.CursorLine] = line.Substring(0, stop) + line.Substring(col);
+                buf.CursorCol = stop;
+            }
+            buf.ClearSelection();
+            buf.SyncContentFromLines();
+            FinalizeBufferEdit(buf);
+        }
+
         public void DeleteWordLeft()
         {
             var buf = Buffer;
@@ -2485,8 +2554,9 @@ namespace codeLess.AvaloniaApp
                 allCarets.Add((i, ec.Line, ec.Col, ec.AnchorLine, ec.AnchorCol));
             }
 
-            foreach (var c in allCarets.OrderByDescending(x => x.Line).ThenByDescending(x => x.Col))
+            foreach (var c in allCarets.Where(x => x.Line >= 0 && x.Line < buf.Lines.Count).OrderByDescending(x => x.Line).ThenByDescending(x => x.Col))
             {
+                // (stale extra cursors after undo / line delete used to throw ArgumentOutOfRange and crash the app)
                 string line = buf.Lines[c.Line];
                 int c0 = c.Col;
                 int c1 = c.Col;
@@ -2549,9 +2619,37 @@ namespace codeLess.AvaloniaApp
 
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
             bool meta = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
-            bool ctrlOrCmd = ctrl || meta;
+            // Cmd on macOS, Ctrl on Windows/Linux (plain Ctrl on macOS is reserved for Cocoa/emacs editing keys).
+            bool ctrlOrCmd = MacKeymap.IsPrimary(e.KeyModifiers);
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            ClampExtraCursors(buf);
+
+            // macOS Cocoa text-system / VS Code emacs bindings (Ctrl, not Cmd)
+            if (MacKeymap.IsMacOS && ctrl && !meta && !alt && !ctrlOrCmd)
+            {
+                bool handledEmacs = true;
+                switch (e.Key)
+                {
+                    case Key.A: MoveCaretToLineBoundary(false, shift); break;
+                    case Key.E: MoveCaretToLineBoundary(true, shift); break;
+                    case Key.F: MoveCaretHorizontal(1, shift, false); break;
+                    case Key.B: MoveCaretHorizontal(-1, shift, false); break;
+                    case Key.N: MoveCaretVertical(1, shift); break;
+                    case Key.P: MoveCaretVertical(-1, shift); break;
+                    case Key.H: PerformBackspaceAcrossCursors(); break;
+                    case Key.D: buf.PushUndoSnapshot(); buf.PerformDelete(); FinalizeBufferEdit(buf); break;
+                    case Key.K: DeleteToLineBoundary(buf, toEnd: true); break;
+                    default: handledEmacs = false; break;
+                }
+                if (handledEmacs)
+                {
+                    EnsureCursorVisible();
+                    InvalidateVisual();
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             // Ghost text acceptance
             if (!string.IsNullOrEmpty(buf.GhostTextSuggestion))
@@ -2865,14 +2963,15 @@ namespace codeLess.AvaloniaApp
             }
             if (ctrlOrCmd && !shift && !alt && e.Key == Key.C)
             {
+                e.Handled = true; // before any await: routing finishes at the first yield (else: system beep / double handling)
                 string sel = buf.HasSelection() ? buf.GetSelectedText() : buf.Lines[buf.CursorLine] + "\n";
                 var top = TopLevel.GetTopLevel(this);
                 if (top?.Clipboard != null) await top.Clipboard.SetTextAsync(sel);
-                e.Handled = true;
                 return;
             }
             if (ctrlOrCmd && !shift && !alt && e.Key == Key.X)
             {
+                e.Handled = true;
                 string sel = buf.HasSelection() ? buf.GetSelectedText() : buf.Lines[buf.CursorLine] + "\n";
                 var top = TopLevel.GetTopLevel(this);
                 if (top?.Clipboard != null) await top.Clipboard.SetTextAsync(sel);
@@ -2891,6 +2990,7 @@ namespace codeLess.AvaloniaApp
             }
             if (ctrlOrCmd && !shift && !alt && e.Key == Key.V)
             {
+                e.Handled = true;
                 var top = TopLevel.GetTopLevel(this);
                 if (top?.Clipboard != null)
                 {
@@ -2898,7 +2998,6 @@ namespace codeLess.AvaloniaApp
                     if (!string.IsNullOrEmpty(clip))
                         InsertTextAcrossCursors(clip);
                 }
-                e.Handled = true;
                 return;
             }
 
@@ -2906,14 +3005,21 @@ namespace codeLess.AvaloniaApp
             switch (e.Key)
             {
                 case Key.Back:
-                    if (ctrlOrCmd)
+                    // macOS: Option+Backspace = word, Cmd+Backspace = to line start. Windows/Linux: Ctrl = word.
+                    if (MacKeymap.IsMacOS && meta && !alt)
+                        DeleteToLineBoundary(buf, toEnd: false);
+                    else if (MacKeymap.IsMacOS ? alt : ctrlOrCmd)
                         DeleteWordLeft();
                     else
                         PerformBackspaceAcrossCursors();
                     e.Handled = true;
                     break;
                 case Key.Delete:
-                    if (ctrlOrCmd)
+                    if (MacKeymap.IsMacOS && meta && !alt)
+                    {
+                        DeleteToLineBoundary(buf, toEnd: true);
+                    }
+                    else if (MacKeymap.IsMacOS ? alt : ctrlOrCmd)
                     {
                         DeleteWordRight();
                     }

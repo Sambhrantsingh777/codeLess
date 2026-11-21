@@ -17,6 +17,8 @@ namespace codeLess.AvaloniaApp
         public string Tag { get; set; } = "";
         public bool IsDirectory { get; set; }
         public bool IsExpanded { get; set; }
+        /// <summary>Rendered greyed-out (gitignored / build output / dependency folder), like VS Code.</summary>
+        public bool IsDimmed { get; set; }
         public int StateImageIndex { get; set; }
         public ExplorerTreeNode Parent { get; set; }
         public List<ExplorerTreeNode> Nodes { get; } = new List<ExplorerTreeNode>();
@@ -319,11 +321,25 @@ namespace codeLess.AvaloniaApp
                 RenameRequested?.Invoke(SelectedNode);
                 e.Handled = true;
             }
-            else if (e.Key == Key.Delete && SelectedNode != null)
+            else if (SelectedNode != null && (e.Key == Key.Delete ||
+                     (e.Key == Key.Back && e.KeyModifiers.HasFlag(KeyModifiers.Meta)))) // Cmd+Backspace on macOS
             {
                 DeleteRequested?.Invoke(SelectedNode);
                 e.Handled = true;
             }
+        }
+
+        public void ScrollNodeIntoView(ExplorerTreeNode node)
+        {
+            int idx = node != null ? VisibleFlatRows.IndexOf(node) : -1;
+            if (idx < 0) return;
+            double rowTop = idx * RowHeight;
+            double rowBot = rowTop + RowHeight;
+            double viewH = Bounds.Height > RowHeight ? Bounds.Height : RowHeight * 20;
+            if (rowTop < ScrollOffsetY) ScrollOffsetY = rowTop;
+            else if (rowBot > ScrollOffsetY + viewH) ScrollOffsetY = rowBot - viewH;
+            ClampScroll();
+            InvalidateVisual();
         }
 
         private void SelectIndex(int idx)
@@ -503,7 +519,9 @@ namespace codeLess.AvaloniaApp
                 Color addGreen = isLightBg ? Color.FromRgb(0, 113, 0) : Color.FromRgb(115, 201, 145);
                 Color delRed = isLightBg ? Color.FromRgb(173, 7, 7) : Color.FromRgb(241, 76, 76);
 
-                Color labelColor = isSelected ? TextPrimary : (isFolder ? TextPrimary : TextPrimary);
+                Color labelColor = node.IsDimmed && !isSelected
+                    ? Color.FromArgb(150, TextSecondary.R, TextSecondary.G, TextSecondary.B)
+                    : TextPrimary;
                 string gitBadge = null;
                 Color gitBadgeColor = TextSecondary;
 

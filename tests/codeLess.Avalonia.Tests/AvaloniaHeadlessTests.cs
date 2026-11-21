@@ -270,14 +270,19 @@ namespace codeLess.Avalonia.Tests
                 Assert.Contains("Program.cs", childNames);
                 Assert.Contains("worker.py", childNames);
 
-                // Excluded folders MUST NOT appear in tree or workspaceFiles index
-                Assert.DoesNotContain("bench", childNames);
-                Assert.DoesNotContain("scratch", childNames);
-                Assert.DoesNotContain("node_modules", childNames);
-                Assert.DoesNotContain("bin", childNames);
-                Assert.DoesNotContain("obj", childNames);
-                Assert.DoesNotContain(window.WorkspaceFiles, f => f.IndexOf("bench", StringComparison.OrdinalIgnoreCase) >= 0);
-                Assert.DoesNotContain(window.WorkspaceFiles, f => f.IndexOf("scratch", StringComparison.OrdinalIgnoreCase) >= 0);
+                // VS Code parity: build/dependency folders stay visible in the Explorer (dimmed) but are excluded
+                // from the search / AI file index. Only VCS metadata (.git) is hidden.
+                foreach (string dimmed in new[] { "node_modules", "bin", "obj" })
+                {
+                    var n = rootNode.Nodes.FirstOrDefault(x => x.Text == dimmed);
+                    Assert.NotNull(n);
+                    Assert.True(n.IsDimmed, dimmed + " should render dimmed");
+                }
+                Assert.DoesNotContain(".git", childNames);
+                Assert.DoesNotContain(window.WorkspaceFiles, f => f.Contains(Path.DirectorySeparatorChar + "node_modules" + Path.DirectorySeparatorChar));
+                // Ordinary project folders (even ones named like scratch/bench) are visible and indexed.
+                Assert.Contains("bench", childNames);
+                Assert.Contains("scratch", childNames);
 
                 window.Close();
             }

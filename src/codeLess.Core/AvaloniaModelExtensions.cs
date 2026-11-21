@@ -378,7 +378,12 @@ namespace codeLess.Studio
     public class GitStatusEntry
     {
         public string FullPath { get; set; } = "";
+        /// <summary>Path relative to the opened workspace folder (for display).</summary>
         public string RelativePath { get; set; } = "";
+        /// <summary>Top-level directory of the git repository that owns this entry (outer repo or a nested repo).</summary>
+        public string RepoRoot { get; set; } = "";
+        /// <summary>Path relative to <see cref="RepoRoot"/> with '/' separators; this is what git commands expect.</summary>
+        public string RepoRelativePath { get; set; } = "";
         public char IndexStatus { get; set; } = ' ';
         public char WorkingTreeStatus { get; set; } = 'M';
         public bool IsStaged => IndexStatus != ' ' && IndexStatus != '?';
@@ -446,22 +451,55 @@ namespace codeLess.Studio
         {
             var list = new List<GitStatusEntry>();
             if (string.IsNullOrEmpty(rootDir) || !Directory.Exists(rootDir)) return list;
-            string raw = RunQuickProcess("git", "status --porcelain", rootDir, 4000, out int code);
-            if (code != 0 || string.IsNullOrWhiteSpace(raw)) return list;
-
-            foreach (string line in raw.Replace("\r\n", "\n").Split('\n'))
+            string ws = Path.GetFullPath(rootDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var repos = DiscoverGitRepositories(ws);
+            var nested = new HashSet<string>(repos.Skip(1).Select(r => r.TrimEnd('/', '\\')), StringComparer.Ordinal);
+            foreach (string repo in repos)
             {
-                if (line.Length < 4) continue;
-                char x = line[0];
-                char y = line[1];
-                string rel = line.Substring(3).Trim().Trim('"');
-                int arrow = rel.IndexOf(" -> ", StringComparison.Ordinal);
-                if (arrow >= 0) rel = rel.Substring(arrow + 4).Trim().Trim('"');
-                string full = Path.GetFullPath(Path.Combine(rootDir, rel));
+                foreach (var e in GetGitStatusEntriesForRepo(repo))
+                {
+                    // Opened a sub-folder of a repo: only show changes inside the opened folder, like VS Code's tree.
+                    if (!IsPathInsideWorkspace(ws, e.FullPath) &&
+                        !string.Equals(e.FullPath.TrimEnd('/', '\\'), ws, StringComparison.Ordinal))
+                        continue;
+                    // The outer repo reports a nested repo as one untracked directory; its own status covers it.
+                    string trimmed = e.FullPath.TrimEnd('/', '\\');
+                    if (!string.Equals(repo, trimmed, StringComparison.Ordinal) && nested.Contains(trimmed) && e.IndexStatus == '?')
+                        continue;
+                    e.RelativePath = GetRelativePath(ws, e.FullPath);
+                    list.Add(e);
+                    if (list.Count >= 5000) return list;
+                }
+            }
+            return list;
+        }
+
+        public static List<GitStatusEntry> GetGitStatusEntriesForRepo(string repoRoot)
+        {
+            var list = new List<GitStatusEntry>();
+            // -z: NUL-separated, never quoted, so spaces / unicode / quotes in names survive.
+            // -uall: list files inside untracked folders (VS Code does the same) so they get "U" decorations.
+            string raw = RunQuickProcess("git", "-c core.quotepath=false status --porcelain=v1 -z -uall", repoRoot, 6000, out int code);
+            if (code != 0 || string.IsNullOrEmpty(raw)) return list;
+            string[] parts = raw.Split('\0');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string rec = parts[i];
+                if (rec.Length < 4) continue;
+                char x = rec[0];
+                char y = rec[1];
+                string rel = rec.Substring(3);
+                if (x == 'R' || x == 'C' || y == 'R' || y == 'C')
+                    i++; // the next record is the rename/copy source path
+                string full;
+                try { full = Path.GetFullPath(Path.Combine(repoRoot, rel.Replace('/', Path.DirectorySeparatorChar))); }
+                catch { continue; }
                 list.Add(new GitStatusEntry
                 {
                     FullPath = full,
                     RelativePath = rel,
+                    RepoRoot = repoRoot,
+                    RepoRelativePath = rel.TrimEnd('/'),
                     IndexStatus = x,
                     WorkingTreeStatus = y
                 });

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -316,17 +317,8 @@ namespace codeLess.AvaloniaApp
         public void WriteAutomatedInput(string text, bool echoLocallyWhenLive = false)
         {
             if (string.IsNullOrEmpty(text)) return;
-            string trimmed = text.Trim();
-            if (string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase))
-            {
-                if (Session != null && Session.IsRunning)
-                {
-                    try { Session.WriteInput("exit\r"); } catch { }
-                }
-                StopShell(notifyExit: true);
-                return;
-            }
-
+            // Text goes to the PTY verbatim. (Typing a line that read "exit" used to kill the whole session even
+            // inside vim / nano / ssh / a REPL; session end is now driven only by the real process exit.)
             if (Session != null && Session.IsRunning)
             {
                 Session.WriteInput(text);
@@ -576,7 +568,14 @@ namespace codeLess.AvaloniaApp
                 for (int c = startC; c <= endC; c++)
                 {
                     char ch = buf.GetViewportCell(r, c, scrollbackOffset).Char;
-                    lineSb.Append(ch == '\0' ? ' ' : ch);
+                    if (ch == '\0')
+                    {
+                        // '\0' after a wide glyph is its continuation cell, not a space
+                        char prev = c > startC ? buf.GetViewportCell(r, c - 1, scrollbackOffset).Char : ' ';
+                        if (prev != '\0' && prev != ' ' && (Vt100TerminalBuffer.IsWideBmp(prev) || char.IsLowSurrogate(prev))) continue;
+                        ch = ' ';
+                    }
+                    lineSb.Append(ch);
                 }
                 if (r < r1) sb.AppendLine(lineSb.ToString().TrimEnd());
                 else sb.Append(lineSb.ToString().TrimEnd());
@@ -705,8 +704,13 @@ namespace codeLess.AvaloniaApp
             var buf = owner.ActiveBuffer;
             if (buf == null || Math.Abs(e.Delta.Y) < 0.01) return;
 
-            bool wheelUp = e.Delta.Y > 0;
-            int steps = Math.Max(1, Math.Min(10, (int)Math.Round(Math.Abs(e.Delta.Y) * 3)));
+            // Accumulate fractional trackpad deltas: forcing >= 1 line per tiny event made scrollback fly past.
+            wheelAccum += e.Delta.Y * 3;
+            int whole = (int)wheelAccum;
+            if (whole == 0) { e.Handled = true; return; }
+            wheelAccum -= whole;
+            bool wheelUp = whole > 0;
+            int steps = Math.Min(10, Math.Abs(whole));
             var pt = e.GetPosition(this);
             int col1 = Math.Max(1, (int)((pt.X - PadLeft) / CellW) + 1);
             int row1 = Math.Max(1, (int)((pt.Y - PadTop) / CellH) + 1);
@@ -730,154 +734,276 @@ namespace codeLess.AvaloniaApp
             e.Handled = true;
         }
 
-        private readonly StringBuilder lineInputTracker = new StringBuilder();
+        private double wheelAccum;
+        private bool suppressNextTextInput;
 
-        protected override async void OnKeyDown(KeyEventArgs e)
+        protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
-            bool ctrlOrCmd = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+            bool isMac = MacKeymap.IsMacOS;
+            bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            bool meta = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            bool primary = isMac ? meta : ctrl;
 
-            if (ctrlOrCmd && e.Key == Key.K)
+            // Inline AI command bar: Cmd+I / Ctrl+I (VS Code terminal inline chat). Ctrl+K stays a shell key.
+            if (primary && !shift && !alt && e.Key == Key.I)
             {
                 owner.ShowInlineAiBar();
                 e.Handled = true;
                 return;
             }
-
-            if ((e.KeyModifiers.HasFlag(KeyModifiers.Meta) && e.Key == Key.C) ||
-                (e.KeyModifiers.HasFlag(KeyModifiers.Control) && shift && e.Key == Key.C) ||
-                (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.C && HasSelection()))
+            // Cmd+K clears the terminal on macOS (VS Code / Terminal.app).
+            if (isMac && meta && !shift && !alt && e.Key == Key.K)
             {
+                owner.ClearTerminal();
+                e.Handled = true;
+                return;
+            }
+            if (isMac && meta && !shift && e.Key == Key.A)
+            {
+                SelectAll();
+                e.Handled = true;
+                return;
+            }
+
+            // Copy: Cmd+C on macOS; Ctrl+Shift+C, or Ctrl+C with an active selection, on Windows/Linux.
+            // On macOS plain Ctrl+C always sends SIGINT, even with a selection.
+            bool copy = isMac
+                ? (meta && !shift && e.Key == Key.C)
+                : (ctrl && e.Key == Key.C && (shift || HasSelection()));
+            if (copy)
+            {
+                e.Handled = true; // set before any await: routing completes at the first yield
                 string sel = GetSelectedText();
                 if (!string.IsNullOrEmpty(sel))
                 {
-                    var top = TopLevel.GetTopLevel(this);
-                    if (top?.Clipboard != null)
-                        await top.Clipboard.SetTextAsync(sel);
+                    _ = CopyToClipboardAsync(sel);
                     ClearSelection();
                 }
+                return;
+            }
+
+            bool paste = isMac
+                ? (meta && !shift && e.Key == Key.V)
+                : ((ctrl && shift && e.Key == Key.V) || (shift && e.Key == Key.Insert));
+            if (paste)
+            {
+                e.Handled = true;
+                _ = PasteFromClipboardAsync();
+                return;
+            }
+
+            if (shift && !ctrl && !meta && e.Key == Key.PageUp && owner.ActiveBuffer != null && !owner.ActiveBuffer.IsAlternateScreen)
+            {
+                scrollbackOffset = Math.Min(owner.ActiveBuffer.ScrollbackCount, scrollbackOffset + 10);
+                InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+            if (shift && !ctrl && !meta && e.Key == Key.PageDown && owner.ActiveBuffer != null && !owner.ActiveBuffer.IsAlternateScreen)
+            {
+                scrollbackOffset = Math.Max(0, scrollbackOffset - 10);
+                InvalidateVisual();
                 e.Handled = true;
                 return;
             }
 
-            if ((ctrlOrCmd && e.Key == Key.V) || (shift && e.Key == Key.Insert))
+            // Linux/Windows: Alt+printable is "Meta" (ESC prefix) like xterm.js; macOS Option composes characters.
+            if (!isMac && alt && !ctrl && !meta)
             {
-                var top = TopLevel.GetTopLevel(this);
-                if (top?.Clipboard != null)
+                string ch = PrintableForKey(e.Key, shift);
+                if (ch != null)
                 {
-                    string clip = await top.Clipboard.GetTextAsync();
-                    if (!string.IsNullOrEmpty(clip))
-                        owner.WriteAutomatedInput(clip);
-                }
-                e.Handled = true;
-                return;
-            }
-
-            if (shift && e.Key == Key.PageUp && owner.ActiveBuffer != null)
-            {
-                if (owner.ActiveBuffer.IsAlternateScreen)
-                {
-                    owner.WriteAutomatedInput("\x1b[5~");
-                }
-                else
-                {
-                    scrollbackOffset = Math.Min(owner.ActiveBuffer.ScrollbackCount, scrollbackOffset + 10);
-                    InvalidateVisual();
-                }
-                e.Handled = true;
-                return;
-            }
-            if (shift && e.Key == Key.PageDown && owner.ActiveBuffer != null)
-            {
-                if (owner.ActiveBuffer.IsAlternateScreen)
-                {
-                    owner.WriteAutomatedInput("\x1b[6~");
-                }
-                else
-                {
-                    scrollbackOffset = Math.Max(0, scrollbackOffset - 10);
-                    InvalidateVisual();
-                }
-                e.Handled = true;
-                return;
-            }
-
-            bool appCursor = owner.ActiveBuffer?.ApplicationCursorKeys ?? false;
-            if (e.Key == Key.Enter && !shift && !alt)
-            {
-                if (string.Equals(lineInputTracker.ToString().Trim(), "exit", StringComparison.OrdinalIgnoreCase))
-                {
-                    lineInputTracker.Clear();
-                    owner.WriteAutomatedInput("exit");
+                    suppressNextTextInput = true;
+                    scrollbackOffset = 0;
+                    ClearSelection();
+                    owner.WriteAutomatedInput("\x1b" + ch);
                     e.Handled = true;
                     return;
                 }
-                lineInputTracker.Clear();
             }
-            else if (e.Key == Key.Back)
-            {
-                if (lineInputTracker.Length > 0) lineInputTracker.Length--;
-            }
-            string vt = TranslateKeyToVtSequence(e.Key, e.KeyModifiers, appCursor);
 
+            bool appCursor = owner.ActiveBuffer?.ApplicationCursorKeys ?? false;
+            string vt = TranslateKeyToVtSequence(e.Key, e.KeyModifiers, appCursor, isMac);
             if (!string.IsNullOrEmpty(vt))
             {
                 scrollbackOffset = 0;
                 ClearSelection();
                 owner.WriteAutomatedInput(vt);
                 e.Handled = true;
+                if (alt || ctrl) suppressNextTextInput = true;
             }
         }
 
-        /// <summary>
-        /// Maps a non-text key press to the byte sequence sent to the PTY (null when the key is not a
-        /// control/navigation key and should arrive via OnTextInput instead).
-        /// Shift+Enter and Alt/Option+Enter send ESC CR ("\x1b\r"), the newline-without-submit sequence
-        /// TUI apps such as Claude Code and opencode recognise; plain Enter sends CR.
-        /// </summary>
+        private async Task CopyToClipboardAsync(string text)
+        {
+            try
+            {
+                var top = TopLevel.GetTopLevel(this);
+                if (top?.Clipboard != null) await top.Clipboard.SetTextAsync(text);
+            }
+            catch { }
+        }
+
+        private async Task PasteFromClipboardAsync()
+        {
+            try
+            {
+                var top = TopLevel.GetTopLevel(this);
+                if (top?.Clipboard == null) return;
+                string clip = await top.Clipboard.GetTextAsync();
+                if (string.IsNullOrEmpty(clip)) return;
+                scrollbackOffset = 0;
+                ClearSelection();
+                bool bracketed = owner.ActiveBuffer != null && owner.ActiveBuffer.BracketedPasteMode;
+                owner.WriteAutomatedInput(Vt100TerminalBuffer.PreparePasteText(clip, bracketed));
+            }
+            catch { }
+        }
+
+        private static string PrintableForKey(Key key, bool shift)
+        {
+            if (key >= Key.A && key <= Key.Z)
+            {
+                char c = (char)('a' + (key - Key.A));
+                return (shift ? char.ToUpperInvariant(c) : c).ToString();
+            }
+            if (key >= Key.D0 && key <= Key.D9 && !shift) return ((char)('0' + (key - Key.D0))).ToString();
+            switch (key)
+            {
+                case Key.OemPeriod: return shift ? ">" : ".";
+                case Key.OemComma: return shift ? "<" : ",";
+                case Key.OemMinus: return shift ? "_" : "-";
+                case Key.OemPlus: return shift ? "+" : "=";
+                case Key.OemQuestion: return shift ? "?" : "/";
+                case Key.OemSemicolon: return shift ? ":" : ";";
+                case Key.OemQuotes: return shift ? "\"" : "'";
+                case Key.OemOpenBrackets: return shift ? "{" : "[";
+                case Key.OemCloseBrackets: return shift ? "}" : "]";
+                case Key.OemPipe: return shift ? "|" : "\\";
+                case Key.OemTilde: return shift ? "~" : "`";
+                case Key.Space: return " ";
+                default: return null;
+            }
+        }
+
         public static string TranslateKeyToVtSequence(Key key, KeyModifiers mods, bool appCursor)
+        {
+            return TranslateKeyToVtSequence(key, mods, appCursor, MacKeymap.IsMacOS);
+        }
+
+        /// <summary>
+        /// Maps a non-text key press to the bytes sent to the PTY (null when the key should arrive via
+        /// OnTextInput). Follows xterm.js: modifier-encoded cursor/edit keys (CSI 1;m X), DECCKM-aware
+        /// Home/End, F1-F12, Insert, Ctrl+punctuation control codes, and macOS line/word editing for
+        /// Cmd/Option + arrows/backspace. Shift/Option+Enter send ESC CR (newline-without-submit for TUIs).
+        /// </summary>
+        public static string TranslateKeyToVtSequence(Key key, KeyModifiers mods, bool appCursor, bool isMac)
         {
             bool shift = mods.HasFlag(KeyModifiers.Shift);
             bool alt = mods.HasFlag(KeyModifiers.Alt);
             bool ctrl = mods.HasFlag(KeyModifiers.Control);
+            bool meta = mods.HasFlag(KeyModifiers.Meta);
+            int modParam = 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0);
+
+            if (isMac)
+            {
+                // macOS text-editing conventions (Terminal.app / iTerm2 / VS Code)
+                if (meta && !ctrl)
+                {
+                    switch (key)
+                    {
+                        case Key.Left: return "\x01";      // line start (Ctrl+A)
+                        case Key.Right: return "\x05";     // line end (Ctrl+E)
+                        case Key.Back: return "\x15";      // delete to line start (Ctrl+U)
+                        case Key.Delete: return "\x0b";    // delete to line end (Ctrl+K)
+                        default: return null;            // other Cmd combos are app shortcuts, never shell input
+                    }
+                }
+                if (alt && !ctrl && !shift)
+                {
+                    if (key == Key.Left) return "\u001bb";   // word left
+                    if (key == Key.Right) return "\u001bf";  // word right
+                    if (key == Key.Back) return "\x1b\x7f"; // delete word left
+                    if (key == Key.Delete) return "\u001bd"; // delete word right
+                }
+            }
+            else if (meta)
+            {
+                return null; // Super/Windows key combos are window-manager shortcuts
+            }
+
+            string Csi(string final) => modParam > 1 ? "\x1b[1;" + modParam + final : null;
+            string Tilde(int code) => modParam > 1 ? "\x1b[" + code + ";" + modParam + "~" : "\x1b[" + code + "~";
+
             switch (key)
             {
                 case Key.Enter: return (shift || alt) ? "\x1b\r" : "\r";
-                case Key.Back: return "\x7f";
+                case Key.Back: return ctrl ? "\x08" : (alt ? "\x1b\x7f" : "\x7f");
                 case Key.Tab: return shift ? "\x1b[Z" : "\t";
                 case Key.Escape: return "\x1b";
-                case Key.Up: return appCursor ? "\x1bOA" : "\x1b[A";
-                case Key.Down: return appCursor ? "\x1bOB" : "\x1b[B";
-                case Key.Right: return appCursor ? "\x1bOC" : "\x1b[C";
-                case Key.Left: return appCursor ? "\x1bOD" : "\x1b[D";
-                case Key.Home: return "\x1b[H";
-                case Key.End: return "\x1b[F";
-                case Key.Delete: return "\x1b[3~";
-                case Key.PageUp: return "\x1b[5~";
-                case Key.PageDown: return "\x1b[6~";
-                default:
-                    if (ctrl && !alt && key >= Key.A && key <= Key.Z)
-                        return ((char)((key - Key.A) + 1)).ToString();
-                    return null;
+                case Key.Up: return Csi("A") ?? (appCursor ? "\x1bOA" : "\x1b[A");
+                case Key.Down: return Csi("B") ?? (appCursor ? "\x1bOB" : "\x1b[B");
+                case Key.Right: return Csi("C") ?? (appCursor ? "\x1bOC" : "\x1b[C");
+                case Key.Left: return Csi("D") ?? (appCursor ? "\x1bOD" : "\x1b[D");
+                case Key.Home: return Csi("H") ?? (appCursor ? "\x1bOH" : "\x1b[H");
+                case Key.End: return Csi("F") ?? (appCursor ? "\x1bOF" : "\x1b[F");
+                case Key.Insert: return Tilde(2);
+                case Key.Delete: return Tilde(3);
+                case Key.PageUp: return Tilde(5);
+                case Key.PageDown: return Tilde(6);
+                case Key.F1: return Csi("P") ?? "\x1bOP";
+                case Key.F2: return Csi("Q") ?? "\x1bOQ";
+                case Key.F3: return Csi("R") ?? "\x1bOR";
+                case Key.F4: return Csi("S") ?? "\x1bOS";
+                case Key.F5: return Tilde(15);
+                case Key.F6: return Tilde(17);
+                case Key.F7: return Tilde(18);
+                case Key.F8: return Tilde(19);
+                case Key.F9: return Tilde(20);
+                case Key.F10: return Tilde(21);
+                case Key.F11: return Tilde(23);
+                case Key.F12: return Tilde(24);
             }
+
+            if (ctrl)
+            {
+                string prefix = alt ? "\x1b" : "";
+                if (key >= Key.A && key <= Key.Z) return prefix + ((char)((key - Key.A) + 1)).ToString();
+                switch (key)
+                {
+                    case Key.Space: case Key.D2: return prefix + "\0";
+                    case Key.OemOpenBrackets: case Key.D3: return prefix + "\x1b";
+                    case Key.OemPipe: case Key.D4: return prefix + "\x1c";
+                    case Key.OemCloseBrackets: case Key.D5: return prefix + "\x1d";
+                    case Key.D6: return prefix + "\x1e";
+                    case Key.OemQuestion: case Key.OemMinus: case Key.D7: return prefix + "\x1f";
+                    case Key.D8: return prefix + "\x7f";
+                }
+            }
+            return null;
         }
 
         protected override void OnTextInput(TextInputEventArgs e)
         {
             base.OnTextInput(e);
             if (string.IsNullOrEmpty(e.Text)) return;
+            if (suppressNextTextInput)
+            {
+                // The key was already encoded in OnKeyDown (Alt-as-Meta, Ctrl combos).
+                suppressNextTextInput = false;
+                e.Handled = true;
+                return;
+            }
 
             // Filter out control characters (Enter, Backspace, Escape, Tab, Ctrl+A..Z) already handled in OnKeyDown
             var clean = new StringBuilder(e.Text.Length);
             foreach (char ch in e.Text)
             {
                 if (ch >= 32 && ch != 127)
-                {
                     clean.Append(ch);
-                    lineInputTracker.Append(ch);
-                }
             }
             if (clean.Length == 0)
             {

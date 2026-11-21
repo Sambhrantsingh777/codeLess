@@ -933,6 +933,8 @@ namespace codeLess.Studio
         public bool ShowEmptyWorkspaceState { get; set; }
         public bool HideRootFolderRow = true;
         public readonly Dictionary<string, string> GitStatusByFile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Full paths rendered greyed-out (gitignored / build output / dependency folders), like VS Code.</summary>
+        public readonly HashSet<string> DimmedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public event TreeNodeMouseClickEventHandler NodeMouseClick;
         public event Action OpenFolderRequested;
         public event Action OnOpenFolderEmptyStateClicked;
@@ -1198,6 +1200,63 @@ namespace codeLess.Studio
                 }
             }
             RebuildFlatRows();
+            this.Invalidate();
+        }
+
+        /// <summary>Full paths of every expanded folder (used to rebuild the tree without losing state).</summary>
+        public HashSet<string> GetExpandedPaths()
+        {
+            HashSet<string> result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (TreeNode n in expandedSet)
+            {
+                string p = n.Tag as string;
+                if (!string.IsNullOrEmpty(p) && !p.StartsWith("__")) result.Add(p);
+            }
+            return result;
+        }
+
+        public bool IsRootCollapsedByHeader { get { return rootCollapsedByHeader; } }
+
+        public TreeNode FindNodeByPath(string fullPath)
+        {
+            if (string.IsNullOrEmpty(fullPath)) return null;
+            foreach (TreeNode root in backingTree.Nodes)
+            {
+                TreeNode f = FindNodeRecursive(root, fullPath);
+                if (f != null) return f;
+            }
+            return null;
+        }
+
+        private static TreeNode FindNodeRecursive(TreeNode cur, string fullPath)
+        {
+            if (string.Equals(cur.Tag as string, fullPath, StringComparison.OrdinalIgnoreCase)) return cur;
+            foreach (TreeNode child in cur.Nodes)
+            {
+                TreeNode f = FindNodeRecursive(child, fullPath);
+                if (f != null) return f;
+            }
+            return null;
+        }
+
+        /// <summary>Marks a node expanded without raising BeforeNodeExpand (caller already populated it).</summary>
+        public void MarkExpanded(TreeNode node)
+        {
+            if (node != null) expandedSet.Add(node);
+        }
+
+        /// <summary>Expands all ancestors, selects the node and scrolls it into view.</summary>
+        public void RevealAndSelect(TreeNode node)
+        {
+            if (node == null) return;
+            TreeNode p = node.Parent;
+            while (p != null) { expandedSet.Add(p); p = p.Parent; }
+            SelectedNode = node;
+            RebuildFlatRows();
+            for (int i = 0; i < flatRows.Count; i++)
+            {
+                if (ReferenceEquals(flatRows[i].Node, node)) { EnsureVisible(i); break; }
+            }
             this.Invalidate();
         }
 
@@ -1622,7 +1681,8 @@ namespace codeLess.Studio
                     {
                         Color folderFg = isRootHeaderRow
                             ? (theme != null ? theme.FgSecondary : Color.FromArgb(148, 163, 184))
-                            : (isSel ? (theme != null ? theme.FgPrimary : Color.White) : this.ForeColor);
+                            : (isSel ? (theme != null ? theme.FgPrimary : Color.White)
+                                : (nodePath != null && DimmedPaths.Contains(nodePath) ? (theme != null ? theme.FgMuted : Color.FromArgb(120, 128, 140)) : this.ForeColor));
                         string folderDisplay = isRootHeaderRow ? rawName.ToUpperInvariant() : rawName;
                         TextRenderer.DrawText(g, folderDisplay, ff, new Rectangle(x, r.Y, Math.Max(10, r.Width - x - 6), r.Height),
                             folderFg, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
@@ -1665,10 +1725,9 @@ namespace codeLess.Studio
                     string gitStatus = null;
                     if (!string.IsNullOrEmpty(nodePath) && GitStatusByFile.ContainsKey(nodePath))
                         gitStatus = GitStatusByFile[nodePath];
-                    else if (GitStatusByFile.ContainsKey(rawName))
-                        gitStatus = GitStatusByFile[rawName];
 
-                    Color fileFg = isSel ? (theme != null ? theme.FgPrimary : Color.White) : this.ForeColor;
+                    Color fileFg = isSel ? (theme != null ? theme.FgPrimary : Color.White)
+                        : (nodePath != null && DimmedPaths.Contains(nodePath) ? (theme != null ? theme.FgMuted : Color.FromArgb(120, 128, 140)) : this.ForeColor);
                     Color gitBadgeFg = fileFg;
                     int rightReserve = 6;
 

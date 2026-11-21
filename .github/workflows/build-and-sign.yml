@@ -14,8 +14,13 @@ concurrency:
 
 jobs:
   test-cross-platform:
-    name: Build & Run Headless Test Suite
-    runs-on: windows-latest
+    name: Build & Run Headless Test Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Real PTY, git and file-system tests must pass on every shipped platform, not only Windows.
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

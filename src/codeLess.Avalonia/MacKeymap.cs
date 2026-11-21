@@ -22,6 +22,36 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        [ThreadStatic] private static int lenientPrimaryDepth;
+
+        /// <summary>
+        /// Automation (SimulateShortcut / tests) treats Ctrl and Cmd interchangeably so scripted shortcuts are
+        /// platform-neutral. Real keyboard input never runs inside this scope.
+        /// </summary>
+        public static IDisposable BeginLenientPrimaryMatching()
+        {
+            lenientPrimaryDepth++;
+            return new LenientScope();
+        }
+
+        private sealed class LenientScope : IDisposable
+        {
+            private bool disposed;
+            public void Dispose() { if (!disposed) { disposed = true; lenientPrimaryDepth--; } }
+        }
+
+        /// <summary>
+        /// VS Code primary modifier test: Cmd on macOS (plain Ctrl stays free for Cocoa/emacs editing keys and
+        /// shell control characters such as Ctrl+A/E/K/W/R), Ctrl on Windows/Linux.
+        /// </summary>
+        public static bool IsPrimary(KeyModifiers mods)
+        {
+            bool ctrl = (mods & KeyModifiers.Control) != 0;
+            bool meta = (mods & KeyModifiers.Meta) != 0;
+            if (lenientPrimaryDepth > 0) return ctrl || meta;
+            return IsMacOS ? meta : ctrl;
+        }
+
         public static KeyModifiers PrimaryModifier
         {
             get { return IsMacOS ? KeyModifiers.Meta : KeyModifiers.Control; }

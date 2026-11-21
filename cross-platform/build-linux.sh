@@ -74,6 +74,9 @@ Icon=codeless
 Terminal=false
 Type=Application
 Categories=Development;IDE;TextEditor;
+StartupWMClass=codeLess
+MimeType=inode/directory;text/plain;
+Keywords=editor;ide;code;terminal;ai;
 EOF
 
 cat > "$DEB_ROOT/DEBIAN/control" << EOF
@@ -82,13 +85,13 @@ Version: $VERSION
 Section: devel
 Priority: optional
 Architecture: $DEB_ARCH
-Depends: libx11-6, libfontconfig1
+Depends: libx11-6, libice6, libsm6, libxi6, libxrandr2, libxcursor1, libxext6, libfontconfig1, libicu76 | libicu74 | libicu72 | libicu70 | libicu67, libssl3 | libssl1.1, ca-certificates, git
 Maintainer: Savatarr <https://github.com/Sambhrantsingh777/codeLess>
 Description: codeLess — Lightweight Native Agentic IDE & Multi-Harness Engineering Workbench
 EOF
 
 if command -v dpkg-deb >/dev/null 2>&1; then
-    dpkg-deb --build "$DEB_ROOT" "$ROOT_DIR/Output/codeless-ide_${VERSION}_${DEB_ARCH}.deb"
+    dpkg-deb --build --root-owner-group "$DEB_ROOT" "$ROOT_DIR/Output/codeless-ide_${VERSION}_${DEB_ARCH}.deb"
     cp "$ROOT_DIR/Output/codeless-ide_${VERSION}_${DEB_ARCH}.deb" "$ROOT_DIR/Output/codeLess-linux-${ARCH_SHORT}.deb"
     echo "✓ Built Linux Debian package: $ROOT_DIR/Output/codeLess-linux-${ARCH_SHORT}.deb"
 fi

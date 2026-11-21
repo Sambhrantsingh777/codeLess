@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Platform.Storage;
 using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
@@ -17,6 +18,7 @@ namespace codeLess.AvaloniaApp
         public static string StartupWorkspacePath { get; set; }
         public static string ScreenshotOutputPath { get; set; }
         public static string ScreenshotSuiteDir { get; set; }
+        public static string SmokeQuitReportPath { get; set; }
 
         public App()
         {
@@ -37,8 +39,12 @@ namespace codeLess.AvaloniaApp
             };
             quitItem.Click += (s, e) =>
             {
+                // Close via the window so the unsaved-changes prompt in MainWindow.OnClosing can run.
                 if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime dt)
-                    dt.Shutdown(0);
+                {
+                    if (dt.MainWindow != null) dt.MainWindow.Close();
+                    else dt.TryShutdown(0);
+                }
             };
             appMenu.Add(quitItem);
             NativeMenu.SetMenu(this, appMenu);
@@ -47,12 +53,49 @@ namespace codeLess.AvaloniaApp
         public override void OnFrameworkInitializationCompleted()
         {
             Name = "codeLess";
+            // A bug in one handler (e.g. an editor command) must not take the whole IDE and unsaved work down:
+            // log UI-thread exceptions to ~/.codeless/crash.log and keep running.
+            Dispatcher.UIThread.UnhandledException += (s, e) =>
+            {
+                try
+                {
+                    string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codeless");
+                    Directory.CreateDirectory(dir);
+                    File.AppendAllText(Path.Combine(dir, "crash.log"),
+                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [UIThread] {e.Exception}{Environment.NewLine}");
+                }
+                catch { }
+                e.Handled = true;
+            };
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
                 var mainWindow = new MainWindow(StartupWorkspacePath);
                 desktop.MainWindow = mainWindow;
 
-                if (!string.IsNullOrWhiteSpace(ScreenshotSuiteDir))
+                // macOS delivers "Open With", dock-icon drops and `open -a codeLess <path>` as Apple Events,
+                // not argv; they were silently ignored.
+                var activatable = TryGetFeature(typeof(IActivatableLifetime)) as IActivatableLifetime;
+                if (activatable != null)
+                {
+                    activatable.Activated += (s, e) =>
+                    {
+                        if (e is FileActivatedEventArgs fe && fe.Files != null)
+                        {
+                            foreach (var item in fe.Files)
+                            {
+                                string path = item?.TryGetLocalPath();
+                                if (!string.IsNullOrEmpty(path))
+                                    Dispatcher.UIThread.Post(() => mainWindow.OpenPathFromOs(path));
+                            }
+                        }
+                    };
+                }
+
+                if (!string.IsNullOrWhiteSpace(SmokeQuitReportPath))
+                {
+                    mainWindow.Opened += async (s, e) => await mainWindow.RunSmokeQuitAsync(SmokeQuitReportPath);
+                }
+                else if (!string.IsNullOrWhiteSpace(ScreenshotSuiteDir))
                 {
                     mainWindow.Opened += async (s, e) =>
                     {

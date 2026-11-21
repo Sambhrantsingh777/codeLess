@@ -200,7 +200,7 @@ namespace codeLess.Avalonia.Tests
             public static string Translate(Key key, KeyModifiers mods)
             {
                 Type ct = typeof(AvaloniaTerminalEmulatorControl).Assembly.GetType("codeLess.AvaloniaApp.AvaloniaTerminalGridCanvas");
-                return (string)ct.GetMethod("TranslateKeyToVtSequence").Invoke(null, new object[] { key, mods, false });
+                return (string)ct.GetMethod("TranslateKeyToVtSequence", new[] { typeof(Key), typeof(KeyModifiers), typeof(bool) }).Invoke(null, new object[] { key, mods, false });
             }
         }
     }

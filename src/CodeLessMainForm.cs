@@ -3469,7 +3469,7 @@ if __name__ == '__main__':
             refreshBtn.Click += (s, e) =>
             {
                 if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
-                    LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                    AfterExplorerFileOperation(null);
             };
             explorerRefreshBtn = refreshBtn;
 
@@ -3764,9 +3764,22 @@ if __name__ == '__main__':
                 try
                 {
                     if (string.IsNullOrEmpty(oldPath) || string.IsNullOrWhiteSpace(newName)) return;
-                    string newPath = Path.Combine(Path.GetDirectoryName(oldPath), newName.Trim());
-                    if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase)) return;
-                    if (File.Exists(oldPath))
+                    string newPath;
+                    string nameErr = ValidateNewEntryName(Path.GetDirectoryName(oldPath), newName, out newPath);
+                    if (nameErr != null) { ShowToastNotification("Rename Failed", nameErr); return; }
+                    if (string.Equals(oldPath, newPath, StringComparison.Ordinal)) return;
+                    bool caseOnly = string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase);
+                    if (!caseOnly && (File.Exists(newPath) || Directory.Exists(newPath)))
+                    {
+                        ShowToastNotification("Rename Failed", "A file or folder '" + Path.GetFileName(newPath) + "' already exists at this location.");
+                        return;
+                    }
+                    if (caseOnly)
+                    {
+                        MovePathCaseSafe(oldPath, newPath);
+                        RepathOpenTabsForFileOrDirectoryMove(oldPath, newPath, Directory.Exists(newPath));
+                    }
+                    else if (File.Exists(oldPath))
                     {
                         string oldName = Path.GetFileName(oldPath);
                         string oldRel = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, oldPath);
@@ -3782,7 +3795,8 @@ if __name__ == '__main__':
                         Directory.Move(oldPath, newPath);
                         RepathOpenTabsForFileOrDirectoryMove(oldPath, newPath, isDirectory: true);
                     }
-                    LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                    AfterExplorerFileOperation(newPath);
+                    RefreshTabStrip();
                 }
                 catch (Exception ex)
                 {
@@ -3880,18 +3894,35 @@ if __name__ == '__main__':
                     {
                         File.Copy(explorerClipboardPath, targetPath, overwrite: false);
                     }
-                    LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                    AfterExplorerFileOperation(targetPath);
                 }
                 else if (Directory.Exists(explorerClipboardPath) && !string.Equals(explorerClipboardPath, targetPath, StringComparison.OrdinalIgnoreCase))
                 {
+                    if (targetPath.StartsWith(explorerClipboardPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ShowToastNotification("Paste Failed", "Cannot paste a folder into itself.");
+                        return;
+                    }
                     if (explorerClipboardIsCut)
                     {
-                        Directory.Move(explorerClipboardPath, targetPath);
+                        MoveDirectoryAcrossVolumes(explorerClipboardPath, targetPath);
                         RepathOpenTabsForFileOrDirectoryMove(explorerClipboardPath, targetPath, isDirectory: true);
                         explorerClipboardPath = "";
                         explorerClipboardIsCut = false;
-                        LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
                     }
+                    else
+                    {
+                        string dst = targetPath;
+                        int copyIdx = 1;
+                        while (Directory.Exists(dst) || File.Exists(dst))
+                        {
+                            dst = targetPath + "_copy" + (copyIdx > 1 ? copyIdx.ToString() : "");
+                            copyIdx++;
+                        }
+                        CopyDirectoryRecursive(explorerClipboardPath, dst);
+                        targetPath = dst;
+                    }
+                    AfterExplorerFileOperation(targetPath);
                 }
             }
             catch (Exception ex)
@@ -4339,26 +4370,55 @@ if __name__ == '__main__':
             {
                 string msg = (gitCommitInput.Text ?? "").Trim();
                 if (string.IsNullOrEmpty(msg))
-                    msg = "chore: update via codeLess IDE";
-                if (gitStatusItems == null || !gitStatusItems.Any(g => g.IsStaged))
-                    LlmHarnessAndAgentEngine.RunProcessCapture("git", "add -A", workspaceRoot, 5000);
-                string res = LlmHarnessAndAgentEngine.RunProcessCapture("git", "commit -m \"" + msg.Replace("\"", "'") + "\"", workspaceRoot, 6000);
-                AppendOutputLog("[Git Commit] " + res);
-                if (!string.IsNullOrWhiteSpace(res) && (res.IndexOf("fatal:", StringComparison.OrdinalIgnoreCase) >= 0 || res.IndexOf("error:", StringComparison.OrdinalIgnoreCase) >= 0))
                 {
-                    string errLine = res.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Git error";
-                    statusLeftLabel.Text = "Git commit failed: " + errLine;
+                    statusLeftLabel.Text = "Please enter a commit message.";
+                    return;
                 }
-                else if (!string.IsNullOrWhiteSpace(res) && res.IndexOf("nothing to commit", StringComparison.OrdinalIgnoreCase) >= 0)
+                List<GitFileStatus> snapshot = gitStatusItems != null ? gitStatusItems.ToList() : new List<GitFileStatus>();
+                bool anyStaged = snapshot.Any(g => g.IsStaged);
+                if (!anyStaged)
                 {
-                    statusLeftLabel.Text = "Git: working tree clean";
+                    if (snapshot.Count == 0) { statusLeftLabel.Text = "Git: nothing to commit"; return; }
+                    // VS Code "smart commit" prompt instead of silently staging everything.
+                    if (!SuppressUnsavedPrompts && MessageBox.Show(this,
+                            "There are no staged changes to commit.\n\nWould you like to stage all your changes and commit them directly?",
+                            "codeLess — Git Commit", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                        return;
                 }
-                else
+                List<string> repos = snapshot.Where(g => !anyStaged || g.IsStaged).Select(g => GitRepoFor(g)).Where(r => !string.IsNullOrEmpty(r)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (repos.Count == 0) { statusLeftLabel.Text = "No git repository found."; return; }
+                string msgFile = Path.Combine(Path.GetTempPath(), "codeless-commit-" + Guid.NewGuid().ToString("N") + ".txt");
+                File.WriteAllText(msgFile, msg + "\n", new UTF8Encoding(false));
+                gitCommitInput.Clear();
+                statusLeftLabel.Text = "Committing…";
+                bool stageAll = !anyStaged;
+                Task.Run(() =>
                 {
-                    gitCommitInput.Clear();
-                    statusLeftLabel.Text = "Committed: " + msg;
-                }
-                RefreshGitSidebarStatus();
+                    StringBuilder report = new StringBuilder();
+                    bool allOk = true;
+                    foreach (string repo in repos)
+                    {
+                        int code;
+                        if (stageAll) RunGitInRepo(repo, 60000, out code, "add", "-A");
+                        // Long timeout: pre-commit hooks / GPG signing must not be killed mid-commit (index.lock).
+                        string res = RunGitInRepo(repo, 300000, out code, "commit", "-F", msgFile);
+                        report.AppendLine(Path.GetFileName(repo) + ": " + res);
+                        if (code != 0) allOk = false;
+                    }
+                    try { File.Delete(msgFile); } catch { }
+                    Action done = () =>
+                    {
+                        AppendOutputLog("[Git Commit] " + report.ToString());
+                        if (allOk) statusLeftLabel.Text = "Committed: " + msg;
+                        else
+                        {
+                            statusLeftLabel.Text = "Git commit failed (see Output)";
+                            MessageBox.Show(this, report.ToString(), "Git Commit Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                        RefreshGitSidebarStatus();
+                    };
+                    if (this.IsHandleCreated && !this.IsDisposed) this.BeginInvoke(done);
+                });
             };
             gitCommitInput.KeyDown += (s, e) =>
             {
@@ -4406,7 +4466,7 @@ if __name__ == '__main__':
             gitCtxMenu.Items.Add(new ToolStripSeparator());
             gitCtxMenu.Items.Add("+ Stage All Files (git add -A)", null, (s, e) =>
             {
-                LlmHarnessAndAgentEngine.RunProcessCapture("git", "add -A", workspaceRoot, 5000);
+                StageAllInAllRepos();
                 RefreshGitSidebarStatus();
             });
 
@@ -4437,17 +4497,25 @@ if __name__ == '__main__':
             {
                 if (stage)
                 {
-                    LlmHarnessAndAgentEngine.RunProcessCapture("git", "add -A", workspaceRoot, 5000);
+                    StageAllInAllRepos();
                     RefreshGitSidebarStatus();
                 }
                 return;
             }
             GitFileStatus item = gitStatusItems[idx];
-            string gitRel = item.RelativePath.Replace('\\', '/');
+            string repo = GitRepoFor(item);
+            string gitRel = GitRelFor(item);
+            if (string.IsNullOrEmpty(repo)) return;
+            int code;
+            string res;
             if (stage)
-                LlmHarnessAndAgentEngine.RunProcessCapture("git", "add -- \"" + gitRel + "\"", workspaceRoot, 4000);
+                res = RunGitInRepo(repo, 15000, out code, "add", "-A", "--", gitRel);
             else
-                LlmHarnessAndAgentEngine.RunProcessCapture("git", "reset HEAD -- \"" + gitRel + "\"", workspaceRoot, 4000);
+            {
+                res = RunGitInRepo(repo, 15000, out code, "restore", "--staged", "--", gitRel);
+                if (code != 0) res = RunGitInRepo(repo, 15000, out code, "reset", "-q", "--", gitRel);
+            }
+            if (code != 0) AppendOutputLog("[Git] " + res);
             RefreshGitSidebarStatus();
             statusLeftLabel.Text = (stage ? "Staged " : "Unstaged ") + item.RelativePath;
         }
@@ -4461,15 +4529,32 @@ if __name__ == '__main__':
             if (!SuppressUnsavedPrompts &&
                 MessageBox.Show(this, "Discard uncommitted working tree changes in '" + item.RelativePath + "'?", "Confirm Git Discard", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
-            string gitRel = item.RelativePath.Replace('\\', '/');
-            if (item.StatusCode == "??" && File.Exists(item.FilePath))
+            string repo = GitRepoFor(item);
+            string gitRel = GitRelFor(item);
+            int code;
+            if (item.StatusCode == "??" || item.StatusCode == "A")
             {
-                try { File.Delete(item.FilePath); } catch { }
+                // Untracked or newly added file/folder: unstage (for A) and send the working copy to the Recycle Bin.
+                if (item.StatusCode == "A" && !string.IsNullOrEmpty(repo))
+                    RunGitInRepo(repo, 15000, out code, "rm", "-r", "-f", "-q", "--cached", "--", gitRel);
+                try
+                {
+                    if (File.Exists(item.FilePath))
+                        Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(item.FilePath, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                    else if (Directory.Exists(item.FilePath))
+                        Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(item.FilePath, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                }
+                catch (Exception ex) { MessageBox.Show(this, "Discard failed: " + ex.Message, "codeLess IDE"); }
             }
-            else
+            else if (!string.IsNullOrEmpty(repo))
             {
-                LlmHarnessAndAgentEngine.RunProcessCapture("git", "reset HEAD -- \"" + gitRel + "\"", workspaceRoot, 4000);
-                LlmHarnessAndAgentEngine.RunProcessCapture("git", "checkout -- \"" + gitRel + "\"", workspaceRoot, 4000);
+                string res = RunGitInRepo(repo, 15000, out code, "restore", "--staged", "--worktree", "--source=HEAD", "--", gitRel);
+                if (code != 0)
+                {
+                    RunGitInRepo(repo, 15000, out code, "reset", "-q", "HEAD", "--", gitRel);
+                    res = RunGitInRepo(repo, 15000, out code, "checkout", "--", gitRel);
+                }
+                if (code != 0) MessageBox.Show(this, "Git discard failed:\n" + res, "codeLess IDE");
             }
             if (File.Exists(item.FilePath))
             {
@@ -4505,8 +4590,8 @@ if __name__ == '__main__':
             if (idx < 0 || idx >= gitStatusItems.Count) return;
 
             GitFileStatus item = gitStatusItems[idx];
-            string fullPath = Path.Combine(workspaceRoot, item.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(fullPath)) return;
+            string fullPath = item.FilePath;
+            if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath)) return;
 
             EditorTabBuffer tab = OpenFileInTab(fullPath);
             if (tab == null) return;
@@ -4524,6 +4609,55 @@ if __name__ == '__main__':
             editorControl.StageProposedContent(currentContent, diffLabel);
             RefreshTabStrip();
             statusLeftLabel.Text = "Diff: " + item.RelativePath;
+        }
+
+        private string GitRepoFor(GitFileStatus item)
+        {
+            if (item != null && !string.IsNullOrEmpty(item.RepoRoot)) return item.RepoRoot;
+            return LlmHarnessAndAgentEngine.FindGitRepoRoot(item != null && !string.IsNullOrEmpty(item.FilePath) ? Path.GetDirectoryName(item.FilePath) : workspaceRoot);
+        }
+
+        private string GitRelFor(GitFileStatus item)
+        {
+            if (!string.IsNullOrEmpty(item.RepoRelativePath)) return item.RepoRelativePath;
+            string repo = GitRepoFor(item);
+            return repo != null ? LlmHarnessAndAgentEngine.GetRelativePath(repo, item.FilePath).Replace('\\', '/') : item.RelativePath.Replace('\\', '/');
+        }
+
+        private void StageAllInAllRepos()
+        {
+            HashSet<string> repos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (gitStatusItems != null) foreach (GitFileStatus g in gitStatusItems) { string r = GitRepoFor(g); if (!string.IsNullOrEmpty(r)) repos.Add(r); }
+            if (repos.Count == 0) { string r = LlmHarnessAndAgentEngine.FindGitRepoRoot(workspaceRoot); if (r != null) repos.Add(r); }
+            foreach (string repo in repos) { int code; RunGitInRepo(repo, 60000, out code, "add", "-A"); }
+        }
+
+        /// <summary>Windows argv quoting (CommandLineToArgvW rules) so paths/messages with spaces, quotes or trailing backslashes survive.</summary>
+        private static string QuoteWindowsArg(string arg)
+        {
+            if (arg == null) arg = "";
+            if (arg.Length > 0 && arg.IndexOfAny(new char[] { ' ', '\t', '"', '\n' }) < 0) return arg;
+            StringBuilder sb = new StringBuilder("\"");
+            int backslashes = 0;
+            foreach (char c in arg)
+            {
+                if (c == '\\') { backslashes++; continue; }
+                if (c == '"') { sb.Append('\\', backslashes * 2 + 1); sb.Append('"'); }
+                else { sb.Append('\\', backslashes); sb.Append(c); }
+                backslashes = 0;
+            }
+            sb.Append('\\', backslashes * 2);
+            sb.Append('"');
+            return sb.ToString();
+        }
+
+        private static string RunGitInRepo(string repo, int timeoutMs, out int exitCode, params string[] args)
+        {
+            string joined = string.Join(" ", args.Select(a => QuoteWindowsArg(a)).ToArray());
+            bool timedOut;
+            string res = LlmHarnessAndAgentEngine.RunProcessCaptureWithExitCode("git", joined, repo, timeoutMs, out exitCode, out timedOut);
+            if (timedOut) exitCode = -1;
+            return res ?? "";
         }
 
         private void RefreshGitSidebarStatus()
@@ -4560,6 +4694,18 @@ if __name__ == '__main__':
                 {
                     if (gitStatusList == null || this.IsDisposed) return;
                     gitStatusItems = items;
+                    if (explorerTree != null)
+                    {
+                        // Explorer M / U / A / D decorations keyed by full path (previously never populated).
+                        explorerTree.GitStatusByFile.Clear();
+                        foreach (GitFileStatus gi in items)
+                        {
+                            string code = gi.StatusCode ?? "";
+                            string badge = code.Contains("?") ? "U" : code.Contains("D") ? "D" : code.Contains("A") ? "A" : code.Contains("M") || code.Contains("R") ? "M" : null;
+                            if (badge != null && !string.IsNullOrEmpty(gi.FilePath)) explorerTree.GitStatusByFile[gi.FilePath] = badge;
+                        }
+                        explorerTree.Invalidate();
+                    }
                     bool isNoGit = string.IsNullOrEmpty(snapRoot) || string.IsNullOrEmpty(branch) || string.Equals(branch, "no-git", StringComparison.OrdinalIgnoreCase);
                     gitBranchLabel.Text = isNoGit
                         ? "No Git repository"
@@ -6818,6 +6964,165 @@ if __name__ == '__main__':
             return set;
         }
 
+        // VS Code "files.exclude" defaults: only VCS metadata / OS litter is hidden from the Explorer tree.
+        // Build output, node_modules, nested repositories and gitignored folders stay visible (dimmed) and are
+        // merely excluded from indexing and search.
+        private static readonly string[] ExplorerDefaultHiddenNames = new string[] { ".git", ".svn", ".hg", "CVS", ".DS_Store", "Thumbs.db" };
+        private const string DefaultExcludedFoldersListForExplorer = ".git, node_modules, bin, obj, dist, build, out, .venv, __pycache__, .next, target, packages";
+        private HashSet<string> explorerDimmedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public HashSet<string> GetExplorerHiddenSet()
+        {
+            HashSet<string> set = new HashSet<string>(ExplorerDefaultHiddenNames, StringComparer.OrdinalIgnoreCase);
+            if (settings != null)
+            {
+                HashSet<string> defaults = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string d in DefaultExcludedFoldersListForExplorer.Split(',')) defaults.Add(d.Trim());
+                string[] custom = settings.GetExcludedFoldersList();
+                if (custom != null)
+                {
+                    foreach (string c in custom)
+                    {
+                        string t = (c ?? "").Trim().Trim('/', '\\');
+                        if (t.Length > 0 && !defaults.Contains(t)) set.Add(t);
+                    }
+                }
+            }
+            return set;
+        }
+
+        private void RefreshExplorerDimmedNames()
+        {
+            explorerDimmedNames = GetExcludedFolderSet(workspaceRoot);
+            explorerDimmedNames.Remove(".git");
+            if (explorerTree != null) explorerTree.DimmedPaths.Clear();
+        }
+
+        private static readonly string[] WindowsReservedNames = new string[]
+        {
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        };
+
+        /// <summary>
+        /// Validates a name typed for New File / New Folder / Rename. Relative sub-paths ("src\\util\\a.cs") are allowed
+        /// like in VS Code, but the result must stay inside baseDir. Returns null when valid.
+        /// </summary>
+        public static string ValidateNewEntryName(string baseDir, string input, out string fullPath)
+        {
+            fullPath = null;
+            string name = (input ?? "").Trim();
+            if (name.Length == 0) return "A file or folder name must be provided.";
+            if (Path.IsPathRooted(name) || name.Contains(":")) return "Please enter a name relative to the selected folder.";
+            char[] invalid = Path.GetInvalidFileNameChars().Where(c => c != '/' && c != '\\').ToArray();
+            if (name.IndexOfAny(invalid) >= 0) return "The name '" + name + "' contains characters that are not allowed.";
+            foreach (string seg in name.Split('/', '\\'))
+            {
+                if (seg == "." || seg == "..") return "Names cannot contain '.' or '..' path segments.";
+                if (seg.Length > 0 && (seg.EndsWith(".") || seg.EndsWith(" "))) return "'" + seg + "' is not a valid name on Windows.";
+                string stem = seg.Split('.')[0].ToUpperInvariant();
+                if (WindowsReservedNames.Contains(stem)) return "'" + seg + "' is a reserved name on Windows.";
+            }
+            string root = Path.GetFullPath(baseDir).TrimEnd('\\', '/');
+            string combined = Path.GetFullPath(Path.Combine(root, name)).TrimEnd('\\', '/');
+            if (!combined.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return "The name must point inside the selected folder.";
+            fullPath = combined;
+            return null;
+        }
+
+        private static bool IsLikelyBinaryFile(string path)
+        {
+            try
+            {
+                string ext = Path.GetExtension(path ?? "");
+                if (!string.IsNullOrEmpty(ext) && DefaultIgnoredBinaryExtensions.Contains(ext)) return true;
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    byte[] buf = new byte[8000];
+                    int n = fs.Read(buf, 0, buf.Length);
+                    if (n >= 2 && ((buf[0] == 0xFF && buf[1] == 0xFE) || (buf[0] == 0xFE && buf[1] == 0xFF))) return false;
+                    for (int i = 0; i < n; i++) if (buf[i] == 0) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
+        /// Re-reads the Explorer tree from disk keeping expanded folders, selection and scroll, optionally
+        /// revealing a path. Replaces the previous full LoadWorkspace() after every file operation, which
+        /// collapsed the whole tree, re-indexed the workspace and respawned exited terminals.
+        /// </summary>
+        public void RefreshExplorerPreservingState(string revealPath)
+        {
+            if (explorerTree == null || string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot)) return;
+            HashSet<string> expanded = explorerTree.GetExpandedPaths();
+            string selectedPath = explorerTree.SelectedNode != null ? explorerTree.SelectedNode.Tag as string : null;
+            if (!string.IsNullOrEmpty(revealPath))
+            {
+                selectedPath = revealPath;
+                string d = Path.GetDirectoryName(revealPath);
+                while (!string.IsNullOrEmpty(d) && d.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    expanded.Add(d);
+                    d = Path.GetDirectoryName(d);
+                }
+            }
+
+            RefreshExplorerDimmedNames();
+            HashSet<string> hidden = GetExplorerHiddenSet();
+            List<string> roots = new List<string>();
+            roots.Add(workspaceRoot);
+            foreach (string extra in additionalWorkspaceFolders)
+                if (!string.IsNullOrEmpty(extra) && Directory.Exists(extra) && !string.Equals(extra, workspaceRoot, StringComparison.OrdinalIgnoreCase))
+                    roots.Add(extra);
+
+            explorerTree.Nodes.Clear();
+            foreach (string root in roots)
+            {
+                TreeNode rootNode = new TreeNode(Path.GetFileName(root.TrimEnd('\\', '/'))) { Tag = root, StateImageIndex = 1 };
+                PopulateSingleDirectoryLevel(root, rootNode, hidden, false);
+                if (rootNode.Nodes.Count == 0)
+                    rootNode.Nodes.Add(new TreeNode("No files in folder") { Tag = "__EMPTY_FOLDER__", StateImageIndex = 2 });
+                explorerTree.Nodes.Add(rootNode);
+                explorerTree.MarkExpanded(rootNode);
+                RestoreExpandedChildren(rootNode, expanded, hidden);
+            }
+
+            TreeNode sel = !string.IsNullOrEmpty(selectedPath) ? explorerTree.FindNodeByPath(selectedPath) : null;
+            explorerTree.RebuildTreeLayout(false);
+            if (sel != null)
+            {
+                if (!string.IsNullOrEmpty(revealPath)) explorerTree.RevealAndSelect(sel);
+                else explorerTree.SelectedNode = sel;
+            }
+            explorerTree.Invalidate();
+        }
+
+        private void RestoreExpandedChildren(TreeNode parent, HashSet<string> expanded, HashSet<string> hidden)
+        {
+            foreach (TreeNode child in parent.Nodes.Cast<TreeNode>().ToList())
+            {
+                string p = child.Tag as string;
+                if (string.IsNullOrEmpty(p) || child.StateImageIndex != 1 || !expanded.Contains(p)) continue;
+                child.Nodes.Clear();
+                PopulateSingleDirectoryLevel(p, child, hidden, false);
+                explorerTree.MarkExpanded(child);
+                RestoreExpandedChildren(child, expanded, hidden);
+            }
+        }
+
+        /// <summary>Tree refresh plus lightweight index / git updates after a file operation.</summary>
+        private void AfterExplorerFileOperation(string revealPath)
+        {
+            RefreshExplorerPreservingState(revealPath);
+            if (!string.IsNullOrEmpty(revealPath) && File.Exists(revealPath) && !workspaceFiles.Contains(revealPath))
+                workspaceFiles.Add(revealPath);
+            workspaceFiles.RemoveAll(f => !File.Exists(f));
+            try { RefreshGitSidebarStatus(); } catch { }
+        }
+
         private static readonly HashSet<string> DefaultIgnoredBinaryExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             ".exe", ".dll", ".pdb", ".zip", ".ico", ".png", ".dat", ".bin", ".obj",
@@ -6834,22 +7139,25 @@ if __name__ == '__main__':
             if (folderNode.Nodes.Count == 1 && (folderNode.Nodes[0].Tag as string) == "__LAZY_DIR__")
             {
                 folderNode.Nodes.Clear();
-                HashSet<string> excludedFolders = GetExcludedFolderSet(workspaceRoot);
-                PopulateSingleDirectoryLevel(dirPath, folderNode, excludedFolders, addFilesToWorkspaceIndex: false);
+                PopulateSingleDirectoryLevel(dirPath, folderNode, GetExplorerHiddenSet(), addFilesToWorkspaceIndex: false);
             }
         }
 
-        private void PopulateSingleDirectoryLevel(string dirPath, TreeNode parentNode, HashSet<string> excludedFolders, bool addFilesToWorkspaceIndex)
+        /// <param name="hiddenNames">Names hidden from the tree (VS Code files.exclude), see GetExplorerHiddenSet.</param>
+        private void PopulateSingleDirectoryLevel(string dirPath, TreeNode parentNode, HashSet<string> hiddenNames, bool addFilesToWorkspaceIndex)
         {
             try
             {
+                string parentPath = parentNode.Tag as string;
+                bool parentDimmed = explorerTree != null && !string.IsNullOrEmpty(parentPath) && explorerTree.DimmedPaths.Contains(parentPath);
                 List<string> subDirs = new List<string>();
                 foreach (string d in Directory.EnumerateDirectories(dirPath))
                 {
                     string name = Path.GetFileName(d);
                     if (string.IsNullOrEmpty(name)) continue;
-                    if (excludedFolders != null && excludedFolders.Contains(name)) continue;
+                    if (hiddenNames != null && hiddenNames.Contains(name)) continue;
                     subDirs.Add(d);
+                    if (explorerTree != null && (parentDimmed || explorerDimmedNames.Contains(name))) explorerTree.DimmedPaths.Add(d);
                 }
                 subDirs.Sort((a, b) => string.Compare(Path.GetFileName(a), Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
 
@@ -6870,11 +7178,8 @@ if __name__ == '__main__':
                 foreach (string f in Directory.EnumerateFiles(dirPath))
                 {
                     string name = Path.GetFileName(f);
-                    if (string.IsNullOrEmpty(name) || name.StartsWith("unins000.", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    string ext = Path.GetExtension(name);
-                    if (!string.IsNullOrEmpty(ext) && DefaultIgnoredBinaryExtensions.Contains(ext))
-                        continue;
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (hiddenNames != null && hiddenNames.Contains(name)) continue;
                     files.Add(f);
                 }
                 files.Sort((a, b) => string.Compare(Path.GetFileName(a), Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
@@ -6882,8 +7187,12 @@ if __name__ == '__main__':
                 foreach (string file in files)
                 {
                     string name = Path.GetFileName(file);
-                    if (addFilesToWorkspaceIndex)
+                    string fext = Path.GetExtension(name);
+                    bool indexable = (string.IsNullOrEmpty(fext) || !DefaultIgnoredBinaryExtensions.Contains(fext)) &&
+                                     !name.StartsWith("unins000.", StringComparison.OrdinalIgnoreCase);
+                    if (addFilesToWorkspaceIndex && indexable)
                         workspaceFiles.Add(file);
+                    if (explorerTree != null && (parentDimmed || explorerDimmedNames.Contains(name))) explorerTree.DimmedPaths.Add(file);
                     TreeNode fileNode = new TreeNode(name)
                     {
                         Tag = file,
@@ -7024,7 +7333,8 @@ if __name__ == '__main__':
             rootNode.Nodes.Add(loadingNode);
             try
             {
-                PopulateSingleDirectoryLevel(rootDir, rootNode, excludedFolders, addFilesToWorkspaceIndex: true);
+                RefreshExplorerDimmedNames();
+                PopulateSingleDirectoryLevel(rootDir, rootNode, GetExplorerHiddenSet(), addFilesToWorkspaceIndex: true);
             }
             finally
             {
@@ -7049,6 +7359,8 @@ if __name__ == '__main__':
                 }
             }
             explorerTree.RebuildTreeLayout(true);
+            // Watch immediately (not only after full indexing, which can be slow or fail).
+            InitializeWorkspaceFileWatcher(rootDir);
 
             string fastGitBranch = ResolveFastGitBranch(rootDir);
             if (statusLeftLabel != null)
@@ -7168,8 +7480,6 @@ if __name__ == '__main__':
                     if (!string.IsNullOrEmpty(aiEngine.ActiveGitBranch))
                         gitBranch = aiEngine.ActiveGitBranch;
                     if (token.IsCancellationRequested || gen != workspaceLoadGeneration) return;
-
-                    InitializeWorkspaceFileWatcher(rootDir);
                 }
                 catch { }
                 finally
@@ -7354,35 +7664,113 @@ if __name__ == '__main__':
                 workspaceFileWatcher = new FileSystemWatcher(rootDir)
                 {
                     IncludeSubdirectories = true,
-                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size,
+                    InternalBufferSize = 64 * 1024
                 };
-                FileSystemEventHandler onChanged = (s, e) =>
-                {
-                    if (string.IsNullOrEmpty(e.FullPath)) return;
-                    if (e.FullPath.IndexOf("\\.git\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        e.FullPath.IndexOf("\\obj\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        e.FullPath.IndexOf("\\bin\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        e.FullPath.IndexOf("\\node_modules\\", StringComparison.OrdinalIgnoreCase) >= 0)
-                        return;
-                    if (this.IsHandleCreated && !this.IsDisposed)
-                    {
-                        try
-                        {
-                            string changedPath = e.FullPath;
-                            this.BeginInvoke(new Action(() =>
-                            {
-                                if (!this.IsDisposed)
-                                    HandleExternalFileChanged(changedPath);
-                            }));
-                        }
-                        catch { }
-                    }
-                };
+                FileSystemEventHandler onChanged = (s, e) => QueueWorkspaceFsChange(e.FullPath, e.ChangeType != WatcherChangeTypes.Changed, e.ChangeType == WatcherChangeTypes.Deleted);
                 workspaceFileWatcher.Changed += onChanged;
                 workspaceFileWatcher.Created += onChanged;
+                workspaceFileWatcher.Deleted += onChanged;
+                workspaceFileWatcher.Renamed += (s, e) =>
+                {
+                    QueueWorkspaceFsChange(e.OldFullPath, true, true);
+                    QueueWorkspaceFsChange(e.FullPath, true, false);
+                };
+                workspaceFileWatcher.Error += (s, e) =>
+                {
+                    // Internal buffer overflow: changes were lost, so do one full refresh.
+                    lock (fsChangeLock) { fsTreeDirty = true; fsGitDirty = true; }
+                    ScheduleFsFlush();
+                };
                 workspaceFileWatcher.EnableRaisingEvents = true;
             }
             catch { }
+        }
+
+        private readonly object fsChangeLock = new object();
+        private bool fsTreeDirty;
+        private bool fsGitDirty;
+        private readonly HashSet<string> fsChangedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> fsDeletedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private System.Windows.Forms.Timer fsFlushTimer;
+        private readonly HashSet<EditorTabBuffer> tabsWithReloadPromptOpen = new HashSet<EditorTabBuffer>();
+
+        private void QueueWorkspaceFsChange(string fullPath, bool structural, bool deleted)
+        {
+            if (string.IsNullOrEmpty(fullPath)) return;
+            bool insideGit = fullPath.IndexOf("\\.git\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             fullPath.EndsWith("\\.git", StringComparison.OrdinalIgnoreCase);
+            lock (fsChangeLock)
+            {
+                if (insideGit)
+                {
+                    string n = Path.GetFileName(fullPath);
+                    if (n == "HEAD" || n == "index" || fullPath.IndexOf("\\refs\\", StringComparison.OrdinalIgnoreCase) >= 0) fsGitDirty = true;
+                    else return;
+                }
+                else
+                {
+                    fsGitDirty = true;
+                    if (structural) fsTreeDirty = true;
+                    if (deleted) fsDeletedFiles.Add(fullPath);
+                    else { fsChangedFiles.Add(fullPath); fsDeletedFiles.Remove(fullPath); }
+                }
+            }
+            ScheduleFsFlush();
+        }
+
+        private void ScheduleFsFlush()
+        {
+            if (!this.IsHandleCreated || this.IsDisposed) return;
+            try
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (this.IsDisposed) return;
+                    if (fsFlushTimer == null)
+                    {
+                        fsFlushTimer = new System.Windows.Forms.Timer { Interval = 450 };
+                        fsFlushTimer.Tick += (ts, te) => { fsFlushTimer.Stop(); FlushWorkspaceFsChanges(); };
+                    }
+                    fsFlushTimer.Stop();
+                    fsFlushTimer.Start();
+                }));
+            }
+            catch { }
+        }
+
+        private void FlushWorkspaceFsChanges()
+        {
+            bool tree, git;
+            List<string> changed, deleted;
+            lock (fsChangeLock)
+            {
+                tree = fsTreeDirty; git = fsGitDirty;
+                changed = fsChangedFiles.ToList(); deleted = fsDeletedFiles.ToList();
+                fsTreeDirty = false; fsGitDirty = false;
+                fsChangedFiles.Clear(); fsDeletedFiles.Clear();
+            }
+            if (string.IsNullOrEmpty(workspaceRoot)) return;
+            if (tree)
+            {
+                RefreshExplorerPreservingState(null);
+                foreach (string c in changed)
+                {
+                    string ext = Path.GetExtension(c);
+                    if (File.Exists(c) && !workspaceFiles.Contains(c) && (string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext)))
+                        workspaceFiles.Add(c);
+                }
+                if (deleted.Count > 0) workspaceFiles.RemoveAll(f => !File.Exists(f));
+            }
+            foreach (string d in deleted)
+            {
+                foreach (EditorTabBuffer t in openTabs.Where(x => string.Equals(x.FilePath, d, StringComparison.OrdinalIgnoreCase)))
+                    if (!File.Exists(d)) t.IsDeletedOnDisk = true;
+            }
+            if (deleted.Count > 0) RefreshTabStrip();
+            // One reload check per file per debounce window: a single save fires several Changed events.
+            foreach (string c in changed) HandleExternalFileChanged(c);
+            if (git) { try { RefreshGitSidebarStatus(); } catch { } }
         }
 
         public void HandleExternalFileChanged(string fullPath)
@@ -7411,13 +7799,19 @@ if __name__ == '__main__':
             if (normDisk == normTab && tab.EolSequence == diskEol && tab.HasBom == diskBom && tab.HasFinalNewline == diskFinalNl) return;
 
             bool shouldReload = true;
+            tab.IsDeletedOnDisk = false;
             if (tab.IsDirty)
             {
+                if (tabsWithReloadPromptOpen.Contains(tab)) return; // a prompt for this tab is already showing
                 if (ExternalFileReloadOverride != null)
                     shouldReload = ExternalFileReloadOverride(tab);
                 else if (SuppressUnsavedPrompts)
                     shouldReload = false;
                 else
+                {
+                    tabsWithReloadPromptOpen.Add(tab);
+                    try
+                    {
                     shouldReload = MessageBox.Show(
                         this,
                         "The file '" + tab.FileName + "' has been modified on disk, and your editor buffer also has unsaved changes.\n\nDo you want to reload from disk and overwrite your unsaved editor changes?",
@@ -7425,6 +7819,9 @@ if __name__ == '__main__':
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Warning
                     ) == DialogResult.Yes;
+                    }
+                    finally { tabsWithReloadPromptOpen.Remove(tab); }
+                }
             }
 
             if (shouldReload)
@@ -7494,6 +7891,13 @@ if __name__ == '__main__':
             EditorTabBuffer existing = openTabs.FirstOrDefault(
                 t => string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase)
             );
+            if (existing == null && !string.IsNullOrEmpty(filePath) && File.Exists(filePath) && IsLikelyBinaryFile(filePath))
+            {
+                // Images, PDFs, archives... would be corrupted by the text editor on save; hand them to the OS.
+                try { Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true }); } catch { }
+                if (statusLeftLabel != null) statusLeftLabel.Text = Path.GetFileName(filePath) + " is a binary file; opened with the default app.";
+                return null;
+            }
             if (existing != null)
             {
                 activeTab = existing;
@@ -8957,7 +9361,7 @@ if __name__ == '__main__':
                         string dir = Path.GetDirectoryName(filePath);
                         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                         File.WriteAllText(filePath, "");
-                        LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                        AfterExplorerFileOperation(filePath);
                     }
                     catch { }
                 }
@@ -9670,19 +10074,29 @@ if __name__ == '__main__':
                         CreateNewUntitledTextTab();
                         return;
                     }
-                    string newPath = Path.Combine(folder, inputName);
+                    string newPath;
+                    string nameErr = ValidateNewEntryName(folder, inputName, out newPath);
+                    if (nameErr != null)
+                    {
+                        MessageBox.Show(this, nameErr, "Create New File", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    if (File.Exists(newPath) || Directory.Exists(newPath))
+                    {
+                        MessageBox.Show(this, "A file or folder '" + Path.GetFileName(newPath) + "' already exists at this location. Please choose a different name.", "Create New File", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
                     try
                     {
                         string dir = Path.GetDirectoryName(newPath);
                         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                        if (!File.Exists(newPath))
-                            File.WriteAllText(newPath, "");
-                        LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                        using (new FileStream(newPath, FileMode.CreateNew, FileAccess.Write)) { }
+                        AfterExplorerFileOperation(newPath);
                         OpenFileInTab(newPath);
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Could not create file: " + ex.Message, "codeLess IDE");
+                        MessageBox.Show(this, "Could not create file: " + ex.Message, "codeLess IDE");
                     }
                 }
             }
@@ -9752,14 +10166,26 @@ if __name__ == '__main__':
             {
                 if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.InputValue))
                 {
+                    string newDir;
+                    string nameErr = ValidateNewEntryName(folder, dlg.InputValue, out newDir);
+                    if (nameErr != null)
+                    {
+                        MessageBox.Show(this, nameErr, "Create New Folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    if (File.Exists(newDir) || Directory.Exists(newDir))
+                    {
+                        MessageBox.Show(this, "A file or folder '" + Path.GetFileName(newDir) + "' already exists at this location. Please choose a different name.", "Create New Folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
                     try
                     {
-                        Directory.CreateDirectory(Path.Combine(folder, dlg.InputValue.Trim()));
-                        LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                        Directory.CreateDirectory(newDir);
+                        AfterExplorerFileOperation(newDir);
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Could not create folder: " + ex.Message, "codeLess IDE");
+                        MessageBox.Show(this, "Could not create folder: " + ex.Message, "codeLess IDE");
                     }
                 }
             }
@@ -9777,8 +10203,22 @@ if __name__ == '__main__':
                 {
                     try
                     {
-                        string newPath = Path.Combine(Path.GetDirectoryName(path), dlg.InputValue.Trim());
-                        if (File.Exists(path))
+                        string newPath;
+                        string nameErr = ValidateNewEntryName(Path.GetDirectoryName(path), dlg.InputValue, out newPath);
+                        if (nameErr != null) { MessageBox.Show(this, nameErr, "Rename", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                        bool caseOnly = string.Equals(path, newPath, StringComparison.OrdinalIgnoreCase);
+                        if (!caseOnly && (File.Exists(newPath) || Directory.Exists(newPath)))
+                        {
+                            MessageBox.Show(this, "A file or folder '" + Path.GetFileName(newPath) + "' already exists at this location.", "Rename", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                        if (caseOnly)
+                        {
+                            bool wasDir = Directory.Exists(path);
+                            MovePathCaseSafe(path, newPath);
+                            RepathOpenTabsForFileOrDirectoryMove(path, newPath, wasDir);
+                        }
+                        else if (File.Exists(path))
                         {
                             string oldRel = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, path);
                             bool hadPill = attachedContextPills.Any(p => DoesPillMatchFile(p, path, oldName, oldRel));
@@ -9808,15 +10248,45 @@ if __name__ == '__main__':
                                 }
                             }
                         }
-                        LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                        AfterExplorerFileOperation(newPath);
                         RefreshTabStrip();
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Rename failed: " + ex.Message, "codeLess IDE");
+                        MessageBox.Show(this, "Rename failed: " + ex.Message, "codeLess IDE");
                     }
                 }
             }
+        }
+
+        /// <summary>Rename that also works for case-only changes on case-insensitive NTFS ("foo" -> "Foo").</summary>
+        private static void MovePathCaseSafe(string oldPath, string newPath)
+        {
+            bool isDir = Directory.Exists(oldPath);
+            string tmp = oldPath.TrimEnd('\\') + ".codeless-rename-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            if (isDir) { Directory.Move(oldPath, tmp); Directory.Move(tmp, newPath); }
+            else { File.Move(oldPath, tmp); File.Move(tmp, newPath); }
+        }
+
+        private static void CopyDirectoryRecursive(string src, string dst)
+        {
+            Directory.CreateDirectory(dst);
+            foreach (string f in Directory.GetFiles(src))
+                File.Copy(f, Path.Combine(dst, Path.GetFileName(f)), false);
+            foreach (string d in Directory.GetDirectories(src))
+                CopyDirectoryRecursive(d, Path.Combine(dst, Path.GetFileName(d)));
+        }
+
+        /// <summary>Directory.Move throws across volumes; fall back to copy + delete.</summary>
+        private static void MoveDirectoryAcrossVolumes(string src, string dst)
+        {
+            if (string.Equals(Path.GetPathRoot(src), Path.GetPathRoot(dst), StringComparison.OrdinalIgnoreCase))
+            {
+                Directory.Move(src, dst);
+                return;
+            }
+            CopyDirectoryRecursive(src, dst);
+            Directory.Delete(src, true);
         }
 
         private void PromptDeleteSelectedNode()
@@ -9878,12 +10348,12 @@ if __name__ == '__main__':
                             editorControl.LoadBuffer(activeTab);
                         }
                     }
-                    LoadWorkspace(workspaceRoot, restorePreviousTabs: false, keepCurrentTabs: true);
+                    AfterExplorerFileOperation(Path.GetDirectoryName(path));
                     RefreshTabStrip();
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show("Delete failed: " + ex.Message, "codeLess IDE");
+                    MessageBox.Show(this, "Delete failed: " + ex.Message, "codeLess IDE");
                 }
             }
         }

@@ -28,6 +28,10 @@ namespace codeLess.AvaloniaApp
                     {
                         App.ScreenshotSuiteDir = args[++i];
                     }
+                    else if (a == "--smoke-quit" && i + 1 < args.Length)
+                    {
+                        App.SmokeQuitReportPath = args[++i];
+                    }
                     else if ((a == "--screenshot" || a == "-s") && i + 1 < args.Length)
                     {
                         App.ScreenshotOutputPath = args[++i];
@@ -43,13 +47,72 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
-            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args ?? Array.Empty<string>());
+            int exitCode = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args ?? Array.Empty<string>());
+            // The UI lifetime has ended (last window closed / Cmd+Q). Terminate deterministically so no lingering
+            // worker (blocked pty write, git subprocess wait, HTTP stream) can keep a windowless process alive.
+            Environment.Exit(exitCode);
+        }
+
+        /// <summary>
+        /// GUI launches (Finder, Dock, Spotlight, .desktop files) do not inherit the login shell's environment, so
+        /// nvm / pyenv / asdf / volta / Homebrew paths and exported API keys were missing for git, syntax checks and
+        /// the agent's run_terminal. Like VS Code, resolve the environment once from "$SHELL -ilc env" and merge it.
+        /// </summary>
+        private static void ImportLoginShellEnvironment()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+            // Started from a terminal: the environment is already the user's shell environment.
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SHLVL"))) return;
+            try
+            {
+                string shell = Environment.GetEnvironmentVariable("SHELL");
+                if (string.IsNullOrEmpty(shell) || !File.Exists(shell)) shell = File.Exists("/bin/zsh") ? "/bin/zsh" : "/bin/bash";
+                const string marker = "__CODELESS_ENV_BEGIN__";
+                var psi = new System.Diagnostics.ProcessStartInfo(shell)
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true,
+                    CreateNoWindow = true
+                };
+                psi.ArgumentList.Add("-ilc");
+                psi.ArgumentList.Add("printf '" + marker + "'; command env -0");
+                psi.Environment["CODELESS_RESOLVING_ENVIRONMENT"] = "1";
+                using var p = System.Diagnostics.Process.Start(psi);
+                if (p == null) return;
+                p.StandardInput.Close();
+                var outTask = p.StandardOutput.ReadToEndAsync();
+                _ = p.StandardError.ReadToEndAsync();
+                if (!p.WaitForExit(5000))
+                {
+                    try { p.Kill(true); } catch { }
+                    return;
+                }
+                if (!outTask.Wait(1000)) return;
+                string raw = outTask.Result ?? "";
+                int idx = raw.LastIndexOf(marker, StringComparison.Ordinal);
+                if (idx < 0) return;
+                var skip = new HashSet<string>(StringComparer.Ordinal) { "PWD", "OLDPWD", "SHLVL", "_", "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "CODELESS_RESOLVING_ENVIRONMENT", "PS1", "PS2" };
+                foreach (string entry in raw.Substring(idx + marker.Length).Split('\0'))
+                {
+                    int eq = entry.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string key = entry.Substring(0, eq);
+                    string val = entry.Substring(eq + 1);
+                    if (skip.Contains(key) || key.IndexOf('\n') >= 0) continue;
+                    if (key == "PATH" || string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                        Environment.SetEnvironmentVariable(key, val);
+                }
+            }
+            catch { }
         }
 
         private static void EnsureDeveloperPathOnUnix()
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 return;
+            ImportLoginShellEnvironment();
 
             try
             {

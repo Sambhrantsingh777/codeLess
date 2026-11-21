@@ -22,8 +22,46 @@ namespace codeLess.AvaloniaApp
 {
     public partial class MainWindow
     {
+        /// <summary>True when the key event originates from the integrated terminal grid.</summary>
+        private static bool IsFromTerminal(object source)
+        {
+            var v = source as global::Avalonia.Visual;
+            while (v != null)
+            {
+                if (v is AvaloniaTerminalEmulatorControl) return true;
+                v = global::Avalonia.VisualTree.VisualExtensions.GetVisualParent(v);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// VS Code "commandsToSkipShell": the few workbench shortcuts that still work while the terminal has focus.
+        /// Everything else (Ctrl+A/E/K/W/R/P/N/B..., Option/Alt combos, F-keys) must reach the shell / TUI app.
+        /// </summary>
+        public static bool IsWorkbenchShortcutAllowedFromTerminal(Key key, KeyModifiers mods)
+        {
+            bool ctrl = mods.HasFlag(KeyModifiers.Control);
+            bool meta = mods.HasFlag(KeyModifiers.Meta);
+            bool shift = mods.HasFlag(KeyModifiers.Shift);
+            if (key == Key.F1) return true;
+            if (ctrl && (key == Key.OemTilde || key == Key.Tab || key == Key.PageUp || key == Key.PageDown)) return true;
+            if (MacKeymap.IsMacOS)
+            {
+                // Cmd shortcuts are never shell input; the terminal itself handles Cmd+C/V/K/A/I.
+                if (!meta) return false;
+                return key != Key.C && key != Key.V && key != Key.K && key != Key.A && key != Key.I &&
+                       key != Key.Left && key != Key.Right && key != Key.Back && key != Key.Delete;
+            }
+            if (!ctrl) return false;
+            if (shift) return key != Key.C && key != Key.V; // Ctrl+Shift+P, Ctrl+Shift+` ... but not copy/paste
+            return key == Key.P || key == Key.B || key == Key.J || (key >= Key.D1 && key <= Key.D9) || key == Key.OemComma;
+        }
+
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
+            if (IsFromTerminal(e.Source) && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
+                return;
+
             if (e.Source is TextBox &&
                 !e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
                 !e.KeyModifiers.HasFlag(KeyModifiers.Meta) &&
@@ -48,6 +86,12 @@ namespace codeLess.AvaloniaApp
 
         public bool SimulateShortcut(Key key, KeyModifiers modifiers)
         {
+            using (MacKeymap.BeginLenientPrimaryMatching())
+                return SimulateShortcutCore(key, modifiers);
+        }
+
+        private bool SimulateShortcutCore(Key key, KeyModifiers modifiers)
+        {
             if (HandleWorkbenchKeyEvent(key, modifiers))
                 return true;
 
@@ -66,7 +110,7 @@ namespace codeLess.AvaloniaApp
         {
             bool ctrl = modifiers.HasFlag(KeyModifiers.Control);
             bool meta = modifiers.HasFlag(KeyModifiers.Meta);
-            bool ctrlOrCmd = ctrl || meta;
+            bool ctrlOrCmd = MacKeymap.IsPrimary(modifiers);
             bool shift = modifiers.HasFlag(KeyModifiers.Shift);
             bool alt = modifiers.HasFlag(KeyModifiers.Alt);
 
@@ -192,8 +236,8 @@ namespace codeLess.AvaloniaApp
                 lastCtrlKChordTime = DateTime.UtcNow;
                 string prefixName = meta ? "Cmd+K" : "Ctrl+K";
                 statusChordLabel.Text = $"({prefixName}) was pressed. Waiting for second key of chord...";
-                // Also toggle inline AI bar if user doesn't press a second chord key, or allow immediate access
-                PrimaryEditor.ShowInlineAiBar();
+                // Do NOT open/focus the inline AI bar here: stealing focus into its TextBox made every letter-only
+                // chord (Cmd+K S/F/Z/W/M/Enter...) type into the box instead. Cmd+K Cmd+K or Cmd+I opens it.
                 return true;
             }
 
@@ -698,14 +742,15 @@ namespace codeLess.AvaloniaApp
 
         public void CloseAllTabs()
         {
-            if (!ConfirmSaveOrDiscardDirtyTabs(openTabs)) return;
+            if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, CloseAllTabs)) return;
             openTabs.Clear();
             ActivateTab(null);
         }
 
         public void CloseWorkspaceFolder()
         {
-            if (!ConfirmSaveOrDiscardDirtyTabs(openTabs)) return;
+            if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, CloseWorkspaceFolder)) return;
+            StopWorkspaceWatcher();
             workspaceRoot = "";
             workspaceFiles.Clear();
             ExplorerTree.Nodes.Clear();
@@ -738,8 +783,9 @@ namespace codeLess.AvaloniaApp
                 items.Add(new Separator());
             }
 
-            items.Add(MakeCtxItem("New File...", PromptCreateNewFileInWorkspace));
-            items.Add(MakeCtxItem("New Folder...", PromptCreateNewFolderInWorkspace));
+            string ctxDir = isDir ? fullPath : Path.GetDirectoryName(fullPath);
+            items.Add(MakeCtxItem("New File...", () => PromptCreateNewFileInWorkspace(ctxDir)));
+            items.Add(MakeCtxItem("New Folder...", () => PromptCreateNewFolderInWorkspace(ctxDir)));
             items.Add(new Separator());
             items.Add(MakeCtxItem(revealLabel, () => RevealInOsFileManager(fullPath)));
             items.Add(MakeCtxItem("Open in Integrated Terminal", () =>
@@ -898,12 +944,36 @@ namespace codeLess.AvaloniaApp
             catch { }
         }
 
-        public void PromptCreateNewFileInWorkspace()
+        /// <summary>Focus a modal's text box once it is attached and laid out (an immediate Focus() is a no-op).</summary>
+        private static void FocusPromptTextBox(TextBox tb, bool selectNameWithoutExtension = false)
         {
-            string baseDir = GetSelectedExplorerDirectory();
+            void apply()
+            {
+                tb.Focus();
+                string t = tb.Text ?? "";
+                int dot = selectNameWithoutExtension ? t.LastIndexOf('.') : -1;
+                if (dot > 0)
+                {
+                    tb.SelectionStart = 0;
+                    tb.SelectionEnd = dot;
+                }
+                else
+                {
+                    tb.SelectAll();
+                }
+            }
+            apply();
+            Dispatcher.UIThread.Post(apply, DispatcherPriority.Loaded);
+        }
+
+        public void PromptCreateNewFileInWorkspace() => PromptCreateNewFileInWorkspace(null);
+
+        public void PromptCreateNewFileInWorkspace(string targetDir)
+        {
+            string baseDir = !string.IsNullOrEmpty(targetDir) && Directory.Exists(targetDir) ? targetDir : GetSelectedExplorerDirectory();
             var view = AvaloniaDialogBuilder.BuildPromptInputView(
-                $"Enter new file name in '{Path.GetFileName(baseDir)}':",
-                "NewClass.cs",
+                $"Enter new file name in '{Path.GetFileName(baseDir.TrimEnd('/', '\\'))}' (use / for sub-folders):",
+                "",
                 currentTheme,
                 fileName =>
                 {
@@ -913,8 +983,7 @@ namespace codeLess.AvaloniaApp
                 () => ModalHost.CloseModal(),
                 out var tb);
             ModalHost.ShowModal("new-file", "New File", view, 440);
-            tb.Focus();
-            tb.SelectAll();
+            FocusPromptTextBox(tb);
         }
 
         public string CreateFileInDirectory(string baseDir, string fileName)
@@ -922,28 +991,38 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrWhiteSpace(fileName)) return null;
             if (string.IsNullOrEmpty(baseDir) || !Directory.Exists(baseDir))
                 baseDir = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot) ? workspaceRoot : Path.GetTempPath();
-            string fullPath = Path.Combine(baseDir, fileName.Trim());
+            string err = ValidateNewEntryName(baseDir, fileName, out string fullPath);
+            if (err != null) { ReportFileOperationError("New File", err); return null; }
+            if (File.Exists(fullPath) || Directory.Exists(fullPath))
+            {
+                ReportFileOperationError("New File", $"A file or folder '{Path.GetFileName(fullPath)}' already exists at this location. Please choose a different name.");
+                return null;
+            }
             try
             {
                 string parent = Path.GetDirectoryName(fullPath);
                 if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
                     Directory.CreateDirectory(parent);
-                if (!File.Exists(fullPath))
-                    File.WriteAllText(fullPath, "");
-                if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
-                    LoadWorkspace(workspaceRoot, keepCurrentTabs: true);
+                using (new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write)) { }
+                RefreshWorkspaceAfterFileOperation(fullPath);
                 OpenFileInTab(fullPath, preview: false);
                 return fullPath;
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                ReportFileOperationError("New File", $"Unable to create '{fileName.Trim()}': {ex.Message}");
+                return null;
+            }
         }
 
-        public void PromptCreateNewFolderInWorkspace()
+        public void PromptCreateNewFolderInWorkspace() => PromptCreateNewFolderInWorkspace(null);
+
+        public void PromptCreateNewFolderInWorkspace(string targetDir)
         {
-            string baseDir = GetSelectedExplorerDirectory();
+            string baseDir = !string.IsNullOrEmpty(targetDir) && Directory.Exists(targetDir) ? targetDir : GetSelectedExplorerDirectory();
             var view = AvaloniaDialogBuilder.BuildPromptInputView(
-                $"Enter new folder name in '{Path.GetFileName(baseDir)}':",
-                "NewFolder",
+                $"Enter new folder name in '{Path.GetFileName(baseDir.TrimEnd('/', '\\'))}' (use / for nested folders):",
+                "",
                 currentTheme,
                 folderName =>
                 {
@@ -953,8 +1032,7 @@ namespace codeLess.AvaloniaApp
                 () => ModalHost.CloseModal(),
                 out var tb);
             ModalHost.ShowModal("new-folder", "New Folder", view, 440);
-            tb.Focus();
-            tb.SelectAll();
+            FocusPromptTextBox(tb);
         }
 
         public string CreateFolderInDirectory(string baseDir, string folderName)
@@ -962,22 +1040,41 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrWhiteSpace(folderName)) return null;
             if (string.IsNullOrEmpty(baseDir) || !Directory.Exists(baseDir))
                 baseDir = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot) ? workspaceRoot : Path.GetTempPath();
-            string fullPath = Path.Combine(baseDir, folderName.Trim());
+            string err = ValidateNewEntryName(baseDir, folderName, out string fullPath);
+            if (err != null) { ReportFileOperationError("New Folder", err); return null; }
+            if (File.Exists(fullPath) || Directory.Exists(fullPath))
+            {
+                ReportFileOperationError("New Folder", $"A file or folder '{Path.GetFileName(fullPath)}' already exists at this location. Please choose a different name.");
+                return null;
+            }
             try
             {
                 Directory.CreateDirectory(fullPath);
-                if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
-                    LoadWorkspace(workspaceRoot, keepCurrentTabs: true);
+                RefreshWorkspaceAfterFileOperation(fullPath);
                 return fullPath;
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                ReportFileOperationError("New Folder", $"Unable to create folder '{folderName.Trim()}': {ex.Message}");
+                return null;
+            }
+        }
+
+        private void ReportFileOperationError(string title, string message)
+        {
+            SetStatusMessage(message);
+            AppendOutputLog($"[{title}] {message}");
+            if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
+                ShowMessageModal(title, message);
         }
 
         public void PromptRenameExplorerNode(ExplorerTreeNode node)
         {
             if (node == null || string.IsNullOrEmpty(node.Tag)) return;
+            if (ExplorerTree.Nodes.Contains(node)) return; // workspace roots are renamed in the OS, not in-place
             string oldPath = node.Tag;
             string oldName = Path.GetFileName(oldPath);
+            bool isFile = File.Exists(oldPath);
             var view = AvaloniaDialogBuilder.BuildPromptInputView(
                 $"Rename '{oldName}' to:",
                 oldName,
@@ -990,87 +1087,130 @@ namespace codeLess.AvaloniaApp
                 () => ModalHost.CloseModal(),
                 out var tb);
             ModalHost.ShowModal("rename-node", "Rename", view, 440);
-            tb.Focus();
-            tb.SelectAll();
+            FocusPromptTextBox(tb, selectNameWithoutExtension: isFile);
         }
 
         public bool RenameExplorerPath(string oldPath, string newName)
         {
             if (string.IsNullOrEmpty(oldPath) || string.IsNullOrWhiteSpace(newName)) return false;
+            string dir = Path.GetDirectoryName(oldPath.TrimEnd('/', '\\'));
+            if (string.IsNullOrEmpty(dir)) return false;
+            string err = ValidateNewEntryName(dir, newName, out string newPath);
+            if (err != null) { ReportFileOperationError("Rename", err); return false; }
+            if (string.Equals(oldPath, newPath, StringComparison.Ordinal)) return false;
+            bool caseOnlyChange = string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase);
+            if (!caseOnlyChange && (File.Exists(newPath) || Directory.Exists(newPath)))
+            {
+                ReportFileOperationError("Rename", $"A file or folder '{Path.GetFileName(newPath)}' already exists at this location. Please choose a different name.");
+                return false;
+            }
             try
             {
-                string dir = Path.GetDirectoryName(oldPath);
-                string newPath = Path.Combine(dir ?? "", newName.Trim());
-                if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase)) return false;
-                if (File.Exists(oldPath))
+                string parent = Path.GetDirectoryName(newPath);
+                if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent)) Directory.CreateDirectory(parent);
+                bool isDir = Directory.Exists(oldPath);
+                if (caseOnlyChange)
                 {
-                    File.Move(oldPath, newPath);
-                    var open = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, oldPath, StringComparison.OrdinalIgnoreCase));
-                    if (open != null)
-                    {
-                        open.FilePath = newPath;
-                        open.FileName = Path.GetFileName(newPath);
-                        open.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, newPath) : open.FileName;
-                    }
+                    // Case-insensitive volumes (default macOS / Windows) need a two-step rename for "foo" -> "Foo".
+                    string tmp = oldPath + ".codeless-rename-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                    if (isDir) { Directory.Move(oldPath, tmp); Directory.Move(tmp, newPath); }
+                    else { File.Move(oldPath, tmp); File.Move(tmp, newPath); }
                 }
-                else if (Directory.Exists(oldPath))
+                else if (isDir) Directory.Move(oldPath, newPath);
+                else File.Move(oldPath, newPath);
+
+                // Re-point open editors for the file itself or anything below a renamed folder.
+                string oldPrefix = oldPath.TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
+                foreach (var t in openTabs)
                 {
-                    Directory.Move(oldPath, newPath);
+                    if (string.IsNullOrEmpty(t.FilePath)) continue;
+                    string updated = null;
+                    if (string.Equals(t.FilePath, oldPath, PathKeyComparison)) updated = newPath;
+                    else if (isDir && t.FilePath.StartsWith(oldPrefix, PathKeyComparison))
+                        updated = Path.Combine(newPath, t.FilePath.Substring(oldPrefix.Length));
+                    if (updated == null) continue;
+                    t.FilePath = updated;
+                    t.FileName = Path.GetFileName(updated);
+                    t.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, updated) : t.FileName;
                 }
-                if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
-                    LoadWorkspace(workspaceRoot, keepCurrentTabs: true);
+                RefreshWorkspaceAfterFileOperation(newPath);
                 RefreshTabStrip();
+                UpdateWindowTitle();
                 return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                ReportFileOperationError("Rename", $"Unable to rename '{Path.GetFileName(oldPath)}': {ex.Message}");
+                return false;
+            }
         }
 
         public void DeleteExplorerNodeToTrash(ExplorerTreeNode node)
         {
             if (node == null || string.IsNullOrEmpty(node.Tag)) return;
-            DeletePathToTrashOrRecycleBin(node.Tag);
+            if (ExplorerTree.Nodes.Contains(node)) return; // never delete a workspace root from the tree
+            string path = node.Tag;
+            bool isDir = Directory.Exists(path);
+            string trashName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "Recycle Bin" : "Trash";
+            string msg = isDir
+                ? $"Are you sure you want to delete '{Path.GetFileName(path)}' and its contents?\n\nYou can restore it from the {trashName}."
+                : $"Are you sure you want to delete '{Path.GetFileName(path)}'?\n\nYou can restore it from the {trashName}.";
+            if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
+            {
+                DeletePathToTrashOrRecycleBin(path);
+                return;
+            }
+            ShowConfirmModal("Delete", msg, $"Move to {trashName}", () => DeletePathToTrashOrRecycleBin(path));
         }
 
         public bool DeletePathToTrashOrRecycleBin(string fullPath)
         {
             if (string.IsNullOrEmpty(fullPath)) return false;
+            bool isDir = Directory.Exists(fullPath);
+            string prefix = fullPath.TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
+            var affected = openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath) &&
+                (string.Equals(t.FilePath, fullPath, PathKeyComparison) || (isDir && t.FilePath.StartsWith(prefix, PathKeyComparison)))).ToList();
+
+            bool done = TryMoveToSystemTrash(fullPath, out string trashError);
+            if (!done && AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
+            {
+                // Trash unavailable (e.g. network volume): ask before deleting permanently, like VS Code.
+                ShowConfirmModal("Delete Permanently",
+                    $"Could not move '{Path.GetFileName(fullPath)}' to the trash ({trashError ?? "unsupported location"}).\n\nDelete it permanently? This cannot be undone.",
+                    "Delete Permanently",
+                    () =>
+                    {
+                        if (PermanentlyDeletePath(fullPath))
+                            FinishDelete(affected, fullPath);
+                    });
+                return false;
+            }
+            if (!done) done = PermanentlyDeletePath(fullPath);
+            if (done) FinishDelete(affected, fullPath);
+            return done;
+        }
+
+        private bool PermanentlyDeletePath(string fullPath)
+        {
             try
             {
-                var open = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase));
-                if (open != null)
-                    CloseTab(open, forceWithoutPrompt: true);
-
-                bool movedToTrash = false;
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                {
-                    try
-                    {
-                        string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                        string trashDir = Path.Combine(userHome, ".Trash");
-                        if (Directory.Exists(trashDir))
-                        {
-                            string dest = Path.Combine(trashDir, Path.GetFileName(fullPath) + "_" + DateTime.Now.Ticks);
-                            if (File.Exists(fullPath)) { File.Move(fullPath, dest); movedToTrash = true; }
-                            else if (Directory.Exists(fullPath)) { Directory.Move(fullPath, dest); movedToTrash = true; }
-                        }
-                    }
-                    catch
-                    {
-                        movedToTrash = false;
-                    }
-                }
-
-                if (!movedToTrash)
-                {
-                    if (File.Exists(fullPath)) File.Delete(fullPath);
-                    else if (Directory.Exists(fullPath)) Directory.Delete(fullPath, true);
-                }
-
-                if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
-                    LoadWorkspace(workspaceRoot, keepCurrentTabs: true);
+                if (File.Exists(fullPath)) File.Delete(fullPath);
+                else if (Directory.Exists(fullPath)) Directory.Delete(fullPath, true);
                 return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                ReportFileOperationError("Delete", $"Unable to delete '{Path.GetFileName(fullPath)}': {ex.Message}");
+                return false;
+            }
+        }
+
+        private void FinishDelete(List<EditorTabBuffer> affectedTabs, string fullPath)
+        {
+            foreach (var t in affectedTabs)
+                CloseTab(t, forceWithoutPrompt: true);
+            RefreshWorkspaceAfterFileOperation(Path.GetDirectoryName(fullPath.TrimEnd('/', '\\')));
+            SetStatusMessage($"Deleted '{Path.GetFileName(fullPath)}'.");
         }
 
         private string GetSelectedExplorerDirectory()
@@ -1280,7 +1420,7 @@ namespace codeLess.AvaloniaApp
                 var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Height = 24 };
                 var openBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"{Path.GetFileName(captured.RelativePath)}   ({captured.IndexStatus})")
+                    Content = new LiteralTextBlock($"{ScmLabel(captured)}   ({captured.IndexStatus})")
                     {
                         FontSize = 11.5,
                         Foreground = new SolidColorBrush(stagedGreen)
@@ -1294,7 +1434,7 @@ namespace codeLess.AvaloniaApp
                 };
                 openBtn.Click += (s, e) => OpenGitFileDiffInEditor(captured.FullPath);
                 var unstageBtn = new Button { Content = "-", FontSize = 11, Padding = new Thickness(6, 1) };
-                unstageBtn.Click += (s, e) => ExecuteGitUnstageFile(captured.RelativePath);
+                unstageBtn.Click += (s, e) => ExecuteGitUnstageFile(captured);
                 row.Children.Add(openBtn);
                 Grid.SetColumn(unstageBtn, 1);
                 row.Children.Add(unstageBtn);
@@ -1307,7 +1447,7 @@ namespace codeLess.AvaloniaApp
                 var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Height = 24 };
                 var openBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"{Path.GetFileName(captured.RelativePath)}   ({captured.DisplayBadge})")
+                    Content = new LiteralTextBlock($"{ScmLabel(captured)}   ({(captured.IndexStatus == '?' ? 'U' : captured.DisplayBadge)})")
                     {
                         FontSize = 11.5,
                         Foreground = new SolidColorBrush(modAmber)
@@ -1321,9 +1461,9 @@ namespace codeLess.AvaloniaApp
                 };
                 openBtn.Click += (s, e) => OpenGitFileDiffInEditor(captured.FullPath);
                 var stageBtn = new Button { Content = "+", FontSize = 11, Padding = new Thickness(6, 1), Margin = new Thickness(2, 0) };
-                stageBtn.Click += (s, e) => ExecuteGitStageFile(captured.RelativePath);
+                stageBtn.Click += (s, e) => ExecuteGitStageFile(captured);
                 var discardBtn = new Button { Content = "↺", FontSize = 11, Padding = new Thickness(6, 1) };
-                discardBtn.Click += (s, e) => ExecuteGitDiscardFile(captured.RelativePath);
+                discardBtn.Click += (s, e) => ConfirmAndDiscardGitFile(captured);
                 row.Children.Add(openBtn);
                 Grid.SetColumn(stageBtn, 1);
                 row.Children.Add(stageBtn);
@@ -1333,38 +1473,187 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        public void ExecuteGitStageFile(string relativePath)
+        private string ScmLabel(GitStatusEntry e)
         {
-            if (string.IsNullOrEmpty(workspaceRoot) || string.IsNullOrEmpty(relativePath)) return;
-            LlmHarnessAndAgentEngine.RunQuickProcess("git", $"add -- \"{relativePath}\"", workspaceRoot, 5000);
+            string name = Path.GetFileName((e.RepoRelativePath ?? e.RelativePath ?? "").TrimEnd('/'));
+            bool multiRepo = currentGitEntries.Select(x => x.RepoRoot).Distinct().Count() > 1;
+            return multiRepo && !string.IsNullOrEmpty(e.RepoRoot) ? $"{name}  ·  {Path.GetFileName(e.RepoRoot)}" : name;
+        }
+
+        /// <summary>Runs git with properly escaped arguments (no shell, no manual quoting).</summary>
+        public static string RunGit(string repoRoot, int timeoutMs, out int exitCode, params string[] args)
+        {
+            exitCode = -1;
+            try
+            {
+                var psi = new ProcessStartInfo("git")
+                {
+                    WorkingDirectory = repoRoot,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true,
+                    CreateNoWindow = true
+                };
+                psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+                foreach (string a in args) psi.ArgumentList.Add(a);
+                using var p = Process.Start(psi);
+                if (p == null) return "git could not be started.";
+                p.StandardInput.Close();
+                var outTask = p.StandardOutput.ReadToEndAsync();
+                var errTask = p.StandardError.ReadToEndAsync();
+                if (!p.WaitForExit(timeoutMs))
+                {
+                    try { p.Kill(entireProcessTree: true); } catch { }
+                    return "git timed out.";
+                }
+                exitCode = p.ExitCode;
+                Task.WaitAll(new Task[] { outTask, errTask }, 2000);
+                string o = outTask.IsCompleted ? outTask.Result : "";
+                string er = errTask.IsCompleted ? errTask.Result : "";
+                return (o + (string.IsNullOrWhiteSpace(er) ? "" : (o.Length > 0 ? "\n" : "") + er)).Trim();
+            }
+            catch (Exception ex)
+            {
+                return "git is not available: " + ex.Message;
+            }
+        }
+
+        private IEnumerable<string> RepoRootsForScm()
+        {
+            var roots = currentGitEntries.Select(e => e.RepoRoot).Where(r => !string.IsNullOrEmpty(r)).Distinct().ToList();
+            if (roots.Count == 0)
+            {
+                string r = LlmHarnessAndAgentEngine.FindGitRepoRoot(workspaceRoot);
+                if (r != null) roots.Add(r);
+            }
+            return roots;
+        }
+
+        private void ReportGitFailure(string op, string output)
+        {
+            AppendOutputLog($"[Git {op}] {output}");
+            SetStatusMessage($"Git {op} failed: {(output ?? "").Split('\n').FirstOrDefault()}");
+            if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
+                ShowMessageModal($"Git {op} failed", output);
+        }
+
+        private bool ResolveEntry(GitStatusEntry e, out string repo, out string rel)
+        {
+            repo = !string.IsNullOrEmpty(e?.RepoRoot) ? e.RepoRoot : LlmHarnessAndAgentEngine.FindGitRepoRoot(workspaceRoot);
+            rel = !string.IsNullOrEmpty(e?.RepoRelativePath) ? e.RepoRelativePath : e?.RelativePath;
+            return !string.IsNullOrEmpty(repo) && !string.IsNullOrEmpty(rel);
+        }
+
+        /// <summary>Workspace-relative overloads (used by tests / automation).</summary>
+        private GitStatusEntry EntryForWorkspaceRelativePath(string relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath) || string.IsNullOrEmpty(workspaceRoot)) return null;
+            string full = Path.GetFullPath(Path.Combine(workspaceRoot, relativePath));
+            var known = currentGitEntries.FirstOrDefault(e => string.Equals(e.FullPath, full, PathKeyComparison));
+            if (known != null) return known;
+            string repo = LlmHarnessAndAgentEngine.FindGitRepoRoot(Path.GetDirectoryName(full));
+            if (repo == null) return null;
+            return new GitStatusEntry
+            {
+                FullPath = full,
+                RelativePath = relativePath,
+                RepoRoot = repo,
+                RepoRelativePath = LlmHarnessAndAgentEngine.GetRelativePath(repo, full),
+                IndexStatus = ' ',
+                WorkingTreeStatus = 'M'
+            };
+        }
+
+        public void ExecuteGitStageFile(string relativePath) => ExecuteGitStageFile(EntryForWorkspaceRelativePath(relativePath));
+        public void ExecuteGitUnstageFile(string relativePath) => ExecuteGitUnstageFile(EntryForWorkspaceRelativePath(relativePath));
+        public void ExecuteGitDiscardFile(string relativePath) => ExecuteGitDiscardFile(EntryForWorkspaceRelativePath(relativePath));
+
+        public void ExecuteGitStageFile(GitStatusEntry entry)
+        {
+            if (!ResolveEntry(entry, out string repo, out string rel)) return;
+            string res = RunGit(repo, 15000, out int code, "add", "-A", "--", rel);
+            if (code != 0) ReportGitFailure("Stage", res);
             RefreshGitStatus();
         }
 
-        public void ExecuteGitUnstageFile(string relativePath)
+        public void ExecuteGitUnstageFile(GitStatusEntry entry)
         {
-            if (string.IsNullOrEmpty(workspaceRoot) || string.IsNullOrEmpty(relativePath)) return;
-            LlmHarnessAndAgentEngine.RunQuickProcess("git", $"reset HEAD -- \"{relativePath}\"", workspaceRoot, 5000);
+            if (!ResolveEntry(entry, out string repo, out string rel)) return;
+            string res = RunGit(repo, 15000, out int code, "restore", "--staged", "--", rel);
+            if (code != 0) res = RunGit(repo, 15000, out code, "reset", "-q", "--", rel); // git < 2.23 / unborn branch
+            if (code != 0) ReportGitFailure("Unstage", res);
             RefreshGitStatus();
         }
 
-        public void ExecuteGitDiscardFile(string relativePath)
+        public void ConfirmAndDiscardGitFile(GitStatusEntry entry)
         {
-            if (string.IsNullOrEmpty(workspaceRoot) || string.IsNullOrEmpty(relativePath)) return;
-            LlmHarnessAndAgentEngine.RunQuickProcess("git", $"checkout -- \"{relativePath}\"", workspaceRoot, 5000);
+            if (entry == null) return;
+            bool untracked = entry.IndexStatus == '?';
+            string name = Path.GetFileName(entry.FullPath.TrimEnd('/', '\\'));
+            string msg = untracked
+                ? $"Are you sure you want to DELETE '{name}'?\n\nThis file is untracked; it will be moved to the trash."
+                : $"Are you sure you want to discard changes in '{name}'?\n\nThis is IRREVERSIBLE: your current working set will be lost.";
+            if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime) { ExecuteGitDiscardFile(entry); return; }
+            ShowConfirmModal("Discard Changes", msg, untracked ? "Delete File" : "Discard File", () => ExecuteGitDiscardFile(entry));
+        }
+
+        public void ExecuteGitDiscardFile(GitStatusEntry entry)
+        {
+            if (!ResolveEntry(entry, out string repo, out string rel)) return;
+            if (entry.IndexStatus == '?')
+            {
+                // "git checkout" cannot discard an untracked file; VS Code deletes it.
+                if (!TryMoveToSystemTrash(entry.FullPath, out _))
+                {
+                    try
+                    {
+                        if (File.Exists(entry.FullPath)) File.Delete(entry.FullPath);
+                        else if (Directory.Exists(entry.FullPath)) Directory.Delete(entry.FullPath, true);
+                    }
+                    catch (Exception ex) { ReportGitFailure("Discard", ex.Message); }
+                }
+            }
+            else if (entry.IndexStatus == 'A')
+            {
+                // Newly added (staged) file: unstage and remove the working copy.
+                RunGit(repo, 15000, out _, "rm", "-f", "--cached", "--", rel);
+                try { if (File.Exists(entry.FullPath)) File.Delete(entry.FullPath); } catch { }
+            }
+            else
+            {
+                string res = RunGit(repo, 15000, out int code, "checkout", "--", rel);
+                if (code != 0) ReportGitFailure("Discard", res);
+            }
+            var tab = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FullPath, PathKeyComparison));
+            if (tab != null)
+            {
+                if (File.Exists(entry.FullPath)) { tab.IsDirty = false; ReloadOpenTabIfChangedOnDisk(entry.FullPath); }
+                else CloseTab(tab, forceWithoutPrompt: true);
+            }
             RefreshGitStatus();
+            RefreshExplorerTree();
         }
 
         public void ExecuteGitStageAll()
         {
             if (string.IsNullOrEmpty(workspaceRoot)) return;
-            LlmHarnessAndAgentEngine.RunQuickProcess("git", "add -A", workspaceRoot, 5000);
+            foreach (string repo in RepoRootsForScm())
+            {
+                string res = RunGit(repo, 30000, out int code, "add", "-A");
+                if (code != 0) ReportGitFailure("Stage All", res);
+            }
             RefreshGitStatus();
         }
 
         public void ExecuteGitUnstageAll()
         {
             if (string.IsNullOrEmpty(workspaceRoot)) return;
-            LlmHarnessAndAgentEngine.RunQuickProcess("git", "reset HEAD", workspaceRoot, 5000);
+            foreach (string repo in RepoRootsForScm())
+            {
+                string res = RunGit(repo, 30000, out int code, "restore", "--staged", ":/");
+                if (code != 0) RunGit(repo, 30000, out code, "reset", "-q");
+            }
             RefreshGitStatus();
         }
 
@@ -1372,16 +1661,58 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrEmpty(workspaceRoot)) return false;
             string msg = overrideMessage ?? (scmCommitInput.Text ?? "").Trim();
-            if (string.IsNullOrEmpty(msg)) return false;
+            if (string.IsNullOrEmpty(msg))
+            {
+                SetStatusMessage("Please enter a commit message.");
+                return false;
+            }
 
-            if (!currentGitEntries.Any(e => e.IsStaged))
-                LlmHarnessAndAgentEngine.RunQuickProcess("git", "add -A", workspaceRoot, 5000);
+            // Commit each repository that has staged changes; if nothing is staged anywhere, stage everything first
+            // (VS Code "smart commit").
+            var entries = currentGitEntries.ToList();
+            bool anyStaged = entries.Any(e => e.IsStaged);
+            var repos = anyStaged
+                ? entries.Where(e => e.IsStaged).Select(e => e.RepoRoot).Distinct().ToList()
+                : entries.Select(e => e.RepoRoot).Distinct().ToList();
+            repos = repos.Where(r => !string.IsNullOrEmpty(r)).ToList();
+            if (repos.Count == 0) repos = RepoRootsForScm().ToList();
+            if (repos.Count == 0)
+            {
+                SetStatusMessage("No git repository found for this workspace.");
+                return false;
+            }
 
-            string safeMsg = msg.Replace("\"", "\\\"");
-            string res = LlmHarnessAndAgentEngine.RunQuickProcess("git", $"commit -m \"{safeMsg}\"", workspaceRoot, 8000);
+            string msgFile = Path.Combine(Path.GetTempPath(), "codeless-commit-" + Guid.NewGuid().ToString("N") + ".txt");
+            File.WriteAllText(msgFile, msg + "\n", new UTF8Encoding(false));
             scmCommitInput.Text = "";
-            RefreshGitStatus();
-            AppendOutputLog("[Git Commit] " + res);
+
+            void work()
+            {
+                var results = new List<(string repo, int code, string output)>();
+                foreach (string repo in repos)
+                {
+                    if (!anyStaged) RunGit(repo, 60000, out _, "add", "-A");
+                    // Generous timeout: pre-commit hooks (lint, tests) can take a while.
+                    string res = RunGit(repo, 180000, out int code, "commit", "-F", msgFile);
+                    results.Add((repo, code, res));
+                }
+                try { File.Delete(msgFile); } catch { }
+                void apply()
+                {
+                    foreach (var r in results)
+                    {
+                        AppendOutputLog($"[Git Commit] {Path.GetFileName(r.repo)}: {r.output}");
+                        if (r.code != 0) ReportGitFailure("Commit", $"{Path.GetFileName(r.repo)}: {r.output}");
+                    }
+                    if (results.All(r => r.code == 0)) SetStatusMessage("Committed.");
+                    RefreshGitStatusInBackground();
+                }
+                if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime) Dispatcher.UIThread.Post(apply);
+                else apply();
+            }
+
+            if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime) _ = Task.Run(work);
+            else work();
             return true;
         }
 
@@ -2061,7 +2392,12 @@ namespace codeLess.AvaloniaApp
             };
         }
 
-        public bool ConfirmSaveOrDiscardDirtyTabs(IEnumerable<EditorTabBuffer> candidates)
+        /// <summary>
+        /// Returns true when the caller may proceed immediately. When an Unsaved Changes modal has to be shown it
+        /// returns false; <paramref name="proceedAfterDecision"/> then runs once the user picks Save or Don't Save,
+        /// so the original action (quit, close tab, open folder) completes instead of silently being dropped.
+        /// </summary>
+        public bool ConfirmSaveOrDiscardDirtyTabs(IEnumerable<EditorTabBuffer> candidates, Action proceedAfterDecision = null)
         {
             var dirty = (candidates ?? Enumerable.Empty<EditorTabBuffer>()).Where(t => t != null && t.IsDirty).ToList();
             if (dirty.Count == 0 || SuppressUnsavedPrompts) return true;
@@ -2097,6 +2433,8 @@ namespace codeLess.AvaloniaApp
                         CloseTab(d, forceWithoutPrompt: true);
                     }
                 }
+                if (decision != UnsavedPromptResult.Cancel && proceedAfterDecision != null)
+                    Dispatcher.UIThread.Post(proceedAfterDecision);
             });
             ModalHost.ShowModal("unsaved-changes", "Unsaved Changes — codeLess", view, 500);
             return false;
@@ -2592,6 +2930,65 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        /// <summary>Test hook: decides agent tool approvals without UI.</summary>
+        public Func<string, string, bool> AgentToolApprovalOverride { get; set; }
+
+        /// <summary>
+        /// Approval gate for agent tools (previously never wired on macOS/Linux, so run_terminal executed any
+        /// LLM-chosen command; repo files like AGENTS.md / .cursorrules are injected into the prompt, so an opened
+        /// repository could steer it). Shell commands always need explicit approval unless the user disabled
+        /// "Require agent tool approval"; file writes/edits are staged as diffs for review, so they pass.
+        /// Called on the agent worker thread; blocks until the user decides.
+        /// </summary>
+        private bool RequestAgentToolApproval(string toolName, string detail)
+        {
+            if (AgentToolApprovalOverride != null) return AgentToolApprovalOverride(toolName, detail);
+            bool isShell = string.Equals(toolName, "run_terminal", StringComparison.OrdinalIgnoreCase);
+            if (!isShell) return true;
+            if (settings != null && !settings.RequireAgentToolApproval) return true;
+            if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime) return false; // never run unattended
+            if (Dispatcher.UIThread.CheckAccess()) return false; // cannot block the UI thread waiting for a click
+
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var stack = new StackPanel { Spacing = 10 };
+                stack.Children.Add(new TextBlock
+                {
+                    Text = "The AI agent wants to run a shell command. Review it carefully before allowing it:",
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = 12.5,
+                    Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary))
+                });
+                stack.Children.Add(new TextBox
+                {
+                    Text = detail ?? "",
+                    IsReadOnly = true,
+                    TextWrapping = TextWrapping.Wrap,
+                    FontFamily = new FontFamily("Menlo, Consolas, DejaVu Sans Mono, monospace"),
+                    MaxHeight = 220
+                });
+                var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8 };
+                var allow = new Button { Content = "Run Command", Padding = new Thickness(14, 5) };
+                var deny = new Button
+                {
+                    Content = "Deny",
+                    Padding = new Thickness(14, 5),
+                    Background = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary)),
+                    Foreground = Brushes.White
+                };
+                allow.Click += (s, e) => { ModalHost.CloseModal(); tcs.TrySetResult(true); };
+                deny.Click += (s, e) => { ModalHost.CloseModal(); tcs.TrySetResult(false); };
+                row.Children.Add(deny);
+                row.Children.Add(allow);
+                stack.Children.Add(row);
+                ModalHost.ShowModal("agent-tool-approval", "Allow Agent Command?", stack, 560);
+                Dispatcher.UIThread.Post(() => deny.Focus(), DispatcherPriority.Loaded); // default = safe choice
+            });
+            // Unanswered for 10 minutes => deny.
+            return tcs.Task.Wait(TimeSpan.FromMinutes(10)) && tcs.Task.Result;
+        }
+
         public async Task<string> SendChatMessageAsync(string prompt)
         {
             if (string.IsNullOrWhiteSpace(prompt)) return "";
@@ -2613,16 +3010,19 @@ namespace codeLess.AvaloniaApp
             if (!string.IsNullOrEmpty(activeTab?.FileName) && !pills.Contains(activeTab.FileName))
                 pills.Add(activeTab.FileName);
 
-            var turnResult = await aiEngine.RunAutonomousAgentLoopAsync(
-                currentAgentMode,
-                prompt,
-                preferredVendor,
-                settings.ActiveHarnessId,
-                activeTab,
-                workspaceRoot,
-                workspaceFiles,
-                pills,
-                activeTerminalSession?.Control?.GetVisibleScreenText() ?? "");
+            // Run the agent loop (LLM calls, tool execution: shell commands, grep, syntax checks) on a worker
+            // thread; previously it ran on the UI thread and froze the window for each tool call.
+            string mode = currentAgentMode;
+            string harnessId = settings.ActiveHarnessId;
+            var tabSnapshot = activeTab;
+            string wsSnapshot = workspaceRoot;
+            var filesSnapshot = workspaceFiles.ToList();
+            string termText = activeTerminalSession?.Control?.GetVisibleScreenText() ?? "";
+            var loopTask = Task.Run(() => aiEngine.RunAutonomousAgentLoopAsync(
+                mode, prompt, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText));
+            var turnResult = AvaloniaTerminalEmulatorControl.IsDesktopRuntime
+                ? await loopTask
+                : loopTask.GetAwaiter().GetResult();
 
             if (turnResult.ToolCalls != null)
             {

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -128,7 +129,8 @@ namespace codeLess.Studio
                     BaseUrl = "https://api.anthropic.com/v1",
                     SelectedModel = "claude-sonnet-4-6",
                     DefaultHarnessId = "claude-xml-surgical",
-                    Models = new[] { "claude-sonnet-4-6", "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest" },
+                    // Retired *-latest 3.x aliases removed: selecting them returned HTTP 404.
+                    Models = new[] { "claude-sonnet-4-6", "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5" },
                     EnvVarName = "ANTHROPIC_API_KEY"
                 },
                 new ByokVendor
@@ -928,6 +930,105 @@ namespace codeLess.Studio
             }
         }
 
+        private static readonly HashSet<string> RepoScanSkipNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".git", "node_modules", "bin", "obj", "dist", "build", "out", "target", ".venv", "venv", "__pycache__",
+            "Pods", "DerivedData", ".next", ".nuxt", ".gradle", ".idea", ".vs", "vendor", "packages", ".cache"
+        };
+
+        /// <summary>Walks up from startPath to the directory containing a .git directory or .git file (worktree/submodule).</summary>
+        public static string FindGitRepoRoot(string startPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(startPath)) return null;
+                string cur = Path.GetFullPath(startPath);
+                if (File.Exists(cur)) cur = Path.GetDirectoryName(cur);
+                for (int i = 0; i < 128 && !string.IsNullOrEmpty(cur); i++)
+                {
+                    string dotGit = Path.Combine(cur, ".git");
+                    if (Directory.Exists(dotGit) || File.Exists(dotGit))
+                        return cur.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    DirectoryInfo parent = Directory.GetParent(cur);
+                    cur = parent != null ? parent.FullName : null;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// VS Code-style repository discovery: the repository containing the folder (possibly an ancestor when a
+        /// sub-folder of a repo is opened) plus nested repositories / submodules below it.
+        /// </summary>
+        public static List<string> DiscoverGitRepositories(string workspaceRoot, int maxDepth = 3, int maxRepos = 24)
+        {
+            List<string> repos = new List<string>();
+            if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot)) return repos;
+            string root = Path.GetFullPath(workspaceRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string outer = FindGitRepoRoot(root);
+            if (outer != null) repos.Add(outer);
+
+            Queue<KeyValuePair<string, int>> queue = new Queue<KeyValuePair<string, int>>();
+            queue.Enqueue(new KeyValuePair<string, int>(root, 0));
+            int visited = 0;
+            while (queue.Count > 0 && repos.Count < maxRepos && visited < 5000)
+            {
+                KeyValuePair<string, int> item = queue.Dequeue();
+                visited++;
+                string[] subs;
+                try { subs = Directory.GetDirectories(item.Key); }
+                catch { continue; }
+                foreach (string sub in subs)
+                {
+                    string name = Path.GetFileName(sub);
+                    if (string.IsNullOrEmpty(name) || RepoScanSkipNames.Contains(name)) continue;
+                    try
+                    {
+                        if ((new DirectoryInfo(sub).Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    }
+                    catch { continue; }
+                    string dotGit = Path.Combine(sub, ".git");
+                    if ((Directory.Exists(dotGit) || File.Exists(dotGit)) && !repos.Contains(sub))
+                    {
+                        repos.Add(sub);
+                        if (repos.Count >= maxRepos) break;
+                    }
+                    if (item.Value + 1 < maxDepth)
+                        queue.Enqueue(new KeyValuePair<string, int>(sub, item.Value + 1));
+                }
+            }
+            return repos;
+        }
+
+        /// <summary>Reads the current branch from HEAD, following a ".git" file ("gitdir: ...") for worktrees/submodules.</summary>
+        public static string ReadGitBranchForRepo(string repoRoot)
+        {
+            try
+            {
+                string dotGit = Path.Combine(repoRoot, ".git");
+                string gitDir = dotGit;
+                if (File.Exists(dotGit))
+                {
+                    string txt = File.ReadAllText(dotGit).Trim();
+                    if (txt.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string target = txt.Substring(7).Trim();
+                        gitDir = Path.IsPathRooted(target) ? target : Path.GetFullPath(Path.Combine(repoRoot, target));
+                    }
+                }
+                string headPath = Path.Combine(gitDir, "HEAD");
+                if (!File.Exists(headPath)) return null;
+                string headRaw = File.ReadAllText(headPath).Trim();
+                const string refPrefix = "ref: refs/heads/";
+                if (headRaw.StartsWith(refPrefix, StringComparison.OrdinalIgnoreCase))
+                    return headRaw.Substring(refPrefix.Length).Trim();
+                if (headRaw.Length >= 7) return headRaw.Substring(0, 7);
+            }
+            catch { }
+            return null;
+        }
+
         public List<GitFileStatus> QueryGitWorkspaceStatus(string workspaceRoot)
         {
             List<GitFileStatus> list = new List<GitFileStatus>();
@@ -939,44 +1040,31 @@ namespace codeLess.Studio
 
             try
             {
-                string headBranch = null;
-                string checkDir = workspaceRoot;
-                while (!string.IsNullOrEmpty(checkDir))
-                {
-                    string headPath = Path.Combine(checkDir, ".git", "HEAD");
-                    if (File.Exists(headPath))
-                    {
-                        string headRaw = File.ReadAllText(headPath).Trim();
-                        const string refPrefix = "ref: refs/heads/";
-                        if (headRaw.StartsWith(refPrefix, StringComparison.OrdinalIgnoreCase))
-                            headBranch = headRaw.Substring(refPrefix.Length).Trim();
-                        else if (headRaw.Length >= 7)
-                            headBranch = headRaw.Substring(0, 7);
-                        break;
-                    }
-                    DirectoryInfo parent = Directory.GetParent(checkDir);
-                    checkDir = parent != null ? parent.FullName : null;
-                }
-
-                if (string.IsNullOrEmpty(headBranch))
+                string ws = Path.GetFullPath(workspaceRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                List<string> repos = DiscoverGitRepositories(ws);
+                if (repos.Count == 0)
                 {
                     ActiveGitBranch = "no-git";
                     return list;
                 }
+                string headBranch = ReadGitBranchForRepo(repos[0]);
+                ActiveGitBranch = string.IsNullOrEmpty(headBranch) ? "no-git" : headBranch;
+                HashSet<string> nested = new HashSet<string>(repos.Skip(1), StringComparer.OrdinalIgnoreCase);
 
-                ActiveGitBranch = headBranch;
-
-                string statusOut = RunProcessCapture("git", "status --porcelain", workspaceRoot, 3500);
-                if (!string.IsNullOrWhiteSpace(statusOut) && !statusOut.Contains("fatal:"))
+                foreach (string repo in repos)
                 {
+                    // -z: NUL separated and never quoted (spaces/unicode/quotes survive); -uall lists files inside
+                    // untracked folders. Paths are always relative to the repository root.
+                    string statusOut = RunProcessCapture("git", "-c core.quotepath=false status --porcelain=v1 -z -uall", repo, 10000);
+                    if (string.IsNullOrEmpty(statusOut) || statusOut.StartsWith("fatal:")) continue;
+
                     Dictionary<string, int[]> numstatMap = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
-                    string numstatOut = RunProcessCapture("git", "diff HEAD --numstat", workspaceRoot, 3500);
+                    string numstatOut = RunProcessCapture("git", "-c core.quotepath=false diff HEAD --numstat", repo, 10000);
                     if (string.IsNullOrWhiteSpace(numstatOut) || numstatOut.Contains("fatal:"))
-                        numstatOut = RunProcessCapture("git", "diff --numstat", workspaceRoot, 3500);
+                        numstatOut = RunProcessCapture("git", "-c core.quotepath=false diff --numstat", repo, 10000);
                     if (!string.IsNullOrWhiteSpace(numstatOut) && !numstatOut.Contains("fatal:"))
                     {
-                        string[] nsLines = numstatOut.Replace("\r\n", "\n").Split('\n');
-                        foreach (string ns in nsLines)
+                        foreach (string ns in numstatOut.Replace("\r\n", "\n").Split('\n'))
                         {
                             string[] parts = ns.Split('\t');
                             if (parts.Length >= 3)
@@ -984,52 +1072,48 @@ namespace codeLess.Studio
                                 int addCnt = 0, delCnt = 0;
                                 int.TryParse(parts[0].Trim(), out addCnt);
                                 int.TryParse(parts[1].Trim(), out delCnt);
-                                string nsRel = parts[2].Trim().Trim('"').Replace('\\', '/');
-                                numstatMap[nsRel] = new int[] { addCnt, delCnt };
+                                numstatMap[parts[2].Trim().Trim('"').Replace('\\', '/')] = new int[] { addCnt, delCnt };
                             }
                         }
                     }
 
-                    string[] lines = statusOut.Replace("\r\n", "\n").Split('\n');
-                    foreach (string raw in lines)
+                    string[] records = statusOut.Split('\0');
+                    for (int i = 0; i < records.Length; i++)
                     {
-                        if (raw.Length < 3) continue;
-                        string xy;
-                        string rel;
-                        if (raw.Length >= 4 && raw[2] == ' ')
-                        {
-                            xy = raw.Substring(0, 2);
-                            rel = raw.Substring(3).Trim().Trim('"');
-                        }
-                        else if (raw[1] == ' ')
-                        {
-                            xy = " " + raw[0];
-                            rel = raw.Substring(2).Trim().Trim('"');
-                        }
-                        else
-                        {
-                            if (raw.Length < 4) continue;
-                            xy = raw.Substring(0, 2);
-                            rel = raw.Substring(3).Trim().Trim('"');
-                        }
-                        string normRel = rel.Replace('\\', '/');
-                        string full = Path.Combine(workspaceRoot, rel.Replace('/', Path.DirectorySeparatorChar));
-                        int addLines = 0, delLines = 0;
+                        string rec = records[i];
+                        if (rec.Length < 4) continue;
+                        char x = rec[0];
+                        char y = rec[1];
+                        string rel = rec.Substring(3);
+                        if (x == 'R' || x == 'C' || y == 'R' || y == 'C') i++; // next record is the rename source
+                        string full;
+                        try { full = Path.GetFullPath(Path.Combine(repo, rel.Replace('/', Path.DirectorySeparatorChar))); }
+                        catch { continue; }
+                        string trimmedFull = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        // Only show changes inside the opened folder (it may be a sub-folder of the repository).
+                        if (!string.Equals(trimmedFull, ws, StringComparison.OrdinalIgnoreCase) &&
+                            !trimmedFull.StartsWith(ws + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        // The outer repo reports a nested repo as one untracked folder; its own status covers it.
+                        if (x == '?' && !string.Equals(repo, trimmedFull, StringComparison.OrdinalIgnoreCase) && nested.Contains(trimmedFull))
+                            continue;
+                        string repoRel = rel.TrimEnd('/');
                         int[] counts;
-                        if (numstatMap.TryGetValue(normRel, out counts))
-                        {
-                            addLines = counts[0];
-                            delLines = counts[1];
-                        }
+                        int addLines = 0, delLines = 0;
+                        if (numstatMap.TryGetValue(repoRel, out counts)) { addLines = counts[0]; delLines = counts[1]; }
+                        string xy = new string(new char[] { x, y });
                         list.Add(new GitFileStatus
                         {
-                            FilePath = full,
-                            RelativePath = rel,
+                            FilePath = trimmedFull,
+                            RelativePath = GetRelativePath(ws, trimmedFull),
+                            RepoRoot = repo,
+                            RepoRelativePath = repoRel,
                             StatusCode = xy.Trim(),
-                            IsStaged = xy[0] != ' ' && xy[0] != '?',
+                            IsStaged = x != ' ' && x != '?',
                             AddedLines = addLines,
                             RemovedLines = delLines
                         });
+                        if (list.Count >= 5000) return list;
                     }
                 }
             }
@@ -1043,9 +1127,11 @@ namespace codeLess.Studio
                 return null;
             try
             {
+                // Resolve the repository from the file itself (not the workspace) so files inside nested repos /
+                // submodules diff against their own HEAD rather than the outer repository's.
                 string repoRoot = null;
-                string cur = Path.GetFullPath(workspaceRoot);
-                for (int depth = 0; depth < 8 && !string.IsNullOrEmpty(cur); depth++)
+                string cur = Path.GetDirectoryName(Path.GetFullPath(filePath));
+                for (int depth = 0; depth < 128 && !string.IsNullOrEmpty(cur); depth++)
                 {
                     string dotGit = Path.Combine(cur, ".git");
                     if (Directory.Exists(dotGit) || File.Exists(dotGit))
@@ -1159,6 +1245,99 @@ namespace codeLess.Studio
             return RunProcessCaptureWithExitCode(fileName, args, workingDir, timeoutMs, out dummyExit, out dummyTimeout);
         }
 
+        public static bool IsReasoningModelWithoutTemperature(string model)
+        {
+            string m = (model ?? "").Trim().ToLowerInvariant();
+            int slash = m.LastIndexOf('/');
+            if (slash >= 0) m = m.Substring(slash + 1); // OpenRouter style "openai/o3-mini"
+            return m.StartsWith("o1") || m.StartsWith("o3") || m.StartsWith("o4") || m.StartsWith("gpt-5");
+        }
+
+        private static string ExtractProviderErrorMessage(Dictionary<string, object> evt)
+        {
+            try
+            {
+                object err;
+                if (evt.TryGetValue("error", out err))
+                {
+                    Dictionary<string, object> ed = err as Dictionary<string, object>;
+                    if (ed != null && ed.ContainsKey("message")) return Convert.ToString(ed["message"]);
+                    if (err != null) return Convert.ToString(err);
+                }
+                if (evt.ContainsKey("message")) return Convert.ToString(evt["message"]);
+            }
+            catch { }
+            return "unknown provider error";
+        }
+
+        /// <summary>Timeout for agent run_terminal commands (builds / tests routinely exceed the old 12 s).</summary>
+        public static int AgentTerminalTimeoutMs = 120000;
+
+        /// <summary>
+        /// Quotes one argument for ProcessStartInfo.Arguments. .NET parses Arguments with CommandLineToArgvW rules
+        /// on every OS, so this is correct for Windows and Unix child processes alike.
+        /// </summary>
+        public static string QuoteProcessArgument(string arg)
+        {
+            if (arg == null) arg = "";
+            if (arg.Length > 0 && arg.IndexOfAny(new char[] { ' ', '\t', '"', '\n', '\r' }) < 0) return arg;
+            StringBuilder sb = new StringBuilder("\"");
+            int backslashes = 0;
+            foreach (char c in arg)
+            {
+                if (c == '\\') { backslashes++; continue; }
+                if (c == '"') { sb.Append('\\', backslashes * 2 + 1); sb.Append('"'); }
+                else { sb.Append('\\', backslashes); sb.Append(c); }
+                backslashes = 0;
+            }
+            sb.Append('\\', backslashes * 2);
+            sb.Append('"');
+            return sb.ToString();
+        }
+
+        /// <summary>Kills a process and all of its descendants (grandchildren such as node / pytest included).</summary>
+        public static void KillProcessTreeCrossPlatform(Process p, int pid)
+        {
+            try
+            {
+                if (ConPtyNative.IsWindowsPlatform())
+                {
+                    if (pid > 0) ConPtyNative.KillProcessTreeById(pid);
+                }
+                else
+                {
+#if NET5_0_OR_GREATER
+                    try { p.Kill(true); } catch { }
+#else
+                    KillUnixTreeViaPgrep(pid, 0);
+#endif
+                }
+            }
+            catch { }
+            try { if (!p.HasExited) p.Kill(); } catch { }
+        }
+
+        private static void KillUnixTreeViaPgrep(int pid, int depth)
+        {
+            if (pid <= 1 || depth > 16) return;
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo("pgrep", "-P " + pid) { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true };
+                using (Process pg = Process.Start(psi))
+                {
+                    string outp = pg.StandardOutput.ReadToEnd();
+                    pg.WaitForExit(2000);
+                    foreach (string line in outp.Split('\n'))
+                    {
+                        int child;
+                        if (int.TryParse(line.Trim(), out child)) KillUnixTreeViaPgrep(child, depth + 1);
+                    }
+                }
+            }
+            catch { }
+            try { UnixPtyNative.kill(pid, UnixPtyNative.SIGKILL); } catch { }
+        }
+
         public static string RunProcessCaptureWithExitCode(string fileName, string args, string workingDir, int timeoutMs, out int exitCode, out bool timedOut)
         {
             exitCode = -1;
@@ -1178,40 +1357,37 @@ namespace codeLess.Studio
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-                using (Process p = Process.Start(psi))
+                // Incremental capture: with ReadToEndAsync a surviving grandchild (or "cmd &") that keeps the
+                // pipe open meant the read never completed and all output was lost on timeout.
+                StringBuilder stdoutSb = new StringBuilder();
+                StringBuilder stderrSb = new StringBuilder();
+                object sync = new object();
+                using (Process p = new Process())
                 {
+                    p.StartInfo = psi;
+                    p.OutputDataReceived += (s, e) => { if (e.Data != null) lock (sync) { if (stdoutSb.Length < 400000) stdoutSb.AppendLine(e.Data); } };
+                    p.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (sync) { if (stderrSb.Length < 200000) stderrSb.AppendLine(e.Data); } };
+                    p.Start();
                     int pid = 0;
                     try { pid = p.Id; } catch { }
                     try { p.StandardInput.Close(); } catch { }
-                    Task<string> outTask = p.StandardOutput.ReadToEndAsync();
-                    Task<string> errTask = p.StandardError.ReadToEndAsync();
+                    p.BeginOutputReadLine();
+                    p.BeginErrorReadLine();
                     bool exited = p.WaitForExit(timeoutMs);
                     if (!exited)
                     {
                         timedOut = true;
-                        try
-                        {
-                            if (ConPtyNative.IsWindowsPlatform())
-                            {
-                                if (pid > 0) ConPtyNative.KillProcessTreeById(pid);
-                            }
-                            else if (pid > 0)
-                            {
-                                try { UnixPtyNative.kill(-pid, UnixPtyNative.SIGKILL); } catch { }
-                                try { UnixPtyNative.kill(pid, UnixPtyNative.SIGKILL); } catch { }
-                            }
-                        }
-                        catch { }
-                        try { p.Kill(); } catch { }
+                        KillProcessTreeCrossPlatform(p, pid);
+                        try { p.WaitForExit(1500); } catch { }
                     }
                     else
                     {
+                        try { p.WaitForExit(); } catch { } // flush async readers
                         try { exitCode = p.ExitCode; } catch { exitCode = 0; }
                     }
-                    Task.WaitAll(new Task[] { outTask, errTask }, 1000);
-                    string stdout = outTask.IsCompleted ? outTask.Result : "";
-                    string stderr = errTask.IsCompleted ? errTask.Result : "";
-                    string combined = (stdout + (string.IsNullOrEmpty(stderr) ? "" : "\n" + stderr)).Trim();
+                    string stdout, stderr;
+                    lock (sync) { stdout = stdoutSb.ToString(); stderr = stderrSb.ToString(); }
+                    string combined = (stdout.TrimEnd() + (string.IsNullOrEmpty(stderr) ? "" : "\n" + stderr.TrimEnd())).Trim();
                     combined = StripAnsiCodes(combined);
                     if (!exited)
                     {
@@ -1938,10 +2114,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     var reqObj = new Dictionary<string, object>
                     {
                         { "model", vendor.SelectedModel },
-                        { "temperature", temperature },
                         { "messages", fullMsgs },
                         { "stream", EnableSseStreaming }
                     };
+                    // OpenAI reasoning models (o1/o3/o4, gpt-5) reject a non-default temperature with HTTP 400.
+                    if (!IsReasoningModelWithoutTemperature(vendor.SelectedModel))
+                        reqObj["temperature"] = temperature;
                     payload = ser.Serialize(reqObj);
                 }
 
@@ -1960,6 +2138,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         StringBuilder rawBuilder = new StringBuilder();
                         StringBuilder streamedText = new StringBuilder();
                         bool sawSseDataLine = false;
+                        string streamErrorMessage = null;
 
                         string line;
                         while ((line = sr.ReadLine()) != null)
@@ -1976,7 +2155,13 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                 try
                                 {
                                     var evt = ser.Deserialize<Dictionary<string, object>>(dataPart);
-                                    if (evt != null)
+                                    if (evt != null && (evt.ContainsKey("error") || (evt.ContainsKey("type") && Convert.ToString(evt["type"]) == "error")))
+                                    {
+                                        // Mid-stream provider errors (Anthropic "overloaded_error", OpenAI errors) used to be
+                                        // ignored and the raw SSE transcript was shown as the assistant's reply.
+                                        streamErrorMessage = ExtractProviderErrorMessage(evt);
+                                    }
+                                    else if (evt != null)
                                     {
                                         string deltaChunk = null;
                                         if (evt.ContainsKey("choices") && evt["choices"] is ArrayList)
@@ -2025,6 +2210,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                         if (sawSseDataLine && streamedText.Length > 0)
                             return streamedText.ToString();
+                        if (!string.IsNullOrEmpty(streamErrorMessage))
+                            return "Error: " + vendor.Name + " returned an error: " + streamErrorMessage;
+                        if (sawSseDataLine)
+                            return "Error: " + vendor.Name + " returned an empty streamed response.";
 
                         string rawJson = rawBuilder.ToString().Trim();
                         var root = ser.Deserialize<Dictionary<string, object>>(rawJson);
@@ -2801,12 +2990,14 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         }
                         else if (ConPtyNative.IsWindowsPlatform())
                         {
-                            output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command \"" + cmd.Replace("\"", "\\\"") + "\"", workspaceRoot, 12000, out exitCode, out timedOut);
+                            output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command " + QuoteProcessArgument(cmd), workspaceRoot, AgentTerminalTimeoutMs, out exitCode, out timedOut);
                         }
                         else
                         {
+                            // Proper argv quoting: the old "-c \"...\"" with naive escaping mangled commands containing
+                            // backslash-quote sequences (sed/curl JSON) or a trailing backslash.
                             string sh = ConPtyTerminalSession.GetUserUnixShell();
-                            output = RunProcessCaptureWithExitCode(sh, "-c \"" + cmd.Replace("\"", "\\\"") + "\"", workspaceRoot, 12000, out exitCode, out timedOut);
+                            output = RunProcessCaptureWithExitCode(sh, "-c " + QuoteProcessArgument(cmd), workspaceRoot, AgentTerminalTimeoutMs, out exitCode, out timedOut);
                         }
                     }
                     finally
@@ -3030,11 +3221,80 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             }
         }
 
+        [DllImport("libc", EntryPoint = "realpath", SetLastError = true)]
+        private static extern IntPtr realpath_native(byte[] path, IntPtr resolved);
+
+        [DllImport("libc", EntryPoint = "free")]
+        private static extern void free_native(IntPtr ptr);
+
+        /// <summary>Resolves symlinks of the deepest existing ancestor (Unix realpath); the non-existent tail is appended.</summary>
+        private static string ResolveRealPathUnix(string path)
+        {
+            string full = Path.GetFullPath(path);
+            string cur = full;
+            List<string> tail = new List<string>();
+            while (!string.IsNullOrEmpty(cur) && !File.Exists(cur) && !Directory.Exists(cur))
+            {
+                tail.Insert(0, Path.GetFileName(cur));
+                cur = Path.GetDirectoryName(cur);
+            }
+            if (string.IsNullOrEmpty(cur)) return full;
+            IntPtr res = realpath_native(Encoding.UTF8.GetBytes(cur + "\0"), IntPtr.Zero);
+            if (res == IntPtr.Zero) return full;
+            try
+            {
+                int len = 0;
+                while (Marshal.ReadByte(res, len) != 0) len++;
+                byte[] bytes = new byte[len];
+                Marshal.Copy(res, bytes, 0, len);
+                string resolved = Encoding.UTF8.GetString(bytes);
+                foreach (string t in tail) resolved = Path.Combine(resolved, t);
+                return resolved;
+            }
+            finally { free_native(res); }
+        }
+
+        /// <summary>
+        /// Sandbox check for agent file tools. Unlike the textual IsPathInsideWorkspace it (a) denies everything
+        /// when no folder is open, (b) resolves symlinks (Unix) / rejects reparse points (Windows junctions,
+        /// symlinks) so a link inside the workspace cannot expose ~/.ssh, and (c) is case-sensitive on Linux.
+        /// </summary>
+        public static bool IsPathInsideWorkspaceStrict(string workspaceRoot, string fullPath)
+        {
+            if (string.IsNullOrEmpty(workspaceRoot) || string.IsNullOrEmpty(fullPath)) return false;
+            try
+            {
+                bool linux = !ConPtyNative.IsWindowsPlatform() && !ConPtyNative.IsMacPlatform();
+                StringComparison cmp = linux ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                string root = Path.GetFullPath(workspaceRoot).TrimEnd('\\', '/');
+                string full = Path.GetFullPath(fullPath).TrimEnd('\\', '/');
+                if (!(string.Equals(full, root, cmp) || full.StartsWith(root + Path.DirectorySeparatorChar, cmp))) return false;
+                if (ConPtyNative.IsWindowsPlatform())
+                {
+                    string cur = full;
+                    while (!string.IsNullOrEmpty(cur) && cur.Length > root.Length)
+                    {
+                        if ((File.Exists(cur) || Directory.Exists(cur)) && (File.GetAttributes(cur) & FileAttributes.ReparsePoint) != 0)
+                            return false;
+                        cur = Path.GetDirectoryName(cur);
+                    }
+                    return true;
+                }
+                string realRoot = ResolveRealPathUnix(root).TrimEnd('/');
+                string realFull = ResolveRealPathUnix(full).TrimEnd('/');
+                return string.Equals(realFull, realRoot, cmp) || realFull.StartsWith(realRoot + "/", cmp);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static AgentToolCallResult RejectIfOutsideWorkspace(string toolName, string workspaceRoot, string fullPath, string relPath, EditorTabBuffer activeTab)
         {
             if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath) && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
                 return null;
-            if (IsPathInsideWorkspace(workspaceRoot, fullPath))
+            if (IsPathInsideWorkspaceStrict(workspaceRoot, fullPath))
                 return null;
             return new AgentToolCallResult
             {

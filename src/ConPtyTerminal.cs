@@ -397,6 +397,23 @@ namespace codeLess.Studio
         [DllImport("libc", SetLastError = true)]
         public static extern int kill(int pid, int sig);
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct pollfd
+        {
+            public int fd;
+            public short events;
+            public short revents;
+        }
+
+        public const short POLLIN = 0x0001;
+
+        // nfds_t is 32-bit on Darwin and 64-bit on glibc; a pointer-sized argument is ABI-correct for both.
+        [DllImport("libc", SetLastError = true)]
+        public static extern int poll([In, Out] pollfd[] fds, UIntPtr nfds, int timeout);
+
+        [DllImport("libc", SetLastError = true)]
+        public static extern int tcgetpgrp(int fd);
+
         [DllImport("libc", SetLastError = true)]
         public static extern int waitpid(int pid, out int status, int options);
 
@@ -505,6 +522,34 @@ namespace codeLess.Studio
 
         [DllImport("libc", SetLastError = true)]
         public static extern int posix_spawn(out int pid, IntPtr path, IntPtr file_actions, IntPtr attrp, IntPtr argv, IntPtr envp);
+
+        // Signal reset for spawned shells: the .NET runtime ignores SIGPIPE and may block signals on the spawning
+        // thread; ignored dispositions and the signal mask survive exec, so the shell must get pristine defaults.
+        public const short POSIX_SPAWN_SETSIGDEF = 0x04;
+        public const short POSIX_SPAWN_SETSIGMASK = 0x08;
+
+        [DllImport("libc", SetLastError = true)]
+        public static extern int sigemptyset(IntPtr set);
+
+        [DllImport("libc", SetLastError = true)]
+        public static extern int sigfillset(IntPtr set);
+
+        [DllImport("libc", SetLastError = true)]
+        public static extern int sigdelset(IntPtr set, int signo);
+
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawnattr_setsigmask(IntPtr attr, IntPtr sigmask);
+
+        [DllImport("libc", SetLastError = true)]
+        public static extern int posix_spawnattr_setsigdefault(IntPtr attr, IntPtr sigdefault);
+
+        /// <summary>
+        /// POSIX single-quote escaping for embedding a literal path into a /bin/sh -c script.
+        /// </summary>
+        public static string ShellSingleQuote(string value)
+        {
+            return "'" + (value ?? "").Replace("'", "'\\''") + "'";
+        }
     }
 
     // =========================================================================
@@ -538,6 +583,20 @@ namespace codeLess.Studio
 
     public class Vt100TerminalBuffer
     {
+        /// <summary>
+        /// Normalises clipboard text for a PTY like xterm.js / Windows Terminal: CRLF and LF become CR (a raw LF
+        /// is an extra keystroke that double-executes lines in cmd/PSReadLine), and in bracketed-paste mode the
+        /// text is wrapped in ESC[200~ ... ESC[201~ with embedded ESC characters stripped, so pasted content cannot
+        /// terminate the bracket early and inject commands.
+        /// </summary>
+        public static string PreparePasteText(string text, bool bracketedPasteMode)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            string norm = text.Replace("\r\n", "\r").Replace("\n", "\r");
+            if (!bracketedPasteMode) return norm;
+            return "\x1b[200~" + norm.Replace("\x1b", "") + "\x1b[201~";
+        }
+
         private readonly object syncLock = new object();
         private TermCell[,] primaryGrid;
         private TermCell[,] altGrid;
@@ -873,6 +932,12 @@ namespace codeLess.Studio
             {
                 if (newCols == Cols && newRows == Rows) return;
 
+                if (newCols < Cols && !IsAlternateScreen)
+                {
+                    ResizeShrinkWidthRewrapInternal(newCols, newRows);
+                    return;
+                }
+
                 TermCell[,] newPrimary = CreateGrid(newCols, newRows);
                 TermCell[,] newAlt = CreateGrid(newCols, newRows);
 
@@ -927,6 +992,80 @@ namespace codeLess.Studio
             }
         }
 
+        /// <summary>
+        /// Narrowing the terminal used to cut every visible row at the new width, permanently destroying output
+        /// (VS Code / xterm.js reflow instead). Rows longer than the new width are re-wrapped onto following rows,
+        /// overflow at the top moves into scrollback, and the cursor follows its cell so the shell's SIGWINCH
+        /// redraw lands on the right line. Scrollback rows keep their full length (rendering clips them), so
+        /// widening again shows them intact.
+        /// </summary>
+        private void ResizeShrinkWidthRewrapInternal(int newCols, int newRows)
+        {
+            int lastOccupiedRow = CursorRow;
+            for (int r = Rows - 1; r > lastOccupiedRow; r--)
+            {
+                if (!IsGridRowBlank(primaryGrid, Cols, r)) { lastOccupiedRow = r; break; }
+            }
+
+            var rows = new List<TermCell[]>();
+            int cursorRowOut = 0, cursorColOut = 0;
+            for (int r = 0; r <= lastOccupiedRow && r < Rows; r++)
+            {
+                TermCell[] line = CopyTrimmedScrollbackRow(primaryGrid, r, Cols);
+                int len = line.Length;
+                if (r == CursorRow) len = Math.Max(len, Math.Min(Cols, CursorCol));
+                int start = 0;
+                bool cursorPlaced = false;
+                do
+                {
+                    int take = Math.Min(newCols, len - start);
+                    // never split a wide glyph (first cell followed by its '\0' continuation cell)
+                    if (take == newCols && start + take < line.Length && take > 1 &&
+                        line[start + take].Char == '\0' && line[start + take - 1].Char != '\0' && line[start + take - 1].Char != ' ')
+                        take--;
+                    if (take < 0) take = 0;
+                    var chunk = new TermCell[take];
+                    for (int c = 0; c < take && start + c < line.Length; c++) chunk[c] = line[start + c];
+                    if (r == CursorRow && !cursorPlaced && (CursorCol < start + Math.Max(take, 1) || start + take >= len))
+                    {
+                        cursorRowOut = rows.Count;
+                        cursorColOut = Math.Min(newCols - 1, Math.Max(0, CursorCol - start));
+                        cursorPlaced = true;
+                    }
+                    rows.Add(chunk);
+                    start += Math.Max(take, 1);
+                } while (start < len);
+            }
+
+            int shift = Math.Max(0, rows.Count - newRows);
+            shift = Math.Min(shift, cursorRowOut); // keep the cursor row on screen
+            for (int i = 0; i < shift; i++)
+            {
+                scrollback.Add(rows[i]);
+                if (scrollback.Count > MaxScrollbackLines) scrollback.RemoveAt(0);
+            }
+
+            TermCell[,] newPrimary = CreateGrid(newCols, newRows);
+            for (int r = 0; r < newRows && r + shift < rows.Count; r++)
+            {
+                TermCell[] src = rows[r + shift];
+                for (int c = 0; c < src.Length && c < newCols; c++) newPrimary[r, c] = src[c];
+            }
+            TermCell[,] newAlt = CreateGrid(newCols, newRows);
+            for (int r = 0; r < newRows && r < Rows; r++)
+                for (int c = 0; c < newCols; c++) newAlt[r, c] = altGrid[r, c];
+
+            primaryGrid = newPrimary;
+            altGrid = newAlt;
+            Cols = newCols;
+            Rows = newRows;
+            ScrollTop = 0;
+            ScrollBottom = Rows - 1;
+            CursorRow = Math.Max(0, Math.Min(Rows - 1, cursorRowOut - shift));
+            CursorCol = Math.Max(0, Math.Min(Cols - 1, cursorColOut));
+            pendingWrap = false;
+        }
+
         public void ProcessBytes(byte[] bytes, int count)
         {
             if (bytes == null || count <= 0) return;
@@ -944,8 +1083,8 @@ namespace codeLess.Studio
                         ProcessCharInternal(charDecodeBuf[i]);
                     if (bytesUsed == 0) break;
                 }
-                if (state == ParseState.Normal)
-                    SnapCursorToIdlePromptIfDriftedInternal();
+                // No cursor "snapping" here: the shell owns cursor placement. Moving the cursor based on a
+                // prompt-shaped previous line made a lone "\r\n" chunk jump back and overwrite output.
             }
         }
 
@@ -956,8 +1095,6 @@ namespace codeLess.Studio
             {
                 for (int i = 0; i < text.Length; i++)
                     ProcessCharInternal(text[i]);
-                if (state == ParseState.Normal)
-                    SnapCursorToIdlePromptIfDriftedInternal();
             }
         }
 
@@ -1237,7 +1374,7 @@ namespace codeLess.Studio
                    c == '﻿';
         }
 
-        internal static bool IsWideBmp(char c)
+        public static bool IsWideBmp(char c)
         {
             if (c < 'ᄀ') return false;
             return (c <= 'ᅟ') ||
@@ -2516,10 +2653,37 @@ namespace codeLess.Studio
                     ? workingDir
                     : GetDefaultHomeDirectory();
 
-                unmanagedShell = UnixPtyNative.AllocUtf8HGlobal(shellExe);
                 unmanagedWorkDir = UnixPtyNative.AllocUtf8HGlobal(effectiveWorkDir);
 
-                unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal(Path.GetFileName(shellExe)));
+                // Open the PTY master first: the slave path is needed to build the launcher script below.
+                int masterFd = -1;
+                string slavePath;
+                if (!UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out slavePath) || masterFd < 0 || string.IsNullOrEmpty(slavePath))
+                {
+                    if (masterFd >= 0) { try { UnixPtyNative.close(masterFd); } catch { } }
+                    return false;
+                }
+
+                // The shell must own the PTY as its *controlling terminal*, otherwise Ctrl+C/Ctrl+Z never reach the
+                // foreground job, job control is disabled, SIGWINCH is not delivered to TUI apps on resize, and
+                // programs that open /dev/tty (sudo, ssh, git credential prompts) fail. XNU applies posix_spawn file
+                // actions before POSIX_SPAWN_SETSID, so a slave opened via file actions never becomes the controlling
+                // tty on macOS. Instead /bin/sh (already a session leader) opens the slave itself and execs the shell.
+                bool useCttyLauncher = File.Exists("/bin/sh");
+                string spawnExe = useCttyLauncher ? "/bin/sh" : shellExe;
+                unmanagedShell = UnixPtyNative.AllocUtf8HGlobal(spawnExe);
+                if (useCttyLauncher)
+                {
+                    unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal("sh"));
+                    unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal("-c"));
+                    string q = UnixPtyNative.ShellSingleQuote(slavePath);
+                    unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal("exec \"$0\" \"$@\" 0<>" + q + " 1>&0 2>&0"));
+                    unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal(shellExe));
+                }
+                else
+                {
+                    unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal(Path.GetFileName(shellExe)));
+                }
                 foreach (string a in shellArgs)
                     unmanagedArgStrs.Add(UnixPtyNative.AllocUtf8HGlobal(a));
 
@@ -2557,21 +2721,21 @@ namespace codeLess.Studio
                 Marshal.WriteIntPtr(unmanagedEnvp, unmanagedEnvStrs.Count * IntPtr.Size, IntPtr.Zero);
 
                 UnixPtyNative.winsize ws = new UnixPtyNative.winsize((ushort)Math.Max((short)6, rows), (ushort)Math.Max((short)20, cols));
-                int masterFd = -1;
                 int pid = -1;
                 bool spawned = false;
 
-                string slavePath;
-                if (UnixPtyNative.OpenPosixPtyMaster(cols, rows, out masterFd, out slavePath) && masterFd >= 0 && !string.IsNullOrEmpty(slavePath))
                 {
                     // 512-byte zeroed buffers safely hold both Darwin pointer-backed and glibc struct-backed spawn descriptors
                     IntPtr spawnAttr = Marshal.AllocHGlobal(512);
                     IntPtr spawnActions = Marshal.AllocHGlobal(512);
+                    IntPtr sigSet = Marshal.AllocHGlobal(256); // >= sizeof(sigset_t) on glibc (128) and Darwin (4)
                     for (int z = 0; z < 512; z++)
                     {
                         Marshal.WriteByte(spawnAttr, z, 0);
                         Marshal.WriteByte(spawnActions, z, 0);
                     }
+                    for (int z = 0; z < 256; z++)
+                        Marshal.WriteByte(sigSet, z, 0);
                     bool attrInited = false;
                     bool actionsInited = false;
                     try
@@ -2583,12 +2747,33 @@ namespace codeLess.Studio
                             short flags = ConPtyNative.IsMacPlatform()
                                 ? (short)(UnixPtyNative.POSIX_SPAWN_SETSID_DARWIN | UnixPtyNative.POSIX_SPAWN_CLOEXEC_DEFAULT_DARWIN)
                                 : UnixPtyNative.POSIX_SPAWN_SETSID_LINUX;
+                            try
+                            {
+                                if (UnixPtyNative.sigemptyset(sigSet) == 0 && UnixPtyNative.posix_spawnattr_setsigmask(spawnAttr, sigSet) == 0)
+                                    flags |= UnixPtyNative.POSIX_SPAWN_SETSIGMASK;
+                                if (UnixPtyNative.sigfillset(sigSet) == 0)
+                                {
+                                    UnixPtyNative.sigdelset(sigSet, 9);                                  // SIGKILL
+                                    UnixPtyNative.sigdelset(sigSet, ConPtyNative.IsMacPlatform() ? 17 : 19); // SIGSTOP
+                                    if (UnixPtyNative.posix_spawnattr_setsigdefault(spawnAttr, sigSet) == 0)
+                                        flags |= UnixPtyNative.POSIX_SPAWN_SETSIGDEF;
+                                }
+                            }
+                            catch { }
                             UnixPtyNative.posix_spawnattr_setflags(spawnAttr, flags);
                         }
                         if (UnixPtyNative.posix_spawn_file_actions_init(spawnActions) == 0)
                         {
                             actionsInited = true;
-                            UnixPtyNative.posix_spawn_file_actions_addopen(spawnActions, 0, unmanagedSlavePath, UnixPtyNative.O_RDWR, 0);
+                            // With the ctty launcher, stdio starts on /dev/null and /bin/sh re-opens the slave after setsid().
+                            if (useCttyLauncher)
+                            {
+                                IntPtr devNull = UnixPtyNative.AllocUtf8HGlobal("/dev/null");
+                                try { UnixPtyNative.posix_spawn_file_actions_addopen(spawnActions, 0, devNull, UnixPtyNative.O_RDWR, 0); }
+                                finally { Marshal.FreeHGlobal(devNull); }
+                            }
+                            else
+                                UnixPtyNative.posix_spawn_file_actions_addopen(spawnActions, 0, unmanagedSlavePath, UnixPtyNative.O_RDWR, 0);
                             UnixPtyNative.posix_spawn_file_actions_adddup2(spawnActions, 0, 1);
                             UnixPtyNative.posix_spawn_file_actions_adddup2(spawnActions, 0, 2);
                             try { UnixPtyNative.posix_spawn_file_actions_addchdir_np(spawnActions, unmanagedWorkDir); } catch { }
@@ -2616,6 +2801,7 @@ namespace codeLess.Studio
                         if (attrInited) { try { UnixPtyNative.posix_spawnattr_destroy(spawnAttr); } catch { } }
                         Marshal.FreeHGlobal(spawnActions);
                         Marshal.FreeHGlobal(spawnAttr);
+                        Marshal.FreeHGlobal(sigSet);
                     }
                 }
 
@@ -2663,10 +2849,26 @@ namespace codeLess.Studio
         {
             byte[] buf = new byte[8192];
             int lastSnapshotTick = 0;
+            var pfd = new UnixPtyNative.pollfd[1];
             try
             {
                 while (!isDisposed && gen == sessionGeneration && masterFd >= 0)
                 {
+                    // Never block indefinitely in read(): on macOS close() of a tty fd that another thread is blocked
+                    // reading can itself block, which previously froze the UI thread when the window was closed.
+                    pfd[0].fd = masterFd;
+                    pfd[0].events = UnixPtyNative.POLLIN;
+                    pfd[0].revents = 0;
+                    int pr = UnixPtyNative.poll(pfd, (UIntPtr)1, 150);
+                    if (pr < 0)
+                    {
+                        int perr = Marshal.GetLastWin32Error();
+                        if (perr == 4 || perr == 35 || perr == 11) continue;
+                        break;
+                    }
+                    if (pr == 0) continue;
+                    if (isDisposed || gen != sessionGeneration) break;
+
                     IntPtr n = UnixPtyNative.read(masterFd, buf, (IntPtr)buf.Length);
                     long rawCount = n.ToInt64();
                     if (rawCount < 0)
@@ -2699,6 +2901,16 @@ namespace codeLess.Studio
             }
             catch
             {
+            }
+            finally
+            {
+                // The reader owns the master fd. Detach it from the session under the write lock so no writer can
+                // touch a closed (and possibly reused) descriptor, then close it.
+                lock (unixWriteLock)
+                {
+                    if (unixMasterFd == masterFd) unixMasterFd = -1;
+                }
+                try { UnixPtyNative.close(masterFd); } catch { }
             }
         }
 
@@ -3277,7 +3489,7 @@ namespace codeLess.Studio
 
             conPtyWriteStream = null;
             conPtyReadStream = null;
-            unixMasterFd = -1;
+            unixMasterFd = -1; // no lock: a writer blocked in write() on a full pty must not stall teardown
             ProcessId = 0;
             hProcess = IntPtr.Zero;
             hThread = IntPtr.Zero;
@@ -3292,9 +3504,18 @@ namespace codeLess.Studio
             {
                 if (!ConPtyNative.IsWindowsPlatform())
                 {
+                    // Hang up the terminal's foreground job (vim, a dev server, ...) which, with job control, runs in
+                    // its own process group, then the shell's group, then hard-kill the shell. The master fd itself is
+                    // closed by the (polling) reader thread once it observes the generation change; it is never
+                    // closed here, because closing a tty fd with a blocked reader can hang on macOS.
                     if (oldUnixFd >= 0)
                     {
-                        try { UnixPtyNative.close(oldUnixFd); } catch { }
+                        try
+                        {
+                            int fg = UnixPtyNative.tcgetpgrp(oldUnixFd);
+                            if (fg > 1 && fg != oldPid) UnixPtyNative.kill(-fg, UnixPtyNative.SIGHUP);
+                        }
+                        catch { }
                     }
                     if (oldPid > 0 && !wasExited)
                     {
@@ -4157,12 +4378,26 @@ namespace codeLess.Studio
             {
                 session.WriteInput("\r");
             }
+            else if (char.IsHighSurrogate(e.KeyChar))
+            {
+                // Emoji / astral characters arrive as two WM_CHARs; encoding a lone surrogate yields U+FFFD.
+                pendingHighSurrogate = e.KeyChar;
+            }
+            else if (char.IsLowSurrogate(e.KeyChar))
+            {
+                if (pendingHighSurrogate != '\0')
+                    session.WriteInput(new string(new char[] { pendingHighSurrogate, e.KeyChar }));
+                pendingHighSurrogate = '\0';
+            }
             else
             {
+                pendingHighSurrogate = '\0';
                 session.WriteInput(e.KeyChar.ToString());
             }
             e.Handled = true;
         }
+
+        private char pendingHighSurrogate = '\0';
 
         public static string EncodeSpecialKeyToVt(Keys key, bool ctrl, bool shift, bool alt, bool appCursor)
         {
@@ -4247,10 +4482,7 @@ namespace codeLess.Studio
                     if (!string.IsNullOrEmpty(txt))
                     {
                         scrollbackOffset = 0;
-                        if (session.Buffer != null && session.Buffer.BracketedPasteMode)
-                            session.WriteInput("\x1b[200~" + txt + "\x1b[201~");
-                        else
-                            session.WriteInput(txt);
+                        session.WriteInput(Vt100TerminalBuffer.PreparePasteText(txt, session.Buffer != null && session.Buffer.BracketedPasteMode));
                     }
                 }
             }

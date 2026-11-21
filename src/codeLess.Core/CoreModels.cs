@@ -900,8 +900,11 @@ namespace codeLess.Studio
 
             byte[] preamble = hasBom ? enc.GetPreamble() : new byte[0];
             byte[] body = enc.GetBytes(exactTextWithEol ?? "");
-            using (FileStream fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+            // OpenOrCreate + SetLength(0) instead of FileMode.Create: CREATE_ALWAYS fails with "access denied" on
+            // Hidden/System files on Windows, and this keeps the file's identity, permissions (exec bit) and xattrs.
+            using (FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read))
             {
+                fs.SetLength(0);
                 if (preamble != null && preamble.Length > 0)
                     fs.Write(preamble, 0, preamble.Length);
                 if (body != null && body.Length > 0)
@@ -942,6 +945,23 @@ namespace codeLess.Studio
 
         // Undo / Redo & Diffs & Diagnostics
         public Stack<BufferSnapshot> UndoStack = new Stack<BufferSnapshot>();
+
+        /// <summary>Undo keeps full-content snapshots; bound history by count and memory (was unbounded).</summary>
+        public const int MaxUndoSnapshots = 400;
+        public const long MaxUndoBytes = 160L * 1024 * 1024;
+
+        private void TrimUndoHistory()
+        {
+            long approxBytes = (long)UndoStack.Count * Math.Max(1, (Content ?? "").Length) * 2;
+            if (UndoStack.Count <= MaxUndoSnapshots + 40 && approxBytes <= MaxUndoBytes) return;
+            int keep = MaxUndoSnapshots;
+            long perSnapshot = Math.Max(1L, (long)(Content ?? "").Length * 2);
+            if (perSnapshot * keep > MaxUndoBytes) keep = (int)Math.Max(20L, MaxUndoBytes / perSnapshot);
+            BufferSnapshot[] newestFirst = UndoStack.ToArray();
+            Stack<BufferSnapshot> trimmed = new Stack<BufferSnapshot>();
+            for (int i = Math.Min(keep, newestFirst.Length) - 1; i >= 0; i--) trimmed.Push(newestFirst[i]);
+            UndoStack = trimmed;
+        }
         public Stack<BufferSnapshot> RedoStack = new Stack<BufferSnapshot>();
         public long LastTypingUndoTick = 0;
         public int LastTypingUndoLine = -1;
@@ -1254,6 +1274,7 @@ namespace codeLess.Studio
                     CursorCol = CursorCol
                 });
                 RedoStack.Clear();
+                TrimUndoHistory();
             }
             if (coalesceTyping)
             {
@@ -1419,6 +1440,10 @@ namespace codeLess.Studio
         public string FilePath;
         public string RelativePath;
         public string StatusCode; // "M", "A", "??", "D"
+        /// <summary>Top-level directory of the repository owning this entry (outer or nested repo).</summary>
+        public string RepoRoot;
+        /// <summary>Path relative to RepoRoot with '/' separators; pass this to git commands run in RepoRoot.</summary>
+        public string RepoRelativePath;
         public bool IsStaged;
         public int AddedLines;
         public int RemovedLines;
@@ -1574,7 +1599,18 @@ namespace codeLess.Studio
                     }
                 }
             }
-            catch { }
+            catch
+            {
+                // Unreadable / corrupt settings: keep a copy before falling back to defaults. Previously the next
+                // Save() silently overwrote the file and permanently wiped API keys and recent workspaces.
+                try
+                {
+                    string path = GetSettingsFilePath();
+                    if (File.Exists(path))
+                        File.Copy(path, path + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".bak", true);
+                }
+                catch { }
+            }
             return new IdePersistentSettings();
         }
 
@@ -1599,7 +1635,34 @@ namespace codeLess.Studio
                 string path = GetSettingsFilePath();
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 string json = ser.Serialize(this);
-                File.WriteAllText(path, json, Encoding.UTF8);
+                // Atomic write (temp file + replace) so a crash or full disk mid-write cannot truncate settings.
+                string tmp = path + ".tmp";
+                File.WriteAllText(tmp, json, new UTF8Encoding(false));
+                RestrictToOwner(tmp);
+                if (File.Exists(path))
+                {
+                    try { File.Replace(tmp, path, null); }
+                    catch { File.Copy(tmp, path, true); File.Delete(tmp); }
+                }
+                else
+                {
+                    File.Move(tmp, path);
+                }
+                RestrictToOwner(path);
+            }
+            catch { }
+        }
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "chmod", SetLastError = true)]
+        private static extern int chmod_native(byte[] path, int mode);
+
+        /// <summary>settings.json holds API keys: make it owner read/write only (0600) on macOS / Linux.</summary>
+        private static void RestrictToOwner(string path)
+        {
+            try
+            {
+                if (Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX) return;
+                chmod_native(Encoding.UTF8.GetBytes(path + "\0"), 384); // 0600
             }
             catch { }
         }

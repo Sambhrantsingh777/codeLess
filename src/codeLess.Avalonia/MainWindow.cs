@@ -243,6 +243,7 @@ namespace codeLess.AvaloniaApp
                 settings.ThemeId = "codeless-obsidian";
             currentTheme = StudioTheme.GetById(settings.ThemeId);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
+            aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
             BuildNativeMacMenu();
@@ -262,8 +263,11 @@ namespace codeLess.AvaloniaApp
                 {
                     startPath = validRecent;
                 }
-                else if (!IsUnsafeDefaultStartupDirectory(Environment.CurrentDirectory))
+                else if (!IsUnsafeDefaultStartupDirectory(Environment.CurrentDirectory) &&
+                         !IsHomeOrSystemTempDirectory(Environment.CurrentDirectory))
                 {
+                    // Dock / Finder / .desktop launches start in $HOME: never silently index + watch the whole
+                    // home folder (12k files, an inotify watch per directory); show the Welcome screen instead.
                     startPath = Environment.CurrentDirectory;
                 }
             }
@@ -290,6 +294,21 @@ namespace codeLess.AvaloniaApp
             EnsureInitialTerminalSession();
             UpdateWindowTitle();
             UpdateStatusBar();
+        }
+
+        private static bool IsHomeOrSystemTempDirectory(string dir)
+        {
+            try
+            {
+                string norm = Path.GetFullPath(dir).TrimEnd('\\', '/');
+                string home = (Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) ?? "").TrimEnd('\\', '/');
+                if (!string.IsNullOrEmpty(home) && string.Equals(norm, home, StringComparison.Ordinal)) return true;
+                foreach (string d in new[] { "/home", "/root", "/tmp", "/var/tmp", "/private/tmp" })
+                    if (string.Equals(norm, d, StringComparison.Ordinal)) return true;
+                string tmp = Path.GetTempPath().TrimEnd('\\', '/');
+                return string.Equals(norm, tmp, StringComparison.Ordinal);
+            }
+            catch { return false; }
         }
 
         private static bool IsUnsafeDefaultStartupDirectory(string dir)
@@ -322,8 +341,26 @@ namespace codeLess.AvaloniaApp
             return false;
         }
 
+        private bool closeConfirmed;
+
+        protected override void OnClosing(WindowClosingEventArgs e)
+        {
+            // VS Code parity: quitting (Cmd+Q / red close button / Alt+F4) with modified files asks to save first.
+            if (!closeConfirmed && !SuppressUnsavedPrompts && openTabs.Any(t => t.IsDirty))
+            {
+                if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, () => { closeConfirmed = true; Close(); }))
+                {
+                    e.Cancel = true; // modal shown (or cancelled); the continuation closes after Save / Don't Save
+                    return;
+                }
+                closeConfirmed = true;
+            }
+            base.OnClosing(e);
+        }
+
         protected override void OnClosed(EventArgs e)
         {
+            StopWorkspaceWatcher();
             try { workspaceLoadCts?.Cancel(); } catch { }
             if (debouncedUiSyncTimer != null)
                 debouncedUiSyncTimer.Stop();
@@ -627,9 +664,10 @@ namespace codeLess.AvaloniaApp
                     Mi("Undo", "Ctrl+Z", () => { if (activeTab != null) { activeTab.PerformUndo(); PrimaryEditor.Canvas.InvalidateVisual(); } }),
                     Mi("Redo", "Ctrl+Y", () => { if (activeTab != null) { activeTab.PerformRedo(); PrimaryEditor.Canvas.InvalidateVisual(); } }),
                     new Separator(),
-                    Mi("Cut", "Ctrl+X", () => PrimaryEditor.Canvas.Focus()),
-                    Mi("Copy", "Ctrl+C", () => PrimaryEditor.Canvas.Focus()),
-                    Mi("Paste", "Ctrl+V", () => PrimaryEditor.Canvas.Focus()),
+                    // These used to only focus the editor (no-op). This menu is the only menu bar on Linux.
+                    Mi("Cut", "Ctrl+X", () => { PrimaryEditor.Canvas.Focus(); SimulateShortcut(Key.X, MacKeymap.PrimaryModifier); }),
+                    Mi("Copy", "Ctrl+C", () => { PrimaryEditor.Canvas.Focus(); SimulateShortcut(Key.C, MacKeymap.PrimaryModifier); }),
+                    Mi("Paste", "Ctrl+V", () => { PrimaryEditor.Canvas.Focus(); SimulateShortcut(Key.V, MacKeymap.PrimaryModifier); }),
                     new Separator(),
                     Mi("Find", "Ctrl+F", () => PrimaryEditor.ShowFindBar(false)),
                     Mi("Replace", "Ctrl+H", () => PrimaryEditor.ShowFindBar(true)),
@@ -830,8 +868,8 @@ namespace codeLess.AvaloniaApp
 
                 var editSub = new NativeMenu
                 {
-                    Nmi("Undo", () => activeTab?.PerformUndo(), Key.Z, meta),
-                    Nmi("Redo", () => activeTab?.PerformRedo(), Key.Z, meta | KeyModifiers.Shift),
+                    Nmi("Undo", () => RouteNativeEditCommand("undo"), Key.Z, meta),
+                    Nmi("Redo", () => RouteNativeEditCommand("redo"), Key.Z, meta | KeyModifiers.Shift),
                     new NativeMenuItemSeparator(),
                     Nmi("Find", () => PrimaryEditor.ShowFindBar(false), Key.F, meta),
                     Nmi("Replace", () => PrimaryEditor.ShowFindBar(true), Key.F, meta | KeyModifiers.Alt),
@@ -841,7 +879,7 @@ namespace codeLess.AvaloniaApp
 
                 var selSub = new NativeMenu
                 {
-                    Nmi("Select All", () => activeTab?.SelectAll(), Key.A, meta),
+                    Nmi("Select All", () => RouteNativeEditCommand("selectall"), Key.A, meta),
                     Nmi("Add Next Occurrence", () => PrimaryEditor.Canvas.AddNextOccurrenceOrSelectWord(), Key.D, meta),
                     Nmi("Select All Occurrences", () => PrimaryEditor.Canvas.SelectAllFindOccurrences(), Key.L, meta | KeyModifiers.Shift),
                     Nmi("Add Cursor Above", () => PrimaryEditor.Canvas.AddCursorVertical(-1), Key.Up, meta | KeyModifiers.Alt),
@@ -1071,7 +1109,7 @@ namespace codeLess.AvaloniaApp
 
             sidebarHeaderActions.Children.Add(MakeHeaderAction("new-file", "New File...", PromptCreateNewFileInWorkspace));
             sidebarHeaderActions.Children.Add(MakeHeaderAction("new-folder", "New Folder...", PromptCreateNewFolderInWorkspace));
-            sidebarHeaderActions.Children.Add(MakeHeaderAction("refresh", "Refresh Explorer", () => { if (!string.IsNullOrEmpty(workspaceRoot)) LoadWorkspace(workspaceRoot, keepCurrentTabs: true); }));
+            sidebarHeaderActions.Children.Add(MakeHeaderAction("refresh", "Refresh Explorer", () => { if (!string.IsNullOrEmpty(workspaceRoot)) RefreshWorkspaceAfterFileOperation(); }));
             sidebarHeaderActions.Children.Add(MakeHeaderAction("collapse-all", "Collapse Folders in Explorer", () => ExplorerTree?.CollapseAllFolders()));
 
             headerGrid.Children.Add(sidebarHeaderTitle);
@@ -2394,8 +2432,7 @@ namespace codeLess.AvaloniaApp
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 ".git", "node_modules", "bin", "obj", "dist", "build", "out",
-                ".venv", "__pycache__", ".next", "target", "packages", ".vs", "Output",
-                "bench", "scratch"
+                ".venv", "__pycache__", ".next", "target", "packages", ".vs"
             };
             if (settings != null)
             {
@@ -2410,10 +2447,6 @@ namespace codeLess.AvaloniaApp
                     }
                     set.Add(".vs");
                     set.Add(".git");
-                    set.Add("Output");
-                    set.Add("bench");
-                    set.Add("scratch");
-                    set.Add("dist");
                 }
             }
 
@@ -2444,7 +2477,7 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrWhiteSpace(rootDir) || !Directory.Exists(rootDir)) return;
 
-            if (!keepCurrentTabs && !ConfirmSaveOrDiscardDirtyTabs(openTabs))
+            if (!keepCurrentTabs && !ConfirmSaveOrDiscardDirtyTabs(openTabs, () => LoadWorkspace(rootDir, keepCurrentTabs)))
                 return;
 
             try { workspaceLoadCts?.Cancel(); } catch { }
@@ -2476,7 +2509,9 @@ namespace codeLess.AvaloniaApp
             excluded.Add(".turbo");
             excluded.Add(".cache");
 
-            var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenFiles = new HashSet<string>(PathKeyComparer);
+            RefreshExplorerDimmedNames();
+            var explorerHidden = GetExplorerHiddenSet();
             var rootNode = new ExplorerTreeNode(folderName)
             {
                 Tag = workspaceRoot,
@@ -2484,7 +2519,7 @@ namespace codeLess.AvaloniaApp
                 StateImageIndex = 1,
                 IsExpanded = true
             };
-            PopulateSingleDirectoryLevel(workspaceRoot, rootNode, excluded, addFilesToIndex: true, seenSet: seenFiles);
+            PopulateSingleDirectoryLevel(workspaceRoot, rootNode, explorerHidden, addFilesToIndex: true, seenSet: seenFiles);
             ExplorerTree.Nodes.Add(rootNode);
 
             foreach (string extraDir in additionalWorkspaceFolders)
@@ -2498,12 +2533,13 @@ namespace codeLess.AvaloniaApp
                         StateImageIndex = 1,
                         IsExpanded = true
                     };
-                    PopulateSingleDirectoryLevel(extraDir, extraNode, GetExcludedFolderSet(extraDir), addFilesToIndex: true, seenSet: seenFiles);
+                    PopulateSingleDirectoryLevel(extraDir, extraNode, explorerHidden, addFilesToIndex: true, seenSet: seenFiles);
                     ExplorerTree.Nodes.Add(extraNode);
                 }
             }
 
             ExplorerTree.RebuildTreeLayout(preserveScroll: false);
+            StartWorkspaceWatcher(workspaceRoot);
             PrimaryEditor.SetWorkspaceContext(workspaceRoot, settings.RecentWorkspaces);
             SplitEditor.SetWorkspaceContext(workspaceRoot, settings.RecentWorkspaces);
 
@@ -2614,12 +2650,12 @@ namespace codeLess.AvaloniaApp
             if (folderNode.Nodes.Count == 1 && folderNode.Nodes[0].Tag == "__LAZY_DIR__")
             {
                 folderNode.Nodes.Clear();
-                var excluded = GetExcludedFolderSet(workspaceRoot);
-                PopulateSingleDirectoryLevel(folderNode.Tag, folderNode, excluded, addFilesToIndex: false, seenSet: null);
+                PopulateSingleDirectoryLevel(folderNode.Tag, folderNode, GetExplorerHiddenSet(), addFilesToIndex: false, seenSet: null);
             }
         }
 
-        private void PopulateSingleDirectoryLevel(string dirPath, ExplorerTreeNode parentNode, HashSet<string> excludedFolders, bool addFilesToIndex, HashSet<string> seenSet = null)
+        /// <param name="hiddenNames">Names hidden from the tree (VS Code files.exclude); see GetExplorerHiddenSet.</param>
+        private void PopulateSingleDirectoryLevel(string dirPath, ExplorerTreeNode parentNode, HashSet<string> hiddenNames, bool addFilesToIndex, HashSet<string> seenSet = null)
         {
             try
             {
@@ -2628,7 +2664,7 @@ namespace codeLess.AvaloniaApp
                 {
                     string name = Path.GetFileName(d);
                     if (string.IsNullOrEmpty(name)) continue;
-                    if (excludedFolders != null && excludedFolders.Contains(name)) continue;
+                    if (hiddenNames != null && hiddenNames.Contains(name)) continue;
                     subDirs.Add(d);
                 }
                 subDirs.Sort((a, b) => string.Compare(Path.GetFileName(a), Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
@@ -2642,6 +2678,7 @@ namespace codeLess.AvaloniaApp
                         IsDirectory = true,
                         StateImageIndex = 1,
                         IsExpanded = false,
+                        IsDimmed = parentNode.IsDimmed || IsExplorerDimmedName(name),
                         Parent = parentNode
                     };
                     dirNode.Nodes.Add(new ExplorerTreeNode("") { Tag = "__LAZY_DIR__", StateImageIndex = 2, Parent = dirNode });
@@ -2652,22 +2689,25 @@ namespace codeLess.AvaloniaApp
                 foreach (string f in Directory.EnumerateFiles(dirPath))
                 {
                     string name = Path.GetFileName(f);
-                    if (string.IsNullOrEmpty(name) || name.StartsWith("unins000.", StringComparison.OrdinalIgnoreCase)) continue;
-                    string ext = Path.GetExtension(name);
-                    if (!string.IsNullOrEmpty(ext) && DefaultIgnoredBinaryExtensions.Contains(ext)) continue;
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (hiddenNames != null && hiddenNames.Contains(name)) continue;
                     files.Add(f);
                 }
                 files.Sort((a, b) => string.Compare(Path.GetFileName(a), Path.GetFileName(b), StringComparison.OrdinalIgnoreCase));
 
                 foreach (string file in files)
                 {
-                    if (addFilesToIndex && (seenSet != null ? seenSet.Add(file) : !workspaceFiles.Contains(file, StringComparer.OrdinalIgnoreCase)))
+                    string ext = Path.GetExtension(file);
+                    bool indexable = string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext);
+                    if (addFilesToIndex && indexable && (seenSet != null ? seenSet.Add(file) : !workspaceFiles.Contains(file, PathKeyComparer)))
                         workspaceFiles.Add(file);
-                    parentNode.Nodes.Add(new ExplorerTreeNode(Path.GetFileName(file))
+                    string fname = Path.GetFileName(file);
+                    parentNode.Nodes.Add(new ExplorerTreeNode(fname)
                     {
                         Tag = file,
                         IsDirectory = false,
                         StateImageIndex = 2,
+                        IsDimmed = parentNode.IsDimmed || IsExplorerDimmedName(fname),
                         Parent = parentNode
                     });
                 }
@@ -2680,7 +2720,15 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrWhiteSpace(filePath)) return null;
             string fullPath = Path.GetFullPath(filePath);
 
-            var existing = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase));
+            var existing = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fullPath, PathKeyComparison));
+            if (existing == null && File.Exists(fullPath) && IsLikelyBinaryFile(fullPath))
+            {
+                // The text editor would corrupt binary content on save; hand images, PDFs, archives... to the OS.
+                if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
+                    OpenWithSystemDefaultApp(fullPath);
+                SetStatusMessage($"'{Path.GetFileName(fullPath)}' is a binary file; opened with the system default application.");
+                return null;
+            }
             if (existing != null)
             {
                 if (!preview && existing.IsPreviewTab)
@@ -2834,7 +2882,7 @@ namespace codeLess.AvaloniaApp
             if (tab == null) return true;
             if (!forceWithoutPrompt && tab.IsDirty)
             {
-                if (!ConfirmSaveOrDiscardDirtyTabs(new[] { tab }))
+                if (!ConfirmSaveOrDiscardDirtyTabs(new[] { tab }, () => { if (openTabs.Contains(tab)) CloseTab(tab, forceWithoutPrompt: true); }))
                     return false;
             }
 

@@ -5938,6 +5938,10 @@ namespace codeLess.Studio
             if (e.Shift && e.Alt && e.KeyCode == Keys.Left) { e.SuppressKeyPress = true; ShrinkSelection(); return; }
             if (e.Control && e.Alt && e.KeyCode == Keys.Up) { e.SuppressKeyPress = true; PushCursorHistorySnapshot(buf); AddCursorVertical(-1); return; }
             if (e.Control && e.Alt && e.KeyCode == Keys.Down) { e.SuppressKeyPress = true; PushCursorHistorySnapshot(buf); AddCursorVertical(1); return; }
+            // AltGr is reported as Ctrl+Alt on Windows. On Polish, German, Czech... layouts AltGr+letter/digit/OEM
+            // types a character (ś, ą, @, €, {, }); it must reach WM_CHAR instead of firing Ctrl shortcuts
+            // (Save, Select All, Copy, Cut, Undo).
+            if (e.Control && e.Alt && IsAltGrCharacterKey(e.KeyCode)) return;
             if (e.Control && e.Shift && e.KeyCode == Keys.L) { e.SuppressKeyPress = true; SelectAllOccurrencesOfWord(); return; }
             if (e.Control && e.KeyCode == Keys.F2) { e.SuppressKeyPress = true; SelectAllOccurrencesOfWord(); return; }
             if (e.Shift && e.Alt && e.KeyCode == Keys.A) { e.SuppressKeyPress = true; ToggleBlockCommentOnSelection(); return; }
@@ -6494,32 +6498,15 @@ namespace codeLess.Studio
         {
             if (string.IsNullOrEmpty(text)) return;
             fallbackClipboardText = text;
-            for (int attempt = 0; attempt < 15; attempt++)
-            {
-                if (OpenClipboard(IntPtr.Zero))
-                {
-                    try
-                    {
-                        EmptyClipboard();
-                        IntPtr hGlobal = System.Runtime.InteropServices.Marshal.StringToHGlobalUni(text);
-                        if (SetClipboardData(CF_UNICODETEXT, hGlobal) == IntPtr.Zero)
-                        {
-                            System.Runtime.InteropServices.Marshal.FreeHGlobal(hGlobal);
-                        }
-                        return;
-                    }
-                    finally
-                    {
-                        CloseClipboard();
-                    }
-                }
-                System.Threading.Thread.Sleep(15);
-            }
+            // Clipboard.SetDataObject owns OLE ownership + retry; the previous raw OpenClipboard(NULL) path could
+            // EmptyClipboard() and then fail SetClipboardData (NULL owner, non-movable memory), leaving it empty.
             try
             {
-                Clipboard.SetDataObject(text, false, 5, 15);
+                Clipboard.SetDataObject(text, true, 10, 50);
+                return;
             }
             catch { }
+            try { Clipboard.SetText(text, TextDataFormat.UnicodeText); } catch { }
         }
 
         private static string SafeGetClipboardText()
@@ -6529,15 +6516,17 @@ namespace codeLess.Studio
                 if (Clipboard.ContainsText())
                 {
                     string t = Clipboard.GetText();
-                    if (!string.IsNullOrEmpty(t))
-                    {
-                        fallbackClipboardText = t;
-                        return t;
-                    }
+                    if (t != null) fallbackClipboardText = t;
+                    return t ?? "";
                 }
+                // Clipboard holds an image / files: never paste stale text copied earlier.
+                return "";
             }
-            catch { }
-            return fallbackClipboardText ?? "";
+            catch
+            {
+                // Clipboard temporarily locked by another process: fall back to our own last copy.
+                return fallbackClipboardText ?? "";
+            }
         }
 
         private void PerformCopy()
@@ -6930,6 +6919,15 @@ namespace codeLess.Studio
             {
                 CopyLines(false);
             }
+        }
+
+        private static bool IsAltGrCharacterKey(Keys k)
+        {
+            return (k >= Keys.A && k <= Keys.Z) || (k >= Keys.D0 && k <= Keys.D9) ||
+                   (k >= Keys.Oem1 && k <= Keys.Oem102) || k == Keys.OemSemicolon || k == Keys.Oemplus ||
+                   k == Keys.Oemcomma || k == Keys.OemMinus || k == Keys.OemPeriod || k == Keys.OemQuestion ||
+                   k == Keys.Oemtilde || k == Keys.OemOpenBrackets || k == Keys.OemPipe || k == Keys.OemCloseBrackets ||
+                   k == Keys.OemQuotes || k == Keys.OemBackslash;
         }
 
         public void AddCursorVertical(int deltaLine)

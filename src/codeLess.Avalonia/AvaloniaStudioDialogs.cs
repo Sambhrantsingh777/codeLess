@@ -418,13 +418,50 @@ namespace codeLess.AvaloniaApp
             titleBlock.Foreground = AvaloniaColorHelper.ToBrush(theme.TextPrimary);
         }
 
+        private IInputElement focusBeforeModal;
+
         public void ShowModal(string dialogId, string title, Control content, double width = 620)
         {
+            var top = TopLevel.GetTopLevel(this);
+            if (!IsVisible) focusBeforeModal = top?.FocusManager?.GetFocusedElement();
             ActiveDialogId = dialogId ?? "";
             titleBlock.Text = title ?? "codeLess";
             cardBorder.Width = width;
             bodyHost.Content = content;
             IsVisible = true;
+            // Move keyboard focus into the dialog; otherwise keystrokes / Enter kept editing the file behind the
+            // overlay (e.g. while the Unsaved Changes prompt was open). Callers may focus a specific control later.
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsVisible || !ReferenceEquals(bodyHost.Content, content)) return;
+                var focused = top?.FocusManager?.GetFocusedElement() as Visual;
+                if (focused != null && IsVisualDescendant(focused, cardBorder)) return;
+                var first = FindFirstFocusable(content);
+                if (first != null) first.Focus();
+                else cardBorder.Focus();
+            }, Avalonia.Threading.DispatcherPriority.Loaded);
+        }
+
+        private static bool IsVisualDescendant(Visual v, Visual ancestor)
+        {
+            while (v != null)
+            {
+                if (ReferenceEquals(v, ancestor)) return true;
+                v = Avalonia.VisualTree.VisualExtensions.GetVisualParent(v);
+            }
+            return false;
+        }
+
+        private static InputElement FindFirstFocusable(Visual root)
+        {
+            if (root is TextBox tb && tb.IsEffectivelyEnabled && !tb.IsReadOnly) return tb;
+            foreach (var child in Avalonia.VisualTree.VisualExtensions.GetVisualChildren(root))
+            {
+                var f = FindFirstFocusable(child);
+                if (f != null) return f;
+            }
+            if (root is Button b && b.IsEffectivelyEnabled) return b;
+            return null;
         }
 
         public void CloseModal()
@@ -433,6 +470,9 @@ namespace codeLess.AvaloniaApp
             IsVisible = false;
             ActiveDialogId = "";
             bodyHost.Content = null;
+            var restore = focusBeforeModal;
+            focusBeforeModal = null;
+            try { restore?.Focus(); } catch { }
             Closed?.Invoke();
         }
     }
