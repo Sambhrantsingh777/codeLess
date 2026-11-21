@@ -46,7 +46,8 @@ namespace codeLess.Studio
                 return result;
             }
             string reason;
-            if (!NetworkLedger.Check(LedgerFeature, req.Method, url, out reason))
+            NetworkRequestScope scope;
+            if (!NetworkLedger.TryBegin(LedgerFeature, req.Method, url, out scope, out reason))
             {
                 result.Blocked = true;
                 result.Error = reason;
@@ -92,6 +93,7 @@ namespace codeLess.Studio
                     using (HttpResponseMessage resp = await client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false))
                     {
                         result.StatusCode = (int)resp.StatusCode;
+                        scope.Status = result.StatusCode;
                         result.ReasonPhrase = resp.ReasonPhrase ?? "";
                         result.HttpVersion = "HTTP/" + resp.Version.ToString();
                         foreach (KeyValuePair<string, IEnumerable<string>> kv in resp.Headers)
@@ -110,6 +112,7 @@ namespace codeLess.Studio
                                 while ((n = await s.ReadAsync(buf, 0, buf.Length, linked.Token).ConfigureAwait(false)) > 0)
                                 {
                                     total += n;
+                                    scope.AddReceived(n);
                                     if (ms.Length < MaxDisplayBodyBytes) ms.Write(buf, 0, (int)Math.Min(n, MaxDisplayBodyBytes - ms.Length));
                                 }
                                 result.BodyBytes = total;
@@ -139,8 +142,15 @@ namespace codeLess.Studio
             }
             sw.Stop();
             result.ElapsedMs = sw.ElapsedMilliseconds;
-            NetworkLedger.Record(LedgerFeature, req.Method, url, sent, result.BodyBytes, result.StatusCode, result.Error ?? "");
+            scope.AddSent(sent);
+            scope.Complete(result.StatusCode, result.Cancelled ? "Cancelled" : (result.HasResponse ? "" : ShortNote(result.Error)));
             return result;
+        }
+
+        private static string ShortNote(string error)
+        {
+            if (string.IsNullOrEmpty(error)) return "";
+            return error.Length > 80 ? error.Substring(0, 80) : error;
         }
 
         private static string DescribeException(Exception ex)

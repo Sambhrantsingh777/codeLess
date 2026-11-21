@@ -159,6 +159,8 @@ namespace codeLess.AvaloniaApp
         public bool IsLoading => loading;
         public string StatusText => statusText.Text ?? "";
 
+        private readonly UiPost ui = UiPost.CaptureCurrent();
+
         public GitGraphView(string repoRoot, string repoRelativeFile)
         {
             RepoRoot = repoRoot;
@@ -238,7 +240,7 @@ namespace codeLess.AvaloniaApp
                 var page = GitHistoryService.LoadPage(RepoRoot, skip, GitHistoryService.PageSize, filter, FilePathFilter, all, remotes, out err);
                 var rows = new List<GitGraphRow>();
                 lock (lay) foreach (var c in page) rows.Add(lay.AddCommit(c.Hash, c.Parents));
-                Dispatcher.UIThread.Post(() =>
+                ui.Post(() =>
                 {
                     if (gen != generation) return;
                     loading = false;
@@ -302,7 +304,7 @@ namespace codeLess.AvaloniaApp
                 string err;
                 var files = GitHistoryService.GetChangedFiles(RepoRoot, captured, out err);
                 string msg = GitHistoryService.GetFullMessage(RepoRoot, captured.Hash);
-                Dispatcher.UIThread.Post(() =>
+                ui.Post(() =>
                 {
                     if (!ReferenceEquals(selectedCommit, captured)) return;
                     int nl = msg.IndexOf('\n');

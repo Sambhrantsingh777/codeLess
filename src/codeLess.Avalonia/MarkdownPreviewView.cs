@@ -362,32 +362,33 @@ namespace codeLess.AvaloniaApp
                 lock (remoteImageCache) remoteImageCache.TryGetValue(img.Url, out cached);
                 if (cached != null) return MakeImage(cached, img);
                 string reason;
-                if (!NetworkLedger.Check(NetworkFeature, "GET", img.Url, out reason))
+                NetworkRequestScope scope;
+                if (!NetworkLedger.TryBegin(NetworkFeature, "GET", img.Url, out scope, out reason))
                 {
                     ((TextBlock)placeholder.Child).Text = "🖼 " + (string.IsNullOrEmpty(img.Text) ? "image" : img.Text) + " (remote image not loaded: Offline Mode)";
                     return placeholder;
                 }
                 if (img.Url.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) || img.Url.Contains(".svg?")) return placeholder;
                 var host = new ContentControl { Content = placeholder };
+                var ui = UiPost.CaptureCurrent();
                 string url = img.Url;
                 Task.Run(async () =>
                 {
                     byte[] data = null;
-                    int status = 0;
-                    string note = "";
                     try
                     {
                         using (var hc = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
                         using (var resp = await hc.GetAsync(url).ConfigureAwait(false))
                         {
-                            status = (int)resp.StatusCode;
+                            scope.Status = (int)resp.StatusCode;
                             if (resp.IsSuccessStatusCode) data = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                            if (data != null) scope.AddReceived(data.Length);
                         }
+                        scope.Complete();
                     }
-                    catch (Exception ex) { note = ex.Message; }
-                    NetworkLedger.Record(NetworkFeature, "GET", url, 0, data != null ? data.Length : 0, status, note);
+                    catch (Exception ex) { scope.Fail(ex); }
                     if (data == null || data.Length > 20 * 1024 * 1024) return;
-                    Dispatcher.UIThread.Post(() =>
+                    ui.Post(() =>
                     {
                         try
                         {

@@ -3298,6 +3298,7 @@ namespace codeLess.Studio
             EditorTabBuffer buf = owner.CurrentBuffer;
 
             diffPillHits.Clear();
+            ClearAnnotationHits();
             lastPaintedRows.Clear();
 
             g.Clear(th.BgEditor);
@@ -3568,6 +3569,7 @@ namespace codeLess.Studio
 
                     // Inline annotations & diff pills only on final segment of the line
                     bool isLastSegOfLine = (seg.ColEnd == fullLineText.Length);
+                    if (isLastSegOfLine && hunk == null && !isFolded && !buf.WordWrap) DrawLineAnnotation(g, buf, docLine, sliceVisLen, effScrollLeft, y, codeAreaRight);
 
                     if (isLastSegOfLine && hunk != null && docLine == hunk.StartLine)
                     {
@@ -4355,6 +4357,8 @@ namespace codeLess.Studio
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
 
+            if (TryClickLineAnnotation(e)) return;
+
             // 0. Check Per-Hunk Inline [Accept] / [Reject] Diff Pills First
             if (e.Button == MouseButtons.Left && diffPillHits.Count > 0)
             {
@@ -4603,7 +4607,8 @@ namespace codeLess.Studio
                            isDraggingBoxSelection || isPendingTextDrag || isDraggingSelectedText || isDraggingSelection;
             if (!anyDrag) UpdateLinkHover(e.Location);
             else ClearLinkHover();
-            this.Cursor = (overDiffPill || overHScroll || e.X >= rightMinimapStart - ScrollbarThickness)
+            bool overAnnotation = !anyDrag && UpdateLineAnnotationHover(e.Location);
+            this.Cursor = (overDiffPill || overHScroll || overAnnotation || e.X >= rightMinimapStart - ScrollbarThickness)
                 ? Cursors.Hand
                 : (e.X < GutterWidth ? Cursors.Arrow
                 : (isDraggingSelectedText ? Cursors.Arrow : (linkHover != null ? Cursors.Hand : Cursors.IBeam)));
@@ -4797,6 +4802,7 @@ namespace codeLess.Studio
         {
             base.OnMouseLeave(e);
             ClearLinkHover();
+            ClearLineAnnotationHover();
             if (hoveredDiagnostic != null)
             {
                 hoveredDiagnostic = null;

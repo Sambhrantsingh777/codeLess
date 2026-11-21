@@ -48,11 +48,15 @@ namespace codeLess.Avalonia.Tests
             try { Directory.Delete(dir, true); } catch { }
         }
 
-        private static bool Pump(Func<bool> cond, int ms = 15000)
+        private MainWindow current;
+
+        private bool Pump(Func<bool> cond, int ms = 15000)
         {
             var sw = Stopwatch.StartNew();
             while (sw.ElapsedMilliseconds < ms)
             {
+                Dispatcher.UIThread.RunJobs();
+                current?.FlushDevToolsDebounce();
                 Dispatcher.UIThread.RunJobs();
                 if (cond()) return true;
                 Thread.Sleep(15);
@@ -67,6 +71,7 @@ namespace codeLess.Avalonia.Tests
             var w = new MainWindow(dir) { Width = 1400, Height = 900 };
             w.Show();
             Dispatcher.UIThread.RunJobs();
+            current = w;
             return w;
         }
 
@@ -89,7 +94,7 @@ namespace codeLess.Avalonia.Tests
                 foreach (var expected in new[] { "Git: Toggle Line Blame", "Git: Toggle File Blame", "Git: Show Graph", "Git: File History", "HTTP: Send Request", "Markdown: Open Preview", "Markdown: Open Preview to the Side" })
                     Assert.Contains(expected, labels);
             }
-            finally { w.Close(); }
+            finally { w.SuppressUnsavedPrompts = true; w.Close(); }
         }
 
         [AvaloniaFact]
@@ -135,7 +140,7 @@ namespace codeLess.Avalonia.Tests
                 Dispatcher.UIThread.RunJobs();
                 Assert.False(w.IsAuxPaneVisible);
             }
-            finally { w.Close(); }
+            finally { w.SuppressUnsavedPrompts = true; w.Close(); }
         }
 
         private static int FreePort()
@@ -209,7 +214,7 @@ namespace codeLess.Avalonia.Tests
                     Assert.True(Pump(() => !w.HttpResponsePane.IsRunning && w.HttpResponsePane.Result != null && w.HttpResponsePane.Result.Body.Contains("\"n\":2"), 10000));
                     Assert.Contains(NetworkLedger.Snapshot(), e => e.Feature == "HTTP Client" && e.Url.Contains("/ping") && e.Status == 200);
                 }
-                finally { w.Close(); listener.Stop(); }
+                finally { w.SuppressUnsavedPrompts = true; w.Close(); listener.Stop(); }
             }
         }
 
@@ -312,7 +317,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(Pump(() => hist.List.Commits.Count == 2 && !hist.IsLoading, 15000));
                 Assert.False(hist.List.ShowGraph);
             }
-            finally { w.Close(); }
+            finally { w.SuppressUnsavedPrompts = true; w.Close(); }
         }
     }
 }

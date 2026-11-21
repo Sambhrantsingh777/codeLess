@@ -542,6 +542,47 @@ namespace codeLess.Avalonia.Tests
         }
 
         [Fact]
+        public void RtfWriter_ForWindowsPreview_EmitsStylesTablesLinksAnchorsAndImages()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "codeLess_mdrtf_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                // 1x1 PNG
+                byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+                File.WriteAllBytes(Path.Combine(dir, "dot.png"), png);
+                string md = "# Héllo {x}\n\nText **b** *i* `c` [site](https://x.org) ![dot](dot.png)\n\n- [x] task\n\n| A | B |\n|---|--:|\n| 1 | 2 |\n\n```cs\nvar s = \"q\"; // c\n```\n";
+                var doc = MarkdownParser.Parse(md);
+                var theme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
+                var res = MarkdownRtfWriter.Build(doc, MarkdownRtfColors.FromTheme(theme), src =>
+                {
+                    string p = MarkdownLinkResolver.ResolveLocalImage(src, Path.Combine(dir, "README.md"));
+                    return p != null && File.Exists(p) ? File.ReadAllBytes(p) : null;
+                });
+                Assert.StartsWith(@"{\rtf1", res.Rtf);
+                Assert.Contains(@"H\u233?llo \{x\}", res.Rtf);
+                Assert.Contains(@"{\b b}", res.Rtf);
+                Assert.Contains(@"{\i i}", res.Rtf);
+                Assert.Contains(@"\trowd", res.Rtf);
+                Assert.Contains(@"\qr", res.Rtf);
+                Assert.Contains(@"\pngblip", res.Rtf);
+                Assert.Contains("\\u" + ((int)'☑').ToString() + "?", res.Rtf); // checked task box
+                Assert.Single(res.Links);
+                Assert.Equal("https://x.org", res.Links[0].Url);
+                Assert.Equal("site", res.Links[0].Text);
+                Assert.Contains(res.Anchors, a => a.HeadingAnchor == "héllo-x" && a.SourceLine == 0);
+                int w, h; string blip;
+                Assert.True(MarkdownRtfWriter.TryGetImageSize(png, out w, out h, out blip));
+                Assert.Equal(1, w);
+                Assert.Equal("pngblip", blip);
+                // Balanced groups (escaped braces excluded).
+                string unescaped = res.Rtf.Replace(@"\{", "").Replace(@"\}", "");
+                Assert.Equal(unescaped.Count(ch => ch == '{'), unescaped.Count(ch => ch == '}'));
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        [Fact]
         public void LinkResolver_ClassifiesTargets()
         {
             string mdFile = Path.Combine(Path.GetTempPath(), "proj", "README.md");

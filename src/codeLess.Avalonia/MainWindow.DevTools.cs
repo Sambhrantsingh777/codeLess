@@ -22,6 +22,7 @@ namespace codeLess.AvaloniaApp
     public partial class MainWindow
     {
         private AuxPaneHost auxPane;
+        private UiPost devToolsUi;
         private GridSplitter auxSplitter;
         private Canvas devToolsOverlay;
         private GridLength savedEditorCol0 = new GridLength(1, GridUnitType.Star);
@@ -55,8 +56,9 @@ namespace codeLess.AvaloniaApp
 
         private void InitializeDevTools()
         {
+            devToolsUi = UiPost.CaptureCurrent();
             blameService = new GitBlameService();
-            blameService.BlameReady += path => Dispatcher.UIThread.Post(() =>
+            blameService.BlameReady += path => devToolsUi.Post(() =>
             {
                 if (activeTab != null && string.Equals(activeTab.FilePath, path, StringComparison.OrdinalIgnoreCase))
                 {
@@ -64,7 +66,7 @@ namespace codeLess.AvaloniaApp
                     if (isEditorSplit) SplitEditor.Canvas.InvalidateVisual();
                 }
             });
-            blameService.StatusMessage += msg => Dispatcher.UIThread.Post(() => SetStatusMessage(msg));
+            blameService.StatusMessage += msg => devToolsUi.Post(() => SetStatusMessage(msg));
 
             blameDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
             blameDebounce.Tick += (s, e) => { blameDebounce.Stop(); RequestBlameForActiveBuffer(); };
@@ -124,6 +126,15 @@ namespace codeLess.AvaloniaApp
                 devToolsOverlay = new Canvas();
                 rootGrid.Children.Insert(Math.Min(1, rootGrid.Children.Count), devToolsOverlay);
             }
+        }
+
+        /// <summary>Runs pending debounced work now (headless tests: DispatcherTimer does not tick there).</summary>
+        public void FlushDevToolsDebounce()
+        {
+            if (blameDebounce != null && blameDebounce.IsEnabled) { blameDebounce.Stop(); RequestBlameForActiveBuffer(); }
+            if (markdownDebounce != null && markdownDebounce.IsEnabled) { markdownDebounce.Stop(); RefreshMarkdownPreviewFor(pendingMarkdownBuffer); }
+            var b = PrimaryEditor.CurrentBuffer;
+            if (!ReferenceEquals(b, lastPolledBuffer)) { lastPolledBuffer = b; RequestBlameForActiveBuffer(); }
         }
 
         private void ApplyDevToolsTheme(StudioTheme theme)
@@ -388,7 +399,7 @@ namespace codeLess.AvaloniaApp
                     Task.Run(() =>
                     {
                         string m = blameService.LoadFullMessage(capturedRepo, hash);
-                        Dispatcher.UIThread.Post(() => { if (!string.IsNullOrEmpty(m)) msg.Text = m; });
+                        devToolsUi.Post(() => { if (!string.IsNullOrEmpty(m)) msg.Text = m; });
                     });
                 }
                 var hashText = new SelectableTextBlock { Text = c.Hash, FontFamily = new FontFamily(DevToolsFonts.MonoFamily), FontSize = 11, Foreground = muted };
@@ -466,7 +477,7 @@ namespace codeLess.AvaloniaApp
         {
             Task.Run(() =>
             {
-                if (!GitCli.IsAvailable()) Dispatcher.UIThread.Post(() => SetStatusMessage(GitCli.GitMissingHint));
+                if (!GitCli.IsAvailable()) devToolsUi.Post(() => SetStatusMessage(GitCli.GitMissingHint));
             });
         }
 
@@ -484,7 +495,7 @@ namespace codeLess.AvaloniaApp
             {
                 string oldT, newT, note;
                 GitHistoryService.GetFileVersions(repo, commit, file, out oldT, out newT, out note);
-                Dispatcher.UIThread.Post(() =>
+                devToolsUi.Post(() =>
                 {
                     var dv = new DiffView(file.DisplayName + "  ·  " + GitHistoryService.StatusLabel(file.Status) + " in " + commit.ShortHash + " " + commit.Subject, oldT, newT, note);
                     OpenAuxDocument(new AuxPaneDocument { Id = id, Title = title, Tooltip = file.Path, Content = dv, ApplyTheme = dv.ApplyTheme });
@@ -505,7 +516,7 @@ namespace codeLess.AvaloniaApp
                 string err;
                 var files = GitHistoryService.GetChangedFiles(repo, commits[0], out err);
                 var file = files.FirstOrDefault(f => f.Path == repoRelPath) ?? new GitChangedFile { Path = repoRelPath, Status = "M" };
-                Dispatcher.UIThread.Post(() => OpenCommitFileDiff(repo, commits[0], file));
+                devToolsUi.Post(() => OpenCommitFileDiff(repo, commits[0], file));
             });
         }
 
