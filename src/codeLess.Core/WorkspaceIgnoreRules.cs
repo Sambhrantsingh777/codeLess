@@ -24,6 +24,8 @@ namespace codeLess.Studio
 
         public string BaseDir { get; private set; }
         public int RuleCount { get { return rules.Count; } }
+        /// <summary>True if any rule needs the path relative to BaseDir (others only look at the entry name).</summary>
+        public bool HasAnchoredRules { get; private set; }
 
         public GitIgnoreFile(string baseDir, IEnumerable<string> lines)
         {
@@ -85,7 +87,7 @@ namespace codeLess.Studio
             {
                 RegexOptions opts = RegexOptions.CultureInvariant | (IgnoreCase ? RegexOptions.IgnoreCase : RegexOptions.None);
                 string body = GlobToRegex(p);
-                if (anchored) { r.Kind = 2; r.Rx = new Regex("^" + body + "$", opts); }
+                if (anchored) { r.Kind = 2; r.Rx = new Regex("^" + body + "$", opts); HasAnchoredRules = true; }
                 else { r.Kind = 3; r.Rx = new Regex("^" + body + "$", opts); }
             }
             rules.Add(r);
@@ -328,7 +330,7 @@ namespace codeLess.Studio
         {
             capped = false;
             List<string> results = new List<string>(Math.Min(maxFiles, 4096));
-            Queue<KeyValuePair<string, int>> queue = new Queue<KeyValuePair<string, int>>();
+            Queue<WalkItem> queue = new Queue<WalkItem>();
             HashSet<string> seenRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (roots != null)
             {
@@ -336,30 +338,36 @@ namespace codeLess.Studio
                 {
                     if (string.IsNullOrEmpty(r) || !Directory.Exists(r)) continue;
                     string full = Path.GetFullPath(r).TrimEnd('/', '\\');
-                    if (seenRoots.Add(full)) queue.Enqueue(new KeyValuePair<string, int>(full, 0));
+                    if (seenRoots.Add(full)) queue.Enqueue(new WalkItem(full, 0, BuildChain(full)));
                 }
             }
             while (queue.Count > 0)
             {
                 if (ct.IsCancellationRequested) break;
-                KeyValuePair<string, int> item = queue.Dequeue();
+                WalkItem item = queue.Dequeue();
                 List<string> subdirs = null;
+                GitIgnoreFile[] chain = item.Chain;
                 try
                 {
-                    DirectoryInfo di = new DirectoryInfo(item.Key);
+                    DirectoryInfo di = new DirectoryInfo(item.Dir);
                     foreach (FileSystemInfo fsi in di.EnumerateFileSystemInfos())
                     {
                         string full = fsi.FullName;
                         if ((fsi.Attributes & FileAttributes.Directory) == FileAttributes.Directory)
                         {
                             if ((fsi.Attributes & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint) continue;
-                            if (item.Value + 1 > MaxWalkDepth || IsExcludedDirectory(full)) continue;
+                            if (item.Depth + 1 > MaxWalkDepth) continue;
+                            string dname = fsi.Name;
+                            if (IsExcludedName(full, dname) || IsIgnoredByChain(chain, full, dname, true)) continue;
                             if (subdirs == null) subdirs = new List<string>();
                             subdirs.Add(full);
                         }
                         else
                         {
-                            if (IsIgnoredFile(full)) continue;
+                            string fname = fsi.Name;
+                            string ext = Path.GetExtension(fname);
+                            if (!string.IsNullOrEmpty(ext) && WorkspaceSearchEngine.BinaryExtensions.Contains(ext)) continue;
+                            if (IsIgnoredByChain(chain, full, fname, false)) continue;
                             if (results.Count >= maxFiles) { capped = true; return results; }
                             results.Add(full);
                         }
@@ -369,10 +377,60 @@ namespace codeLess.Studio
                 if (subdirs != null)
                 {
                     subdirs.Sort(StringComparer.OrdinalIgnoreCase);
-                    foreach (string s in subdirs) queue.Enqueue(new KeyValuePair<string, int>(s, item.Value + 1));
+                    foreach (string sd in subdirs) queue.Enqueue(new WalkItem(sd, item.Depth + 1, ExtendChain(chain, sd)));
                 }
             }
             return results;
+        }
+
+        private sealed class WalkItem
+        {
+            public readonly string Dir;
+            public readonly int Depth;
+            public readonly GitIgnoreFile[] Chain;
+            public WalkItem(string dir, int depth, GitIgnoreFile[] chain) { Dir = dir; Depth = depth; Chain = chain; }
+        }
+
+        private static readonly GitIgnoreFile[] EmptyChain = new GitIgnoreFile[0];
+
+        /// <summary>.gitignore files that apply to entries of dir, nearest first (dir itself, then ancestors up to the root).</summary>
+        private GitIgnoreFile[] BuildChain(string dir)
+        {
+            if (!useGitIgnore || root.Length == 0) return EmptyChain;
+            List<GitIgnoreFile> list = new List<GitIgnoreFile>();
+            string d = dir;
+            while (d != null && d.Length >= root.Length)
+            {
+                GitIgnoreFile gi = GetGitIgnore(d);
+                if (gi != null) list.Add(gi);
+                if (d.Length == root.Length) break;
+                d = Path.GetDirectoryName(d);
+            }
+            if (infoExclude != null) list.Add(infoExclude);
+            return list.ToArray();
+        }
+
+        private GitIgnoreFile[] ExtendChain(GitIgnoreFile[] parentChain, string dir)
+        {
+            if (!useGitIgnore || root.Length == 0) return EmptyChain;
+            GitIgnoreFile own = GetGitIgnore(dir);
+            if (own == null) return parentChain;
+            GitIgnoreFile[] c = new GitIgnoreFile[parentChain.Length + 1];
+            c[0] = own;
+            Array.Copy(parentChain, 0, c, 1, parentChain.Length);
+            return c;
+        }
+
+        private static bool IsIgnoredByChain(GitIgnoreFile[] chain, string fullPath, string name, bool isDir)
+        {
+            for (int i = 0; i < chain.Length; i++)
+            {
+                GitIgnoreFile gi = chain[i];
+                string rel = gi.HasAnchoredRules ? RelativeTo(gi.BaseDir, fullPath) : name;
+                int v = gi.Match(rel, name, isDir);
+                if (v != 0) return v > 0;
+            }
+            return false;
         }
 
         public List<string> EnumerateFiles(IEnumerable<string> roots, int maxFiles, CancellationToken ct)

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 // NOTE: compiled by the legacy C# 5 compiler for the Windows build - keep this file strictly C# 5
 // (no string interpolation, no ?., no expression-bodied members, no out var, no auto-property initializers).
@@ -455,86 +456,56 @@ namespace codeLess.Studio
             string quickRejectNeedle = options.UseRegex ? null : query;
             int maxResults = options.MaxResults > 0 ? options.MaxResults : 10000;
 
-            foreach (string fp in files)
+            // Files are read and scanned in parallel batches (I/O bound on many small files) and merged in input order,
+            // so results and onFileMatches callbacks keep the same deterministic order as a sequential scan.
+            List<string> fileList = files as List<string>;
+            if (fileList == null) fileList = new List<string>(files);
+            int batchSize = 64;
+            for (int b0 = 0; b0 < fileList.Count; b0 += batchSize)
             {
                 if (ct.IsCancellationRequested) { result.Cancelled = true; break; }
-                string text = null;
-                try
+                int n = Math.Min(batchSize, fileList.Count - b0);
+                FileScanResult[] slots = new FileScanResult[n];
+                int remaining = maxResults - result.Matches.Count;
+                int baseIndex = b0;
+                WorkspaceSearchOptions opts = options;
+                if (SearchParallelism <= 1 || n == 1)
                 {
-                    string overrideText;
-                    if (options.ContentOverrides != null && options.ContentOverrides.TryGetValue(fp, out overrideText) && overrideText != null)
-                    {
-                        text = overrideText;
-                    }
-                    else
-                    {
-                        FileInfo fi = new FileInfo(fp);
-                        if (!fi.Exists || fi.Length > options.MaxFileSizeBytes) continue;
-                        text = ReadTextFileForSearch(fp);
-                    }
+                    for (int k = 0; k < n; k++)
+                        slots[k] = ScanOneFile(fileList[baseIndex + k], workspaceRoot, query, rx, cmp, quickRejectNeedle, opts, remaining, ct);
                 }
-                catch { text = null; }
-                if (text == null) continue;
-                result.FilesSearched++;
-
-                if (quickRejectNeedle != null && text.IndexOf(quickRejectNeedle, cmp) < 0)
-                    continue;
-
-                List<WorkspaceSearchMatch> fileMatches = new List<WorkspaceSearchMatch>();
-                string rel = GetRelative(workspaceRoot, fp);
-                int lineNo = 0;
-                int pos = 0;
+                else
+                {
+                    ParallelOptions po = new ParallelOptions();
+                    po.MaxDegreeOfParallelism = SearchParallelism;
+                    System.Threading.Tasks.Parallel.For(0, n, po, delegate (int k)
+                    {
+                        slots[k] = ScanOneFile(fileList[baseIndex + k], workspaceRoot, query, rx, cmp, quickRejectNeedle, opts, remaining, ct);
+                    });
+                }
                 bool stop = false;
-                try
+                for (int k = 0; k < n; k++)
                 {
-                    while (pos <= text.Length && !stop)
+                    FileScanResult fr = slots[k];
+                    if (fr == null) continue;
+                    if (fr.Searched) result.FilesSearched++;
+                    if (fr.Cancelled) result.Cancelled = true;
+                    List<WorkspaceSearchMatch> fileMatches = fr.Matches;
+                    if (fileMatches != null && fileMatches.Count > 0)
                     {
-                        if ((lineNo & 255) == 0 && ct.IsCancellationRequested) { result.Cancelled = true; break; }
-                        int nl = text.IndexOf('\n', pos);
-                        int end = nl < 0 ? text.Length : nl;
-                        int lineEnd = (end > pos && text[end - 1] == '\r') ? end - 1 : end;
-                        string line = text.Substring(pos, lineEnd - pos);
-                        lineNo++;
-
-                        if (rx != null)
+                        int room = maxResults - result.Matches.Count;
+                        if (fileMatches.Count > room) { fileMatches = fileMatches.GetRange(0, Math.Max(0, room)); stop = true; }
+                        if (fileMatches.Count > 0)
                         {
-                            Match m = rx.Match(line);
-                            while (m.Success)
-                            {
-                                if (m.Length > 0)
-                                {
-                                    fileMatches.Add(BuildMatch(fp, rel, lineNo, line, m.Index, m.Length));
-                                    if (result.Matches.Count + fileMatches.Count >= maxResults) { stop = true; break; }
-                                }
-                                m = m.NextMatch();
-                            }
+                            result.FilesMatched++;
+                            result.Matches.AddRange(fileMatches);
+                            if (onFileMatches != null) onFileMatches(fileMatches);
                         }
-                        else
-                        {
-                            int idx = line.IndexOf(query, 0, cmp);
-                            while (idx >= 0)
-                            {
-                                fileMatches.Add(BuildMatch(fp, rel, lineNo, line, idx, query.Length));
-                                if (result.Matches.Count + fileMatches.Count >= maxResults) { stop = true; break; }
-                                int next = idx + Math.Max(1, query.Length);
-                                if (next >= line.Length) break;
-                                idx = line.IndexOf(query, next, cmp);
-                            }
-                        }
-
-                        if (nl < 0) break;
-                        pos = nl + 1;
                     }
+                    if (fr.HitLimit || result.Matches.Count >= maxResults) stop = true;
+                    if (stop) break;
                 }
-                catch (RegexMatchTimeoutException) { }
-
-                if (fileMatches.Count > 0)
-                {
-                    result.FilesMatched++;
-                    result.Matches.AddRange(fileMatches);
-                    if (onFileMatches != null) onFileMatches(fileMatches);
-                }
-                if (stop || result.Matches.Count >= maxResults)
+                if (stop)
                 {
                     result.Truncated = true;
                     break;
@@ -542,6 +513,95 @@ namespace codeLess.Studio
                 if (result.Cancelled) break;
             }
             return result;
+        }
+
+        /// <summary>Degree of parallelism for Find in Files (file reads + scanning). 1 = sequential.</summary>
+        public static int SearchParallelism = Math.Max(1, Math.Min(4, Environment.ProcessorCount));
+
+        private sealed class FileScanResult
+        {
+            public bool Searched;
+            public bool Cancelled;
+            public bool HitLimit;
+            public List<WorkspaceSearchMatch> Matches;
+        }
+
+        private static FileScanResult ScanOneFile(string fp, string workspaceRoot, string query, Regex rx, StringComparison cmp,
+            string quickRejectNeedle, WorkspaceSearchOptions options, int maxMatches, CancellationToken ct)
+        {
+            FileScanResult fr = new FileScanResult();
+            if (ct.IsCancellationRequested) { fr.Cancelled = true; return fr; }
+            string text = null;
+            try
+            {
+                string overrideText;
+                if (options.ContentOverrides != null && options.ContentOverrides.TryGetValue(fp, out overrideText) && overrideText != null)
+                {
+                    text = overrideText;
+                }
+                else
+                {
+                    FileInfo fi = new FileInfo(fp);
+                    if (!fi.Exists || fi.Length > options.MaxFileSizeBytes) return fr;
+                    text = ReadTextFileForSearch(fp);
+                }
+            }
+            catch { text = null; }
+            if (text == null) return fr;
+            fr.Searched = true;
+
+            if (quickRejectNeedle != null && text.IndexOf(quickRejectNeedle, cmp) < 0)
+                return fr;
+
+            List<WorkspaceSearchMatch> fileMatches = new List<WorkspaceSearchMatch>();
+            fr.Matches = fileMatches;
+            string rel = GetRelative(workspaceRoot, fp);
+            int lineNo = 0;
+            int pos = 0;
+            bool stop = false;
+            try
+            {
+                while (pos <= text.Length && !stop)
+                {
+                    if ((lineNo & 255) == 0 && ct.IsCancellationRequested) { fr.Cancelled = true; break; }
+                    int nl = text.IndexOf('\n', pos);
+                    int end = nl < 0 ? text.Length : nl;
+                    int lineEnd = (end > pos && text[end - 1] == '\r') ? end - 1 : end;
+                    string line = text.Substring(pos, lineEnd - pos);
+                    lineNo++;
+
+                    if (rx != null)
+                    {
+                        Match m = rx.Match(line);
+                        while (m.Success)
+                        {
+                            if (m.Length > 0)
+                            {
+                                fileMatches.Add(BuildMatch(fp, rel, lineNo, line, m.Index, m.Length));
+                                if (fileMatches.Count >= maxMatches) { stop = true; fr.HitLimit = true; break; }
+                            }
+                            m = m.NextMatch();
+                        }
+                    }
+                    else
+                    {
+                        int idx = line.IndexOf(query, 0, cmp);
+                        while (idx >= 0)
+                        {
+                            fileMatches.Add(BuildMatch(fp, rel, lineNo, line, idx, query.Length));
+                            if (fileMatches.Count >= maxMatches) { stop = true; fr.HitLimit = true; break; }
+                            int next = idx + Math.Max(1, query.Length);
+                            if (next >= line.Length) break;
+                            idx = line.IndexOf(query, next, cmp);
+                        }
+                    }
+
+                    if (nl < 0) break;
+                    pos = nl + 1;
+                }
+            }
+            catch (RegexMatchTimeoutException) { }
+            return fr;
         }
 
         private static WorkspaceSearchMatch BuildMatch(string fp, string rel, int lineNo, string line, int idx, int len)
