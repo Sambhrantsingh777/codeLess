@@ -289,6 +289,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write      # Sigstore keyless signing (OIDC identity of this workflow)
+      attestations: write  # GitHub artifact attestations (SLSA build provenance)
+    env:
+      HAS_GPG_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY != '' }}
     steps:
       - name: Download all platform artifacts
         uses: actions/download-artifact@v4
@@ -304,6 +308,49 @@ jobs:
           cd release-files
           sha256sum * > SHA256SUMS.txt
           ls -lh
+
+      # Provenance for every platform's binaries: signed via Sigstore with this workflow's identity, recorded in the
+      # public transparency log. Users verify with: gh attestation verify <file> --repo ${{ github.repository }}
+      - name: Attest build provenance for all release binaries
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-files/*.exe
+            release-files/*.msi
+            release-files/*.dmg
+            release-files/*.zip
+            release-files/*.deb
+            release-files/*.tar.gz
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless Sigstore signature over the checksum file (covers every asset through its SHA-256).
+      - name: Sign SHA256SUMS.txt with Sigstore (keyless)
+        run: |
+          cosign sign-blob --yes --bundle release-files/SHA256SUMS.txt.sigstore.json release-files/SHA256SUMS.txt
+          cosign verify-blob --bundle release-files/SHA256SUMS.txt.sigstore.json \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            release-files/SHA256SUMS.txt
+
+      # Optional detached OpenPGP signatures (Linux packaging convention). Enabled by adding the repository secrets
+      # RELEASE_GPG_PRIVATE_KEY (ASCII-armored) and RELEASE_GPG_PASSPHRASE.
+      - name: GPG-sign release files (optional)
+        if: env.HAS_GPG_KEY == 'true'
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$RELEASE_GPG_PRIVATE_KEY" | gpg --batch --import
+          cd release-files
+          for f in *; do
+            case "$f" in *.asc|*.sigstore.json) continue;; esac
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$RELEASE_GPG_PASSPHRASE" --armor --detach-sign "$f"
+          done
+          gpg --armor --export > codeLess-release-signing-key.asc
+          rm -rf "$GNUPGHOME"
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
