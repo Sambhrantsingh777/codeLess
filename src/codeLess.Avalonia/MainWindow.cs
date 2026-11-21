@@ -244,6 +244,7 @@ namespace codeLess.AvaloniaApp
             currentTheme = StudioTheme.GetById(settings.ThemeId);
             AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(8, settings.TabSize));
             aiEngine = new LlmHarnessAndAgentEngine(settings);
+            InitNetworkPrivacy();
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
@@ -719,6 +720,7 @@ namespace codeLess.AvaloniaApp
                     Mi("AI Chat & Composer", "Ctrl+Alt+I", ToggleRightChatDock),
                     new Separator(),
                     Mi("Problems", "Ctrl+Shift+M", () => SwitchBottomTab("problems")),
+                    Mi("Network Activity", "", ShowNetworkActivity),
                     Mi("Output", "Ctrl+Shift+U", () => SwitchBottomTab("output")),
                     Mi("Terminal", "Ctrl+`", () => SwitchBottomTab("terminal")),
                     new Separator(),
@@ -904,7 +906,10 @@ namespace codeLess.AvaloniaApp
                     new NativeMenuItemSeparator(),
                     Nmi("Toggle Primary Side Bar", TogglePrimarySidebar, Key.B, meta),
                     Nmi("Toggle Panel", ToggleBottomPanel, Key.J, meta),
-                    Nmi("Toggle AI Chat", ToggleRightChatDock, Key.I, meta | KeyModifiers.Alt)
+                    Nmi("Toggle AI Chat", ToggleRightChatDock, Key.I, meta | KeyModifiers.Alt),
+                    new NativeMenuItemSeparator(),
+                    Nmi("Network Activity", ShowNetworkActivity),
+                    Nmi("Offline Mode (toggle)", ToggleOfflineMode)
                 };
                 rootMenu.Add(new NativeMenuItem("View") { Menu = viewSub });
 
@@ -2293,6 +2298,7 @@ namespace codeLess.AvaloniaApp
             rightRow.Children.Add(statusEncodingBtn);
             rightRow.Children.Add(statusEolBtn);
             rightRow.Children.Add(statusLanguageBtn);
+            rightRow.Children.Add(BuildNetworkStatusButton());
             rightRow.Children.Add(statusAiModelBtn);
             Grid.SetColumn(rightRow, 2);
             grid.Children.Add(rightRow);
@@ -2409,6 +2415,7 @@ namespace codeLess.AvaloniaApp
             statusEolBtn.Foreground = new SolidColorBrush(statusFg);
             statusLanguageBtn.Foreground = new SolidColorBrush(statusFg);
             statusAiModelBtn.Foreground = new SolidColorBrush(statusFg);
+            ApplyNetworkPrivacyTheme(theme);
 
             // Overlays
             CommandPalette.ApplyTheme(theme);

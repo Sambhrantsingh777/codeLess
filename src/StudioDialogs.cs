@@ -1231,6 +1231,10 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "open_checkpoints"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("API Client", "Open Native HTTP / REST & Latency Playground", "",
                 () => { SelectedCommandId = "open_rest_client"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("View", "Show Network Activity", "",
+                () => { SelectedCommandId = "show_network_activity"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Preferences", "Toggle Offline Mode", "",
+                () => { SelectedCommandId = "toggle_offline_mode"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Self-Heal", "Auto-Heal Last Terminal / Compiler Crash", "",
                 () => { SelectedCommandId = "auto_heal_terminal"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Workspace", "Create New Project from Template Wizard...", "",
@@ -2609,27 +2613,30 @@ namespace codeLess.Studio
                     var sw = Stopwatch.StartNew();
                     try
                     {
-                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                        req.Method = method;
-                        req.UserAgent = "codeLess-Native-REST/3.0";
-                        req.Timeout = 10000;
-                        using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                        using (StreamReader sr = new StreamReader(res.GetResponseStream()))
+                        // Routed through the NetworkLedger (Network Activity panel; refused in Offline Mode unless loopback).
+                        LedgerHttpRequest lreq = new LedgerHttpRequest();
+                        lreq.Feature = "HTTP Client (REST playground)";
+                        lreq.Method = method;
+                        lreq.Url = url;
+                        lreq.UserAgent = "codeLess-Native-REST/3.0";
+                        lreq.TimeoutMs = 10000;
+                        LedgerHttpResponse res = LedgerHttp.Send(lreq);
+                        if (res.Status == 0) throw new Exception(res.Error);
                         {
-                            string body = sr.ReadToEnd();
+                            string body = res.Body ?? "";
                             sw.Stop();
                             StringBuilder sb = new StringBuilder();
                             sb.AppendLine(string.Format("HTTP/{0} {1} {2}  •  Latency: {3} ms  •  Payload: {4:N0} bytes",
-                                res.ProtocolVersion, (int)res.StatusCode, res.StatusDescription, sw.ElapsedMilliseconds, body.Length));
+                                res.ProtocolVersion, res.Status, res.StatusDescription, sw.ElapsedMilliseconds, res.BytesReceived));
                             sb.AppendLine("--------------------------------------------------------------------------------");
-                            foreach (string hk in res.Headers.AllKeys)
-                                sb.AppendLine(hk + ": " + res.Headers[hk]);
+                            foreach (KeyValuePair<string, string> hk in res.Headers)
+                                sb.AppendLine(hk.Key + ": " + hk.Value);
                             sb.AppendLine("--------------------------------------------------------------------------------\n");
                             sb.AppendLine(body.Length > 12000 ? body.Substring(0, 12000) + "\n... [Truncated]" : body);
 
                             this.BeginInvoke(new Action(() =>
                             {
-                                latencyBadge.Text = string.Format("✓ {0} ({1} ms)", (int)res.StatusCode, sw.ElapsedMilliseconds);
+                                latencyBadge.Text = string.Format((res.IsSuccess ? "✓" : "✗") + " {0} ({1} ms)", res.Status, sw.ElapsedMilliseconds);
                                 responseBox.Text = sb.ToString();
                                 sendBtn.Enabled = true;
                             }));
@@ -2676,6 +2683,7 @@ namespace codeLess.Studio
         public CheckBox AutoSaveBox;
         public CheckBox AgentApprovalBox;
         public CheckBox ShowWelcomeBox;
+        public CheckBox OfflineModeBox;
         public CodeLessDarkInputBox ExcludedFoldersInput;
 
         // AI Section controls
@@ -2705,6 +2713,7 @@ namespace codeLess.Studio
             bool origAutoSave = currentSettings.AutoSave;
             bool origApproval = currentSettings.RequireAgentToolApproval;
             bool origWelcome = currentSettings.ShowWelcomeOnStartup;
+            bool origOffline = currentSettings.OfflineMode;
             string origExcluded = currentSettings.ExcludedFolders;
             string origAgentModel = currentSettings.DefaultAgentModel;
             string origAskModel = currentSettings.DefaultAskModel;
@@ -2850,6 +2859,7 @@ namespace codeLess.Studio
             AgentApprovalBox = addCheck("Require Approval Before Agent Runs Commands", settings.RequireAgentToolApproval, 380, y);
             y += 24;
             ShowWelcomeBox = addCheck("Show Welcome page on startup", settings.ShowWelcomeOnStartup, 24, y);
+            OfflineModeBox = addCheck("Offline Mode (block all non-local network requests)", settings.OfflineMode, 380, y);
             y += 28;
             addLabel("Excluded Folders (files.exclude):", y);
             ExcludedFoldersInput = new CodeLessDarkInputBox
@@ -3046,6 +3056,7 @@ namespace codeLess.Studio
             AutoSaveBox.CheckedChanged += (s, e) => liveApply();
             AgentApprovalBox.CheckedChanged += (s, e) => liveApply();
             ShowWelcomeBox.CheckedChanged += (s, e) => liveApply();
+            OfflineModeBox.CheckedChanged += (s, e) => liveApply();
             ExcludedFoldersInput.TextChanged += (s, e) => liveApply();
             DefaultAgentModelCombo.SelectedIndexChanged += (s, e) => liveApply();
             DefaultAskModelCombo.SelectedIndexChanged += (s, e) => liveApply();
@@ -3100,6 +3111,8 @@ namespace codeLess.Studio
                 settings.AutoSave = origAutoSave;
                 settings.RequireAgentToolApproval = origApproval;
                 settings.ShowWelcomeOnStartup = origWelcome;
+                settings.OfflineMode = origOffline;
+                NetworkLedger.SetOfflineMode(origOffline);
                 settings.ExcludedFolders = origExcluded;
                 settings.DefaultAgentModel = origAgentModel;
                 settings.DefaultAskModel = origAskModel;
@@ -3149,6 +3162,11 @@ namespace codeLess.Studio
             settings.RequireAgentToolApproval = AgentApprovalBox.Checked;
             if (ShowWelcomeBox != null)
                 settings.ShowWelcomeOnStartup = ShowWelcomeBox.Checked;
+            if (OfflineModeBox != null)
+            {
+                settings.OfflineMode = OfflineModeBox.Checked;
+                NetworkLedger.SetOfflineMode(settings.OfflineMode);
+            }
             if (ExcludedFoldersInput != null && !string.IsNullOrWhiteSpace(ExcludedFoldersInput.Text))
                 settings.ExcludedFolders = ExcludedFoldersInput.Text.Trim();
             if (DefaultAgentModelCombo != null && !string.IsNullOrWhiteSpace(DefaultAgentModelCombo.Text))

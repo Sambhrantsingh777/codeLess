@@ -77,6 +77,8 @@ namespace codeLess.Studio
         }
 
         private IdePersistentSettings settings;
+        private WinFormsNetworkPrivacyController networkPrivacy;
+        private Label statusNetworkItem;
         private List<StudioTheme> themes;
         private StudioTheme activeTheme;
         private LlmHarnessAndAgentEngine aiEngine;
@@ -335,6 +337,7 @@ namespace codeLess.Studio
             this.activeTheme = StudioTheme.ResolveTheme(themes, settings.ActiveThemeId);
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
             this.vsixEngine = new VsixAndPluginHostEngine(themes);
+            this.networkPrivacy = new WinFormsNetworkPrivacyController(this, settings, () => activeTheme);
 
             this.aiEngine.OnRequestToolApproval = (toolName, detail) =>
             {
@@ -2119,6 +2122,9 @@ namespace codeLess.Studio
             statusWrapLabel = new Label { AutoSize = true, Visible = false, Text = "Wrap: OFF" };
 
             statusRightLabel = createStatusItem(GetActiveModelDisplayName(), "Select AI Model / Provider", (ctrl) => OpenByokConfigurationDialog());
+            statusNetworkItem = networkPrivacy.CreateStatusItem(StatusItemFont);
+            networkPrivacy.StatusItemResized = LayoutStatusBarItems;
+            statusBar.Controls.Add(statusNetworkItem);
 
             statusBar.Controls.AddRange(new Control[]
             {
@@ -2443,6 +2449,7 @@ namespace codeLess.Studio
             int rightX = w - 8;
             Label[] rightItems = new Label[]
             {
+                statusNetworkItem,
                 statusRightLabel,
                 statusLangItem,
                 statusEolItem,
@@ -2868,6 +2875,7 @@ namespace codeLess.Studio
             viewMenu.DropDownItems.Add(CreateMenuItem("Extensions", "Ctrl+Shift+X", () => { leftSidebar.Visible = true; SwitchSidebarView("extensions"); }));
             viewMenu.DropDownItems.Add(new ToolStripSeparator());
             viewMenu.DropDownItems.Add(CreateMenuItem("Problems", "Ctrl+Shift+M", () => { bottomDockPanel.Visible = true; SwitchBottomDockTab("problems"); }));
+            viewMenu.DropDownItems.Add(CreateMenuItem("Network Activity", "", () => networkPrivacy.ShowPanel()));
             viewMenu.DropDownItems.Add(CreateMenuItem("Output", "Ctrl+Shift+U", () => { bottomDockPanel.Visible = true; SwitchBottomDockTab("output"); }));
             viewMenu.DropDownItems.Add(CreateMenuItem("Debug Console", "Ctrl+Shift+Y", () => { bottomDockPanel.Visible = true; SwitchBottomDockTab("output"); }));
             viewMenu.DropDownItems.Add(CreateMenuItem("Terminal", "Ctrl+`", () =>
@@ -8854,6 +8862,7 @@ if __name__ == '__main__':
         private void MaybeAutoCheckForUpdates()
         {
             if (settings == null || !settings.AutoCheckForUpdates || SuppressUnsavedPrompts) return;
+            if (NetworkLedger.OfflineMode) return; // Offline Mode: skip the automatic check silently
             DateTime last;
             if (DateTime.TryParse(settings.LastUpdateCheckUtc, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out last) &&
@@ -9871,6 +9880,11 @@ if __name__ == '__main__':
             int added = await vsixEngine.SearchOpenVsxRegistryAsync(query);
             RefreshExtensionsListUi();
             statusLeftLabel.Text = string.Format("Found {0} extension(s) for '{1}'", added, query);
+            if (!string.IsNullOrEmpty(vsixEngine.LastNetworkNotice))
+            {
+                statusLeftLabel.Text = vsixEngine.LastNetworkNotice;
+                MessageBox.Show(this, vsixEngine.LastNetworkNotice, "OpenVSX", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
 
         private async Task HandleExtensionActionAsync()
@@ -9888,6 +9902,8 @@ if __name__ == '__main__':
                 extActionBtn.Text = "Install / Activate Selected VSIX";
                 RefreshExtensionsListUi();
                 RefreshThemeComboItems();
+                if (!ok && !string.IsNullOrEmpty(vsixEngine.LastNetworkNotice))
+                    MessageBox.Show(this, vsixEngine.LastNetworkNotice, "Extension download", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 if (!ok) return;
             }
 
@@ -10006,6 +10022,8 @@ if __name__ == '__main__':
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
             else if (cmdId == "open_rest_client") OpenRestApiPlaygroundDialog();
+            else if (cmdId == "show_network_activity") networkPrivacy.ShowPanel();
+            else if (cmdId == "toggle_offline_mode") networkPrivacy.ToggleOfflineMode();
             else if (cmdId == "auto_heal_terminal") { var _ = AutoHealLastTerminalErrorAsync(); }
             else if (cmdId == "toggle_sidebar") ToggleLeftSidebarVisibility();
             else if (cmdId == "toggle_right") ToggleRightDockVisibility();
@@ -10725,6 +10743,7 @@ if __name__ == '__main__':
         public void ApplyThemeToWorkbench(StudioTheme theme)
         {
             activeTheme = theme;
+            if (networkPrivacy != null) networkPrivacy.ApplyTheme(theme);
             EnableNativeDarkTitleBar();
             this.BackColor = theme.BgWorkbench;
             this.ForeColor = theme.FgPrimary;
@@ -10790,6 +10809,7 @@ if __name__ == '__main__':
             if (statusLangItem != null) statusLangItem.ForeColor = statusFg;
             if (statusChordLabel != null) statusChordLabel.ForeColor = statusFg;
             statusRightLabel.ForeColor = statusFg;
+            if (statusNetworkItem != null) { statusNetworkItem.ForeColor = statusFg; statusNetworkItem.Invalidate(); }
 
             activityBar.BackColor = theme.BgActivity;
             leftSidebar.BackColor = theme.BgSidebar;

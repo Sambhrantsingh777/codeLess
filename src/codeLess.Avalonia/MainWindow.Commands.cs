@@ -2548,6 +2548,8 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "View", Title = "Show Source Control (Git)", Shortcut = "Ctrl+Shift+G", Execute = () => SwitchSidebarView("git") },
                 new PaletteEntryItem { Category = "View", Title = "Show Run and Debug", Shortcut = "Ctrl+Shift+D", Execute = () => SwitchSidebarView("run") },
                 new PaletteEntryItem { Category = "View", Title = "Show Extensions", Shortcut = "Ctrl+Shift+X", Execute = () => SwitchSidebarView("extensions") },
+                new PaletteEntryItem { Category = "View", Title = "Show Network Activity", Execute = ShowNetworkActivity },
+                new PaletteEntryItem { Category = "Preferences", Title = "Toggle Offline Mode", Execute = ToggleOfflineMode },
                 new PaletteEntryItem { Category = "View", Title = "Toggle Primary Side Bar", Shortcut = "Ctrl+B", Execute = TogglePrimarySidebar },
                 new PaletteEntryItem { Category = "View", Title = "Toggle Panel", Shortcut = "Ctrl+J", Execute = ToggleBottomPanel },
                 new PaletteEntryItem { Category = "View", Title = "Toggle AI Agent Chat Dock", Shortcut = "Ctrl+Alt+I", Execute = ToggleRightChatDock },

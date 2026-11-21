@@ -20,11 +20,14 @@ namespace codeLess.Studio
         public string DownloadUrl = "";
         public string ReleaseNotes = "";
         public string Error = "";
+        /// <summary>True when Offline Mode refused the request (nothing was sent).</summary>
+        public bool Blocked;
     }
 
     /// <summary>
     /// Shared (Windows WinForms + macOS/Linux Avalonia) update checker. Compiled by legacy csc.exe: C# 5 only.
-    /// Privacy: one anonymous HTTPS GET to api.github.com with a generic User-Agent; no identifiers are sent.
+    /// Privacy: one anonymous HTTPS GET to api.github.com with a generic User-Agent; no identifiers are sent. Routed through
+    /// NetworkLedger (shown in Network Activity, refused in Offline Mode).
     /// </summary>
     public static class UpdateChecker
     {
@@ -75,17 +78,16 @@ namespace codeLess.Studio
             r.ReleasePageUrl = LatestReleasePage;
             try
             {
-                try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12; } catch { }
-                HttpWebRequest req = (HttpWebRequest)WebRequest.Create("https://api.github.com/repos/" + Repository + "/releases/latest");
-                req.Method = "GET";
+                LedgerHttpRequest req = new LedgerHttpRequest();
+                req.Feature = "Update check";
+                req.Url = "https://api.github.com/repos/" + Repository + "/releases/latest";
                 req.UserAgent = "codeLess-update-check";
                 req.Accept = "application/vnd.github+json";
-                req.Timeout = timeoutMs;
-                req.ReadWriteTimeout = timeoutMs;
-                string json;
-                using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
-                    json = sr.ReadToEnd();
+                req.TimeoutMs = timeoutMs;
+                LedgerHttpResponse res = LedgerHttp.Send(req);
+                if (res.Status == 0) { r.Error = "Network error: " + res.Error; return r; }
+                if (!res.IsSuccess) { r.Error = "GitHub returned HTTP " + res.Status + "."; return r; }
+                string json = res.Body;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 Dictionary<string, object> root = ser.Deserialize<Dictionary<string, object>>(json);
@@ -114,10 +116,11 @@ namespace codeLess.Studio
                 r.Success = !string.IsNullOrEmpty(r.LatestVersion);
                 if (!r.Success) r.Error = "No release information found.";
             }
-            catch (WebException wex)
+            catch (NetworkBlockedException bex)
             {
-                HttpWebResponse hr = wex.Response as HttpWebResponse;
-                r.Error = hr != null ? ("GitHub returned HTTP " + (int)hr.StatusCode + ".") : ("Network error: " + wex.Message);
+                // Offline Mode: nothing was sent. The automatic check stays silent; Help > Check for Updates shows this.
+                r.Blocked = true;
+                r.Error = bex.Message;
             }
             catch (Exception ex)
             {
