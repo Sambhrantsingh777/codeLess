@@ -349,7 +349,7 @@ namespace codeLess.Studio
         public static new StudioSettings Load()
         {
             var baseLoaded = IdePersistentSettings.Load();
-            return new StudioSettings
+            var loaded = new StudioSettings
             {
                 ActiveThemeId = baseLoaded.ActiveThemeId,
                 ActiveVendorId = baseLoaded.ActiveVendorId,
@@ -370,6 +370,10 @@ namespace codeLess.Studio
                 ShowMinimap = baseLoaded.ShowMinimap,
                 ShowBreadcrumbs = baseLoaded.ShowBreadcrumbs,
                 ShowWelcomeOnStartup = baseLoaded.ShowWelcomeOnStartup,
+                ActivatePythonEnvironmentInTerminal = baseLoaded.ActivatePythonEnvironmentInTerminal,
+                PythonInterpreters = baseLoaded.PythonInterpreters,
+                DebugAdapters = baseLoaded.DebugAdapters,
+                DebugLastConfigurations = baseLoaded.DebugLastConfigurations,
                 ExcludedFolders = baseLoaded.ExcludedFolders,
                 DefaultAgentModel = baseLoaded.DefaultAgentModel,
                 DefaultAskModel = baseLoaded.DefaultAskModel,
@@ -381,6 +385,8 @@ namespace codeLess.Studio
                 OpenTabPaths = baseLoaded.OpenTabPaths ?? new List<string>(),
                 Vendors = baseLoaded.Vendors ?? new List<SavedVendorEntry>()
             };
+            loaded.CopyLanguageServerSettingsFrom(baseLoaded);
+            return loaded;
         }
     }
 

@@ -623,7 +623,20 @@ namespace codeLess.Studio
         public BorderStyle BorderStyle { get; set; }
         public DrawMode DrawMode { get; set; }
         public event EventHandler SelectedIndexChanged;
+        /// <summary>Raised on every left click on an item, including the already-selected one (SelectedIndexChanged is not).</summary>
+        public event EventHandler ItemClicked;
         public event DrawItemEventHandler DrawItem;
+
+        /// <summary>First visible item index (scroll position).</summary>
+        public int TopIndex
+        {
+            get { return scrollTopIndex; }
+            set
+            {
+                scrollTopIndex = Math.Max(0, Math.Min(Math.Max(0, Items.Count - VisibleCapacity), value));
+                this.Invalidate();
+            }
+        }
 
         public int SelectedIndex
         {
@@ -765,6 +778,8 @@ namespace codeLess.Studio
             if (idx >= 0 && idx < Items.Count)
             {
                 this.SelectedIndex = idx;
+                if (e.Button == MouseButtons.Left && ItemClicked != null)
+                    ItemClicked(this, EventArgs.Empty);
             }
         }
 

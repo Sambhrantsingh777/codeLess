@@ -244,13 +244,16 @@ namespace codeLess.AvaloniaApp
             currentTheme = StudioTheme.GetById(settings.ThemeId);
             AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(8, settings.TabSize));
             aiEngine = new LlmHarnessAndAgentEngine(settings);
+            InitNetworkPrivacy();
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
             BuildNativeMacMenu();
+            InitLanguageServers();
             ApplyTheme(currentTheme);
+            InitDebugWorkbench();
 
             // Register tunnel & bubble key handlers so workbench shortcuts work anywhere
             AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
@@ -364,6 +367,7 @@ namespace codeLess.AvaloniaApp
         protected override void OnClosed(EventArgs e)
         {
             StopWorkspaceWatcher();
+            ShutdownLanguageServers();
             try { workspaceLoadCts?.Cancel(); } catch { }
             if (debouncedUiSyncTimer != null)
                 debouncedUiSyncTimer.Stop();
@@ -471,6 +475,7 @@ namespace codeLess.AvaloniaApp
                 if (t != null) ApplyTheme(t, persistSetting: false);
             };
             CommandPalette.GoToLineRequested += lineNum => PrimaryEditor.GoToLine(lineNum);
+            CommandPalette.FileOpenRequested += (path, line, col) => OpenFileAtLocation(path, line, Math.Max(1, col), 0, preview: false, focusEditor: true);
             CommandPalette.Closed += () => PrimaryEditor.Canvas.Focus();
             rootOverlayGrid.Children.Add(CommandPalette);
 
@@ -674,8 +679,8 @@ namespace codeLess.AvaloniaApp
                     new Separator(),
                     Mi("Find", "Ctrl+F", () => PrimaryEditor.ShowFindBar(false)),
                     Mi("Replace", "Ctrl+H", () => PrimaryEditor.ShowFindBar(true)),
-                    Mi("Find in Files", "Ctrl+Shift+F", () => SwitchSidebarView("search")),
-                    Mi("Replace in Files", "Ctrl+Shift+H", () => SwitchSidebarView("search")),
+                    Mi("Find in Files", "Ctrl+Shift+F", () => ShowSearchView(false)),
+                    Mi("Replace in Files", "Ctrl+Shift+H", () => ShowSearchView(true)),
                     new Separator(),
                     Mi("Toggle Line Comment", "Ctrl+/", () => PrimaryEditor.Canvas.ToggleLineComment()),
                     Mi("Toggle Block Comment", "Shift+Alt+A", () => PrimaryEditor.Canvas.ToggleBlockComment())
@@ -719,6 +724,7 @@ namespace codeLess.AvaloniaApp
                     Mi("AI Chat & Composer", "Ctrl+Alt+I", ToggleRightChatDock),
                     new Separator(),
                     Mi("Problems", "Ctrl+Shift+M", () => SwitchBottomTab("problems")),
+                    Mi("Network Activity", "", ShowNetworkActivity),
                     Mi("Output", "Ctrl+Shift+U", () => SwitchBottomTab("output")),
                     Mi("Terminal", "Ctrl+`", () => SwitchBottomTab("terminal")),
                     new Separator(),
@@ -762,8 +768,19 @@ namespace codeLess.AvaloniaApp
                 Header = "_Run",
                 ItemsSource = new object[]
                 {
-                    Mi("Start Debugging / Run Active File", "F5", RunActiveFileInTerminal),
+                    Mi("Start Debugging", "F5", StartOrContinueDebugging),
                     Mi("Run Without Debugging", "Ctrl+F5", RunActiveFileInTerminal),
+                    Mi("Stop Debugging", "Shift+F5", () => _ = debugController.StopAsync()),
+                    Mi("Restart Debugging", "Ctrl+Shift+F5", () => debugController.Restart()),
+                    new Separator(),
+                    Mi("Step Over", "F10", () => debugController.StepOver()),
+                    Mi("Step Into", "F11", () => debugController.StepInto()),
+                    Mi("Step Out", "Shift+F11", () => debugController.StepOut()),
+                    Mi("Continue", "F5", () => debugController.Continue()),
+                    new Separator(),
+                    Mi("Toggle Breakpoint", "F9", ToggleBreakpointAtCursor),
+                    Mi("Add Configuration (launch.json)...", "", CreateLaunchJson),
+                    new Separator(),
                     Mi("Run Build Task", "Ctrl+Shift+B", RunWorkspaceBuildInTerminal),
                     Mi("Open Run & Debug View", "Ctrl+Shift+D", () => SwitchSidebarView("run"))
                 }
@@ -904,7 +921,10 @@ namespace codeLess.AvaloniaApp
                     new NativeMenuItemSeparator(),
                     Nmi("Toggle Primary Side Bar", TogglePrimarySidebar, Key.B, meta),
                     Nmi("Toggle Panel", ToggleBottomPanel, Key.J, meta),
-                    Nmi("Toggle AI Chat", ToggleRightChatDock, Key.I, meta | KeyModifiers.Alt)
+                    Nmi("Toggle AI Chat", ToggleRightChatDock, Key.I, meta | KeyModifiers.Alt),
+                    new NativeMenuItemSeparator(),
+                    Nmi("Network Activity", ShowNetworkActivity),
+                    Nmi("Offline Mode (toggle)", ToggleOfflineMode)
                 };
                 rootMenu.Add(new NativeMenuItem("View") { Menu = viewSub });
 
@@ -919,8 +939,17 @@ namespace codeLess.AvaloniaApp
 
                 var runSub = new NativeMenu
                 {
-                    Nmi("Start Debugging", RunActiveFileInTerminal, Key.F5, KeyModifiers.None),
-                    Nmi("Run Without Debugging", RunActiveFileInTerminal, Key.F5, KeyModifiers.Control)
+                    Nmi("Start Debugging", StartOrContinueDebugging, Key.F5, KeyModifiers.None),
+                    Nmi("Run Without Debugging", RunActiveFileInTerminal, Key.F5, KeyModifiers.Control),
+                    Nmi("Stop Debugging", () => _ = debugController.StopAsync(), Key.F5, KeyModifiers.Shift),
+                    Nmi("Restart Debugging", () => debugController.Restart(), Key.F5, meta | KeyModifiers.Shift),
+                    new NativeMenuItemSeparator(),
+                    Nmi("Step Over", () => debugController.StepOver(), Key.F10, KeyModifiers.None),
+                    Nmi("Step Into", () => debugController.StepInto(), Key.F11, KeyModifiers.None),
+                    Nmi("Step Out", () => debugController.StepOut(), Key.F11, KeyModifiers.Shift),
+                    new NativeMenuItemSeparator(),
+                    Nmi("Toggle Breakpoint", ToggleBreakpointAtCursor, Key.F9, KeyModifiers.None),
+                    Nmi("Add Configuration (launch.json)...", CreateLaunchJson)
                 };
                 rootMenu.Add(new NativeMenuItem("Run") { Menu = runSub });
 
@@ -1134,7 +1163,7 @@ namespace codeLess.AvaloniaApp
             explorerPanelView = BuildExplorerSidebarView();
             searchPanelView = BuildSearchSidebarView();
             scmPanelView = BuildScmSidebarView();
-            runDebugPanelView = BuildRunDebugSidebarView();
+            runDebugPanelView = BuildDebugSidebarView();
             extensionsPanelView = BuildExtensionsSidebarView();
             harnessPanelView = BuildHarnessSidebarView();
 
@@ -1249,70 +1278,6 @@ namespace codeLess.AvaloniaApp
             grid.Children.Add(outlineHeaderBtn);
             Grid.SetRow(outlineListBox, 5);
             grid.Children.Add(outlineListBox);
-
-            return grid;
-        }
-
-        private Grid BuildSearchSidebarView()
-        {
-            var grid = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,*"),
-                Margin = new Thickness(8, 6),
-                IsVisible = false
-            };
-
-            var topStack = new StackPanel { Spacing = 6 };
-            workspaceSearchInput = new TextBox { Watermark = "Search in workspace files...", FontSize = 12, Padding = new Thickness(7, 4) };
-            workspaceReplaceInput = new TextBox { Watermark = "Replace in workspace files...", FontSize = 12, Padding = new Thickness(7, 4) };
-
-            var toggleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            wsMatchCaseBtn = new Button { Content = "Aa", FontSize = 10.5, Padding = new Thickness(6, 2) };
-            wsWholeWordBtn = new Button { Content = "ab", FontSize = 10.5, Padding = new Thickness(6, 2) };
-            wsRegexBtn = new Button { Content = ".*", FontSize = 10.5, Padding = new Thickness(6, 2) };
-            var searchBtn = new Button { Content = "Search", FontSize = 11, Padding = new Thickness(10, 3) };
-            var replaceAllBtn = new Button { Content = "Replace All", FontSize = 11, Padding = new Thickness(10, 3) };
-
-            wsMatchCaseBtn.Click += (s, e) => { wsSearchMatchCase = !wsSearchMatchCase; ExecuteWorkspaceSearch(); };
-            wsWholeWordBtn.Click += (s, e) => { wsSearchWholeWord = !wsSearchWholeWord; ExecuteWorkspaceSearch(); };
-            wsRegexBtn.Click += (s, e) => { wsSearchRegex = !wsSearchRegex; ExecuteWorkspaceSearch(); };
-            searchBtn.Click += (s, e) => ExecuteWorkspaceSearch();
-            replaceAllBtn.Click += (s, e) => ExecuteWorkspaceReplaceAll();
-            workspaceSearchInput.KeyDown += (s, e) => { if (e.Key == Key.Enter) { ExecuteWorkspaceSearch(); e.Handled = true; } };
-
-            toggleRow.Children.Add(wsMatchCaseBtn);
-            toggleRow.Children.Add(wsWholeWordBtn);
-            toggleRow.Children.Add(wsRegexBtn);
-            toggleRow.Children.Add(searchBtn);
-            toggleRow.Children.Add(replaceAllBtn);
-
-            workspaceSearchSummary = new TextBlock { Text = "Type a query and press Enter to search across files.", FontSize = 11 };
-
-            topStack.Children.Add(workspaceSearchInput);
-            topStack.Children.Add(workspaceReplaceInput);
-            topStack.Children.Add(toggleRow);
-            topStack.Children.Add(workspaceSearchSummary);
-            Grid.SetRow(topStack, 0);
-            grid.Children.Add(topStack);
-
-            workspaceSearchResultsList = new ListBox
-            {
-                Margin = new Thickness(0, 6, 0, 0),
-                BorderThickness = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            workspaceSearchResultsList.SelectionChanged += (s, e) =>
-            {
-                int idx = workspaceSearchResultsList.SelectedIndex;
-                if (idx >= 0 && idx < workspaceSearchHits.Count)
-                {
-                    var hit = workspaceSearchHits[idx];
-                    OpenFileInTab(hit.FilePath, preview: false);
-                    PrimaryEditor.GoToLine(hit.LineNumber);
-                }
-            };
-            Grid.SetRow(workspaceSearchResultsList, 1);
-            grid.Children.Add(workspaceSearchResultsList);
 
             return grid;
         }
@@ -1605,7 +1570,7 @@ namespace codeLess.AvaloniaApp
             PrimaryEditor.OpenRecentWorkspaceRequested += dir => { if (Directory.Exists(dir)) LoadWorkspace(dir); };
             PrimaryEditor.EditorContextMenuRequested += OpenEditorContextMenu;
             PrimaryEditor.DiffAllDecisionRequested += (buf, accepted) => RefreshChangesetBanner();
-            PrimaryEditor.LinkActivated += (buf, target, line) => FollowEditorLink(buf, target);
+            PrimaryEditor.LinkActivated += (buf, target, line) => FollowEditorLinkWithLsp(PrimaryEditor, buf, target, line);
             PrimaryEditor.NavigateHistoryRequested += dir => { if (dir < 0) NavigateBack(); else NavigateForward(); };
             Grid.SetColumn(PrimaryEditor, 0);
             editorSplitGrid.Children.Add(PrimaryEditor);
@@ -1613,7 +1578,7 @@ namespace codeLess.AvaloniaApp
             SplitEditor = new AvaloniaEditorControl();
             SplitEditor.BufferModified += OnEditorBufferModified;
             SplitEditor.CaretMoved += buf => UpdateStatusBar();
-            SplitEditor.LinkActivated += (buf, target, line) => FollowEditorLink(buf, target);
+            SplitEditor.LinkActivated += (buf, target, line) => FollowEditorLinkWithLsp(SplitEditor, buf, target, line);
             SplitEditor.NavigateHistoryRequested += dir => { if (dir < 0) NavigateBack(); else NavigateForward(); };
             splitEditorBorder = new Border
             {
@@ -1848,6 +1813,7 @@ namespace codeLess.AvaloniaApp
                 IsVisible = false
             };
             bodyDeck.Children.Add(outputStreamBox);
+            bodyDeck.Children.Add(BuildDebugConsolePanel());
 
             // Terminal Host Grid: Left VT100 Emulator(s) | Right Session List (160px)
             terminalHostGrid = new Grid
@@ -2287,12 +2253,16 @@ namespace codeLess.AvaloniaApp
             });
             statusLanguageBtn = MakeStatusBtn("Plain Text", OpenLanguageModePicker);
             statusAiModelBtn = MakeStatusBtn($"✦ {settings.ActiveModel}", ShowByokAndHarnessModal);
+            statusLspBtn = MakeStatusBtn("", OpenLanguageServerStatusMenu);
+            statusLspBtn.IsVisible = false;
 
+            rightRow.Children.Add(statusLspBtn);
             rightRow.Children.Add(statusLnColBtn);
             rightRow.Children.Add(statusSpacesBtn);
             rightRow.Children.Add(statusEncodingBtn);
             rightRow.Children.Add(statusEolBtn);
             rightRow.Children.Add(statusLanguageBtn);
+            rightRow.Children.Add(BuildNetworkStatusButton());
             rightRow.Children.Add(statusAiModelBtn);
             Grid.SetColumn(rightRow, 2);
             grid.Children.Add(rightRow);
@@ -2409,10 +2379,15 @@ namespace codeLess.AvaloniaApp
             statusEolBtn.Foreground = new SolidColorBrush(statusFg);
             statusLanguageBtn.Foreground = new SolidColorBrush(statusFg);
             statusAiModelBtn.Foreground = new SolidColorBrush(statusFg);
+            ApplyNetworkPrivacyTheme(theme);
+
+            ApplySearchViewTheme();
+            ApplyLanguageServerTheme(theme);
 
             // Overlays
             CommandPalette.ApplyTheme(theme);
             ModalHost.ApplyTheme(theme);
+            ApplyDebugTheme(theme);
         }
 
         private void UpdateActivityBarSelectionVisuals()
@@ -2501,6 +2476,8 @@ namespace codeLess.AvaloniaApp
             sidebarProgressBar.StartProgress();
             workspaceRoot = Path.GetFullPath(rootDir);
             settings.AddRecentWorkspace(workspaceRoot);
+            OnDebugWorkspaceChanged();
+            LspOnWorkspaceChanged();
 
             string folderName = Path.GetFileName(workspaceRoot.TrimEnd('\\', '/'));
             if (string.IsNullOrEmpty(folderName)) folderName = workspaceRoot;
@@ -2878,6 +2855,8 @@ namespace codeLess.AvaloniaApp
         public void ActivateTab(EditorTabBuffer tab)
         {
             SweepClosedLargeFileTabs();
+            // Remember where the caret was in the editor being left so Back returns there (not to where it was opened).
+            if (!suppressNavRecord && !ReferenceEquals(activeTab, tab)) CaptureCurrentNavPosition();
             activeTab = tab;
             if (tab != null)
             {
@@ -2885,6 +2864,7 @@ namespace codeLess.AvaloniaApp
                 if (isEditorSplit && SplitEditor.CurrentBuffer == null)
                     SplitEditor.LoadBuffer(tab);
                 ExplorerTree.ActiveEditorFilePath = tab.FilePath ?? "";
+                if (!string.IsNullOrEmpty(tab.FilePath)) RevealFileInExplorer(tab.FilePath);
                 ExplorerTree.InvalidateVisual();
                 RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1);
             }
@@ -2901,6 +2881,7 @@ namespace codeLess.AvaloniaApp
             RebuildContextPillsBar();
             UpdateWindowTitle();
             UpdateStatusBar();
+            LspOnTabActivated(tab);
         }
 
         public void OpenWelcomeTab()
@@ -2952,6 +2933,7 @@ namespace codeLess.AvaloniaApp
                 RefreshTabStrip();
                 RefreshOpenEditorsSection();
             }
+            LspOnTabClosed(tab);
             return true;
         }
 
@@ -3008,6 +2990,7 @@ namespace codeLess.AvaloniaApp
                 RefreshGitStatus();
                 UpdateWindowTitle();
                 SetStatusMessage($"Saved {tab.FileName}");
+                LspOnSaved(tab);
                 return true;
             }
             catch (Exception ex)
@@ -3032,11 +3015,13 @@ namespace codeLess.AvaloniaApp
             RefreshTabStrip();
             RefreshOpenEditorsSection();
             UpdateWindowTitle();
+            LspOnBufferModified(activeTab);
         }
 
         private void OnEditorBufferModified(EditorTabBuffer buf)
         {
             if (buf == null) return;
+            LspOnBufferModified(buf);
             bool previewChanged = false;
             if (buf.IsDirty && buf.IsPreviewTab)
             {
@@ -3428,6 +3413,8 @@ namespace codeLess.AvaloniaApp
                 statusLanguageBtn.Content = new LiteralTextBlock("");
             }
             statusAiModelBtn.Content = new LiteralTextBlock($"✦ {settings.ActiveModel}");
+            UpdateDebugStatusItems();
+            UpdateLspStatusItem();
         }
 
         public static string MapLanguageDisplayName(string ext)

@@ -9,6 +9,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using codeLess.Studio;
 
 namespace codeLess.AvaloniaApp
@@ -29,6 +30,10 @@ namespace codeLess.AvaloniaApp
         public string Shortcut { get; set; } = "";
         public Action Execute { get; set; }
         public string PreviewThemeId { get; set; } = "";
+        /// <summary>Set for Quick Open file entries: choosing the entry raises FileOpenRequested (supports "file:line:col").</summary>
+        public string FilePath { get; set; } = "";
+        /// <summary>Recently opened / open editors: listed first when the Quick Open query is empty.</summary>
+        public bool IsRecent { get; set; }
 
         public string DisplayLabel => string.IsNullOrEmpty(Category) ? Title : $"{Category}: {Title}";
     }
@@ -45,6 +50,10 @@ namespace codeLess.AvaloniaApp
 
         public event Action<string> ThemePreviewRequested;
         public event Action<int> GoToLineRequested;
+        /// <summary>(path, 1-based line or 0, 1-based column or 0)</summary>
+        public event Action<string, int, int> FileOpenRequested;
+        private int pendingQuickOpenLine;
+        private int pendingQuickOpenColumn;
         public event Action Closed;
 
         private StudioTheme currentTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
@@ -103,6 +112,17 @@ namespace codeLess.AvaloniaApp
                 }
             };
             ResultsListBox.DoubleTapped += (s, e) => ExecuteSelected();
+            // VS Code: a single click on a Quick Open / Command Palette row picks it (was double-click only).
+            ResultsListBox.Tapped += (s, e) =>
+            {
+                var v = e.Source as Visual;
+                var item = v as ListBoxItem ?? v?.FindAncestorOfType<ListBoxItem>();
+                if (item == null) return;
+                int idx = ResultsListBox.IndexFromContainer(item);
+                if (idx >= 0) ResultsListBox.SelectedIndex = idx;
+                ExecuteSelected();
+                e.Handled = true;
+            };
         }
 
         public void ApplyTheme(StudioTheme theme)
@@ -172,14 +192,63 @@ namespace codeLess.AvaloniaApp
                 ModeHintLabel.Text = "Quick Open Files by Name (type '>' for commands, '@' for symbols, ':' for line)";
             }
 
-            if (string.IsNullOrEmpty(query))
+            pendingQuickOpenLine = 0;
+            pendingQuickOpenColumn = 0;
+            bool fileMode = raw.Length == 0 || !(raw.StartsWith(">") || raw.StartsWith("@") || raw.StartsWith("#") || raw.StartsWith(":"));
+            bool hasFileEntries = fileMode && AllEntries.Any(en => !string.IsNullOrEmpty(en.FilePath));
+            if (hasFileEntries)
+            {
+                // Quick Open (Ctrl/Cmd+P): files only, fuzzy ranked, recent first, optional ":line[:col]" suffix.
+                string fileQuery = WorkspaceSearchEngine.SplitQuickOpenLineSuffix(query, out pendingQuickOpenLine, out pendingQuickOpenColumn);
+                var files = AllEntries.Where(en => !string.IsNullOrEmpty(en.FilePath));
+                if (string.IsNullOrEmpty(fileQuery))
+                {
+                    FilteredEntries = files.Where(en => en.IsRecent).Concat(files.Where(en => !en.IsRecent)).Take(120).ToList();
+                }
+                else
+                {
+                    string[] toks = fileQuery.Replace('\\', '/').Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    FilteredEntries = files
+                        .Select(en =>
+                        {
+                            int total = 0;
+                            foreach (string t in toks)
+                            {
+                                int byName = WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.Title, t);
+                                int byPath = t.IndexOf('/') >= 0 || byName == 0
+                                    ? WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.stringSubtitleOrPath.Replace('\\', '/'), t) / 2
+                                    : 0;
+                                int sc = Math.Max(byName, byPath);
+                                if (sc <= 0) return (Entry: en, Score: 0);
+                                total += sc;
+                            }
+                            if (en.IsRecent) total += 15;
+                            return (Entry: en, Score: total);
+                        })
+                        .Where(x => x.Score > 0)
+                        .OrderByDescending(x => x.Score)
+                        .ThenBy(x => x.Entry.stringSubtitleOrPath.Length)
+                        .Take(120)
+                        .Select(x => x.Entry)
+                        .ToList();
+                }
+                if (pendingQuickOpenLine > 0)
+                    ModeHintLabel.Text = $"Open file and go to line {pendingQuickOpenLine}" + (pendingQuickOpenColumn > 0 ? $", column {pendingQuickOpenColumn}" : "");
+            }
+            else if (raw.StartsWith(">") && AllEntries.Any(en => !string.IsNullOrEmpty(en.FilePath)) && string.IsNullOrEmpty(query))
+            {
+                FilteredEntries = AllEntries.Where(en => string.IsNullOrEmpty(en.FilePath)).Take(120).ToList();
+            }
+            else if (string.IsNullOrEmpty(query))
             {
                 FilteredEntries = AllEntries.Take(120).ToList();
             }
             else
             {
                 string[] tokens = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                bool commandMode = raw.StartsWith(">");
                 FilteredEntries = AllEntries
+                    .Where(item => !commandMode || string.IsNullOrEmpty(item.FilePath))
                     .Where(item =>
                     {
                         string hay = (item.Category + " " + item.Title + " " + item.stringSubtitleOrPath + " " + item.Shortcut).ToLowerInvariant();
@@ -336,8 +405,12 @@ namespace codeLess.AvaloniaApp
             {
                 var chosen = FilteredEntries[idx];
                 originalThemeIdBeforePreview = null; // keep chosen theme
+                int line = pendingQuickOpenLine, col = pendingQuickOpenColumn;
                 Close(restorePreviewTheme: false);
-                chosen.Execute?.Invoke();
+                if (!string.IsNullOrEmpty(chosen.FilePath) && FileOpenRequested != null)
+                    FileOpenRequested(chosen.FilePath, line, col);
+                else
+                    chosen.Execute?.Invoke();
             }
         }
     }
@@ -649,7 +722,9 @@ namespace codeLess.AvaloniaApp
             var wrapChk = new CheckBox { Content = "Word Wrap (Alt+Z)", IsChecked = settings.WordWrap, Foreground = new SolidColorBrush(textPrimary) };
             var minimapChk = new CheckBox { Content = "Show Editor Minimap", IsChecked = settings.ShowMinimap, Foreground = new SolidColorBrush(textPrimary) };
             var autoSaveChk = new CheckBox { Content = "Auto Save Modified Files", IsChecked = settings.AutoSave, Foreground = new SolidColorBrush(textPrimary) };
+            var venvChk = new CheckBox { Content = "Activate Python environment in new terminals", IsChecked = settings.ActivatePythonEnvironmentInTerminal, Foreground = new SolidColorBrush(textPrimary) };
             var excludedBox = new TextBox { Text = settings.ExcludedFolders ?? "" };
+            var offlineChk = new CheckBox { Content = "Offline Mode (block all non-local network requests; local Ollama / LM Studio keep working)", IsChecked = NetworkLedger.OfflineMode, Foreground = new SolidColorBrush(textPrimary) };
 
             var providers = LlmHarnessAndAgentEngine.GetAllProviderTemplates();
             string activeNormId = StudioSettings.NormalizeProviderId(settings.ActiveProvider);
@@ -690,6 +765,8 @@ namespace codeLess.AvaloniaApp
             togglesRow.Children.Add(minimapChk);
             togglesRow.Children.Add(autoSaveChk);
             stack.Children.Add(togglesRow);
+            stack.Children.Add(venvChk);
+            stack.Children.Add(offlineChk);
 
             stack.Children.Add(new TextBlock { Text = "Excluded Workspace Folders (comma-separated)", FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = new SolidColorBrush(textPrimary) });
             stack.Children.Add(excludedBox);
@@ -731,6 +808,9 @@ namespace codeLess.AvaloniaApp
                 settings.WordWrap = wrapChk.IsChecked == true;
                 settings.ShowMinimap = minimapChk.IsChecked == true;
                 settings.AutoSave = autoSaveChk.IsChecked == true;
+                settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
+                settings.OfflineMode = offlineChk.IsChecked == true;
+                NetworkLedger.SetOfflineMode(settings.OfflineMode);
                 settings.ExcludedFolders = (excludedBox.Text ?? "").Trim();
                 if (providerCombo.SelectedIndex >= 0 && providerCombo.SelectedIndex < providers.Count)
                     settings.ActiveProvider = StudioSettings.NormalizeProviderId(providers[providerCombo.SelectedIndex].Name);

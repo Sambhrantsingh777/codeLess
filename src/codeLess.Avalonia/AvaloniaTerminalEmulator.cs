@@ -390,6 +390,70 @@ namespace codeLess.AvaloniaApp
         public void SelectAll() => gridCanvas.SelectAll();
         public void ClearSelection() => gridCanvas.ClearSelection();
         public void FocusTerminalCanvas() => gridCanvas.Focus();
+
+        // ---- Links (Cmd+Click on macOS, Ctrl+Click on Windows/Linux), like VS Code's terminal ----
+
+        /// <summary>Workspace root used (after the shell's live cwd) to resolve relative file links.</summary>
+        public Func<string> WorkspaceRootProvider { get; set; }
+
+        /// <summary>Cmd/Ctrl+Click on a file link: absolute path, 1-based line (0 = none), 1-based column (0 = none).</summary>
+        public event Action<string, int, int> FileLinkActivated;
+
+        /// <summary>Opens http(s) links. Defaults to the system browser; replaceable (tests, embedding).</summary>
+        public Action<string> UrlOpener { get; set; }
+
+        /// <summary>Link under a viewport cell (row/col 0-based), or null. Only existing files count as file links.</summary>
+        public TerminalLinkMatch FindLinkAtCell(int viewportRow, int col) => gridCanvas.FindLinkAtCell(viewportRow, col);
+
+        /// <summary>Selects the word at a viewport cell using VS Code's word separators (double-click).</summary>
+        public bool SelectWordAtCell(int viewportRow, int col) => gridCanvas.SelectWordAt(viewportRow, col);
+
+        /// <summary>Selects a whole viewport row (triple-click).</summary>
+        public void SelectLineAtCell(int viewportRow) => gridCanvas.SelectLineAt(viewportRow);
+
+        internal List<string> GetLinkBaseDirectories()
+        {
+            string live = null;
+            try { live = Session?.GetLiveWorkingDirectory(); } catch { }
+            string root = null;
+            try { root = WorkspaceRootProvider?.Invoke(); } catch { }
+            return TerminalLinkDetector.BuildBaseDirectories(live, Session?.WorkingDirectory ?? WorkingDirectory, root);
+        }
+
+        public void ActivateLink(TerminalLinkMatch link)
+        {
+            if (link == null) return;
+            if (link.IsUrl)
+            {
+                (UrlOpener ?? OpenUrlInDefaultBrowser)(link.Url);
+                return;
+            }
+            if (!string.IsNullOrEmpty(link.FilePath))
+                FileLinkActivated?.Invoke(link.FilePath, link.Line, link.Column);
+        }
+
+        public static void OpenUrlInDefaultBrowser(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                return;
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    return;
+                }
+                var psi = new System.Diagnostics.ProcessStartInfo(RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "open" : "xdg-open")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                psi.ArgumentList.Add(url);
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch { }
+        }
     }
 
     /// <summary>Input-method bridge for the terminal (composition drawn at the cursor cell, committed text via OnTextInput).</summary>
@@ -539,11 +603,31 @@ namespace codeLess.AvaloniaApp
         private int selStartRow = -1, selStartCol = -1;
         private int selEndRow = -1, selEndCol = -1;
 
+        // Pointer cursors are created once (platform cursor objects); creation can fail on headless/odd platforms.
+        private static Cursor ibeamCursor, handCursor;
+        private static bool cursorsCreated;
+        private static void EnsureCursors()
+        {
+            if (cursorsCreated) return;
+            cursorsCreated = true;
+            try { ibeamCursor = new Cursor(StandardCursorType.Ibeam); } catch { ibeamCursor = null; }
+            try { handCursor = new Cursor(StandardCursorType.Hand); } catch { handCursor = null; }
+        }
+
+        // Hovered link (shown while Cmd/Ctrl is held): viewport row, the row text it was detected in, and the match.
+        private TerminalLinkMatch hoverLink;
+        private int hoverRow = -1;
+        private string hoverLineText;
+        private Point? lastPointerPos;
+        internal TerminalLinkMatch HoveredLink => hoverLink;
+
         public AvaloniaTerminalGridCanvas(AvaloniaTerminalEmulatorControl owner)
         {
             this.owner = owner;
             Focusable = true;
             ClipToBounds = true;
+            EnsureCursors();
+            if (ibeamCursor != null) Cursor = ibeamCursor;
             imeClient = new TerminalImeClient(this);
             TextInputMethodClientRequested += (s, e) => e.Client = imeClient;
             global::Avalonia.Input.InputMethod.SetIsInputMethodEnabled(this, true);
@@ -573,14 +657,18 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
+        // Word/line/select-all selections are real even when they cover a single cell (a plain click is not).
+        private bool explicitSelection;
+
         public bool HasSelection()
         {
-            return selStartRow >= 0 && selEndRow >= 0 && (selStartRow != selEndRow || selStartCol != selEndCol);
+            return selStartRow >= 0 && selEndRow >= 0 && (explicitSelection || selStartRow != selEndRow || selStartCol != selEndCol);
         }
 
         public void ClearSelection()
         {
             selStartRow = selStartCol = selEndRow = selEndCol = -1;
+            explicitSelection = false;
             isSelecting = false;
             InvalidateVisual();
         }
@@ -593,6 +681,7 @@ namespace codeLess.AvaloniaApp
             selStartCol = 0;
             selEndRow = buf.Rows - 1;
             selEndCol = buf.Cols - 1;
+            explicitSelection = true;
             InvalidateVisual();
         }
 
@@ -648,6 +737,144 @@ namespace codeLess.AvaloniaApp
 
         private int activeMouseBtnCode = -1;
 
+        /// <summary>Text of a viewport row, one character per cell (continuation/empty cells as spaces).</summary>
+        internal string GetViewportRowText(int row)
+        {
+            var buf = owner.ActiveBuffer;
+            if (buf == null || row < 0 || row >= buf.Rows) return "";
+            int cols = buf.Cols;
+            var sb = new StringBuilder(cols);
+            for (int c = 0; c < cols; c++)
+            {
+                char ch = buf.GetViewportCell(row, c, scrollbackOffset).Char;
+                sb.Append(ch == '\0' ? ' ' : ch);
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        internal static bool IsLinkModifier(KeyModifiers mods) =>
+            MacKeymap.IsMacOS ? mods.HasFlag(KeyModifiers.Meta) : mods.HasFlag(KeyModifiers.Control);
+
+        private static bool IsLinkModifierKey(Key key) =>
+            MacKeymap.IsMacOS ? (key == Key.LWin || key == Key.RWin) : (key == Key.LeftCtrl || key == Key.RightCtrl);
+
+        private void PointToCell(Point pt, out int row, out int col)
+        {
+            col = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
+            row = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
+        }
+
+        public TerminalLinkMatch FindLinkAtCell(int row, int col)
+        {
+            var buf = owner.ActiveBuffer;
+            if (buf == null || row < 0 || row >= buf.Rows || col < 0) return null;
+            string line = GetViewportRowText(row);
+            if (col >= line.Length) return null;
+            try { return TerminalLinkDetector.FindLinkAt(line, col, owner.GetLinkBaseDirectories()); }
+            catch { return null; }
+        }
+
+        /// <summary>Re-evaluates the hovered link: shown (underline + hand) only while the link modifier is held.</summary>
+        private void UpdateHoverLink(Point pt, bool modifierHeld)
+        {
+            if (!modifierHeld || isSelecting || owner.ActiveBuffer == null)
+            {
+                ClearHoverLink();
+                return;
+            }
+            PointToCell(pt, out int r, out int c);
+            if (hoverLink != null && r == hoverRow && c >= hoverLink.StartCol && c < hoverLink.EndColExclusive)
+            {
+                if (string.Equals(GetViewportRowText(r), hoverLineText, StringComparison.Ordinal)) return;
+            }
+            string line = GetViewportRowText(r);
+            TerminalLinkMatch link = null;
+            if (c < line.Length)
+            {
+                try { link = TerminalLinkDetector.FindLinkAt(line, c, owner.GetLinkBaseDirectories()); }
+                catch { link = null; }
+            }
+            if (link == null)
+            {
+                ClearHoverLink();
+                return;
+            }
+            hoverLink = link;
+            hoverRow = r;
+            hoverLineText = line;
+            if (handCursor != null) Cursor = handCursor;
+            InvalidateVisual();
+        }
+
+        private void ClearHoverLink()
+        {
+            if (hoverLink == null) return;
+            hoverLink = null;
+            hoverRow = -1;
+            hoverLineText = null;
+            if (ibeamCursor != null) Cursor = ibeamCursor;
+            InvalidateVisual();
+        }
+
+        public bool SelectWordAt(int row, int col)
+        {
+            string line = GetViewportRowText(row);
+            if (!TerminalLinkDetector.GetWordBounds(line, col, out int start, out int end)) return false;
+            selStartRow = selEndRow = row;
+            selStartCol = start;
+            selEndCol = end;
+            explicitSelection = true;
+            isSelecting = false;
+            InvalidateVisual();
+            return true;
+        }
+
+        public void SelectLineAt(int row)
+        {
+            var buf = owner.ActiveBuffer;
+            if (buf == null || row < 0 || row >= buf.Rows) return;
+            // Whole row like VS Code; GetSelectedText trims the trailing blanks.
+            selStartRow = selEndRow = row;
+            selStartCol = 0;
+            selEndCol = buf.Cols - 1;
+            explicitSelection = true;
+            isSelecting = false;
+            InvalidateVisual();
+        }
+
+        private void ShowContextMenu()
+        {
+            string copyKey = MacKeymap.IsMacOS ? "Cmd+C" : "Ctrl+Shift+C";
+            string pasteKey = MacKeymap.IsMacOS ? "Cmd+V" : "Ctrl+Shift+V";
+            var copy = new MenuItem { Header = "Copy   (" + copyKey + ")", IsEnabled = HasSelection() };
+            copy.Click += (s, e) =>
+            {
+                string sel = GetSelectedText();
+                if (!string.IsNullOrEmpty(sel)) _ = CopyToClipboardAsync(sel);
+            };
+            var paste = new MenuItem { Header = "Paste   (" + pasteKey + ")" };
+            paste.Click += (s, e) => _ = PasteFromClipboardAsync();
+            var selectAll = new MenuItem { Header = "Select All" };
+            selectAll.Click += (s, e) => SelectAll();
+            var clear = new MenuItem { Header = "Clear Terminal" };
+            clear.Click += (s, e) => owner.ClearTerminal();
+            var menu = new ContextMenu { ItemsSource = new object[] { copy, paste, new Separator(), selectAll, clear } };
+            try { menu.Open(this); } catch { }
+        }
+
+        protected override void OnPointerExited(PointerEventArgs e)
+        {
+            base.OnPointerExited(e);
+            lastPointerPos = null;
+            ClearHoverLink();
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+            if (IsLinkModifierKey(e.Key)) ClearHoverLink();
+        }
+
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
@@ -660,6 +887,20 @@ namespace codeLess.AvaloniaApp
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+
+            // Cmd/Ctrl+Click opens a link. Checked before mouse-tracking forwarding so links work inside TUIs too,
+            // but only when a link is actually under the pointer (otherwise the click goes to the app as before).
+            if (props.IsLeftButtonPressed && IsLinkModifier(e.KeyModifiers))
+            {
+                var link = FindLinkAtCell(r, c);
+                if (link != null)
+                {
+                    ClearHoverLink();
+                    owner.ActivateLink(link);
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             if (buf != null && buf.MouseTrackingMode != 0 && !shift && !HasSelection())
             {
@@ -679,10 +920,34 @@ namespace codeLess.AvaloniaApp
 
             if (props.IsLeftButtonPressed)
             {
-                isSelecting = true;
-                selStartRow = selEndRow = r;
-                selStartCol = selEndCol = c;
-                InvalidateVisual();
+                if (e.ClickCount == 2)
+                {
+                    if (!SelectWordAt(r, c)) ClearSelection();
+                }
+                else if (e.ClickCount >= 3)
+                {
+                    SelectLineAt(r);
+                }
+                else if (shift && selStartRow >= 0)
+                {
+                    // Shift+Click extends the current selection (VS Code / xterm.js).
+                    selEndRow = r;
+                    selEndCol = c;
+                    isSelecting = true;
+                    InvalidateVisual();
+                }
+                else
+                {
+                    explicitSelection = false;
+                    isSelecting = true;
+                    selStartRow = selEndRow = r;
+                    selStartCol = selEndCol = c;
+                    InvalidateVisual();
+                }
+            }
+            else if (props.IsRightButtonPressed)
+            {
+                ShowContextMenu();
             }
             e.Handled = true;
         }
@@ -695,6 +960,8 @@ namespace codeLess.AvaloniaApp
             int c = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
             int r = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            lastPointerPos = pt;
+            UpdateHoverLink(pt, IsLinkModifier(e.KeyModifiers));
 
             if (buf != null && buf.MouseTrackingMode >= 1002 && !shift && !isSelecting)
             {
@@ -722,6 +989,9 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
+            // A release that belongs to a click forwarded to a mouse-tracking app must not also raise the
+            // context-menu gesture (Control.OnPointerReleased raises ContextRequested for unhandled right releases).
+            if (activeMouseBtnCode >= 0) e.Handled = true;
             base.OnPointerReleased(e);
             if (activeMouseBtnCode >= 0 && owner.ActiveBuffer != null)
             {
@@ -777,6 +1047,8 @@ namespace codeLess.AvaloniaApp
 
             int maxSb = buf.ScrollbackCount;
             scrollbackOffset = Math.Max(0, Math.Min(maxSb, scrollbackOffset + (wheelUp ? steps : -steps)));
+            ClearHoverLink();
+            if (lastPointerPos.HasValue) UpdateHoverLink(lastPointerPos.Value, IsLinkModifier(e.KeyModifiers));
             InvalidateVisual();
             e.Handled = true;
         }
@@ -790,6 +1062,12 @@ namespace codeLess.AvaloniaApp
             // dangling flag swallowed the next typed character.
             suppressNextTextInput = false;
             base.OnKeyDown(e);
+            // Pressing Cmd/Ctrl while the pointer rests over a link reveals it without having to move the mouse.
+            if (IsLinkModifierKey(e.Key))
+            {
+                if (lastPointerPos.HasValue) UpdateHoverLink(lastPointerPos.Value, true);
+                return;
+            }
             if (IsImeComposing) return; // Enter / Backspace / arrows belong to the input method while composing
             bool isMac = MacKeymap.IsMacOS;
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
@@ -1185,6 +1463,16 @@ namespace codeLess.AvaloniaApp
                         context.DrawLine(new Pen(runBrush, 1), new Point(rx, y + CellH - 2), new Point(rx + (c - startCol) * cellW, y + CellH - 2));
                     }
                 }
+            }
+
+            // Underline the Cmd/Ctrl-hovered link (skipped if the row's text changed under it since detection).
+            if (hoverLink != null && hoverRow >= 0 && hoverRow < rows &&
+                string.Equals(GetViewportRowText(hoverRow), hoverLineText, StringComparison.Ordinal))
+            {
+                double ly = PadTop + hoverRow * CellH + textTop + TextLineHeight - 0.5;
+                double lx1 = PadLeft + hoverLink.StartCol * cellW;
+                double lx2 = PadLeft + Math.Min(cols, hoverLink.EndColExclusive) * cellW;
+                context.DrawLine(new Pen(GetBrush(owner.TermFgColor), 1), new Point(lx1, ly), new Point(lx2, ly));
             }
 
             // IME caret geometry + composition preview at the cursor cell

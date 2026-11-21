@@ -22,7 +22,7 @@ using System.Windows.Forms;
 
 namespace codeLess.Studio
 {
-    public class CodeLessMainForm : CodeLessChromelessForm
+    public partial class CodeLessMainForm : CodeLessChromelessForm
     {
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -77,6 +77,8 @@ namespace codeLess.Studio
         }
 
         private IdePersistentSettings settings;
+        private WinFormsNetworkPrivacyController networkPrivacy;
+        private Label statusNetworkItem;
         private List<StudioTheme> themes;
         private StudioTheme activeTheme;
         private LlmHarnessAndAgentEngine aiEngine;
@@ -241,6 +243,8 @@ namespace codeLess.Studio
         private Label statusEncodingItem;
         private Label statusEolItem;
         private Label statusLangItem;
+        private Label statusLspItem;
+        private WinFormsLanguageServerController lspController;
         private Label statusChordLabel;
 
         // Navigation History (Go -> Back / Forward) & Chord State
@@ -335,6 +339,8 @@ namespace codeLess.Studio
             this.activeTheme = StudioTheme.ResolveTheme(themes, settings.ActiveThemeId);
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
             this.vsixEngine = new VsixAndPluginHostEngine(themes);
+            this.networkPrivacy = new WinFormsNetworkPrivacyController(this, settings, () => activeTheme);
+            InitLanguageServerController();
 
             this.aiEngine.OnRequestToolApproval = (toolName, detail) =>
             {
@@ -412,6 +418,7 @@ namespace codeLess.Studio
             }
 
             BuildWorkbenchLayout();
+            InitDebugWorkbench();
             editorControl.ShowWelcomePage = IsWelcomeTabOpen;
             splitEditorControl.ShowWelcomePage = false;
             ApplySettingsToEditors();
@@ -665,14 +672,15 @@ namespace codeLess.Studio
                 this.Text = "codeLess";
         }
 
-        public void RecordNavigationHistory(string filePath, int line1Based)
+        public void RecordNavigationHistory(string filePath, int line1Based, bool newEntryForSameFile = false)
         {
             if (suppressNavRecord || string.IsNullOrEmpty(filePath)) return;
             Tuple<string, int> entry = Tuple.Create(filePath, Math.Max(1, line1Based));
             if (navHistoryIndex >= 0 && navHistoryIndex < navHistory.Count)
             {
                 var cur = navHistory[navHistoryIndex];
-                if (string.Equals(cur.Item1, entry.Item1, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(cur.Item1, entry.Item1, StringComparison.OrdinalIgnoreCase) &&
+                    (!newEntryForSameFile || cur.Item2 == entry.Item2))
                 {
                     navHistory[navHistoryIndex] = entry;
                     return;
@@ -687,6 +695,8 @@ namespace codeLess.Studio
 
         public bool NavigateBack()
         {
+            // Store where the caret is now so Forward returns here.
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
             if (navHistoryIndex <= 0 || navHistory.Count == 0) return false;
             navHistoryIndex--;
             var target = navHistory[navHistoryIndex];
@@ -706,6 +716,7 @@ namespace codeLess.Studio
 
         public bool NavigateForward()
         {
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
             if (navHistoryIndex >= navHistory.Count - 1 || navHistory.Count == 0) return false;
             navHistoryIndex++;
             var target = navHistory[navHistoryIndex];
@@ -833,6 +844,7 @@ namespace codeLess.Studio
         private void UpdateStatusBarCursorAndLanguage(EditorTabBuffer buf)
         {
             if (statusCursorLangLabel == null) return;
+            if (lspController != null) lspController.UpdateStatusItem();
             int effTabSize = (buf != null && buf.CustomTabSize.HasValue && buf.CustomTabSize.Value > 0)
                 ? buf.CustomTabSize.Value
                 : (settings != null && settings.TabSize > 0 ? settings.TabSize : 4);
@@ -859,6 +871,7 @@ namespace codeLess.Studio
                 if (statusEolLabel != null) statusEolLabel.Text = "CRLF";
                 if (statusLangLabel != null) statusLangLabel.Text = emptyMode;
                 if (statusWrapLabel != null) statusWrapLabel.Text = "Wrap: OFF";
+                UpdateDebugStatusItems(null);
                 LayoutStatusBarItems();
                 return;
             }
@@ -902,6 +915,7 @@ namespace codeLess.Studio
                 statusLangLabel.Text = langDisplay;
             if (statusWrapLabel != null)
                 statusWrapLabel.Text = buf.WordWrap ? "Wrap: ON" : "Wrap: OFF";
+            UpdateDebugStatusItems(buf);
             LayoutStatusBarItems();
         }
 
@@ -1161,6 +1175,11 @@ namespace codeLess.Studio
                 e.SuppressKeyPress = true;
                 JumpToProblemOffset(e.Shift ? -1 : 1);
             }
+            else if (e.KeyCode == Keys.F4 && !e.Control && !e.Alt && searchMatchCountWin > 0) // F4 / Shift+F4 Next/Previous Search Result
+            {
+                e.SuppressKeyPress = true;
+                NavigateSearchResultWin(e.Shift ? -1 : 1);
+            }
             else if (e.Alt && e.KeyCode == Keys.Z) // Alt+Z Toggle Word Wrap
             {
                 e.SuppressKeyPress = true;
@@ -1182,16 +1201,12 @@ namespace codeLess.Studio
             else if (e.Control && e.Shift && e.KeyCode == Keys.F) // VS Code Multi-File Search
             {
                 e.SuppressKeyPress = true;
-                leftSidebar.Visible = true;
-                SwitchSidebarView("search");
-                searchInput.Focus();
+                ShowSearchViewWin(false);
             }
             else if (e.Control && e.Shift && e.KeyCode == Keys.H) // Replace in Files
             {
                 e.SuppressKeyPress = true;
-                leftSidebar.Visible = true;
-                SwitchSidebarView("search");
-                searchReplaceInput.Focus();
+                ShowSearchViewWin(true);
             }
             else if (e.Control && e.Shift && e.KeyCode == Keys.G) // VS Code Source Control
             {
@@ -1462,6 +1477,7 @@ namespace codeLess.Studio
             activeTab = null;
             workspaceRoot = "";
             additionalWorkspaceFolders.Clear();
+            if (lspController != null) { lspController.SetWorkspaceRoot(null); lspController.SyncTabs(); }
             terminalWorkingDir = ConPtyTerminalSession.GetDefaultHomeDirectory();
             SyncTerminalsToWorkingDirectory(terminalWorkingDir);
             workspaceFiles.Clear();
@@ -2134,6 +2150,9 @@ namespace codeLess.Studio
             statusEncodingItem = createStatusItem("UTF-8", "Select Encoding", showEncodingMenu);
             statusEolItem = createStatusItem("CRLF", "Select End of Line Sequence", showEolMenu);
             statusLangItem = createStatusItem("Plain Text", "Select Language Mode", showLangMenu);
+            statusLspItem = createStatusItem("", "Language Server: log, restart, configure", (ctrl) => { if (lspController != null) lspController.ShowStatusMenu(ctrl); });
+            statusLspItem.Visible = false;
+            if (lspController != null) lspController.StatusItem = statusLspItem;
 
             statusIndentLabel = new Label { AutoSize = true, Visible = false, Text = "Spaces: 4" };
             statusEolLabel = new Label { AutoSize = true, Visible = false, Text = "CRLF" };
@@ -2141,11 +2160,14 @@ namespace codeLess.Studio
             statusWrapLabel = new Label { AutoSize = true, Visible = false, Text = "Wrap: OFF" };
 
             statusRightLabel = createStatusItem(GetActiveModelDisplayName(), "Select AI Model / Provider", (ctrl) => OpenByokConfigurationDialog());
+            statusNetworkItem = networkPrivacy.CreateStatusItem(StatusItemFont);
+            networkPrivacy.StatusItemResized = LayoutStatusBarItems;
+            statusBar.Controls.Add(statusNetworkItem);
 
             statusBar.Controls.AddRange(new Control[]
             {
                 statusLeftLabel, statusProblemsPanel, statusProblemsLabel, statusChordLabel,
-                statusLnColItem, statusSpacesItem, statusEncodingItem, statusEolItem, statusLangItem,
+                statusLnColItem, statusSpacesItem, statusEncodingItem, statusEolItem, statusLangItem, statusLspItem,
                 statusRightLabel, statusCursorLangLabel, statusIndentLabel, statusEolLabel, statusLangLabel, statusWrapLabel
             });
             statusBar.Resize += (s, e) => LayoutStatusBarItems();
@@ -2292,6 +2314,7 @@ namespace codeLess.Studio
 
             Panel tabActionsBar = new Panel { Dock = DockStyle.Right, Width = 84 };
             Button runTabActionBtn = CreateExplorerVectorIconButton("run", new Point(4, 5));
+            AttachPythonRunMenu(runTabActionBtn);
             runTabActionBtn.Click += async (s, e) => { if (activeTab != null) await ExecuteActiveFileInTerminalAsync(activeTab); };
 
             splitEditorTabBtn = CreateExplorerVectorIconButton("split", new Point(30, 5));
@@ -2465,8 +2488,11 @@ namespace codeLess.Studio
             int rightX = w - 8;
             Label[] rightItems = new Label[]
             {
+                statusNetworkItem,
                 statusRightLabel,
+                statusLspItem,
                 statusLangItem,
+                statusPythonItem,
                 statusEolItem,
                 statusEncodingItem,
                 statusSpacesItem,
@@ -2796,8 +2822,8 @@ namespace codeLess.Studio
             editMenu.DropDownItems.Add(CreateMenuItem("Find", "Ctrl+F", () => editorControl.OpenFindBar(false)));
             editMenu.DropDownItems.Add(CreateMenuItem("Replace", "Ctrl+H", () => editorControl.OpenFindBar(true)));
             editMenu.DropDownItems.Add(new ToolStripSeparator());
-            editMenu.DropDownItems.Add(CreateMenuItem("Find in Files", "Ctrl+Shift+F", () => { leftSidebar.Visible = true; SwitchSidebarView("search"); searchInput.Focus(); }));
-            editMenu.DropDownItems.Add(CreateMenuItem("Replace in Files", "Ctrl+Shift+H", () => { leftSidebar.Visible = true; SwitchSidebarView("search"); searchReplaceInput.Focus(); }));
+            editMenu.DropDownItems.Add(CreateMenuItem("Find in Files", "Ctrl+Shift+F", () => ShowSearchViewWin(false)));
+            editMenu.DropDownItems.Add(CreateMenuItem("Replace in Files", "Ctrl+Shift+H", () => ShowSearchViewWin(true)));
             editMenu.DropDownItems.Add(new ToolStripSeparator());
             editMenu.DropDownItems.Add(CreateMenuItem("Toggle Line Comment", "Ctrl+/", () => editorControl.ToggleCommentActiveDocument()));
             editMenu.DropDownItems.Add(CreateMenuItem("Toggle Block Comment", "Shift+Alt+A", () => editorControl.ToggleBlockCommentActiveDocument()));
@@ -2890,6 +2916,7 @@ namespace codeLess.Studio
             viewMenu.DropDownItems.Add(CreateMenuItem("Extensions", "Ctrl+Shift+X", () => { leftSidebar.Visible = true; SwitchSidebarView("extensions"); }));
             viewMenu.DropDownItems.Add(new ToolStripSeparator());
             viewMenu.DropDownItems.Add(CreateMenuItem("Problems", "Ctrl+Shift+M", () => { bottomDockPanel.Visible = true; SwitchBottomDockTab("problems"); }));
+            viewMenu.DropDownItems.Add(CreateMenuItem("Network Activity", "", () => networkPrivacy.ShowPanel()));
             viewMenu.DropDownItems.Add(CreateMenuItem("Output", "Ctrl+Shift+U", () => { bottomDockPanel.Visible = true; SwitchBottomDockTab("output"); }));
             viewMenu.DropDownItems.Add(CreateMenuItem("Debug Console", "Ctrl+Shift+Y", () => { bottomDockPanel.Visible = true; SwitchBottomDockTab("output"); }));
             viewMenu.DropDownItems.Add(CreateMenuItem("Terminal", "Ctrl+`", () =>
@@ -2944,31 +2971,28 @@ namespace codeLess.Studio
             }));
             goMenu.DropDownItems.Add(CreateMenuItem("Go to Line/Column...", "Ctrl+G", () => OpenCommandPalette(":")));
             goMenu.DropDownItems.Add(CreateMenuItem("Go to Bracket", "Ctrl+Shift+\\", () => editorControl.GoToMatchingBracket()));
+            if (lspController != null) lspController.AddMenuItems(goMenu, CreateMenuItem);
             goMenu.DropDownItems.Add(new ToolStripSeparator());
             goMenu.DropDownItems.Add(CreateMenuItem("Next Problem", "F8", () => JumpToProblemOffset(1)));
             goMenu.DropDownItems.Add(CreateMenuItem("Previous Problem", "Shift+F8", () => JumpToProblemOffset(-1)));
 
             // 6. RUN MENU
             ToolStripMenuItem runMenu = new ToolStripMenuItem("&Run");
-            runMenu.DropDownItems.Add(CreateMenuItem("Run Active File", "F5", async () =>
-            {
-                if (activeTab != null) await ExecuteActiveFileInTerminalAsync(activeTab);
-            }));
+            runMenu.DropDownItems.Add(CreateMenuItem("Start Debugging", "F5", () => StartOrContinueDebugging()));
             runMenu.DropDownItems.Add(CreateMenuItem("Run Without Debugging", "Ctrl+F5", async () =>
             {
                 if (activeTab != null) await ExecuteActiveFileInTerminalAsync(activeTab);
             }));
-            runMenu.DropDownItems.Add(CreateMenuItem("Stop Execution", "Shift+F5", () => KillActiveTerminalProcess()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Stop Debugging / Execution", "Shift+F5", () => { if (debugController != null && debugController.IsActive) debugController.StopAsync(); else KillActiveTerminalProcess(); }));
+            runMenu.DropDownItems.Add(CreateMenuItem("Restart Debugging", "Ctrl+Shift+F5", () => debugController.Restart()));
             runMenu.DropDownItems.Add(new ToolStripSeparator());
-            runMenu.DropDownItems.Add(CreateMenuItem("Toggle Breakpoint", "F9", () =>
-            {
-                if (activeTab != null)
-                {
-                    int ln = activeTab.CursorLine + 1;
-                    if (!activeTab.Breakpoints.Remove(ln)) activeTab.Breakpoints.Add(ln);
-                    editorControl.Invalidate(true);
-                }
-            }));
+            runMenu.DropDownItems.Add(CreateMenuItem("Step Over", "F10", () => debugController.StepOver()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Step Into", "F11", () => debugController.StepInto()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Step Out", "Shift+F11", () => debugController.StepOut()));
+            runMenu.DropDownItems.Add(new ToolStripSeparator());
+            runMenu.DropDownItems.Add(CreateMenuItem("Toggle Breakpoint", "F9", () => ToggleBreakpointAtCursor()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Add Configuration (launch.json)...", "", () => CreateLaunchJson()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Python: Select Interpreter", "", () => TryExecuteDebugCommand("python_select_interpreter")));
             runMenu.DropDownItems.Add(new ToolStripSeparator());
             runMenu.DropDownItems.Add(CreateMenuItem("Auto-Heal Last Crash", "", async () => await AutoHealLastTerminalErrorAsync()));
             runMenu.DropDownItems.Add(CreateMenuItem("HTTP / REST API Playground...", "", () => OpenRestApiPlaygroundDialog()));
@@ -3132,8 +3156,33 @@ if __name__ == '__main__':
             }
         }
 
+        private void InitLanguageServerController()
+        {
+            lspController = new WinFormsLanguageServerController(this, settings);
+            lspController.GetOpenTabs = () => openTabs;
+            lspController.GetActiveTab = () => activeTab;
+            lspController.GetWorkspaceRoot = () => workspaceRoot;
+            lspController.GetTheme = () => activeTheme;
+            lspController.SetStatus = msg => { if (statusLeftLabel != null) statusLeftLabel.Text = msg; };
+            lspController.OpenFile = path => OpenFileInTab(path);
+            lspController.JumpTo = (line, col) => editorControl.JumpToLineAndColumn(line, col);
+            lspController.RefreshProblems = buf => RefreshOutlineAndProblems(buf);
+            lspController.RefreshTabs = () => { RefreshTabStrip(); RefreshOpenEditorsSection(); UpdateWindowTitle(); };
+            lspController.LayoutStatusBar = () => LayoutStatusBarItems();
+            lspController.TypeInTerminal = cmd =>
+            {
+                SwitchBottomDockTab("terminal");
+                if (conPtyTerminalControl != null && conPtyTerminalControl.ActiveSession != null && conPtyTerminalControl.ActiveSession.IsRunning)
+                {
+                    conPtyTerminalControl.ActiveSession.WriteInput(cmd);
+                    conPtyTerminalControl.Focus();
+                }
+            };
+        }
+
         private void WireEditorEvents(CodeLessEditorControl ctrl)
         {
+            if (lspController != null) lspController.Attach(ctrl);
             ctrl.OnSaveRequested += (buf) => SaveTabBuffer(buf);
             ctrl.OnRunFileRequested += async (buf) => await ExecuteActiveFileInTerminalAsync(buf);
             ctrl.OnCtrlKRequested += async (inst, buf) => await HandleCtrlKInlineEditAsync(inst, buf);
@@ -3144,6 +3193,7 @@ if __name__ == '__main__':
             System.Windows.Forms.Timer outlineDebounceTimer = null;
             ctrl.OnBufferModified += (buf) =>
             {
+                if (lspController != null) lspController.OnBufferModified(buf);
                 bool previewCleared = false;
                 if (buf != null && buf.IsPreview)
                 {
@@ -3204,7 +3254,12 @@ if __name__ == '__main__':
             };
             ctrl.OnGoToDefinitionRequested += HandleGoToDefinition;
             ctrl.WorkspaceRootProvider = () => workspaceRoot;
-            ctrl.OnLinkActivated += (buf, target) => HandleEditorLinkActivated(buf, target);
+            ctrl.OnLinkActivated += (buf, target) =>
+            {
+                // Identifiers go to the language server first; imports / paths / URLs keep the built-in resolver.
+                if (lspController != null && lspController.TryFollowSymbolLink(buf, target, () => HandleEditorLinkActivated(buf, target))) return;
+                HandleEditorLinkActivated(buf, target);
+            };
             ctrl.OnGoToReferencesRequested += (buf, sym) => HandleGoToReferences(sym);
             ctrl.OnPeekDefinitionRequested += (buf, sym) => HandlePeekDefinition(sym);
             ctrl.OnCommandPaletteRequested += () => OpenCommandPalette(">");
@@ -3741,9 +3796,9 @@ if __name__ == '__main__':
             });
             ToolStripMenuItem expFindInFolderItem = CreateMenuItem("Find in Folder...", "Shift+Alt+F", () =>
             {
-                leftSidebar.Visible = true;
-                SwitchSidebarView("search");
-                searchInput.Focus();
+                string p = GetSelectedNodePath();
+                if (string.IsNullOrEmpty(p)) p = workspaceRoot;
+                FindInFolder(p);
             });
             ToolStripMenuItem expCutItem = CreateMenuItem("Cut", "Ctrl+X", () =>
             {
@@ -4050,13 +4105,13 @@ if __name__ == '__main__':
         {
             searchPanel = new Panel { Dock = DockStyle.Fill, Visible = false, Padding = new Padding(10, 8, 10, 8) };
 
-            Label sLbl = new Label { Text = "FIND IN WORKSPACE", Dock = DockStyle.Top, Height = 20, Font = new Font("Segoe UI Semibold", 7.8f, FontStyle.Bold) };
+            Label sLbl = new Label { Text = "SEARCH", Dock = DockStyle.Top, Height = 20, Font = new Font("Segoe UI Semibold", 7.8f, FontStyle.Bold) };
             searchInput = new CodeLessDarkInputBox
             {
                 Dock = DockStyle.Top,
                 Height = 28,
                 Font = new Font("Consolas", 9.2f),
-                Placeholder = "Search files (text or regex)..."
+                Placeholder = "Search (Enter)  -  Down arrow moves into the results"
             };
 
             Panel searchFlagsRow = new Panel { Dock = DockStyle.Top, Height = 26 };
@@ -4078,7 +4133,7 @@ if __name__ == '__main__':
             };
             searchFlagsRow.Controls.AddRange(new Control[] { searchCaseToggleBtn, searchWordToggleBtn, searchRegexToggleBtn, searchFlagsHint });
 
-            Label rLbl = new Label { Text = "REPLACE ACROSS FILES", Dock = DockStyle.Top, Height = 20, Font = new Font("Segoe UI Semibold", 7.8f, FontStyle.Bold) };
+            Label rLbl = new Label { Text = "REPLACE", Dock = DockStyle.Top, Height = 20, Font = new Font("Segoe UI Semibold", 7.8f, FontStyle.Bold) };
             searchReplaceInput = new CodeLessDarkInputBox
             {
                 Dock = DockStyle.Top,
@@ -4087,15 +4142,43 @@ if __name__ == '__main__':
                 Placeholder = "Replacement text..."
             };
 
+            Label incLbl = new Label { Text = "FILES TO INCLUDE", Dock = DockStyle.Top, Height = 18, Font = new Font("Segoe UI Semibold", 7.4f, FontStyle.Bold) };
+            searchIncludeInput = new CodeLessDarkInputBox
+            {
+                Dock = DockStyle.Top,
+                Height = 26,
+                Font = new Font("Consolas", 8.8f),
+                Placeholder = "e.g. ./src, *.cs, src/**/*.ts"
+            };
+            Label excLbl = new Label { Text = "FILES TO EXCLUDE", Dock = DockStyle.Top, Height = 18, Font = new Font("Segoe UI Semibold", 7.4f, FontStyle.Bold) };
+            searchExcludeInput = new CodeLessDarkInputBox
+            {
+                Dock = DockStyle.Top,
+                Height = 26,
+                Font = new Font("Consolas", 8.8f),
+                Placeholder = "e.g. *.min.js, **/generated/**"
+            };
+
             Panel searchBtnRow = new Panel { Dock = DockStyle.Top, Height = 30 };
-            Button runSearchBtn = CreateHeaderButton("Search", new Point(0, 2), 92, true);
+            Button runSearchBtn = CreateHeaderButton("Search", new Point(0, 2), 64, true);
             runSearchBtn.Height = 26;
-            stopSearchBtn = CreateHeaderButton("Stop", new Point(96, 2), 54, false);
+            stopSearchBtn = CreateHeaderButton("Stop", new Point(0, 2), 64, false);
             stopSearchBtn.Height = 26;
             stopSearchBtn.Visible = false;
-            Button replaceWorkspaceBtn = CreateHeaderButton("Replace All", new Point(154, 2), 104, false);
+            Button replaceWorkspaceBtn = CreateHeaderButton("Replace All", new Point(68, 2), 84, false);
             replaceWorkspaceBtn.Height = 26;
-            searchBtnRow.Controls.AddRange(new Control[] { runSearchBtn, stopSearchBtn, replaceWorkspaceBtn });
+            Button collapseAllBtn = CreateHeaderButton("Collapse", new Point(156, 2), 62, false);
+            collapseAllBtn.Height = 26;
+            searchBtnRow.Controls.AddRange(new Control[] { stopSearchBtn, runSearchBtn, replaceWorkspaceBtn, collapseAllBtn });
+
+            searchSummaryLabel = new Label
+            {
+                Dock = DockStyle.Top,
+                Height = 20,
+                Font = new Font("Segoe UI", 8.0f),
+                Text = "Type a query and press Enter to search across files.",
+                AutoEllipsis = true
+            };
 
             searchProgressBar = new CodeLessIndeterminateBar
             {
@@ -4109,139 +4192,12 @@ if __name__ == '__main__':
                 Dock = DockStyle.Fill,
                 BorderStyle = BorderStyle.None,
                 Font = new Font("Consolas", 8.5f),
-                ItemHeight = 22
+                ItemHeight = 22,
+                DrawMode = DrawMode.OwnerDrawFixed
             };
+            searchResultsList.DrawItem += DrawSearchResultRowWin;
 
-            List<Tuple<string, int>> matchTargets = new List<Tuple<string, int>>();
-
-            Action executeSearch = () =>
-            {
-                string q = (searchInput.Text ?? "").Trim();
-                if (workspaceSearchCts != null)
-                {
-                    try { workspaceSearchCts.Cancel(); } catch { }
-                }
-                if (string.IsNullOrEmpty(q))
-                {
-                    IsWorkspaceSearchRunning = false;
-                    if (searchProgressBar != null) searchProgressBar.StopProgress();
-                    if (stopSearchBtn != null) stopSearchBtn.Visible = false;
-                    return;
-                }
-                searchResultsList.Items.Clear();
-                matchTargets.Clear();
-
-                Regex rx = null;
-                if (sidebarSearchUseRegex || sidebarSearchWholeWord)
-                {
-                    try
-                    {
-                        string pat = sidebarSearchUseRegex ? q : Regex.Escape(q);
-                        if (sidebarSearchWholeWord) pat = @"\b(?:" + pat + @")\b";
-                        rx = new Regex(pat, sidebarSearchCaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
-                    }
-                    catch (Exception ex)
-                    {
-                        searchResultsList.Items.Add("✕ Invalid Regex: " + ex.Message);
-                        return;
-                    }
-                }
-                StringComparison cmp = sidebarSearchCaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-
-                var cts = new System.Threading.CancellationTokenSource();
-                workspaceSearchCts = cts;
-                IsWorkspaceSearchRunning = true;
-                if (searchProgressBar != null) searchProgressBar.StartProgress();
-                if (stopSearchBtn != null) stopSearchBtn.Visible = true;
-                List<string> snapshotFiles = workspaceFiles != null ? workspaceFiles.ToList() : new List<string>();
-                string snapRoot = workspaceRoot;
-
-                Task.Run(() =>
-                {
-                    List<Tuple<string, string, int>> batch = new List<Tuple<string, string, int>>();
-                    Stopwatch swBatch = Stopwatch.StartNew();
-                    int totalFound = 0;
-
-                    Action flushBatch = () =>
-                    {
-                        if (batch.Count == 0) return;
-                        var toAdd = batch.ToList();
-                        batch.Clear();
-                        Action uiFlush = () =>
-                        {
-                            if (cts.IsCancellationRequested) return;
-                            foreach (var item in toAdd)
-                            {
-                                searchResultsList.Items.Add(item.Item1);
-                                matchTargets.Add(Tuple.Create(item.Item2, item.Item3));
-                            }
-                            searchResultsList.Invalidate();
-                        };
-                        if (this.IsHandleCreated && this.InvokeRequired)
-                            this.BeginInvoke(uiFlush);
-                        else if (!this.IsDisposed)
-                            uiFlush();
-                    };
-
-                    foreach (string fp in snapshotFiles)
-                    {
-                        if (cts.IsCancellationRequested) break;
-                        try
-                        {
-                            FileInfo fi = new FileInfo(fp);
-                            if (!fi.Exists || fi.Length > 1024 * 1024) continue;
-                            string rel = LlmHarnessAndAgentEngine.GetRelativePath(snapRoot, fp);
-                            int lineNo = 0;
-                            foreach (string line in File.ReadLines(fp))
-                            {
-                                if (cts.IsCancellationRequested) break;
-                                lineNo++;
-                                bool isMatch = rx != null ? rx.IsMatch(line) : (line.IndexOf(q, cmp) >= 0);
-                                if (isMatch)
-                                {
-                                    string preview = line.Trim();
-                                    if (preview.Length > 140) preview = preview.Substring(0, 140) + "…";
-                                    batch.Add(Tuple.Create(rel + ":" + lineNo + "  " + preview, fp, lineNo));
-                                    totalFound++;
-                                    if (batch.Count >= 25 || swBatch.ElapsedMilliseconds >= 45)
-                                    {
-                                        flushBatch();
-                                        swBatch.Restart();
-                                    }
-                                    if (totalFound >= 300) break;
-                                }
-                            }
-                            if (totalFound >= 300) break;
-                        }
-                        catch { }
-                    }
-
-                    flushBatch();
-
-                    Action finishSearch = () =>
-                    {
-                        if (workspaceSearchCts == cts)
-                        {
-                            IsWorkspaceSearchRunning = false;
-                            if (searchProgressBar != null) searchProgressBar.StopProgress();
-                            if (stopSearchBtn != null) stopSearchBtn.Visible = false;
-                        }
-                        if (cts.IsCancellationRequested)
-                        {
-                            searchResultsList.Items.Add("ℹ Search cancelled.");
-                        }
-                        else if (matchTargets.Count == 0 && searchResultsList.Items.Count == 0)
-                        {
-                            searchResultsList.Items.Add("No matches found for '" + q + "'.");
-                        }
-                        searchResultsList.Invalidate();
-                    };
-                    if (this.IsHandleCreated && this.InvokeRequired)
-                        this.BeginInvoke(finishSearch);
-                    else if (!this.IsDisposed)
-                        finishSearch();
-                }, cts.Token);
-            };
+            Action executeSearch = () => ExecuteSidebarSearchWin();
             triggerWorkspaceSearchAction = executeSearch;
 
             stopSearchBtn.Click += (s, e) => CancelWorkspaceSearch();
@@ -4269,122 +4225,79 @@ if __name__ == '__main__':
             };
 
             runSearchBtn.Click += (s, e) => executeSearch();
+            collapseAllBtn.Click += (s, e) => ToggleCollapseAllSearchGroupsWin();
             searchInput.KeyDown += (s, e) =>
             {
                 if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; executeSearch(); }
-            };
-
-            replaceWorkspaceBtn.Click += (s, e) =>
-            {
-                string q = searchInput.Text ?? "";
-                if (string.IsNullOrEmpty(q)) return;
-                string repText = searchReplaceInput.Text ?? "";
-                string pattern = sidebarSearchUseRegex ? q : Regex.Escape(q);
-                if (sidebarSearchWholeWord) pattern = @"\b(?:" + pattern + @")\b";
-                RegexOptions opts = sidebarSearchCaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-                Regex rx;
-                try { rx = new Regex(pattern, opts); }
-                catch
+                else if (e.KeyCode == Keys.Down && searchRowsWin.Count > 0)
                 {
-                    if (statusLeftLabel != null) statusLeftLabel.Text = "Invalid search pattern";
-                    return;
+                    e.SuppressKeyPress = true;
+                    searchResultsList.Focus();
+                    searchResultsList.SelectedIndex = searchRowsWin.Count > 1 && searchRowsWin[0].IsHeader ? 1 : 0;
                 }
-
-                List<string> filesSnapshot = new List<string>(workspaceFiles);
-                if (searchProgressBar != null) searchProgressBar.StartProgress();
-                if (statusLeftLabel != null) statusLeftLabel.Text = "Replacing…";
-
-                Task.Run(() =>
-                {
-                    Dictionary<string, string> updatedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (string fp in filesSnapshot)
-                    {
-                        try
-                        {
-                            FileInfo fi = new FileInfo(fp);
-                            if (!fi.Exists || fi.Length > 1024 * 1024) continue;
-                            Encoding fEnc;
-                            bool fBom;
-                            string fEol;
-                            bool fFinalNl;
-                            string raw = EditorTabBuffer.ReadFilePreservingMetadata(fp, out fEnc, out fBom, out fEol, out fFinalNl);
-                            if (raw.IndexOf('\0') >= 0) continue;
-                            if (rx.IsMatch(raw))
-                            {
-                                string next = rx.Replace(raw, repText);
-                                internalSaveTimestamps[fp] = DateTime.UtcNow;
-                                EditorTabBuffer.WriteFilePreservingMetadata(fp, next, fEnc, fBom, fEol, fFinalNl);
-                                string written = EditorTabBuffer.ReadFilePreservingMetadata(fp, out fEnc, out fBom, out fEol, out fFinalNl);
-                                updatedFiles[fp] = written;
-                            }
-                        }
-                        catch { }
-                    }
-
-                    Action applyReplaceOnUi = () =>
-                    {
-                        if (this.IsDisposed) return;
-                        foreach (var kvp in updatedFiles)
-                        {
-                            EditorTabBuffer openBuf = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, kvp.Key, StringComparison.OrdinalIgnoreCase));
-                            if (openBuf != null)
-                            {
-                                openBuf.PushUndoSnapshot();
-                                openBuf.Content = kvp.Value;
-                                openBuf.SavedContent = kvp.Value;
-                                openBuf.SyncLinesFromContent();
-                                openBuf.IsDirty = false;
-                                openBuf.RefreshGutterDiff();
-                                LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(openBuf);
-                            }
-                        }
-                        if (searchProgressBar != null) searchProgressBar.StopProgress();
-                        if (activeTab != null) editorControl.LoadBuffer(activeTab);
-                        if (splitEditorControl != null && splitEditorControl.CurrentBuffer != null)
-                            splitEditorControl.LoadBuffer(splitEditorControl.CurrentBuffer);
-                        RefreshTabStrip();
-                        AppendOutputLog(string.Format("Workspace Replace: Replaced '{0}' across {1} file(s).", q, updatedFiles.Count));
-                        if (statusLeftLabel != null)
-                            statusLeftLabel.Text = string.Format("Replaced across {0} file(s)", updatedFiles.Count);
-                        executeSearch();
-                    };
-
-                    if (this.IsHandleCreated) this.BeginInvoke(applyReplaceOnUi);
-                    else applyReplaceOnUi();
-                });
             };
+            KeyEventHandler runOnEnter = (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; executeSearch(); }
+            };
+            searchIncludeInput.KeyDown += runOnEnter;
+            searchExcludeInput.KeyDown += runOnEnter;
 
-            searchResultsList.SelectedIndexChanged += (s, e) =>
+            // VS Code "search.searchOnType": re-run 300 ms after typing stops.
+            searchOnTypeTimerWin = new System.Windows.Forms.Timer { Interval = 300 };
+            searchOnTypeTimerWin.Tick += (s, e) => { searchOnTypeTimerWin.Stop(); executeSearch(); };
+            EventHandler onType = (s, e) =>
+            {
+                if (suppressSearchOnTypeWin) return;
+                searchOnTypeTimerWin.Stop();
+                searchOnTypeTimerWin.Start();
+            };
+            searchInput.TextChanged += onType;
+            searchIncludeInput.TextChanged += onType;
+            searchExcludeInput.TextChanged += onType;
+
+            replaceWorkspaceBtn.Click += (s, e) => ExecuteSidebarReplaceAllWin();
+
+            // ItemClicked fires on every click, also on the row that is already selected (SelectedIndexChanged did not,
+            // so re-clicking a result after looking at another file did nothing).
+            searchResultsList.ItemClicked += (s, e) =>
             {
                 int idx = searchResultsList.SelectedIndex;
-                if (idx >= 0 && idx < matchTargets.Count)
-                {
-                    EditorTabBuffer tab = OpenFileInTab(matchTargets[idx].Item1);
-                    int targetLine1 = matchTargets[idx].Item2;
-                    editorControl.JumpToLine(targetLine1);
-                    string q = (searchInput.Text ?? "").Trim();
-                    if (tab != null && !string.IsNullOrEmpty(q) && targetLine1 - 1 >= 0 && targetLine1 - 1 < tab.Lines.Count)
-                    {
-                        string lineStr = tab.Lines[targetLine1 - 1] ?? "";
-                        StringComparison cmp = sidebarSearchCaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-                        int mCol = lineStr.IndexOf(q, cmp);
-                        if (mCol >= 0)
-                        {
-                            tab.SelectionAnchorLine = targetLine1 - 1;
-                            tab.SelectionAnchorCol = mCol;
-                            tab.CursorLine = targetLine1 - 1;
-                            tab.CursorCol = mCol + q.Length;
-                            editorControl.UpdateCursorStatusLabel();
-                            editorControl.Invalidate(true);
-                        }
-                    }
-                }
+                if (idx < 0 || idx >= searchRowsWin.Count) return;
+                WinSearchRow row = searchRowsWin[idx];
+                if (row.IsHeader) { ToggleSearchGroupWin(row.Group); return; }
+                if (row.Match == null) return;
+                ActivateSearchMatchWin(row.Match);
+                // Single click keeps the keyboard in the results list (Up/Down/Enter keep working), like VS Code.
+                searchResultsList.Focus();
+            };
+            searchResultsList.DoubleClick += (s, e) =>
+            {
+                int idx = searchResultsList.SelectedIndex;
+                if (idx < 0 || idx >= searchRowsWin.Count || searchRowsWin[idx].Match == null) return;
+                ActivateSearchMatchWin(searchRowsWin[idx].Match);
+            };
+            searchResultsList.KeyDown += (s, e) =>
+            {
+                int idx = searchResultsList.SelectedIndex;
+                if (e.KeyCode != Keys.Enter || idx < 0 || idx >= searchRowsWin.Count) return;
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                WinSearchRow row = searchRowsWin[idx];
+                if (row.IsHeader) ToggleSearchGroupWin(row.Group);
+                else if (row.Match != null) ActivateSearchMatchWin(row.Match);
             };
 
             searchPanel.Controls.Add(searchResultsList);
             searchPanel.Controls.Add(searchProgressBar);
-            searchPanel.Controls.Add(CreateVerticalSpacer(6));
+            searchPanel.Controls.Add(searchSummaryLabel);
+            searchPanel.Controls.Add(CreateVerticalSpacer(4));
             searchPanel.Controls.Add(searchBtnRow);
+            searchPanel.Controls.Add(CreateVerticalSpacer(4));
+            searchPanel.Controls.Add(searchExcludeInput);
+            searchPanel.Controls.Add(excLbl);
+            searchPanel.Controls.Add(searchIncludeInput);
+            searchPanel.Controls.Add(incLbl);
             searchPanel.Controls.Add(CreateVerticalSpacer(4));
             searchPanel.Controls.Add(searchReplaceInput);
             searchPanel.Controls.Add(rLbl);
@@ -4393,6 +4306,650 @@ if __name__ == '__main__':
             searchPanel.Controls.Add(CreateVerticalSpacer(2));
             searchPanel.Controls.Add(searchInput);
             searchPanel.Controls.Add(sLbl);
+        }
+
+        // ---- Search view model (Windows) -------------------------------------------------------------------------
+
+        private sealed class WinSearchGroup
+        {
+            public string FilePath;
+            public string RelativePath;
+            public bool IsCollapsed;
+            public List<WorkspaceSearchMatch> Matches = new List<WorkspaceSearchMatch>();
+        }
+
+        private sealed class WinSearchRow
+        {
+            public WinSearchGroup Group;
+            public WorkspaceSearchMatch Match;
+            public string Info;
+            public bool IsHeader { get { return Match == null && Info == null && Group != null; } }
+            public override string ToString()
+            {
+                if (Info != null) return Info;
+                if (Match == null) return Group != null ? Group.RelativePath : "";
+                return Match.RelativePath + ":" + Match.LineNumber + "  " + Match.LinePreview;
+            }
+        }
+
+        private CodeLessDarkInputBox searchIncludeInput;
+        private CodeLessDarkInputBox searchExcludeInput;
+        private Label searchSummaryLabel;
+        private System.Windows.Forms.Timer searchOnTypeTimerWin;
+        private bool suppressSearchOnTypeWin;
+        private readonly List<WinSearchGroup> searchGroupsWin = new List<WinSearchGroup>();
+        private readonly List<WinSearchRow> searchRowsWin = new List<WinSearchRow>();
+        private int searchCursorMatchIndexWin = -1;
+        private int workspaceSearchGenerationWin;
+        private int searchMatchCountWin;
+        private string lastSearchSignatureWin = "";
+        private Font searchHeaderFontWin;
+        private Font searchMatchFontWin;
+
+        private void SetSearchInputTextWin(CodeLessDarkInputBox box, string text)
+        {
+            suppressSearchOnTypeWin = true;
+            try { box.Text = text ?? ""; }
+            finally { suppressSearchOnTypeWin = false; }
+        }
+
+        private void PostToUiWin(Action a)
+        {
+            if (a == null || this.IsDisposed) return;
+            if (this.IsHandleCreated) this.BeginInvoke(a);
+            else a();
+        }
+
+        private string ComputeSearchSignatureWin(string q)
+        {
+            return string.Join("\u0001", new string[]
+            {
+                q, sidebarSearchCaseSensitive.ToString(), sidebarSearchWholeWord.ToString(), sidebarSearchUseRegex.ToString(),
+                searchIncludeInput != null ? (searchIncludeInput.Text ?? "") : "", searchExcludeInput != null ? (searchExcludeInput.Text ?? "") : ""
+            });
+        }
+
+        private WorkspaceSearchOptions BuildSidebarSearchOptionsWin()
+        {
+            WorkspaceSearchOptions opts = new WorkspaceSearchOptions();
+            opts.CaseSensitive = sidebarSearchCaseSensitive;
+            opts.WholeWord = sidebarSearchWholeWord;
+            opts.UseRegex = sidebarSearchUseRegex;
+            opts.IncludePattern = searchIncludeInput != null ? (searchIncludeInput.Text ?? "") : "";
+            opts.ExcludePattern = searchExcludeInput != null ? (searchExcludeInput.Text ?? "") : "";
+            Dictionary<string, string> overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (EditorTabBuffer t in openTabs)
+            {
+                // Unsaved editors are searched in memory, like VS Code (line numbers then match what the user sees).
+                if (t != null && t.IsDirty && !string.IsNullOrEmpty(t.FilePath))
+                    overrides[t.FilePath] = t.Content ?? "";
+            }
+            opts.ContentOverrides = overrides;
+            return opts;
+        }
+
+        private List<string> GetSearchRootFoldersWin()
+        {
+            List<string> roots = new List<string>();
+            if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot)) roots.Add(workspaceRoot);
+            foreach (string extra in additionalWorkspaceFolders)
+            {
+                if (!string.IsNullOrEmpty(extra) && Directory.Exists(extra) && !roots.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                    roots.Add(extra);
+            }
+            return roots;
+        }
+
+        private void SetSearchSummaryWin(string text)
+        {
+            if (searchSummaryLabel != null) searchSummaryLabel.Text = text ?? "";
+        }
+
+        public void ExecuteSidebarSearchWin()
+        {
+            if (searchInput == null) return;
+            if (searchOnTypeTimerWin != null) searchOnTypeTimerWin.Stop();
+            string q = searchInput.Text ?? "";
+            CancelWorkspaceSearch();
+            int gen = ++workspaceSearchGenerationWin;
+            searchGroupsWin.Clear();
+            searchCursorMatchIndexWin = -1;
+            searchMatchCountWin = 0;
+            RebuildSearchResultItemsWin(false);
+
+            if (q.Length == 0)
+            {
+                lastSearchSignatureWin = "";
+                SetSearchSummaryWin("Type a query and press Enter to search across files.");
+                return;
+            }
+            WorkspaceSearchOptions opts = BuildSidebarSearchOptionsWin();
+            string regexErr;
+            WorkspaceSearchEngine.CompileSearchRegex(q, opts, out regexErr);
+            if (regexErr != null)
+            {
+                lastSearchSignatureWin = "";
+                SetSearchSummaryWin("Invalid regular expression: " + regexErr);
+                return;
+            }
+
+            lastSearchSignatureWin = ComputeSearchSignatureWin(q);
+            string root = workspaceRoot;
+            List<string> roots = GetSearchRootFoldersWin();
+            HashSet<string> excluded = GetExcludedFolderSet(root);
+            List<string> looseFiles = new List<string>();
+            foreach (EditorTabBuffer t in openTabs)
+            {
+                if (t == null || string.IsNullOrEmpty(t.FilePath)) continue;
+                bool under = false;
+                foreach (string r in roots)
+                {
+                    if (t.FilePath.StartsWith(r.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) { under = true; break; }
+                }
+                if (!under) looseFiles.Add(t.FilePath);
+            }
+
+            System.Threading.CancellationTokenSource cts = new System.Threading.CancellationTokenSource();
+            workspaceSearchCts = cts;
+            IsWorkspaceSearchRunning = true;
+            if (searchProgressBar != null) searchProgressBar.StartProgress();
+            if (stopSearchBtn != null) stopSearchBtn.Visible = true;
+            SetSearchSummaryWin("Searching…");
+
+            Task.Run(() =>
+            {
+                List<List<WorkspaceSearchMatch>> pending = new List<List<WorkspaceSearchMatch>>();
+                Stopwatch sw = Stopwatch.StartNew();
+                Action flush = () =>
+                {
+                    List<List<WorkspaceSearchMatch>> batch;
+                    lock (pending)
+                    {
+                        if (pending.Count == 0) return;
+                        batch = new List<List<WorkspaceSearchMatch>>(pending);
+                        pending.Clear();
+                    }
+                    PostToUiWin(() =>
+                    {
+                        if (gen != workspaceSearchGenerationWin) return;
+                        foreach (List<WorkspaceSearchMatch> list in batch) AppendSearchGroupWin(list);
+                        SetSearchSummaryWin("Searching… " + searchMatchCountWin + " result(s) in " + searchGroupsWin.Count + " file(s)");
+                    });
+                };
+
+                WorkspaceSearchResult res;
+                try
+                {
+                    GlobPathFilter include = GlobPathFilter.Parse(opts.IncludePattern, root);
+                    GlobPathFilter exclude = GlobPathFilter.Parse(opts.ExcludePattern, root);
+                    List<string> walkRoots = include.GetLiteralRootDirectories() ?? roots;
+                    List<string> files = WorkspaceSearchEngine.EnumerateSearchFiles(walkRoots, root, excluded, include, exclude, 200000, cts.Token);
+                    foreach (string lf in looseFiles)
+                    {
+                        string rel = Path.GetFileName(lf);
+                        if ((include.IsEmpty || include.IsMatch(lf, rel)) && !exclude.IsMatch(lf, rel) && !files.Contains(lf, StringComparer.OrdinalIgnoreCase))
+                            files.Add(lf);
+                    }
+                    res = WorkspaceSearchEngine.Search(root, files, q, opts, cts.Token, list =>
+                    {
+                        lock (pending) pending.Add(list);
+                        if (sw.ElapsedMilliseconds > 80) { flush(); sw.Restart(); }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    res = new WorkspaceSearchResult();
+                    res.Error = ex.Message;
+                }
+                flush();
+                WorkspaceSearchResult finalRes = res;
+                PostToUiWin(() => FinishSidebarSearchWin(gen, cts, finalRes));
+            });
+        }
+
+        private void FinishSidebarSearchWin(int gen, System.Threading.CancellationTokenSource cts, WorkspaceSearchResult res)
+        {
+            if (gen != workspaceSearchGenerationWin) return;
+            if (workspaceSearchCts == cts)
+            {
+                IsWorkspaceSearchRunning = false;
+                if (searchProgressBar != null) searchProgressBar.StopProgress();
+                if (stopSearchBtn != null) stopSearchBtn.Visible = false;
+            }
+            if (res == null) return;
+            if (!string.IsNullOrEmpty(res.Error)) { SetSearchSummaryWin("Search failed: " + res.Error); return; }
+            int total = searchMatchCountWin;
+            int files = searchGroupsWin.Count;
+            if (total == 0)
+            {
+                string inc = searchIncludeInput != null ? (searchIncludeInput.Text ?? "").Trim() : "";
+                SetSearchSummaryWin(res.Cancelled || cts.IsCancellationRequested ? "Search cancelled." :
+                    ("No results found" + (inc.Length > 0 ? " in '" + inc + "'" : "") + ". Review your settings for configured exclusions."));
+                return;
+            }
+            string summary = total + (total == 1 ? " result in " : " results in ") + files + (files == 1 ? " file" : " files");
+            if (res.Truncated) summary += " - showing the first " + total + " (refine your search)";
+            else if (res.Cancelled || cts.IsCancellationRequested) summary += " (cancelled)";
+            SetSearchSummaryWin(summary);
+        }
+
+        private void AppendSearchGroupWin(List<WorkspaceSearchMatch> matches)
+        {
+            if (matches == null || matches.Count == 0) return;
+            WinSearchGroup g = new WinSearchGroup();
+            g.FilePath = matches[0].FilePath;
+            g.RelativePath = matches[0].RelativePath ?? Path.GetFileName(matches[0].FilePath);
+            g.Matches.AddRange(matches);
+            searchGroupsWin.Add(g);
+            searchMatchCountWin += matches.Count;
+
+            List<object> items = new List<object>();
+            WinSearchRow header = new WinSearchRow { Group = g };
+            searchRowsWin.Add(header);
+            items.Add(header.ToString());
+            foreach (WorkspaceSearchMatch m in matches)
+            {
+                WinSearchRow r = new WinSearchRow { Group = g, Match = m };
+                searchRowsWin.Add(r);
+                items.Add(r.ToString());
+            }
+            searchResultsList.Items.AddRange(items);
+        }
+
+        /// <summary>Rebuilds Items from the groups (rows and Items stay index-aligned).</summary>
+        private void RebuildSearchResultItemsWin(bool keepScroll)
+        {
+            int top = keepScroll ? searchResultsList.TopIndex : 0;
+            searchRowsWin.Clear();
+            searchResultsList.Items.Clear();
+            List<object> items = new List<object>();
+            foreach (WinSearchGroup g in searchGroupsWin)
+            {
+                WinSearchRow header = new WinSearchRow { Group = g };
+                searchRowsWin.Add(header);
+                items.Add(header.ToString());
+                if (g.IsCollapsed) continue;
+                foreach (WorkspaceSearchMatch m in g.Matches)
+                {
+                    WinSearchRow r = new WinSearchRow { Group = g, Match = m };
+                    searchRowsWin.Add(r);
+                    items.Add(r.ToString());
+                }
+            }
+            searchResultsList.Items.AddRange(items);
+            if (keepScroll) searchResultsList.TopIndex = top;
+            searchResultsList.Invalidate();
+        }
+
+        private void ToggleSearchGroupWin(WinSearchGroup g)
+        {
+            if (g == null) return;
+            g.IsCollapsed = !g.IsCollapsed;
+            RebuildSearchResultItemsWin(true);
+            for (int i = 0; i < searchRowsWin.Count; i++)
+            {
+                if (searchRowsWin[i].IsHeader && ReferenceEquals(searchRowsWin[i].Group, g)) { searchResultsList.SelectedIndex = i; break; }
+            }
+        }
+
+        private void ToggleCollapseAllSearchGroupsWin()
+        {
+            if (searchGroupsWin.Count == 0) return;
+            bool collapse = searchGroupsWin.Any(g => !g.IsCollapsed);
+            foreach (WinSearchGroup g in searchGroupsWin) g.IsCollapsed = collapse;
+            RebuildSearchResultItemsWin(false);
+        }
+
+        private void ActivateSearchMatchWin(WorkspaceSearchMatch m)
+        {
+            if (m == null) return;
+            int flat = 0;
+            foreach (WinSearchGroup g in searchGroupsWin)
+            {
+                int i = g.Matches.IndexOf(m);
+                if (i >= 0) { searchCursorMatchIndexWin = flat + i; break; }
+                flat += g.Matches.Count;
+            }
+            if (!File.Exists(m.FilePath) && !openTabs.Any(t => string.Equals(t.FilePath, m.FilePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (statusLeftLabel != null) statusLeftLabel.Text = m.RelativePath + " no longer exists.";
+                return;
+            }
+            OpenFileAtLocation(m.FilePath, m.LineNumber, m.Column, m.MatchLength);
+        }
+
+        /// <summary>F4 / Shift+F4: next / previous search result (wraps). False when there are no results.</summary>
+        public bool NavigateSearchResultWin(int direction)
+        {
+            int total = searchMatchCountWin;
+            if (total <= 0) return false;
+            int idx = searchCursorMatchIndexWin < 0
+                ? (direction >= 0 ? 0 : total - 1)
+                : ((searchCursorMatchIndexWin + (direction >= 0 ? 1 : -1)) % total + total) % total;
+            int flat = 0;
+            foreach (WinSearchGroup g in searchGroupsWin)
+            {
+                if (idx < flat + g.Matches.Count)
+                {
+                    WorkspaceSearchMatch m = g.Matches[idx - flat];
+                    if (g.IsCollapsed) ToggleSearchGroupWin(g);
+                    for (int i = 0; i < searchRowsWin.Count; i++)
+                    {
+                        if (ReferenceEquals(searchRowsWin[i].Match, m)) { searchResultsList.SelectedIndex = i; break; }
+                    }
+                    ActivateSearchMatchWin(m);
+                    searchCursorMatchIndexWin = idx;
+                    return true;
+                }
+                flat += g.Matches.Count;
+            }
+            return false;
+        }
+
+        /// <summary>Explorer &gt; Find in Folder...: scopes "files to include" to the folder ("./relative/path").</summary>
+        public void FindInFolder(string path)
+        {
+            if (string.IsNullOrEmpty(path) || searchInput == null) return;
+            string dir = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(dir)) return;
+            dir = Path.GetFullPath(dir).TrimEnd('\\', '/');
+            string root = string.IsNullOrEmpty(workspaceRoot) ? "" : workspaceRoot.TrimEnd('\\', '/');
+            string include;
+            if (root.Length > 0 && string.Equals(dir, root, StringComparison.OrdinalIgnoreCase)) include = "";
+            else if (root.Length > 0 && dir.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                include = "./" + dir.Substring(root.Length + 1).Replace('\\', '/');
+            else include = dir;
+
+            leftSidebar.Visible = true;
+            SwitchSidebarView("search");
+            SetSearchInputTextWin(searchIncludeInput, include);
+            searchInput.Focus();
+            searchInput.SelectAll();
+            if (!string.IsNullOrEmpty(searchInput.Text)) ExecuteSidebarSearchWin();
+            else SetSearchSummaryWin(include.Length == 0 ? "Type a query to search the workspace." : ("Type a query to search in '" + include + "'."));
+        }
+
+        /// <summary>Ctrl+Shift+F / Ctrl+Shift+H: show Search seeded with the editor's single-line selection.</summary>
+        public void ShowSearchViewWin(bool focusReplace)
+        {
+            leftSidebar.Visible = true;
+            SwitchSidebarView("search");
+            string seed = null;
+            if (activeTab != null && activeTab.HasSelection())
+            {
+                string sel = activeTab.GetSelectedText();
+                if (!string.IsNullOrEmpty(sel) && sel.IndexOf('\n') < 0 && sel.Length <= 500) seed = sel;
+            }
+            if (seed != null && seed != searchInput.Text)
+            {
+                SetSearchInputTextWin(searchInput, seed);
+                ExecuteSidebarSearchWin();
+            }
+            if (focusReplace) { searchReplaceInput.Focus(); searchReplaceInput.SelectAll(); }
+            else { searchInput.Focus(); searchInput.SelectAll(); }
+        }
+
+        private void ExecuteSidebarReplaceAllWin()
+        {
+            string q = searchInput.Text ?? "";
+            if (q.Length == 0) return;
+            WorkspaceSearchOptions opts = BuildSidebarSearchOptionsWin();
+            string err;
+            Regex rx = WorkspaceSearchEngine.BuildReplaceRegex(q, opts, out err);
+            if (rx == null)
+            {
+                SetSearchSummaryWin("Invalid regular expression: " + err);
+                return;
+            }
+            string rep = WorkspaceSearchEngine.PrepareReplacementText(searchReplaceInput.Text ?? "", opts.UseRegex);
+            bool fresh = lastSearchSignatureWin == ComputeSearchSignatureWin(q) && searchGroupsWin.Count > 0 && !IsWorkspaceSearchRunning;
+            string what = fresh ? (searchMatchCountWin + " occurrence(s) across " + searchGroupsWin.Count + " file(s)") : "all occurrences in the workspace";
+            if (MessageBox.Show(this, "Replace " + what + " with '" + (searchReplaceInput.Text ?? "") + "'?", "Replace All",
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
+                return;
+
+            List<string> knownTargets = fresh ? searchGroupsWin.Select(g => g.FilePath).ToList() : null;
+            HashSet<string> dirtyOpen = new HashSet<string>(openTabs.Where(t => t != null && t.IsDirty && !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath), StringComparer.OrdinalIgnoreCase);
+            string root = workspaceRoot;
+            List<string> roots = GetSearchRootFoldersWin();
+            HashSet<string> excluded = GetExcludedFolderSet(root);
+            CancelWorkspaceSearch();
+            if (searchProgressBar != null) searchProgressBar.StartProgress();
+            if (statusLeftLabel != null) statusLeftLabel.Text = "Replacing…";
+
+            Task.Run(() =>
+            {
+                List<string> targets = knownTargets;
+                if (targets == null)
+                {
+                    GlobPathFilter include = GlobPathFilter.Parse(opts.IncludePattern, root);
+                    GlobPathFilter exclude = GlobPathFilter.Parse(opts.ExcludePattern, root);
+                    List<string> files = WorkspaceSearchEngine.EnumerateSearchFiles(include.GetLiteralRootDirectories() ?? roots, root, excluded, include, exclude, 200000, System.Threading.CancellationToken.None);
+                    opts.MaxResults = int.MaxValue;
+                    targets = WorkspaceSearchEngine.Search(root, files, q, opts, System.Threading.CancellationToken.None, null)
+                        .Matches.Select(m => m.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                }
+                Dictionary<string, string> updatedOnDisk = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                List<string> dirtyTargets = new List<string>();
+                int replacedTotal = 0;
+                foreach (string fp in targets)
+                {
+                    if (dirtyOpen.Contains(fp)) { dirtyTargets.Add(fp); continue; }
+                    try
+                    {
+                        FileInfo fi = new FileInfo(fp);
+                        if (!fi.Exists || fi.Length > opts.MaxFileSizeBytes) continue;
+                        Encoding fEnc;
+                        bool fBom;
+                        string fEol;
+                        bool fFinalNl;
+                        string raw = EditorTabBuffer.ReadFilePreservingMetadata(fp, out fEnc, out fBom, out fEol, out fFinalNl);
+                        if (raw.IndexOf('\0') >= 0) continue;
+                        int n;
+                        string next = WorkspaceSearchEngine.ReplaceInText(raw, rx, rep, out n);
+                        if (n == 0) continue;
+                        lock (internalSaveTimestamps) internalSaveTimestamps[fp] = DateTime.UtcNow;
+                        EditorTabBuffer.WriteFilePreservingMetadata(fp, next, fEnc, fBom, fEol, fFinalNl);
+                        updatedOnDisk[fp] = EditorTabBuffer.ReadFilePreservingMetadata(fp, out fEnc, out fBom, out fEol, out fFinalNl);
+                        replacedTotal += n;
+                    }
+                    catch { }
+                }
+
+                PostToUiWin(() =>
+                {
+                    int modified = updatedOnDisk.Count;
+                    int total = replacedTotal;
+                    foreach (string fp in dirtyTargets)
+                    {
+                        EditorTabBuffer buf = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fp, StringComparison.OrdinalIgnoreCase));
+                        if (buf == null) continue;
+                        int n;
+                        string next = WorkspaceSearchEngine.ReplaceInText(buf.Content ?? "", rx, rep, out n);
+                        if (n == 0) continue;
+                        // Unsaved editor: edit the buffer (undoable, stays dirty) instead of clobbering the unsaved text.
+                        buf.PushUndoSnapshot();
+                        buf.Content = next;
+                        buf.SyncLinesFromContent();
+                        buf.IsDirty = true;
+                        modified++;
+                        total += n;
+                    }
+                    foreach (KeyValuePair<string, string> kvp in updatedOnDisk)
+                    {
+                        EditorTabBuffer openBuf = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, kvp.Key, StringComparison.OrdinalIgnoreCase));
+                        if (openBuf == null) continue;
+                        openBuf.PushUndoSnapshot();
+                        openBuf.Content = kvp.Value;
+                        openBuf.SavedContent = kvp.Value;
+                        openBuf.SyncLinesFromContent();
+                        openBuf.IsDirty = false;
+                        openBuf.RefreshGutterDiff();
+                        LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(openBuf);
+                    }
+                    if (searchProgressBar != null) searchProgressBar.StopProgress();
+                    if (activeTab != null)
+                    {
+                        activeTab.CursorLine = Math.Max(0, Math.Min(activeTab.CursorLine, activeTab.Lines.Count - 1));
+                        activeTab.CursorCol = Math.Max(0, Math.Min(activeTab.CursorCol, activeTab.Lines[activeTab.CursorLine].Length));
+                        activeTab.ClearSelection();
+                        editorControl.LoadBuffer(activeTab);
+                    }
+                    if (splitEditorControl != null && splitEditorControl.CurrentBuffer != null)
+                        splitEditorControl.LoadBuffer(splitEditorControl.CurrentBuffer);
+                    RefreshTabStrip();
+                    AppendOutputLog(string.Format("Workspace Replace: Replaced {0} occurrence(s) of '{1}' across {2} file(s).", total, q, modified));
+                    if (statusLeftLabel != null)
+                        statusLeftLabel.Text = string.Format("Replaced {0} occurrence(s) across {1} file(s)", total, modified);
+                    ExecuteSidebarSearchWin();
+                });
+            });
+        }
+
+        private void DrawSearchResultRowWin(object sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0 || e.Index >= searchRowsWin.Count) return;
+            StudioTheme t = activeTheme ?? StudioTheme.GetBuiltInThemes()[0];
+            WinSearchRow row = searchRowsWin[e.Index];
+            Graphics g = e.Graphics;
+            Rectangle r = e.Bounds;
+            bool isSel = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+            Color bg = isSel ? StudioTheme.Blend(t.BgSidebar, t.AccentPrimary, 0.18) : t.BgSidebar;
+            using (SolidBrush b = new SolidBrush(bg)) g.FillRectangle(b, r);
+            if (isSel)
+            {
+                using (SolidBrush bar = new SolidBrush(t.AccentPrimary)) g.FillRectangle(bar, r.X, r.Y, 2, r.Height);
+            }
+            if (searchHeaderFontWin == null) searchHeaderFontWin = new Font("Segoe UI Semibold", 8.6f, FontStyle.Bold);
+            if (searchMatchFontWin == null) searchMatchFontWin = new Font("Segoe UI", 8.6f);
+            TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;
+
+            if (row.Info != null)
+            {
+                TextRenderer.DrawText(g, row.Info, searchMatchFontWin, new Rectangle(r.X + 8, r.Y, r.Width - 12, r.Height), t.FgSecondary, flags | TextFormatFlags.EndEllipsis);
+                return;
+            }
+
+            if (row.IsHeader)
+            {
+                WinSearchGroup grp = row.Group;
+                int x = r.X + 4;
+                TextRenderer.DrawText(g, grp.IsCollapsed ? "▸" : "▾", searchMatchFontWin, new Rectangle(x, r.Y, 12, r.Height), t.FgSecondary, flags);
+                x += 14;
+                string countText = grp.Matches.Count.ToString();
+                Size cs = TextRenderer.MeasureText(g, countText, searchMatchFontWin, new Size(200, r.Height), flags);
+                Rectangle countRect = new Rectangle(r.Right - cs.Width - 18, r.Y + 4, cs.Width + 10, r.Height - 8);
+                using (SolidBrush cb = new SolidBrush(StudioTheme.Blend(bg, t.AccentPrimary, 0.35))) g.FillRectangle(cb, countRect);
+                TextRenderer.DrawText(g, countText, searchMatchFontWin, countRect, t.FgPrimary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                string name = Path.GetFileName(grp.FilePath);
+                int nameMax = Math.Max(20, countRect.X - x - 6);
+                Size ns = TextRenderer.MeasureText(g, name, searchHeaderFontWin, new Size(nameMax, r.Height), flags);
+                TextRenderer.DrawText(g, name, searchHeaderFontWin, new Rectangle(x, r.Y, Math.Min(ns.Width, nameMax), r.Height), t.FgPrimary, flags | TextFormatFlags.EndEllipsis);
+                x += Math.Min(ns.Width, nameMax) + 6;
+                string relDir = Path.GetDirectoryName((grp.RelativePath ?? "").Replace('/', Path.DirectorySeparatorChar)) ?? "";
+                if (relDir.Length > 0 && x < countRect.X - 10)
+                    TextRenderer.DrawText(g, relDir.Replace('\\', '/'), searchMatchFontWin, new Rectangle(x, r.Y, countRect.X - x - 4, r.Height), t.FgSecondary, flags | TextFormatFlags.EndEllipsis);
+                return;
+            }
+
+            WorkspaceSearchMatch m = row.Match;
+            string preview = m.LinePreview ?? "";
+            int ps = Math.Max(0, Math.Min(m.PreviewMatchStart, preview.Length));
+            int pl = Math.Max(0, Math.Min(m.PreviewMatchLength, preview.Length - ps));
+            string before = preview.Substring(0, ps);
+            string hit = preview.Substring(ps, pl);
+            string after = preview.Substring(ps + pl);
+            int px = r.X + 30;
+            int right = r.Right - 6;
+            Font f = searchResultsList.Font;
+            if (before.Length > 0)
+            {
+                Size bs = TextRenderer.MeasureText(g, before, f, new Size(int.MaxValue, r.Height), flags);
+                TextRenderer.DrawText(g, before, f, new Rectangle(px, r.Y, Math.Max(0, right - px), r.Height), t.FgPrimary, flags | TextFormatFlags.EndEllipsis);
+                px += bs.Width;
+            }
+            if (hit.Length > 0 && px < right)
+            {
+                Size hs = TextRenderer.MeasureText(g, hit, f, new Size(int.MaxValue, r.Height), flags);
+                Rectangle hr = new Rectangle(px, r.Y + 3, Math.Min(hs.Width, right - px), r.Height - 6);
+                using (SolidBrush hb = new SolidBrush(StudioTheme.Blend(bg, t.AccentPrimary, 0.42))) g.FillRectangle(hb, hr);
+                TextRenderer.DrawText(g, hit, f, new Rectangle(px, r.Y, Math.Max(0, right - px), r.Height), t.FgPrimary, flags | TextFormatFlags.EndEllipsis);
+                px += hs.Width;
+            }
+            if (after.Length > 0 && px < right)
+                TextRenderer.DrawText(g, after, f, new Rectangle(px, r.Y, right - px, r.Height), t.FgPrimary, flags | TextFormatFlags.EndEllipsis);
+        }
+
+        /// <summary>
+        /// Opens the file (activating its tab when already open), moves to the 1-based line/column, selects the range
+        /// and records the jump in the Back/Forward history (the position being left is stored first).
+        /// </summary>
+        public EditorTabBuffer OpenFileAtLocation(string filePath, int line1, int col1, int selectionLength)
+        {
+            if (string.IsNullOrEmpty(filePath)) return null;
+            bool recording = !suppressNavRecord;
+            if (recording && activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
+                RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
+            EditorTabBuffer tab;
+            suppressNavRecord = true;
+            try { tab = OpenFileInTab(filePath); }
+            finally { suppressNavRecord = !recording; }
+            if (tab == null) return null;
+            if (line1 > 0)
+            {
+                editorControl.JumpToLineAndColumn(line1, Math.Max(1, col1));
+                if (selectionLength > 0 && tab.CursorLine >= 0 && tab.CursorLine < tab.Lines.Count)
+                {
+                    string ln = tab.Lines[tab.CursorLine] ?? "";
+                    int start = tab.CursorCol;
+                    int end = Math.Min(ln.Length, start + selectionLength);
+                    if (end > start)
+                    {
+                        tab.SelectionAnchorLine = tab.CursorLine;
+                        tab.SelectionAnchorCol = start;
+                        tab.CursorCol = end;
+                    }
+                }
+                editorControl.UpdateCursorStatusLabel();
+                editorControl.Invalidate(true);
+            }
+            if (recording) RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1, true);
+            return tab;
+        }
+
+        /// <summary>Expands the Explorer to the file, selects it and scrolls it into view (VS Code explorer.autoReveal).</summary>
+        private void RevealFileInExplorerTreeWin(string filePath)
+        {
+            if (explorerTree == null || string.IsNullOrEmpty(filePath) || explorerTree.Nodes.Count == 0) return;
+            try
+            {
+                TreeNode rootNode = null;
+                foreach (TreeNode n in explorerTree.Nodes)
+                {
+                    string tag = n.Tag as string;
+                    if (!string.IsNullOrEmpty(tag) && filePath.StartsWith(tag.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) { rootNode = n; break; }
+                }
+                if (rootNode == null) return;
+                string rootTag = ((string)rootNode.Tag).TrimEnd('\\', '/');
+                string[] parts = filePath.Substring(rootTag.Length + 1).Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+                TreeNode cur = rootNode;
+                string acc = rootTag;
+                foreach (string part in parts)
+                {
+                    EnsureDirectoryNodePopulated(cur);
+                    acc = Path.Combine(acc, part);
+                    TreeNode next = null;
+                    foreach (TreeNode c in cur.Nodes)
+                    {
+                        if (string.Equals(c.Tag as string, acc, StringComparison.OrdinalIgnoreCase)) { next = c; break; }
+                    }
+                    if (next == null) return;
+                    cur = next;
+                }
+                if (!ReferenceEquals(explorerTree.SelectedNode, cur))
+                    explorerTree.RevealAndSelect(cur);
+            }
+            catch { }
         }
 
         private Action triggerWorkspaceSearchAction;
@@ -5233,7 +5790,7 @@ if __name__ == '__main__':
                     {
                         hb.Font = dockTabFont;
                         hb.Padding = Padding.Empty;
-                        hb.Visible = (hb != btmExtHostTabBtn && hb != btmTraceTabBtn);
+                        hb.Visible = hb != btmExtHostTabBtn;
                     }
                 }
                 shellSelectorCombo.Visible = false;
@@ -5258,9 +5815,7 @@ if __name__ == '__main__':
                 int cx = 6;
                 btmProbTabBtn.Location = new Point(cx, 1); cx += btmProbTabBtn.Width + gap;
                 btmOutTabBtn.Location = new Point(cx, 1); cx += btmOutTabBtn.Width + gap;
-                btmTraceTabBtn.Location = new Point(cx, 1);
-                btmTraceTabBtn.Width = 0;
-                btmTraceTabBtn.Visible = false;
+                btmTraceTabBtn.Location = new Point(cx, 1); cx += btmTraceTabBtn.Width + gap;
                 btmTermTabBtn.Location = new Point(cx, 1); cx += btmTermTabBtn.Width + gap;
                 btmExtHostTabBtn.Location = new Point(cx, 1);
                 btmExtHostTabBtn.Width = 0;
@@ -5495,13 +6050,15 @@ if __name__ == '__main__':
                 termCtrl.IsAiProviderConfiguredCallback = () => IsActiveVendorConfigured();
                 termCtrl.OpenAiSettingsCallback = () => OpenByokConfigurationDialog();
                 termCtrl.SwitchTerminalDeltaRequested += (delta) => SwitchTerminalSessionByDelta(delta);
-                termCtrl.FileLinkClicked += (fp, ln) =>
+                // Ctrl+Click file links arrive already resolved (shell cwd, then workspace root) and verified to exist.
+                termCtrl.WorkspaceRootProvider = () => workspaceRoot;
+                termCtrl.FileLinkClicked += (fp, ln, col) =>
                 {
-                    string resolved = LlmHarnessAndAgentEngine.ResolveWorkspacePath(workspaceRoot, fp);
-                    if (File.Exists(resolved))
+                    if (File.Exists(fp))
                     {
-                        OpenFileInTab(resolved);
-                        if (ln > 0) editorControl.JumpToLine(ln);
+                        OpenFileInTab(fp);
+                        if (ln > 0 && col > 0) editorControl.JumpToLineAndColumn(ln, col);
+                        else if (ln > 0) editorControl.JumpToLine(ln);
                     }
                 };
                 termCtrl.RequestNewTerminal += () => RequestNewTerminal(null, null);
@@ -5881,6 +6438,16 @@ if __name__ == '__main__':
                     handleExitOnUi();
                 }
             };
+            // Every new interactive session is wired here right after creation: activate the workspace venv in it.
+            MaybeActivatePythonVenv(session);
+        }
+
+        /// <summary>VS Code-style Python venv activation (Preferences: "Activate Python environment in new terminals").</summary>
+        private void MaybeActivatePythonVenv(ConPtyTerminalSession pty)
+        {
+            if (pty == null || (settings != null && !settings.ActivatePythonEnvironmentInTerminal)) return;
+            try { PythonVenvActivator.ScheduleActivation(pty, workspaceRoot); }
+            catch { }
         }
 
         private void RemoveExitedTerminalSession(TerminalSessionState state)
@@ -5915,6 +6482,7 @@ if __name__ == '__main__':
                         }
                     };
                     splitConPtyTerminalControl.Session = splitPty;
+                    MaybeActivatePythonVenv(splitPty);
                 }
                 else
                 {
@@ -5964,6 +6532,7 @@ if __name__ == '__main__':
             terminalInput.Visible = false;
             problemsListBox.Visible = tabId == "problems";
             if (debugConsoleBox != null) debugConsoleBox.Visible = tabId == "debug";
+            OnBottomDockTabSwitchedForDebug(tabId);
             UpdateActiveOutputChannelVisibility();
 
             btmTermTabBtn.Tag = tabId == "terminal" ? "docktab_active" : "docktab_inactive";
@@ -7003,6 +7572,7 @@ if __name__ == '__main__':
                 : view == "extensions"
                 ? "EXTENSIONS"
                 : "AI HARNESSES";
+            OnSidebarViewSwitchedForDebug(view);
 
             if (activityBar != null) activityBar.Invalidate(true);
         }
@@ -7399,6 +7969,7 @@ if __name__ == '__main__':
             if (!keepCurrentTabs)
                 additionalWorkspaceFolders.Clear();
             workspaceRoot = rootDir;
+            if (lspController != null) lspController.SetWorkspaceRoot(rootDir);
             terminalWorkingDir = rootDir;
             SyncTerminalsToWorkingDirectory(rootDir);
             settings.AddRecentWorkspace(rootDir);
@@ -8069,8 +8640,10 @@ if __name__ == '__main__':
             }
             if (existing != null)
             {
+                if (!suppressNavRecord && activeTab != null && !ReferenceEquals(activeTab, existing) && !string.IsNullOrEmpty(activeTab.FilePath))
+                    RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
                 activeTab = existing;
-                if (explorerTree != null) { explorerTree.ActiveEditorFilePath = filePath; explorerTree.Invalidate(); }
+                if (explorerTree != null) { explorerTree.ActiveEditorFilePath = filePath; RevealFileInExplorerTreeWin(filePath); explorerTree.Invalidate(); }
                 editorControl.LoadBuffer(activeTab);
                 RefreshOutlineAndProblems(activeTab);
                 RefreshTabStrip();
@@ -8135,11 +8708,13 @@ if __name__ == '__main__':
                 tab.RefreshGutterDiff();
                 if (!isLarge)
                     LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
+                if (!suppressNavRecord && activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
+                    RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
                 openTabs.Add(tab);
                 activeTab = tab;
                 if (settings != null && File.Exists(filePath))
                     settings.AddRecentFile(filePath);
-                if (explorerTree != null) { explorerTree.ActiveEditorFilePath = filePath; explorerTree.Invalidate(); }
+                if (explorerTree != null) { explorerTree.ActiveEditorFilePath = filePath; RevealFileInExplorerTreeWin(filePath); explorerTree.Invalidate(); }
                 editorControl.LoadBuffer(activeTab);
                 RefreshOutlineAndProblems(activeTab);
                 RefreshTabStrip();
@@ -8291,6 +8866,11 @@ if __name__ == '__main__':
                 return;
             }
             KillAllTerminalChildProcesses();
+            if (lspController != null)
+            {
+                try { lspController.Dispose(); } catch { }
+                lspController = null;
+            }
             if (workspaceFileWatcher != null)
             {
                 try { workspaceFileWatcher.Dispose(); } catch { }
@@ -8790,6 +9370,7 @@ if __name__ == '__main__':
             tabStrip.ResumeLayout();
             RefreshOpenEditorsSection();
             UpdateWindowTitle();
+            if (lspController != null) lspController.SyncTabs();
         }
 
         public bool SaveTabBuffer(EditorTabBuffer buf)
@@ -8835,6 +9416,7 @@ if __name__ == '__main__':
                     RefreshGitSidebarStatus();
                 UpdateWindowTitle();
                 statusLeftLabel.Text = "Saved " + buf.FileName;
+                if (lspController != null) lspController.OnSaved(buf);
                 return true;
             }
             catch (Exception ex)
@@ -8857,7 +9439,7 @@ if __name__ == '__main__':
             string runCmd;
 
             if (ext == ".py")
-                runCmd = "python \"" + filePath + "\"";
+                runCmd = BuildPythonRunCommandWinForms(filePath);
             else if (ext == ".js" || ext == ".mjs" || ext == ".cjs")
                 runCmd = "node \"" + filePath + "\"";
             else if (ext == ".ts" || ext == ".tsx")
@@ -8901,6 +9483,7 @@ if __name__ == '__main__':
         private void MaybeAutoCheckForUpdates()
         {
             if (settings == null || !settings.AutoCheckForUpdates || SuppressUnsavedPrompts) return;
+            if (NetworkLedger.OfflineMode) return; // Offline Mode: skip the automatic check silently
             DateTime last;
             if (DateTime.TryParse(settings.LastUpdateCheckUtc, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out last) &&
@@ -9918,6 +10501,11 @@ if __name__ == '__main__':
             int added = await vsixEngine.SearchOpenVsxRegistryAsync(query);
             RefreshExtensionsListUi();
             statusLeftLabel.Text = string.Format("Found {0} extension(s) for '{1}'", added, query);
+            if (!string.IsNullOrEmpty(vsixEngine.LastNetworkNotice))
+            {
+                statusLeftLabel.Text = vsixEngine.LastNetworkNotice;
+                MessageBox.Show(this, vsixEngine.LastNetworkNotice, "OpenVSX", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
 
         private async Task HandleExtensionActionAsync()
@@ -9935,6 +10523,8 @@ if __name__ == '__main__':
                 extActionBtn.Text = "Install / Activate Selected VSIX";
                 RefreshExtensionsListUi();
                 RefreshThemeComboItems();
+                if (!ok && !string.IsNullOrEmpty(vsixEngine.LastNetworkNotice))
+                    MessageBox.Show(this, vsixEngine.LastNetworkNotice, "Extension download", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 if (!ok) return;
             }
 
@@ -10049,10 +10639,18 @@ if __name__ == '__main__':
         public void ExecutePaletteCommand(string cmdId)
         {
             if (string.IsNullOrEmpty(cmdId)) return;
+            if (TryExecuteDebugCommand(cmdId)) return;
+            if (cmdId.StartsWith("lsp_", StringComparison.Ordinal))
+            {
+                if (lspController != null) lspController.ExecuteCommand(cmdId, editorControl);
+                return;
+            }
             if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
             else if (cmdId == "open_rest_client") OpenRestApiPlaygroundDialog();
+            else if (cmdId == "show_network_activity") networkPrivacy.ShowPanel();
+            else if (cmdId == "toggle_offline_mode") networkPrivacy.ToggleOfflineMode();
             else if (cmdId == "auto_heal_terminal") { var _ = AutoHealLastTerminalErrorAsync(); }
             else if (cmdId == "toggle_sidebar") ToggleLeftSidebarVisibility();
             else if (cmdId == "toggle_right") ToggleRightDockVisibility();
@@ -10276,9 +10874,12 @@ if __name__ == '__main__':
             if (dlg == null) return;
             if (dlg.SelectedLineToJump > 0)
             {
-                if (!string.IsNullOrEmpty(dlg.SelectedFilePath) && File.Exists(dlg.SelectedFilePath))
-                    OpenFileInTab(dlg.SelectedFilePath);
-                if (dlg.SelectedColumnToJump > 0)
+                string target = !string.IsNullOrEmpty(dlg.SelectedFilePath) && File.Exists(dlg.SelectedFilePath)
+                    ? dlg.SelectedFilePath
+                    : (activeTab != null ? activeTab.FilePath : null);
+                if (!string.IsNullOrEmpty(target))
+                    OpenFileAtLocation(target, dlg.SelectedLineToJump, Math.Max(1, dlg.SelectedColumnToJump), 0);
+                else if (dlg.SelectedColumnToJump > 0)
                     editorControl.JumpToLineAndColumn(dlg.SelectedLineToJump, dlg.SelectedColumnToJump);
                 else
                     editorControl.JumpToLine(dlg.SelectedLineToJump);
@@ -10288,7 +10889,7 @@ if __name__ == '__main__':
                 if (Directory.Exists(dlg.SelectedFilePath))
                     LoadWorkspace(dlg.SelectedFilePath, restorePreviousTabs: false, keepCurrentTabs: false);
                 else
-                    OpenFileInTab(dlg.SelectedFilePath);
+                    OpenFileAtLocation(dlg.SelectedFilePath, 0, 1, 0);
             }
             else if (dlg.SelectedTheme != null)
             {
@@ -10762,6 +11363,8 @@ if __name__ == '__main__':
 
         public static Color ResolveStatusBarBackColor(StudioTheme theme, bool hasFolderOpen)
         {
+            Color debugColor;
+            if (TryGetDebugStatusBarColor(theme, out debugColor)) return debugColor;
             if (theme == null)
                 return hasFolderOpen ? Color.FromArgb(0, 122, 204) : Color.FromArgb(104, 33, 122);
             if (!hasFolderOpen)
@@ -10772,6 +11375,8 @@ if __name__ == '__main__':
         public void ApplyThemeToWorkbench(StudioTheme theme)
         {
             activeTheme = theme;
+            if (networkPrivacy != null) networkPrivacy.ApplyTheme(theme);
+            ApplyDebugTheme(theme);
             EnableNativeDarkTitleBar();
             this.BackColor = theme.BgWorkbench;
             this.ForeColor = theme.FgPrimary;
@@ -10835,8 +11440,11 @@ if __name__ == '__main__':
             if (statusEncodingItem != null) statusEncodingItem.ForeColor = statusFg;
             if (statusEolItem != null) statusEolItem.ForeColor = statusFg;
             if (statusLangItem != null) statusLangItem.ForeColor = statusFg;
+            if (statusPythonItem != null) statusPythonItem.ForeColor = statusFg;
+            if (statusLspItem != null) statusLspItem.ForeColor = statusFg;
             if (statusChordLabel != null) statusChordLabel.ForeColor = statusFg;
             statusRightLabel.ForeColor = statusFg;
+            if (statusNetworkItem != null) { statusNetworkItem.ForeColor = statusFg; statusNetworkItem.Invalidate(); }
 
             activityBar.BackColor = theme.BgActivity;
             leftSidebar.BackColor = theme.BgSidebar;
@@ -10862,6 +11470,9 @@ if __name__ == '__main__':
 
             searchInput.ApplyTheme(theme);
             searchReplaceInput.ApplyTheme(theme);
+            if (searchIncludeInput != null) searchIncludeInput.ApplyTheme(theme);
+            if (searchExcludeInput != null) searchExcludeInput.ApplyTheme(theme);
+            if (searchSummaryLabel != null) searchSummaryLabel.ForeColor = theme.FgSecondary;
             searchResultsList.ApplyTheme(theme);
 
             gitBranchLabel.ForeColor = theme.AccentPrimary;
