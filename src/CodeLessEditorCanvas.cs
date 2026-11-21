@@ -1667,6 +1667,7 @@ namespace codeLess.Studio
         {
             this.Theme = theme;
             this.BackColor = theme.BgEditor;
+            WinFormsLargeFileHost.ApplyTheme(this, theme);
 
             breadcrumbBar.BackColor = theme.BgEditor;
             pathLabel.ForeColor = theme.FgSecondary;
@@ -1781,6 +1782,7 @@ namespace codeLess.Studio
         public void LoadBuffer(EditorTabBuffer buffer)
         {
             CurrentBuffer = buffer;
+            if (WinFormsLargeFileHost.Sync(this, buffer)) return;
             autocompleteFrame.Visible = false;
 
             if (buffer == null)
@@ -1881,6 +1883,7 @@ namespace codeLess.Studio
         public void JumpToLineAndColumn(int line1Based, int col1Based)
         {
             if (CurrentBuffer == null) return;
+            if (WinFormsLargeFileHost.TryGoToLine(this, line1Based, col1Based)) return;
             int idx = Math.Max(0, Math.Min(CurrentBuffer.Lines.Count - 1, line1Based - 1));
             CurrentBuffer.CursorLine = idx;
             string ln = CurrentBuffer.Lines[idx] ?? "";
@@ -2207,6 +2210,7 @@ namespace codeLess.Studio
         public void OpenFindBar(bool focusReplace = false)
         {
             if (CurrentBuffer == null) return;
+            if (WinFormsLargeFileHost.TryShowFind(this)) return;
             findBar.Visible = true;
             string sel = CurrentBuffer.GetSelectedText();
             if (!string.IsNullOrEmpty(sel) && sel.Length < 80 && !sel.Contains("\n"))

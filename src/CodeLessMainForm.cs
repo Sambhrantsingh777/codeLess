@@ -7940,6 +7940,7 @@ if __name__ == '__main__':
 
             EditorTabBuffer tab = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase));
             if (tab == null) return;
+            if (tab.IsLargeFileViewer) return; // paged from disk; Follow mode handles growth
 
             Encoding diskEnc;
             bool diskBom;
@@ -8087,6 +8088,22 @@ if __name__ == '__main__':
                     try { fileLen = new FileInfo(filePath).Length; } catch { }
                 }
                 bool isLarge = fileLen > 1024 * 1024;
+                EditorTabBuffer largeViewerTab = WinFormsLargeFileHost.TryCreateTab(filePath, workspaceRoot, settings);
+                if (largeViewerTab != null)
+                {
+                    // Large-file mode: paged read-only viewer, nothing is loaded into the editor buffer.
+                    openTabs.Add(largeViewerTab);
+                    activeTab = largeViewerTab;
+                    if (settings != null) settings.AddRecentFile(filePath);
+                    if (explorerTree != null) { explorerTree.ActiveEditorFilePath = filePath; explorerTree.Invalidate(); }
+                    editorControl.LoadBuffer(activeTab);
+                    RefreshTabStrip();
+                    RefreshOpenEditorsSection();
+                    UpdateWindowTitle();
+                    RecordNavigationHistory(filePath, 1);
+                    PersistOpenTabPaths();
+                    return largeViewerTab;
+                }
                 Encoding fileEnc = new UTF8Encoding(false);
                 bool hasBom = false;
                 string eol = "\r\n";
@@ -8476,6 +8493,7 @@ if __name__ == '__main__':
         private void RefreshTabStrip()
         {
             ArmAutoSaveTimer();
+            WinFormsLargeFileHost.SweepClosed(openTabs);
             tabStrip.SuspendLayout();
             Control[] oldTabControls = new Control[tabStrip.Controls.Count];
             tabStrip.Controls.CopyTo(oldTabControls, 0);
@@ -8784,6 +8802,11 @@ if __name__ == '__main__':
         public bool SaveTabBuffer(EditorTabBuffer buf, bool backgroundSave)
         {
             if (buf == null) return false;
+            if (buf.IsLargeFileViewer)
+            {
+                if (statusLeftLabel != null) statusLeftLabel.Text = buf.FileName + " is open read-only in the large-file viewer and cannot be saved.";
+                return false;
+            }
             if (buf.IsUntitled || string.IsNullOrEmpty(buf.FilePath))
             {
                 activeTab = buf;
