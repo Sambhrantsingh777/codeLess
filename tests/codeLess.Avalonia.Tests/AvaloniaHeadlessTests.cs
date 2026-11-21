@@ -129,6 +129,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.False(tab.IsDirty);
                 Assert.StartsWith("Program.cs — ", window.Title);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -160,6 +161,7 @@ namespace codeLess.Avalonia.Tests
                 var nativeHeaders = nativeMenu.Items.OfType<NativeMenuItem>().Select(i => i.Header).ToList();
                 Assert.Equal(new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }, nativeHeaders);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -202,6 +204,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("", window.CommandPalette.InitialPrefix);
                 window.CommandPalette.Close();
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -239,6 +242,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("settings", window.ModalHost.ActiveDialogId);
                 window.ModalHost.CloseModal();
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -284,6 +288,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Contains("bench", childNames);
                 Assert.Contains("scratch", childNames);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -314,6 +319,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal(csFile, window.ExplorerTree.ActiveEditorFilePath);
                 Assert.Contains(tabCs.Symbols, s => s.Name.Contains("Compute"));
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -360,6 +366,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.False(File.Exists(renamedPath));
                 Assert.DoesNotContain(window.OpenTabs, t => t.FilePath == renamedPath);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -386,6 +393,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal(1, replacedFiles);
                 Assert.Contains("CalculateTotal", File.ReadAllText(csFile));
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -435,6 +443,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(committed);
                 Assert.Empty(LlmHarnessAndAgentEngine.GetGitStatusEntries(ws));
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -467,6 +476,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("arena", window.ModalHost.ActiveDialogId);
                 window.ModalHost.CloseModal();
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -503,6 +513,7 @@ namespace codeLess.Avalonia.Tests
                     Assert.NotEmpty(spans);
                 }
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -553,6 +564,7 @@ namespace codeLess.Avalonia.Tests
                 window.SimulateShortcut(Key.OemPipe, KeyModifiers.Meta | KeyModifiers.Shift);
                 Assert.Equal(2, tab.CursorLine);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -609,6 +621,7 @@ namespace codeLess.Avalonia.Tests
                 canvas.ApplyColumnBoxSelection(5, 4, 8, 10);
                 Assert.True(canvas.ExtraCursors.Count >= 3);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -652,6 +665,7 @@ namespace codeLess.Avalonia.Tests
                 window.SimulateShortcut(Key.Z, KeyModifiers.Alt);
                 Assert.NotEqual(initialWrap, tab.WordWrap);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -713,6 +727,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(window.PrimaryEditor.IsInlineAiBarVisible);
                 window.PrimaryEditor.HideInlineAiBar();
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -767,6 +782,7 @@ namespace codeLess.Avalonia.Tests
                 window.SimulateShortcut(Key.OemPipe, KeyModifiers.Meta);
                 Assert.False(window.IsEditorSplit);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -805,6 +821,7 @@ namespace codeLess.Avalonia.Tests
                 term.HideInlineAiBar();
                 Assert.False(term.IsInlineAiBarVisible);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -850,6 +867,7 @@ namespace codeLess.Avalonia.Tests
                 window.KillTerminalSession(second);
                 Assert.DoesNotContain(second, window.TerminalSessions);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -901,6 +919,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(window.TerminalSession.Control.IsLightTerminal);
                 Assert.Equal(global::Avalonia.Media.Colors.White, window.TerminalSession.Control.TermBgColor);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -962,6 +981,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("keyboard-shortcuts", window.ModalHost.ActiveDialogId);
                 window.ModalHost.CloseModal();
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -988,6 +1008,7 @@ namespace codeLess.Avalonia.Tests
                 window.SwitchBottomTab("terminal");
                 Assert.Equal("terminal", window.ActiveBottomTab);
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -1073,6 +1094,7 @@ namespace codeLess.Avalonia.Tests
                 window.SimulateShortcut(Key.L, KeyModifiers.Control);
                 Assert.True(tab.HasSelection());
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -1205,6 +1227,7 @@ namespace codeLess.Avalonia.Tests
                         $"Expected dark legible Outline foreground on light theme, got {brush.Color}");
                 }
 
+                window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();
             }
             finally

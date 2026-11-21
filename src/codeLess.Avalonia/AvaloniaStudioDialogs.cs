@@ -724,6 +724,7 @@ namespace codeLess.AvaloniaApp
             var autoSaveChk = new CheckBox { Content = "Auto Save Modified Files", IsChecked = settings.AutoSave, Foreground = new SolidColorBrush(textPrimary) };
             var venvChk = new CheckBox { Content = "Activate Python environment in new terminals", IsChecked = settings.ActivatePythonEnvironmentInTerminal, Foreground = new SolidColorBrush(textPrimary) };
             var excludedBox = new TextBox { Text = settings.ExcludedFolders ?? "" };
+            var offlineChk = new CheckBox { Content = "Offline Mode (block all non-local network requests; local Ollama / LM Studio keep working)", IsChecked = NetworkLedger.OfflineMode, Foreground = new SolidColorBrush(textPrimary) };
 
             var providers = LlmHarnessAndAgentEngine.GetAllProviderTemplates();
             string activeNormId = StudioSettings.NormalizeProviderId(settings.ActiveProvider);
@@ -765,6 +766,7 @@ namespace codeLess.AvaloniaApp
             togglesRow.Children.Add(autoSaveChk);
             stack.Children.Add(togglesRow);
             stack.Children.Add(venvChk);
+            stack.Children.Add(offlineChk);
 
             stack.Children.Add(new TextBlock { Text = "Excluded Workspace Folders (comma-separated)", FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = new SolidColorBrush(textPrimary) });
             stack.Children.Add(excludedBox);
@@ -807,6 +809,8 @@ namespace codeLess.AvaloniaApp
                 settings.ShowMinimap = minimapChk.IsChecked == true;
                 settings.AutoSave = autoSaveChk.IsChecked == true;
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
+                settings.OfflineMode = offlineChk.IsChecked == true;
+                NetworkLedger.SetOfflineMode(settings.OfflineMode);
                 settings.ExcludedFolders = (excludedBox.Text ?? "").Trim();
                 if (providerCombo.SelectedIndex >= 0 && providerCombo.SelectedIndex < providers.Count)
                     settings.ActiveProvider = StudioSettings.NormalizeProviderId(providers[providerCombo.SelectedIndex].Name);

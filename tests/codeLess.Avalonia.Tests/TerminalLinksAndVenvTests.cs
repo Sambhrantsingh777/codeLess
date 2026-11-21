@@ -371,6 +371,8 @@ namespace codeLess.Avalonia.Tests
         }
     }
 
+    // Headless UI tests share one Avalonia dispatcher and mouse device: never run them in parallel with other UI tests.
+    [Collection("SequentialWorkbench")]
     public class AvaloniaTerminalLinkAndSelectionTests
     {
         private static (Window, AvaloniaTerminalEmulatorControl) MakeTerminal()

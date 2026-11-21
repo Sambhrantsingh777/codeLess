@@ -56,13 +56,23 @@ namespace codeLess.Avalonia.Tests
         {
             var w = new MainWindow(_root) { Width = 1400, Height = 900 };
             w.Show();
-            Dispatcher.UIThread.RunJobs();
+            ForceLayout(w);
             return w;
+        }
+
+        /// <summary>Headless sessions shared with many earlier tests don't reliably tick the layout timer, so lay out explicitly.</summary>
+        private static void ForceLayout(Window w)
+        {
+            Dispatcher.UIThread.RunJobs();
+            w.UpdateLayout();
+            // Input hit-testing uses the last rendered scene: tick the headless render timer so clicks hit fresh layout.
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
         }
 
         private static void Click(MainWindow w, Control target, int clicks = 1)
         {
-            Dispatcher.UIThread.RunJobs();
+            ForceLayout(w);
             var p = target.TranslatePoint(new Point(Math.Min(30, target.Bounds.Width / 2), target.Bounds.Height / 2), w);
             Assert.True(p.HasValue, "target is not in the visual tree");
             for (int i = 0; i < clicks; i++)
@@ -76,10 +86,15 @@ namespace codeLess.Avalonia.Tests
         private static ListBoxItem ContainerFor(MainWindow w, SearchResultRow row)
         {
             var lb = w.WorkspaceSearchResultsListControl;
+            ForceLayout(w);
             lb.ScrollIntoView(row);
-            Dispatcher.UIThread.RunJobs();
+            ForceLayout(w);
             var item = lb.GetVisualDescendants().OfType<ListBoxItem>().FirstOrDefault(i => ReferenceEquals(i.DataContext, row));
-            Assert.NotNull(item);
+            if (item == null)
+            {
+                var chain = string.Join(" <- ", lb.GetVisualAncestors().OfType<Control>().Take(8).Select(a => a.GetType().Name + "[" + a.Bounds.Width + "x" + a.Bounds.Height + (a.IsVisible ? "" : ",hidden") + "]"));
+                Assert.Fail($"no container: lb.Bounds={lb.Bounds} items={lb.ItemCount} chain={chain}");
+            }
             return item;
         }
 
@@ -296,7 +311,7 @@ namespace codeLess.Avalonia.Tests
             // Single click on a row opens it.
             w.OpenQuickOpen();
             w.CommandPalette.SearchInput.Text = "f299";
-            Dispatcher.UIThread.RunJobs();
+            ForceLayout(w);
             var item = w.CommandPalette.ResultsListBox.GetVisualDescendants().OfType<ListBoxItem>().First();
             Click(w, item);
             Assert.False(w.CommandPalette.IsVisible);

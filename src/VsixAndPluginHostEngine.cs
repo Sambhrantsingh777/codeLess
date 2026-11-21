@@ -510,24 +510,38 @@ main();
             }
         }
 
+        /// <summary>
+        /// Why the last OpenVSX search / download did not reach the registry (Offline Mode or a network error); empty on
+        /// success. UIs show it as a notice.
+        /// </summary>
+        public string LastNetworkNotice = "";
+
         public async Task<int> SearchOpenVsxRegistryAsync(string query)
         {
             if (string.IsNullOrWhiteSpace(query)) return 0;
             LogHost("Querying OpenVSX Registry for '" + query + "'...");
+            LastNetworkNotice = "";
 
             return await Task.Run(() =>
             {
                 try
                 {
                     string url = "https://open-vsx.org/api/-/search?query=" + Uri.EscapeDataString(query) + "&size=14";
-                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                    req.UserAgent = "codeLess-Native-IDE/3.2";
-                    req.Timeout = 10000;
-
-                    using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                    using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                    LedgerHttpRequest lreq = new LedgerHttpRequest();
+                    lreq.Feature = "OpenVSX search";
+                    lreq.Url = url;
+                    lreq.UserAgent = "codeLess-Native-IDE/3.2";
+                    lreq.TimeoutMs = 10000;
+                    lreq.BlockedMessage = "Offline Mode is on: OpenVSX extension search is unavailable. Turn off Offline Mode to search the marketplace (installing a local .vsix file still works).";
+                    LedgerHttpResponse res = LedgerHttp.Send(lreq);
+                    if (!res.IsSuccess)
                     {
-                        string raw = sr.ReadToEnd();
+                        LastNetworkNotice = res.Status > 0 ? "OpenVSX returned HTTP " + res.Status + "." : "OpenVSX is unreachable: " + res.Error;
+                        LogHost("OpenVSX search error: " + LastNetworkNotice);
+                        return 0;
+                    }
+                    {
+                        string raw = res.Body;
                         JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
                         var root = ser.Deserialize<Dictionary<string, object>>(raw);
                         if (root != null && root.ContainsKey("extensions") && root["extensions"] is ArrayList)
@@ -575,6 +589,11 @@ main();
                         }
                     }
                 }
+                catch (NetworkBlockedException bex)
+                {
+                    LastNetworkNotice = bex.Message;
+                    LogHost(bex.Message);
+                }
                 catch (Exception ex)
                 {
                     LogHost("OpenVSX search error: " + ex.Message);
@@ -587,6 +606,7 @@ main();
         {
             if (ext == null || string.IsNullOrEmpty(ext.DownloadUrl)) return false;
             LogHost("Downloading " + ext.Id + " from OpenVSX (" + ext.DownloadUrl + ")...");
+            LastNetworkNotice = "";
 
             return await Task.Run(() =>
             {
@@ -595,10 +615,12 @@ main();
                 {
                     string targetDir = Path.Combine(extensionsRootDir, ext.Id + "-" + ext.Version);
 
-                    using (WebClient wc = new WebClient())
+                    LedgerHttpResponse dl = LedgerHttp.DownloadToFile("Extension download", ext.DownloadUrl, vsixTemp, "codeLess-Native-IDE/3.2", 60000);
+                    if (!dl.IsSuccess)
                     {
-                        wc.Headers.Add("User-Agent", "codeLess-Native-IDE/3.2");
-                        wc.DownloadFile(ext.DownloadUrl, vsixTemp);
+                        LastNetworkNotice = "Extension download failed: " + (dl.Status > 0 ? "HTTP " + dl.Status : dl.Error);
+                        LogHost("Failed installing " + ext.Id + ": " + LastNetworkNotice);
+                        return false;
                     }
 
                     if (Directory.Exists(targetDir))
@@ -611,6 +633,12 @@ main();
                     ScanInstalledDirectories(workbenchThemes);
                     LogHost("Successfully installed & activated " + ext.Id);
                     return true;
+                }
+                catch (NetworkBlockedException bex)
+                {
+                    LastNetworkNotice = bex.Message;
+                    LogHost("Failed installing " + ext.Id + ": " + bex.Message);
+                    return false;
                 }
                 catch (Exception ex)
                 {

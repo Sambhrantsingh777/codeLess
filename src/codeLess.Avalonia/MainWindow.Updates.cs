@@ -28,6 +28,7 @@ namespace codeLess.AvaloniaApp
         public void MaybeAutoCheckForUpdates()
         {
             if (settings == null || !settings.AutoCheckForUpdates || !AvaloniaTerminalEmulatorControl.IsDesktopRuntime) return;
+            if (NetworkLedger.OfflineMode) return; // Offline Mode: skip the automatic check silently
             DateTime last;
             if (DateTime.TryParse(settings.LastUpdateCheckUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out last) &&
                 (DateTime.UtcNow - last).TotalHours < 24)

@@ -298,12 +298,11 @@ namespace codeLess.Studio
             {
                 try
                 {
-                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:11434/api/tags");
-                    req.Timeout = 1200;
-                    using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                    using (StreamReader sr = new StreamReader(res.GetResponseStream()))
+                    // Loopback: always allowed (also in Offline Mode), but still listed in Network Activity.
+                    LedgerHttpResponse res = LedgerHttp.Get("AI: Ollama model list (local)", "http://127.0.0.1:11434/api/tags", 1200);
+                    if (res.IsSuccess)
                     {
-                        string json = sr.ReadToEnd();
+                        string json = res.Body;
                         JavaScriptSerializer ser = new JavaScriptSerializer();
                         var dict = ser.Deserialize<Dictionary<string, object>>(json);
                         if (dict != null && dict.ContainsKey("models"))
@@ -2128,6 +2127,27 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
         public int LastStreamingChunkCount { get; private set; }
 
+        /// <summary>Network Activity feature name for a provider, e.g. "AI: Anthropic Claude (claude-sonnet-4-6)".</summary>
+        public static string GetNetworkFeatureName(ByokVendor vendor)
+        {
+            if (vendor == null) return "AI";
+            string name = string.IsNullOrEmpty(vendor.Name) ? (vendor.Id ?? "provider") : vendor.Name;
+            return string.IsNullOrEmpty(vendor.SelectedModel) ? "AI: " + name : "AI: " + name + " (" + vendor.SelectedModel + ")";
+        }
+
+        /// <summary>The URL a provider call goes to (used for Offline Mode decisions before any request is made).</summary>
+        public static string GetVendorEndpoint(ByokVendor vendor)
+        {
+            if (vendor == null || string.IsNullOrEmpty(vendor.BaseUrl)) return "";
+            return vendor.Id == "anthropic" ? vendor.BaseUrl.TrimEnd('/') + "/messages" : vendor.BaseUrl.TrimEnd('/') + "/chat/completions";
+        }
+
+        /// <summary>False when Offline Mode is on and the provider is not on this machine.</summary>
+        public static bool IsVendorReachableUnderOfflineMode(ByokVendor vendor)
+        {
+            return !NetworkLedger.OfflineMode || NetworkLedger.IsLoopback(GetVendorEndpoint(vendor));
+        }
+
         public async Task<string> CallByokVendorMultiTurnAsync(
             ByokVendor vendor,
             string systemPrompt,
@@ -2161,6 +2181,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     ? vendor.BaseUrl.TrimEnd('/') + "/messages"
                     : vendor.BaseUrl.TrimEnd('/') + "/chat/completions";
 
+                // Privacy choke point: Offline Mode refuses non-loopback providers (throws NetworkBlockedException with a
+                // user-facing message); otherwise the request is timed and its bytes counted as they stream.
+                NetworkRequestScope ledger = NetworkLedger.Begin(GetNetworkFeatureName(vendor), "POST", endpoint, NetworkLedger.OfflineAiMessage);
+                try
+                {
                 HttpWebRequest req = (HttpWebRequest)WebRequest.Create(endpoint);
                 req.Method = "POST";
                 req.ContentType = "application/json";
@@ -2205,7 +2230,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
 
                 byte[] bytes = Encoding.UTF8.GetBytes(payload);
-                using (Stream s = req.GetRequestStream())
+                using (Stream s = ledger.WrapRequestStream(req.GetRequestStream()))
                 {
                     s.Write(bytes, 0, bytes.Length);
                 }
@@ -2213,8 +2238,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 try
                 {
                     using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                    using (StreamReader sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                    using (StreamReader sr = new StreamReader(ledger.WrapResponseStream(res.GetResponseStream()), Encoding.UTF8))
                     {
+                        ledger.Status = (int)res.StatusCode;
                         string contentType = (res.ContentType ?? "").ToLowerInvariant();
                         StringBuilder rawBuilder = new StringBuilder();
                         StringBuilder streamedText = new StringBuilder();
@@ -2224,7 +2250,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         string line;
                         while ((line = sr.ReadLine()) != null)
                         {
-                            if (CancelStreamingRequested) break;
+                            if (CancelStreamingRequested) { ledger.Note = "Cancelled by user"; break; }
                             rawBuilder.AppendLine(line);
                             string trimmed = line.Trim();
                             if (trimmed.StartsWith("data:"))
@@ -2296,6 +2322,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                 ? streamedText.ToString() + "\n\n[Error: " + vendor.Name + " stopped mid-response: " + streamErrorMessage + "]"
                                 : "Error: " + vendor.Name + " returned an error: " + streamErrorMessage;
                         }
+                        if (sawSseDataLine && string.IsNullOrEmpty(ledger.Note)) ledger.Note = "streamed";
                         if (sawSseDataLine && streamedText.Length > 0)
                             return streamedText.ToString();
                         if (sawSseDataLine)
@@ -2342,12 +2369,24 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     {
                         HttpWebResponse errRes = wex.Response as HttpWebResponse;
                         string statusPrefix = errRes != null ? string.Format("HTTP {0} ({1}): ", (int)errRes.StatusCode, errRes.StatusDescription) : "";
-                        using (StreamReader esr = new StreamReader(wex.Response.GetResponseStream()))
+                        if (errRes != null) ledger.Status = (int)errRes.StatusCode;
+                        using (StreamReader esr = new StreamReader(ledger.WrapResponseStream(wex.Response.GetResponseStream())))
                         {
                             throw new Exception("Vendor HTTP Error " + statusPrefix + esr.ReadToEnd());
                         }
                     }
+                    ledger.Fail(wex);
                     throw new Exception("Network/Endpoint Error (" + vendor.Name + "): " + wex.Message);
+                }
+                }
+                catch (Exception ex)
+                {
+                    if (ledger.Status <= 0) ledger.Fail(ex);
+                    throw;
+                }
+                finally
+                {
+                    ledger.Complete();
                 }
             });
         }
@@ -2369,6 +2408,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             {
                 return GenerateInlineGhostCompletion(buf);
             }
+            if (CustomModelResponder == null && !IsVendorReachableUnderOfflineMode(activeVendor))
+                return GenerateInlineGhostCompletion(buf);
 
             try
             {
@@ -2691,6 +2732,15 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             {
                 sw.Stop();
                 result.StagedFileContents.Clear();
+                if (ex is NetworkBlockedException)
+                {
+                    result.ToolCalls.Clear();
+                    result.AssistantReply = ex.Message;
+                    result.ProviderUsed = "Offline Mode";
+                    result.ElapsedMs = sw.ElapsedMilliseconds;
+                    RecordHarnessTrace(result, mode, sysPrompt);
+                    return result;
+                }
                 if (ex.Message.Contains("NO_API_KEY"))
                 {
                     result.ToolCalls.Clear();
