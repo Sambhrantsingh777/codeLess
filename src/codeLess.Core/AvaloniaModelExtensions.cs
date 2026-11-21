@@ -231,8 +231,11 @@ namespace codeLess.Studio
             ClampCursor();
             if (CursorCol > 0)
             {
-                Lines[CursorLine] = Lines[CursorLine].Remove(CursorCol - 1, 1);
-                CursorCol--;
+                // never split an emoji / astral surrogate pair (left a lone surrogate saved as U+FFFD)
+                string ln = Lines[CursorLine];
+                int n = (CursorCol >= 2 && char.IsLowSurrogate(ln[CursorCol - 1]) && char.IsHighSurrogate(ln[CursorCol - 2])) ? 2 : 1;
+                Lines[CursorLine] = ln.Remove(CursorCol - n, n);
+                CursorCol -= n;
             }
             else if (CursorLine > 0)
             {
@@ -255,7 +258,9 @@ namespace codeLess.Studio
             ClampCursor();
             if (CursorCol < Lines[CursorLine].Length)
             {
-                Lines[CursorLine] = Lines[CursorLine].Remove(CursorCol, 1);
+                string ln = Lines[CursorLine];
+                int n = (CursorCol + 1 < ln.Length && char.IsHighSurrogate(ln[CursorCol]) && char.IsLowSurrogate(ln[CursorCol + 1])) ? 2 : 1;
+                Lines[CursorLine] = ln.Remove(CursorCol, n);
             }
             else if (CursorLine < Lines.Count - 1)
             {

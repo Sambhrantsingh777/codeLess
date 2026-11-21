@@ -2253,26 +2253,9 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
-            if (buf.HasSelection())
-            {
-                buf.PushUndoSnapshot();
-                buf.DeleteSelection();
-                FinalizeBufferEdit(buf);
-                return;
-            }
-            if (buf.CursorCol == 0)
-            {
-                PerformBackspaceAcrossCursors();
-                return;
-            }
             buf.PushUndoSnapshot();
-            string ln = buf.Lines[buf.CursorLine];
-            int c = Math.Min(ln.Length, buf.CursorCol);
-            int start = c;
-            while (start > 0 && !IsWordChar(ln[start - 1])) start--;
-            while (start > 0 && IsWordChar(ln[start - 1])) start--;
-            buf.Lines[buf.CursorLine] = ln.Remove(start, c - start);
-            buf.CursorCol = start;
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => DeleteWordCore(b, left: true));
             FinalizeBufferEdit(buf);
         }
 
@@ -2280,28 +2263,35 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
-            if (buf.HasSelection())
-            {
-                buf.PushUndoSnapshot();
-                buf.DeleteSelection();
-                FinalizeBufferEdit(buf);
-                return;
-            }
-            string ln = buf.Lines[buf.CursorLine];
-            if (buf.CursorCol >= ln.Length)
-            {
-                buf.PushUndoSnapshot();
-                buf.PerformDelete();
-                FinalizeBufferEdit(buf);
-                return;
-            }
             buf.PushUndoSnapshot();
-            int c = buf.CursorCol;
-            int end = c;
-            while (end < ln.Length && IsWordChar(ln[end])) end++;
-            while (end < ln.Length && !IsWordChar(ln[end])) end++;
-            buf.Lines[buf.CursorLine] = ln.Remove(c, Math.Max(1, end - c));
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => DeleteWordCore(b, left: false));
             FinalizeBufferEdit(buf);
+        }
+
+        private static void DeleteWordCore(EditorTabBuffer b, bool left)
+        {
+            if (b.HasSelection()) { b.DeleteSelection(); return; }
+            string ln = b.Lines[b.CursorLine];
+            int c = Math.Min(ln.Length, b.CursorCol);
+            if (left)
+            {
+                if (c == 0) { b.PerformBackspace(); return; }
+                int start = c;
+                while (start > 0 && !IsWordChar(ln[start - 1])) start--;
+                while (start > 0 && IsWordChar(ln[start - 1])) start--;
+                b.Lines[b.CursorLine] = ln.Remove(start, c - start);
+                b.CursorCol = start;
+            }
+            else
+            {
+                if (c >= ln.Length) { b.PerformDelete(); return; }
+                int end = c;
+                while (end < ln.Length && IsWordChar(ln[end])) end++;
+                while (end < ln.Length && !IsWordChar(ln[end])) end++;
+                b.Lines[b.CursorLine] = ln.Remove(c, Math.Max(1, end - c));
+            }
+            b.SyncContentFromLines(false);
         }
 
         public void ScrollLines(int delta)
@@ -2592,6 +2582,125 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
+        // ---- Multi-cursor engine --------------------------------------------------------------------------
+        // Every edit / movement applies to all carets (primary + ExtraCursors). Edits run from the last caret to
+        // the first with one undo snapshot; carets already processed are tracked as absolute offsets and shifted
+        // by each edit's length delta, so line splits / joins never misplace them.
+        private struct CaretState { public int Line, Col, AnchorLine, AnchorCol; }
+
+        private static CaretState ReadPrimary(EditorTabBuffer b) => new CaretState
+        {
+            Line = b.CursorLine, Col = b.CursorCol,
+            AnchorLine = b.HasSelection() ? b.SelectionStartLine : -1,
+            AnchorCol = b.HasSelection() ? b.SelectionStartCol : -1
+        };
+
+        private static void WritePrimary(EditorTabBuffer b, CaretState c)
+        {
+            b.CursorLine = Math.Max(0, Math.Min(b.Lines.Count - 1, c.Line));
+            b.CursorCol = Math.Max(0, Math.Min(b.Lines[b.CursorLine].Length, c.Col));
+            if (c.AnchorLine >= 0 && c.AnchorCol >= 0)
+            {
+                b.SelectionStartLine = Math.Max(0, Math.Min(b.Lines.Count - 1, c.AnchorLine));
+                b.SelectionStartCol = Math.Max(0, Math.Min(b.Lines[b.SelectionStartLine].Length, c.AnchorCol));
+            }
+            else b.ClearSelection();
+        }
+
+        private static long OffsetOf(EditorTabBuffer b, int line, int col)
+        {
+            long off = 0;
+            int l = Math.Max(0, Math.Min(b.Lines.Count - 1, line));
+            for (int i = 0; i < l; i++) off += b.Lines[i].Length + 1;
+            return off + Math.Max(0, Math.Min(b.Lines[l].Length, col));
+        }
+
+        private static void PositionOf(EditorTabBuffer b, long offset, out int line, out int col)
+        {
+            long rem = Math.Max(0, offset);
+            for (int i = 0; i < b.Lines.Count; i++)
+            {
+                int len = b.Lines[i].Length;
+                if (rem <= len || i == b.Lines.Count - 1) { line = i; col = (int)Math.Min(rem, len); return; }
+                rem -= len + 1;
+            }
+            line = 0; col = 0;
+        }
+
+        private static long TotalLength(EditorTabBuffer b)
+        {
+            long t = Math.Max(0, b.Lines.Count - 1);
+            for (int i = 0; i < b.Lines.Count; i++) t += b.Lines[i].Length;
+            return t;
+        }
+
+        /// <summary>Runs a single-caret edit at every caret (bottom-to-top). The caller pushes the undo snapshot.</summary>
+        private void ApplyEditToAllCarets(EditorTabBuffer buf, Action<EditorTabBuffer, int> edit)
+        {
+            if (ExtraCursors.Count == 0) { edit(buf, 0); return; }
+            var carets = new List<CaretState> { ReadPrimary(buf) };
+            foreach (var ec in ExtraCursors)
+                if (ec.Line >= 0 && ec.Line < buf.Lines.Count)
+                    carets.Add(new CaretState { Line = ec.Line, Col = ec.Col, AnchorLine = ec.HasSelection ? ec.AnchorLine : -1, AnchorCol = ec.HasSelection ? ec.AnchorCol : -1 });
+            // sort by selection end (descending), so each edit only shifts carets that were already processed
+            var ordered = carets.Select((c, i) => new
+            {
+                c, i,
+                end = Math.Max(OffsetOf(buf, c.Line, c.Col), c.AnchorLine >= 0 ? OffsetOf(buf, c.AnchorLine, c.AnchorCol) : 0)
+            }).OrderByDescending(x => x.end).ToList();
+            var done = new List<KeyValuePair<int, long>>(); // original caret index -> final offset
+            int k = 0;
+            foreach (var item in ordered)
+            {
+                WritePrimary(buf, item.c);
+                long before = TotalLength(buf);
+                edit(buf, k++);
+                long delta = TotalLength(buf) - before;
+                for (int d = 0; d < done.Count; d++) done[d] = new KeyValuePair<int, long>(done[d].Key, done[d].Value + delta);
+                done.Add(new KeyValuePair<int, long>(item.i, OffsetOf(buf, buf.CursorLine, buf.CursorCol)));
+            }
+            // restore: index 0 is the primary caret
+            ExtraCursors.Clear();
+            var seen = new HashSet<long>();
+            foreach (var kv in done.OrderBy(x => x.Key))
+            {
+                PositionOf(buf, kv.Value, out int l, out int c);
+                if (kv.Key == 0) { buf.CursorLine = l; buf.CursorCol = c; buf.ClearSelection(); seen.Add(kv.Value); }
+            }
+            foreach (var kv in done.OrderBy(x => x.Key))
+            {
+                if (kv.Key == 0 || !seen.Add(kv.Value)) continue; // merge carets that collapsed onto each other
+                PositionOf(buf, kv.Value, out int l, out int c);
+                ExtraCursors.Add(new ExtraCursorCaret { Line = l, Col = c, AnchorLine = -1, AnchorCol = -1 });
+            }
+        }
+
+        /// <summary>Applies a caret motion to every caret (the motion acts on the buffer's primary caret).</summary>
+        private void ApplyMoveToAllCarets(Action move)
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            if (ExtraCursors.Count == 0) { move(); return; }
+            var primary = ReadPrimary(buf);
+            var moved = new List<ExtraCursorCaret>();
+            foreach (var ec in ExtraCursors.ToList())
+            {
+                if (ec.Line < 0 || ec.Line >= buf.Lines.Count) continue;
+                WritePrimary(buf, new CaretState { Line = ec.Line, Col = ec.Col, AnchorLine = ec.HasSelection ? ec.AnchorLine : -1, AnchorCol = ec.HasSelection ? ec.AnchorCol : -1 });
+                move();
+                var st = ReadPrimary(buf);
+                moved.Add(new ExtraCursorCaret { Line = st.Line, Col = st.Col, AnchorLine = st.AnchorLine, AnchorCol = st.AnchorCol });
+            }
+            WritePrimary(buf, primary);
+            move();
+            ExtraCursors.Clear();
+            foreach (var m in moved)
+            {
+                bool dup = (m.Line == buf.CursorLine && m.Col == buf.CursorCol) || ExtraCursors.Any(x => x.Line == m.Line && x.Col == m.Col);
+                if (!dup) ExtraCursors.Add(m);
+            }
+        }
+
         private void InsertTextAcrossCursors(string text)
         {
             var buf = Buffer;
@@ -2599,49 +2708,24 @@ namespace codeLess.AvaloniaApp
             bool coalesce = ExtraCursors.Count == 0 && text.Length == 1 && text[0] != '\n' && text[0] != '\r' && !buf.HasSelection();
             buf.PushUndoSnapshot(coalesceTyping: coalesce);
             buf.GhostTextSuggestion = "";
-
+            ClampExtraCursors(buf);
             if (ExtraCursors.Count == 0)
             {
                 buf.InsertTextAtCursor(text);
                 FinalizeBufferEdit(buf);
                 return;
             }
-
-            // Apply to extra cursors in bottom-to-top order, then primary cursor
-            var allCarets = new List<(int Idx, int Line, int Col, int AnchorL, int AnchorC)>();
-            allCarets.Add((-1, buf.CursorLine, buf.CursorCol, buf.SelectionStartLine, buf.SelectionStartCol));
-            for (int i = 0; i < ExtraCursors.Count; i++)
+            // VS Code: pasting N lines with N carets puts one line at each caret (in document order).
+            string norm = text.Replace("\r\n", "\n").Replace("\r", "\n");
+            string[] pieces = norm.TrimEnd('\n').Split('\n');
+            int caretCount = ExtraCursors.Count + 1;
+            bool distribute = pieces.Length == caretCount && pieces.Length > 1;
+            int total = caretCount;
+            ApplyEditToAllCarets(buf, (b, k) =>
             {
-                var ec = ExtraCursors[i];
-                allCarets.Add((i, ec.Line, ec.Col, ec.AnchorLine, ec.AnchorCol));
-            }
-
-            foreach (var c in allCarets.Where(x => x.Line >= 0 && x.Line < buf.Lines.Count).OrderByDescending(x => x.Line).ThenByDescending(x => x.Col))
-            {
-                // (stale extra cursors after undo / line delete used to throw ArgumentOutOfRange and crash the app)
-                string line = buf.Lines[c.Line];
-                int c0 = c.Col;
-                int c1 = c.Col;
-                if (c.AnchorL == c.Line && c.AnchorC >= 0)
-                {
-                    c0 = Math.Min(c.Col, c.AnchorC);
-                    c1 = Math.Max(c.Col, c.AnchorC);
-                }
-                c0 = Math.Max(0, Math.Min(line.Length, c0));
-                c1 = Math.Max(c0, Math.Min(line.Length, c1));
-                buf.Lines[c.Line] = line.Substring(0, c0) + text + line.Substring(c1);
-                int newCol = c0 + text.Length;
-                if (c.Idx < 0)
-                {
-                    buf.CursorLine = c.Line;
-                    buf.CursorCol = newCol;
-                    buf.ClearSelection();
-                }
-                else
-                {
-                    ExtraCursors[c.Idx] = new ExtraCursorCaret { Line = c.Line, Col = newCol, AnchorLine = -1, AnchorCol = -1 };
-                }
-            }
+                // k counts from the LAST caret in document order, so the matching line is pieces[total-1-k]
+                b.InsertTextAtCursor(distribute ? pieces[total - 1 - k] : norm);
+            });
             FinalizeBufferEdit(buf);
         }
 
@@ -2651,25 +2735,39 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
             bool coalesce = ExtraCursors.Count == 0 && !buf.HasSelection() && buf.CursorCol > 0;
             buf.PushUndoSnapshot(coalesceTyping: coalesce);
-            if (ExtraCursors.Count == 0)
-            {
-                buf.PerformBackspace();
-                FinalizeBufferEdit(buf);
-                return;
-            }
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => b.PerformBackspace());
+            FinalizeBufferEdit(buf);
+        }
 
-            for (int i = ExtraCursors.Count - 1; i >= 0; i--)
+        private void PerformDeleteAcrossCursors()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => b.PerformDelete());
+            FinalizeBufferEdit(buf);
+        }
+
+        /// <summary>Enter at every caret, keeping the line's own indentation (tabs stay tabs) plus one level after { or :.</summary>
+        private void PerformNewlineAcrossCursors()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) =>
             {
-                var ec = ExtraCursors[i];
-                if (ec.Line >= 0 && ec.Line < buf.Lines.Count && ec.Col > 0)
-                {
-                    string ln = buf.Lines[ec.Line];
-                    int col = Math.Min(ln.Length, ec.Col);
-                    buf.Lines[ec.Line] = ln.Remove(col - 1, 1);
-                    ExtraCursors[i] = new ExtraCursorCaret { Line = ec.Line, Col = col - 1, AnchorLine = -1, AnchorCol = -1 };
-                }
-            }
-            buf.PerformBackspace();
+                string cur = b.Lines[b.CursorLine];
+                int ws = 0;
+                while (ws < cur.Length && (cur[ws] == ' ' || cur[ws] == '\t')) ws++;
+                string indent = cur.Substring(0, Math.Min(ws, b.CursorCol));
+                string beforeCaret = cur.Substring(0, Math.Min(cur.Length, b.CursorCol)).TrimEnd();
+                if (beforeCaret.EndsWith("{") || beforeCaret.EndsWith(":") || beforeCaret.EndsWith("(") || beforeCaret.EndsWith("["))
+                    indent += indent.Contains('\t') ? "\t" : new string(' ', Math.Max(1, DisplayTabSize));
+                b.InsertTextAtCursor("\n" + indent);
+            });
             FinalizeBufferEdit(buf);
         }
 
@@ -3087,22 +3185,14 @@ namespace codeLess.AvaloniaApp
                     }
                     else
                     {
-                        buf.PushUndoSnapshot();
-                        buf.PerformDelete();
-                        FinalizeBufferEdit(buf);
+                        PerformDeleteAcrossCursors();
                     }
                     e.Handled = true;
                     break;
                 case Key.Enter:
                     if (!ctrlOrCmd)
                     {
-                        buf.PushUndoSnapshot();
-                        string curLine = buf.Lines[buf.CursorLine];
-                        int lead = GetLeadingSpaces(curLine);
-                        if (curLine.TrimEnd().EndsWith("{") || curLine.TrimEnd().EndsWith(":"))
-                            lead += 4;
-                        buf.InsertTextAtCursor("\n" + new string(' ', lead));
-                        FinalizeBufferEdit(buf);
+                        PerformNewlineAcrossCursors();
                         e.Handled = true;
                     }
                     break;
@@ -3200,7 +3290,9 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        private void MoveCaretHorizontal(int dir, bool shift, bool wordJump)
+        private void MoveCaretHorizontal(int dir, bool shift, bool wordJump) => ApplyMoveToAllCarets(() => MoveCaretHorizontalCore(dir, shift, wordJump));
+
+        private void MoveCaretHorizontalCore(int dir, bool shift, bool wordJump)
         {
             var buf = Buffer;
             if (buf == null) return;
@@ -3217,7 +3309,11 @@ namespace codeLess.AvaloniaApp
                         while (c > 0 && IsWordChar(line[c - 1])) c--;
                         buf.CursorCol = c;
                     }
-                    else buf.CursorCol--;
+                    else
+                    {
+                        buf.CursorCol--;
+                        if (buf.CursorCol > 0 && char.IsLowSurrogate(line[buf.CursorCol]) && char.IsHighSurrogate(line[buf.CursorCol - 1])) buf.CursorCol--;
+                    }
                 }
                 else if (buf.CursorLine > 0)
                 {
@@ -3236,7 +3332,11 @@ namespace codeLess.AvaloniaApp
                         while (c < line.Length && !IsWordChar(line[c])) c++;
                         buf.CursorCol = c;
                     }
-                    else buf.CursorCol++;
+                    else
+                    {
+                        buf.CursorCol++;
+                        if (buf.CursorCol < line.Length && char.IsLowSurrogate(line[buf.CursorCol]) && char.IsHighSurrogate(line[buf.CursorCol - 1])) buf.CursorCol++;
+                    }
                 }
                 else if (buf.CursorLine < buf.Lines.Count - 1)
                 {
@@ -3258,7 +3358,9 @@ namespace codeLess.AvaloniaApp
         }
 
         // Home / Cmd+Left: first non-whitespace char, then column 0. End / Cmd+Right: end of the logical line.
-        private void MoveCaretToLineBoundary(bool toEnd, bool shift)
+        private void MoveCaretToLineBoundary(bool toEnd, bool shift) => ApplyMoveToAllCarets(() => MoveCaretToLineBoundaryCore(toEnd, shift));
+
+        private void MoveCaretToLineBoundaryCore(bool toEnd, bool shift)
         {
             var buf = Buffer;
             if (buf == null || buf.Lines.Count == 0) return;
@@ -3280,7 +3382,9 @@ namespace codeLess.AvaloniaApp
         }
 
         // Ctrl+Home/End (Windows) or Cmd+Up/Down (macOS): start / end of document.
-        private void MoveCaretToDocumentBoundary(bool toEnd, bool shift)
+        private void MoveCaretToDocumentBoundary(bool toEnd, bool shift) => ApplyMoveToAllCarets(() => MoveCaretToDocumentBoundaryCore(toEnd, shift));
+
+        private void MoveCaretToDocumentBoundaryCore(bool toEnd, bool shift)
         {
             var buf = Buffer;
             if (buf == null || buf.Lines.Count == 0) return;
@@ -3300,7 +3404,9 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
-        private void MoveCaretVertical(int deltaLines, bool shift)
+        private void MoveCaretVertical(int deltaLines, bool shift) => ApplyMoveToAllCarets(() => MoveCaretVerticalCore(deltaLines, shift));
+
+        private void MoveCaretVerticalCore(int deltaLines, bool shift)
         {
             var buf = Buffer;
             if (buf == null) return;

@@ -356,3 +356,92 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    [Collection("SequentialWorkbench")]
+    public class MultiCursorEditingTests : IDisposable
+    {
+        private readonly string _settingsFilePath = IdePersistentSettings.GetSettingsFilePath();
+        private readonly string _settingsBackup;
+        private readonly string _root;
+        public MultiCursorEditingTests()
+        {
+            _settingsBackup = File.Exists(_settingsFilePath) ? File.ReadAllText(_settingsFilePath) : null;
+            _root = Path.Combine(Path.GetTempPath(), "codeLess_MC_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(_root);
+        }
+        public void Dispose()
+        {
+            try { if (_settingsBackup != null) File.WriteAllText(_settingsFilePath, _settingsBackup); else if (File.Exists(_settingsFilePath)) File.Delete(_settingsFilePath); } catch { }
+            try { Directory.Delete(_root, true); } catch { }
+        }
+
+        private (MainWindow w, EditorTabBuffer tab, AvaloniaVirtualEditorCanvas canvas) Setup(string text)
+        {
+            string f = Path.Combine(_root, "m.txt");
+            File.WriteAllText(f, text);
+            var w = new MainWindow(_root);
+            w.SuppressUnsavedPrompts = true;
+            w.Show();
+            var tab = w.OpenFileInTab(f);
+            return (w, tab, w.PrimaryEditor.Canvas);
+        }
+
+        private static void Type(AvaloniaVirtualEditorCanvas c, string text) =>
+            c.RaiseEvent(new global::Avalonia.Input.TextInputEventArgs { RoutedEvent = global::Avalonia.Input.InputElement.TextInputEvent, Text = text });
+
+        private static void ThreeCarets(EditorTabBuffer tab, AvaloniaVirtualEditorCanvas c, int col)
+        {
+            tab.CursorLine = 0; tab.CursorCol = col; tab.ClearSelection();
+            c.ExtraCursors.Clear();
+            c.ExtraCursors.Add(new ExtraCursorCaret { Line = 1, Col = col, AnchorLine = -1, AnchorCol = -1 });
+            c.ExtraCursors.Add(new ExtraCursorCaret { Line = 2, Col = col, AnchorLine = -1, AnchorCol = -1 });
+        }
+
+        [AvaloniaFact]
+        public void TypingBackspaceDeleteAndEnter_ApplyToEveryCursor()
+        {
+            var (w, tab, c) = Setup("foo\nfoo\nfoo\n");
+            ThreeCarets(tab, c, 3);
+            Type(c, "X");
+            Assert.Equal(new[] { "fooX", "fooX", "fooX" }, tab.Lines.Take(3).ToArray());
+            w.SimulateShortcut(global::Avalonia.Input.Key.Back, global::Avalonia.Input.KeyModifiers.None);
+            Assert.Equal(new[] { "foo", "foo", "foo" }, tab.Lines.Take(3).ToArray());
+            w.SimulateShortcut(global::Avalonia.Input.Key.Left, global::Avalonia.Input.KeyModifiers.None); // all carets move to col 2
+            w.SimulateShortcut(global::Avalonia.Input.Key.Delete, global::Avalonia.Input.KeyModifiers.None);
+            Assert.Equal(new[] { "fo", "fo", "fo" }, tab.Lines.Take(3).ToArray());
+            w.SimulateShortcut(global::Avalonia.Input.Key.Enter, global::Avalonia.Input.KeyModifiers.None);
+            Assert.Equal(new[] { "fo", "", "fo", "", "fo", "" }, tab.Lines.Take(6).ToArray());
+            Assert.Equal(2, c.ExtraCursors.Count);
+            Assert.All(c.ExtraCursors, ec => Assert.Equal(0, ec.Col));
+            w.Close();
+        }
+
+        [AvaloniaFact]
+        public void PastingOneLinePerCursor_DistributesLines_AndUndoIsOneStep()
+        {
+            var (w, tab, c) = Setup("a\nb\nc\n");
+            ThreeCarets(tab, c, 1);
+            Type(c, "1\n2\n3");
+            Assert.Equal(new[] { "a1", "b2", "c3" }, tab.Lines.Take(3).ToArray());
+            tab.PerformUndo();
+            Assert.Equal(new[] { "a", "b", "c" }, tab.Lines.Take(3).ToArray());
+            w.Close();
+        }
+
+        [AvaloniaFact]
+        public void BackspaceAndArrows_NeverSplitEmoji()
+        {
+            var (w, tab, c) = Setup("x\U0001F680\n");
+            tab.CursorLine = 0; tab.CursorCol = 3; tab.ClearSelection();
+            w.SimulateShortcut(global::Avalonia.Input.Key.Left, global::Avalonia.Input.KeyModifiers.None);
+            Assert.Equal(1, tab.CursorCol); // stepped over both UTF-16 halves
+            w.SimulateShortcut(global::Avalonia.Input.Key.Right, global::Avalonia.Input.KeyModifiers.None);
+            Assert.Equal(3, tab.CursorCol);
+            w.SimulateShortcut(global::Avalonia.Input.Key.Back, global::Avalonia.Input.KeyModifiers.None);
+            Assert.Equal("x", tab.Lines[0]);
+            w.Close();
+        }
+    }
+}
