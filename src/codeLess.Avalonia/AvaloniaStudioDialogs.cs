@@ -649,6 +649,7 @@ namespace codeLess.AvaloniaApp
             var wrapChk = new CheckBox { Content = "Word Wrap (Alt+Z)", IsChecked = settings.WordWrap, Foreground = new SolidColorBrush(textPrimary) };
             var minimapChk = new CheckBox { Content = "Show Editor Minimap", IsChecked = settings.ShowMinimap, Foreground = new SolidColorBrush(textPrimary) };
             var autoSaveChk = new CheckBox { Content = "Auto Save Modified Files", IsChecked = settings.AutoSave, Foreground = new SolidColorBrush(textPrimary) };
+            var venvChk = new CheckBox { Content = "Activate Python environment in new terminals", IsChecked = settings.ActivatePythonEnvironmentInTerminal, Foreground = new SolidColorBrush(textPrimary) };
             var excludedBox = new TextBox { Text = settings.ExcludedFolders ?? "" };
 
             var providers = LlmHarnessAndAgentEngine.GetAllProviderTemplates();
@@ -690,6 +691,7 @@ namespace codeLess.AvaloniaApp
             togglesRow.Children.Add(minimapChk);
             togglesRow.Children.Add(autoSaveChk);
             stack.Children.Add(togglesRow);
+            stack.Children.Add(venvChk);
 
             stack.Children.Add(new TextBlock { Text = "Excluded Workspace Folders (comma-separated)", FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = new SolidColorBrush(textPrimary) });
             stack.Children.Add(excludedBox);
@@ -731,6 +733,7 @@ namespace codeLess.AvaloniaApp
                 settings.WordWrap = wrapChk.IsChecked == true;
                 settings.ShowMinimap = minimapChk.IsChecked == true;
                 settings.AutoSave = autoSaveChk.IsChecked == true;
+                settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
                 settings.ExcludedFolders = (excludedBox.Text ?? "").Trim();
                 if (providerCombo.SelectedIndex >= 0 && providerCombo.SelectedIndex < providers.Count)
                     settings.ActiveProvider = StudioSettings.NormalizeProviderId(providers[providerCombo.SelectedIndex].Name);

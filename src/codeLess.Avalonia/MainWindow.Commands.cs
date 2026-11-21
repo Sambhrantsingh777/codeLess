@@ -1870,6 +1870,13 @@ namespace codeLess.AvaloniaApp
             };
 
             termCtrl.InlineShellPromptRequested += HandleTerminalInlineAiRequest;
+            // Cmd/Ctrl+Click file links: relative paths resolve against the shell's cwd, then the workspace root.
+            termCtrl.WorkspaceRootProvider = () => workspaceRoot;
+            termCtrl.FileLinkActivated += (path, line, col) =>
+            {
+                if (OpenFileInTab(path, preview: false) != null && line > 0)
+                    PrimaryEditor.GoToLine(line, Math.Max(1, col));
+            };
             termCtrl.SessionExited += ctrl =>
             {
                 // Automatically remove session when user types 'exit' or shell process terminates
@@ -1880,6 +1887,11 @@ namespace codeLess.AvaloniaApp
             try
             {
                 started = termCtrl.StartShell(workDir, resolvedShell);
+                // VS Code-style Python venv activation, typed once the shell's first prompt is up.
+                if (started && (settings == null || settings.ActivatePythonEnvironmentInTerminal))
+                {
+                    try { PythonVenvActivator.ScheduleActivation(termCtrl.Session, workspaceRoot); } catch { }
+                }
             }
             catch { started = false; }
 
@@ -2111,6 +2123,9 @@ namespace codeLess.AvaloniaApp
                 else if (ext == "sh" || ext == "zsh") cmd = $"sh {target}";
                 else if (ext == "rs") cmd = "cargo run";
             }
+            // Brand-new terminal: send its pending venv activation first so the file runs inside the venv.
+            string pendingVenv = PythonVenvActivator.TakePendingActivation(activeTerminalSession?.Control?.Session);
+            if (pendingVenv != null) activeTerminalSession.Control.WriteAutomatedInput(pendingVenv + "\r");
             activeTerminalSession?.Control?.WriteAutomatedInput(cmd + "\r");
             AppendOutputLog("[Runner] Executed in terminal: " + cmd);
         }

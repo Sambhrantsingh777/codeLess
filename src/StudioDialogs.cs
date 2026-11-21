@@ -2676,6 +2676,7 @@ namespace codeLess.Studio
         public CheckBox AutoSaveBox;
         public CheckBox AgentApprovalBox;
         public CheckBox ShowWelcomeBox;
+        public CheckBox ActivatePythonEnvBox;
         public CodeLessDarkInputBox ExcludedFoldersInput;
 
         // AI Section controls
@@ -2705,6 +2706,7 @@ namespace codeLess.Studio
             bool origAutoSave = currentSettings.AutoSave;
             bool origApproval = currentSettings.RequireAgentToolApproval;
             bool origWelcome = currentSettings.ShowWelcomeOnStartup;
+            bool origActivateVenv = currentSettings.ActivatePythonEnvironmentInTerminal;
             string origExcluded = currentSettings.ExcludedFolders;
             string origAgentModel = currentSettings.DefaultAgentModel;
             string origAskModel = currentSettings.DefaultAskModel;
@@ -2850,6 +2852,7 @@ namespace codeLess.Studio
             AgentApprovalBox = addCheck("Require Approval Before Agent Runs Commands", settings.RequireAgentToolApproval, 380, y);
             y += 24;
             ShowWelcomeBox = addCheck("Show Welcome page on startup", settings.ShowWelcomeOnStartup, 24, y);
+            ActivatePythonEnvBox = addCheck("Activate Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, 380, y);
             y += 28;
             addLabel("Excluded Folders (files.exclude):", y);
             ExcludedFoldersInput = new CodeLessDarkInputBox
@@ -3100,6 +3103,7 @@ namespace codeLess.Studio
                 settings.AutoSave = origAutoSave;
                 settings.RequireAgentToolApproval = origApproval;
                 settings.ShowWelcomeOnStartup = origWelcome;
+                settings.ActivatePythonEnvironmentInTerminal = origActivateVenv;
                 settings.ExcludedFolders = origExcluded;
                 settings.DefaultAgentModel = origAgentModel;
                 settings.DefaultAskModel = origAskModel;
@@ -3149,6 +3153,8 @@ namespace codeLess.Studio
             settings.RequireAgentToolApproval = AgentApprovalBox.Checked;
             if (ShowWelcomeBox != null)
                 settings.ShowWelcomeOnStartup = ShowWelcomeBox.Checked;
+            if (ActivatePythonEnvBox != null)
+                settings.ActivatePythonEnvironmentInTerminal = ActivatePythonEnvBox.Checked;
             if (ExcludedFoldersInput != null && !string.IsNullOrWhiteSpace(ExcludedFoldersInput.Text))
                 settings.ExcludedFolders = ExcludedFoldersInput.Text.Trim();
             if (DefaultAgentModelCombo != null && !string.IsNullOrWhiteSpace(DefaultAgentModelCombo.Text))
