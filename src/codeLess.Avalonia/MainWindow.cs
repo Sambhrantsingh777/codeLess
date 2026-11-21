@@ -1605,12 +1605,16 @@ namespace codeLess.AvaloniaApp
             PrimaryEditor.OpenRecentWorkspaceRequested += dir => { if (Directory.Exists(dir)) LoadWorkspace(dir); };
             PrimaryEditor.EditorContextMenuRequested += OpenEditorContextMenu;
             PrimaryEditor.DiffAllDecisionRequested += (buf, accepted) => RefreshChangesetBanner();
+            PrimaryEditor.LinkActivated += (buf, target, line) => FollowEditorLink(buf, target);
+            PrimaryEditor.NavigateHistoryRequested += dir => { if (dir < 0) NavigateBack(); else NavigateForward(); };
             Grid.SetColumn(PrimaryEditor, 0);
             editorSplitGrid.Children.Add(PrimaryEditor);
 
             SplitEditor = new AvaloniaEditorControl();
             SplitEditor.BufferModified += OnEditorBufferModified;
             SplitEditor.CaretMoved += buf => UpdateStatusBar();
+            SplitEditor.LinkActivated += (buf, target, line) => FollowEditorLink(buf, target);
+            SplitEditor.NavigateHistoryRequested += dir => { if (dir < 0) NavigateBack(); else NavigateForward(); };
             splitEditorBorder = new Border
             {
                 Child = SplitEditor,

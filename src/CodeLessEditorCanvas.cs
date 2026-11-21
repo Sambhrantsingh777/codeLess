@@ -124,6 +124,10 @@ namespace codeLess.Studio
         public event Action OnLaunchDemoSandboxClicked;
         public event Action<string> OnOpenRecentWorkspaceClicked;
         public event Action<string> OnGoToDefinitionRequested;
+        /// <summary>Ctrl+Click / F12 on an import, path, URL or identifier (VS Code "follow link").</summary>
+        public event Action<EditorTabBuffer, EditorLinkTarget> OnLinkActivated;
+        /// <summary>Supplies the workspace root used to resolve imports and paths.</summary>
+        public Func<string> WorkspaceRootProvider;
         public event Action<EditorTabBuffer, string> OnGoToReferencesRequested;
         public event Action<EditorTabBuffer, string> OnPeekDefinitionRequested;
         public event Action<EditorTabBuffer, string> OnRenameSymbolRequested;
@@ -2601,6 +2605,31 @@ namespace codeLess.Studio
                 OnToggleSplitEditorRequested();
         }
 
+        /// <summary>Resolves the Ctrl+Click target at a position (never throws).</summary>
+        public EditorLinkTarget ResolveLinkAt(EditorTabBuffer buf, int line, int col)
+        {
+            if (buf == null) return null;
+            try
+            {
+                string root = WorkspaceRootProvider != null ? WorkspaceRootProvider() : null;
+                if (string.IsNullOrEmpty(root) && !string.IsNullOrEmpty(buf.FilePath)) root = Path.GetDirectoryName(buf.FilePath);
+                return EditorLinkResolver.Resolve(buf.Lines, line, col, buf.FilePath, root);
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Follows the link at (line, col): imports open files, identifiers go to their definition. Returns true when handled.</summary>
+        public bool TriggerFollowLinkAt(int line, int col)
+        {
+            EditorTabBuffer buf = CurrentBuffer;
+            if (buf == null || OnLinkActivated == null) return false;
+            EditorLinkTarget target = ResolveLinkAt(buf, line, col);
+            if (target == null && col > 0) target = ResolveLinkAt(buf, line, col - 1);
+            if (target == null) return false;
+            OnLinkActivated(buf, target);
+            return true;
+        }
+
         public void TriggerGoToDefinition(string word)
         {
             if (!string.IsNullOrEmpty(word) && OnGoToDefinitionRequested != null)
@@ -2938,6 +2967,7 @@ namespace codeLess.Studio
             {
                 EditorTabBuffer b = owner.CurrentBuffer;
                 if (b == null) return;
+                if (!b.HasSelection() && owner.TriggerFollowLinkAt(b.CursorLine, b.CursorCol)) return;
                 if (!b.HasSelection()) SelectWordAt(b.CursorLine, b.CursorCol);
                 owner.TriggerGoToDefinition(b.GetSelectedText());
             });
@@ -3760,6 +3790,8 @@ namespace codeLess.Studio
                 }
             }
 
+            DrawLinkHoverUnderline(g, th, buf);
+
             // 4. Interactive Pixel Minimap
             if (EffectiveShowMinimap)
             {
@@ -4455,7 +4487,10 @@ namespace codeLess.Studio
                 buf.SelectionAnchorCol = targetCol;
                 string word = GetWordAtPosition(buf, targetLine, targetCol);
                 owner.UpdateCursorStatusLabel();
+                int underCol = CharIndexUnderPoint(e.Location);
+                ClearLinkHover();
                 this.Invalidate();
+                if (underCol >= 0 && owner.TriggerFollowLinkAt(targetLine, underCol)) return;
                 if (!string.IsNullOrEmpty(word))
                     owner.TriggerGoToDefinition(word);
                 return;
@@ -4567,9 +4602,15 @@ namespace codeLess.Studio
             bool overDiffPill = diffPillHits.Any(h => h.AcceptRect.Contains(e.Location) || h.RejectRect.Contains(e.Location));
             bool overHScroll = !hScrollTrackRect.IsEmpty && hScrollTrackRect.Contains(e.Location);
 
-            this.Cursor = (overDiffPill || overHScroll || e.X < GutterWidth || e.X >= rightMinimapStart - ScrollbarThickness)
+            lastMouseClientPt = e.Location;
+            bool anyDrag = isDraggingHScroll || isDraggingVScroll || isDraggingMinimap || isDraggingGutterLineSelection ||
+                           isDraggingBoxSelection || isPendingTextDrag || isDraggingSelectedText || isDraggingSelection;
+            if (!anyDrag) UpdateLinkHover(e.Location);
+            else ClearLinkHover();
+            this.Cursor = (overDiffPill || overHScroll || e.X >= rightMinimapStart - ScrollbarThickness)
                 ? Cursors.Hand
-                : (isDraggingSelectedText ? Cursors.Arrow : Cursors.IBeam);
+                : (e.X < GutterWidth ? Cursors.Arrow
+                : (isDraggingSelectedText ? Cursors.Arrow : (linkHover != null ? Cursors.Hand : Cursors.IBeam)));
 
             if (isDraggingHScroll)
             {
@@ -4656,9 +4697,110 @@ namespace codeLess.Studio
             }
         }
 
+        // ---- Ctrl+hover link underline (VS Code parity) ------------------------------------------------------
+        private EditorLinkTarget linkHover;
+        private int linkHoverLine = -1;
+        private Point lastMouseClientPt = new Point(-1, -1);
+
+        /// <summary>Character under the pointer (not the nearest caret boundary); -1 when not over text.</summary>
+        private int CharIndexUnderPoint(Point pt)
+        {
+            EditorTabBuffer buf = owner.CurrentBuffer;
+            if (buf == null || pt.X < GutterWidth) return -1;
+            int line, col;
+            ScreenPointToLineCol(new Point(pt.X - CharWidth / 2, pt.Y), out line, out col);
+            if (line < 0 || line >= buf.Lines.Count) return -1;
+            string text = buf.Lines[line] ?? "";
+            if (col >= text.Length) return -1;
+            return col;
+        }
+
+        private void UpdateLinkHover(Point pt)
+        {
+            EditorTabBuffer buf = owner.CurrentBuffer;
+            EditorLinkTarget next = null;
+            int nextLine = -1;
+            int rightMinimapStart = this.Width - (EffectiveShowMinimap ? MinimapWidth : 0);
+            Keys mods = EffectiveModifierKeys;
+            if (buf != null && mods == Keys.Control && pt.X >= GutterWidth && pt.X < rightMinimapStart - ScrollbarThickness &&
+                pt.Y >= 0 && pt.Y < this.Height)
+            {
+                int col = CharIndexUnderPoint(pt);
+                if (col >= 0)
+                {
+                    int line, dummy;
+                    ScreenPointToLineCol(pt, out line, out dummy);
+                    nextLine = line;
+                    if (linkHover != null && linkHoverLine == line && col >= linkHover.StartCol && col < linkHover.EndCol)
+                        next = linkHover;
+                    else
+                        next = owner.ResolveLinkAt(buf, line, col);
+                }
+            }
+            if (!object.ReferenceEquals(next, linkHover))
+            {
+                linkHover = next;
+                linkHoverLine = next != null ? nextLine : -1;
+                this.Invalidate();
+            }
+        }
+
+        private void ClearLinkHover()
+        {
+            if (linkHover == null) return;
+            linkHover = null;
+            linkHoverLine = -1;
+            this.Invalidate();
+        }
+
+        /// <summary>Re-evaluates the hover when Ctrl is pressed / released without moving the mouse.</summary>
+        public void RefreshLinkHoverForModifiers()
+        {
+            if (lastMouseClientPt.X < 0) return;
+            Point p = this.PointToClient(Control.MousePosition);
+            if (!this.ClientRectangle.Contains(p)) { ClearLinkHover(); return; }
+            UpdateLinkHover(p);
+            int rightMinimapStart = this.Width - (EffectiveShowMinimap ? MinimapWidth : 0);
+            if (p.X >= GutterWidth && p.X < rightMinimapStart - ScrollbarThickness)
+                this.Cursor = linkHover != null ? Cursors.Hand : Cursors.IBeam;
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+            if (e.KeyCode == Keys.ControlKey || e.KeyCode == Keys.LControlKey || e.KeyCode == Keys.RControlKey ||
+                e.KeyCode == Keys.ShiftKey || e.KeyCode == Keys.Menu)
+                RefreshLinkHoverForModifiers();
+        }
+
+        private void DrawLinkHoverUnderline(Graphics g, StudioTheme th, EditorTabBuffer buf)
+        {
+            if (linkHover == null || buf == null || linkHoverLine < 0 || linkHoverLine >= buf.Lines.Count) return;
+            string text = buf.Lines[linkHoverLine] ?? "";
+            int effScrollLeft = buf.WordWrap ? 0 : buf.ScrollLeftCol;
+            using (Pen pen = new Pen(th.AccentPrimary, 1f))
+            {
+                for (int r = 0; r < lastPaintedRows.Count; r++)
+                {
+                    VisualRowEntry vre = lastPaintedRows[r];
+                    if (vre.DocLine != linkHoverLine) continue;
+                    int s0 = Math.Max(linkHover.StartCol, vre.ColStart);
+                    int s1 = Math.Min(Math.Min(linkHover.EndCol, text.Length), vre.ColEnd);
+                    if (s1 <= s0) continue;
+                    int x0 = GutterWidth + 8 + (CharColToVisualCol(text, vre.ColStart, s0) - effScrollLeft) * CharWidth;
+                    int x1 = GutterWidth + 8 + (CharColToVisualCol(text, vre.ColStart, s1) - effScrollLeft) * CharWidth;
+                    x0 = Math.Max(GutterWidth, x0);
+                    if (x1 <= x0) continue;
+                    int y = r * LineHeight + 4 + LineHeight - 3;
+                    g.DrawLine(pen, x0, y, x1, y);
+                }
+            }
+        }
+
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
+            ClearLinkHover();
             if (hoveredDiagnostic != null)
             {
                 hoveredDiagnostic = null;
@@ -5849,6 +5991,10 @@ namespace codeLess.Studio
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
+            if (e.KeyCode == Keys.ControlKey || e.KeyCode == Keys.LControlKey || e.KeyCode == Keys.RControlKey)
+                RefreshLinkHoverForModifiers();
+            else if (linkHover != null && e.KeyCode != Keys.ShiftKey && e.KeyCode != Keys.Menu)
+                ClearLinkHover();
             base.OnKeyDown(e);
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
@@ -5986,6 +6132,7 @@ namespace codeLess.Studio
             if (e.KeyCode == Keys.F12)
             {
                 e.SuppressKeyPress = true;
+                if (!e.Shift && !e.Alt && !buf.HasSelection() && owner.TriggerFollowLinkAt(buf.CursorLine, buf.CursorCol)) return;
                 if (!buf.HasSelection()) SelectWordAt(buf.CursorLine, buf.CursorCol);
                 string symWord = buf.GetSelectedText();
                 if (e.Shift) owner.TriggerGoToReferences(symWord);

@@ -2912,7 +2912,9 @@ namespace codeLess.Studio
             goMenu.DropDownItems.Add(CreateMenuItem("Go to Symbol in Editor...", "Ctrl+Shift+O", () => OpenCommandPalette("@")));
             goMenu.DropDownItems.Add(CreateMenuItem("Go to Definition", "F12", () =>
             {
-                if (activeTab != null) HandleGoToDefinition(activeTab.GetSelectedText());
+                if (activeTab == null) return;
+                if (!activeTab.HasSelection() && editorControl.TriggerFollowLinkAt(activeTab.CursorLine, activeTab.CursorCol)) return;
+                HandleGoToDefinition(activeTab.GetSelectedText());
             }));
             goMenu.DropDownItems.Add(CreateMenuItem("Go to References", "Shift+F12", () =>
             {
@@ -3178,6 +3180,8 @@ if __name__ == '__main__':
                 else LoadWorkspace(path, restorePreviousTabs: false);
             };
             ctrl.OnGoToDefinitionRequested += HandleGoToDefinition;
+            ctrl.WorkspaceRootProvider = () => workspaceRoot;
+            ctrl.OnLinkActivated += (buf, target) => HandleEditorLinkActivated(buf, target);
             ctrl.OnGoToReferencesRequested += (buf, sym) => HandleGoToReferences(sym);
             ctrl.OnPeekDefinitionRequested += (buf, sym) => HandlePeekDefinition(sym);
             ctrl.OnCommandPaletteRequested += () => OpenCommandPalette(">");
@@ -3265,6 +3269,42 @@ if __name__ == '__main__':
             HandleGoToDefinition(symbolName);
         }
 
+        /// <summary>VS Code "follow link" for Ctrl+Click / F12: URLs, imports / includes / paths, imported or local symbols.</summary>
+        private void HandleEditorLinkActivated(EditorTabBuffer source, EditorLinkTarget target)
+        {
+            if (target == null) return;
+            if (target.Kind == EditorLinkTarget.KindUrl)
+            {
+                if (EditorLinkResolver.OpenExternalUrl(target.Url)) statusLeftLabel.Text = "Opened " + target.Url;
+                return;
+            }
+            if (string.IsNullOrEmpty(target.FilePath))
+            {
+                if (!string.IsNullOrEmpty(target.SymbolName)) HandleGoToDefinition(target.SymbolName);
+                return;
+            }
+            if (!File.Exists(target.FilePath))
+            {
+                statusLeftLabel.Text = "File not found: " + target.FilePath;
+                return;
+            }
+            EditorTabBuffer origin = source ?? activeTab;
+            if (origin != null) RecordNavigationHistory(origin.FilePath, origin.CursorLine + 1);
+            EditorTabBuffer tab = OpenFileInTab(target.FilePath);
+            if (tab == null) return;
+            int defLine, defCol;
+            if (target.Line > 0)
+                editorControl.JumpToLineAndColumn(target.Line, Math.Max(1, target.Column));
+            else if (!string.IsNullOrEmpty(target.SymbolName) && tab.Lines != null &&
+                     EditorLinkResolver.FindDefinitionInLines(tab.Lines, target.SymbolName, true, out defLine, out defCol))
+                editorControl.JumpToLineAndColumn(defLine + 1, defCol + 1);
+            RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1);
+            string shown = Path.GetFileName(target.FilePath);
+            statusLeftLabel.Text = string.IsNullOrEmpty(target.SymbolName)
+                ? "Opened " + shown
+                : string.Format("Definition: {0} ({1}:{2})", target.SymbolName, shown, tab.CursorLine + 1);
+        }
+
         private void HandleGoToDefinition(string symbolName)
         {
             if (string.IsNullOrWhiteSpace(symbolName)) return;
@@ -3281,6 +3321,17 @@ if __name__ == '__main__':
                     statusLeftLabel.Text = string.Format("Definition: {0} (Ln {1})", clean, localMatch.Line);
                     return;
                 }
+            }
+
+            int dl, dc;
+            if (activeTab != null && activeTab.Lines != null &&
+                EditorLinkResolver.FindDefinitionInLines(activeTab.Lines, clean, false, out dl, out dc) && dl != activeTab.CursorLine)
+            {
+                RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
+                editorControl.JumpToLineAndColumn(dl + 1, dc + 1);
+                RecordNavigationHistory(activeTab.FilePath, dl + 1);
+                statusLeftLabel.Text = string.Format("Definition: {0} (Ln {1})", clean, dl + 1);
+                return;
             }
 
             var wsMatch = aiEngine.WorkspaceSymbolMap.FirstOrDefault(s => string.Equals(s.SymbolName, clean, StringComparison.OrdinalIgnoreCase));

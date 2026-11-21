@@ -698,27 +698,133 @@ namespace codeLess.AvaloniaApp
             finally { suppressNavRecord = false; }
         }
 
+        /// <summary>F12 / context menu "Go to Definition": same resolution as Cmd/Ctrl+Click at the caret.</summary>
         public void GoToDefinitionAtCursor()
         {
             if (activeTab == null) return;
-            PrimaryEditor.Canvas.SelectWordAt(activeTab.CursorLine, activeTab.CursorCol);
-            string word = activeTab.GetSelectedText();
-            if (string.IsNullOrEmpty(word)) return;
+            int line = activeTab.CursorLine;
+            int col = activeTab.CursorCol;
+            var target = PrimaryEditor.ResolveLinkAt(activeTab, line, col);
+            if (target == null && col > 0) target = PrimaryEditor.ResolveLinkAt(activeTab, line, col - 1);
+            if (target == null)
+            {
+                SetStatusMessage("No definition found at the cursor.");
+                return;
+            }
+            FollowEditorLink(activeTab, target);
+        }
 
-            var localSym = activeTab.Symbols?.FirstOrDefault(s => string.Equals(s.Name, word, StringComparison.Ordinal));
+        /// <summary>
+        /// VS Code "follow link": URLs open in the browser, imports / includes / paths open the file (at :line:col or at the
+        /// imported symbol), identifiers jump to their definition (imported module first, then this file, then the workspace).
+        /// </summary>
+        public void FollowEditorLink(EditorTabBuffer source, EditorLinkTarget target)
+        {
+            if (target == null) return;
+            if (target.Kind == EditorLinkTarget.KindUrl)
+            {
+                if (EditorLinkResolver.OpenExternalUrl(target.Url)) SetStatusMessage("Opened " + target.Url);
+                return;
+            }
+            if (!string.IsNullOrEmpty(target.FilePath))
+            {
+                NavigateToFileLocation(source, target.FilePath, target.Line, target.Column, target.SymbolName);
+                return;
+            }
+            if (!string.IsNullOrEmpty(target.SymbolName))
+                GoToSymbolDefinition(source, target.SymbolName);
+        }
+
+        private void NavigateToFileLocation(EditorTabBuffer source, string path, int line, int col, string symbol)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                SetStatusMessage("File not found: " + path);
+                return;
+            }
+            var origin = source ?? activeTab;
+            if (origin != null) RecordNavigationHistory(origin.FilePath, origin.CursorLine + 1);
+            // Only the origin and the final destination go into Back/Forward history (not the tab's previous caret).
+            EditorTabBuffer tab;
+            bool prevSuppress = suppressNavRecord;
+            suppressNavRecord = true;
+            try
+            {
+                tab = OpenFileInTab(path, preview: false);
+                if (tab == null) return;
+                if (line > 0)
+                {
+                    PrimaryEditor.GoToLine(line, Math.Max(1, col));
+                }
+                else if (!string.IsNullOrEmpty(symbol) && tab.Lines != null &&
+                         EditorLinkResolver.FindDefinitionInLines(tab.Lines, symbol, true, out int defLine, out int defCol))
+                {
+                    PrimaryEditor.GoToLine(defLine + 1, defCol + 1);
+                }
+            }
+            finally { suppressNavRecord = prevSuppress; }
+            RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1);
+            PrimaryEditor.Canvas.Focus();
+            string rel = !string.IsNullOrEmpty(workspaceRoot) && path.StartsWith(workspaceRoot, PathKeyComparison)
+                ? Path.GetRelativePath(workspaceRoot, path)
+                : path;
+            SetStatusMessage(string.IsNullOrEmpty(symbol) ? "Opened " + rel : $"Definition: {symbol} ({rel}:{tab.CursorLine + 1})");
+        }
+
+        private void GoToSymbolDefinition(EditorTabBuffer source, string word)
+        {
+            if (string.IsNullOrEmpty(word)) return;
+            var buf = source ?? activeTab;
+
+            void jumpInSource(int line, int col)
+            {
+                if (buf == null) return;
+                RecordNavigationHistory(buf.FilePath, buf.CursorLine + 1);
+                bool prevSuppress = suppressNavRecord;
+                suppressNavRecord = true;
+                try
+                {
+                    if (!ReferenceEquals(activeTab, buf)) ActivateTab(buf);
+                    PrimaryEditor.GoToLine(line, col);
+                }
+                finally { suppressNavRecord = prevSuppress; }
+                RecordNavigationHistory(buf.FilePath, line);
+            }
+
+            var localSym = buf?.Symbols?.FirstOrDefault(s => string.Equals(s.Name, word, StringComparison.Ordinal));
             if (localSym != null)
             {
-                PrimaryEditor.GoToLine(localSym.LineNumber);
+                jumpInSource(localSym.LineNumber, 1);
+                return;
+            }
+            if (buf?.Lines != null && EditorLinkResolver.FindDefinitionInLines(buf.Lines, word, false, out int dl, out int dc) && dl != buf.CursorLine)
+            {
+                jumpInSource(dl + 1, dc + 1);
                 return;
             }
 
             void jump()
             {
-                var wsSym = aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.Ordinal));
-                if (wsSym != null)
+                var wsSym = aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.Ordinal))
+                            ?? aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.OrdinalIgnoreCase));
+                if (wsSym != null && File.Exists(wsSym.FilePath))
                 {
-                    OpenFileInTab(wsSym.FilePath, preview: false);
-                    PrimaryEditor.GoToLine(wsSym.LineNumber);
+                    if (activeTab != null) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
+                    bool prevSuppress = suppressNavRecord;
+                    suppressNavRecord = true;
+                    try
+                    {
+                        OpenFileInTab(wsSym.FilePath, preview: false);
+                        PrimaryEditor.GoToLine(wsSym.LineNumber);
+                    }
+                    finally { suppressNavRecord = prevSuppress; }
+                    RecordNavigationHistory(wsSym.FilePath, wsSym.LineNumber);
+                    PrimaryEditor.Canvas.Focus();
+                    SetStatusMessage($"Definition: {word} ({Path.GetFileName(wsSym.FilePath)}:{wsSym.LineNumber})");
+                }
+                else
+                {
+                    SetStatusMessage($"No definition found for '{word}'");
                 }
             }
             if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime) EnsureWorkspaceIndexedInBackground(jump);

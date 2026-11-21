@@ -1326,6 +1326,34 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        /// <summary>Raised for Cmd/Ctrl+Click on an import, path, URL or identifier: (buffer, target, clicked 0-based line).</summary>
+        public event Action<EditorTabBuffer, EditorLinkTarget, int> LinkActivated;
+        /// <summary>Mouse back (-1) / forward (+1) buttons.</summary>
+        public event Action<int> NavigateHistoryRequested;
+
+        internal string WorkspaceRootForLinks => workspaceRoot;
+
+        /// <summary>Resolves the Cmd/Ctrl+Click target at a position. Never throws.</summary>
+        public EditorLinkTarget ResolveLinkAt(EditorTabBuffer buf, int line, int col)
+        {
+            if (buf == null) return null;
+            try
+            {
+                string root = workspaceRoot;
+                if (string.IsNullOrEmpty(root) && !string.IsNullOrEmpty(buf.FilePath)) root = Path.GetDirectoryName(buf.FilePath);
+                return EditorLinkResolver.Resolve(buf.Lines, line, col, buf.FilePath, root);
+            }
+            catch { return null; }
+        }
+
+        internal void NotifyLinkActivated(EditorLinkTarget target, int line)
+        {
+            if (CurrentBuffer != null && target != null)
+                LinkActivated?.Invoke(CurrentBuffer, target, line);
+        }
+
+        internal void NotifyNavigateHistory(int direction) => NavigateHistoryRequested?.Invoke(direction);
+
         internal void NotifyContextMenu(Point pt)
         {
             if (CurrentBuffer != null)
@@ -1733,6 +1761,175 @@ namespace codeLess.AvaloniaApp
         private double wheelAccumY;
         private double zoomAccum;
 
+        // ---- Pointer cursor, Cmd/Ctrl+Click links, gutter selection and drag auto-scroll ---------------------
+        private static readonly Dictionary<StandardCursorType, Cursor> cursorCache = new Dictionary<StandardCursorType, Cursor>();
+        private StandardCursorType? appliedCursorType;
+        private EditorLinkTarget linkHover;
+        private int linkHoverLine = -1;
+        private bool isGutterSelecting;
+        private int gutterAnchorLine = -1;
+        private DispatcherTimer dragScrollTimer;
+        private Point lastDragPt;
+
+        /// <summary>The link currently underlined under the pointer while Cmd (macOS) / Ctrl is held, or null.</summary>
+        public EditorLinkTarget HoveredLink => linkHover;
+        public int HoveredLinkLine => linkHoverLine;
+
+        private static Cursor GetCachedCursor(StandardCursorType type)
+        {
+            if (cursorCache.TryGetValue(type, out var c)) return c;
+            try { c = new Cursor(type); } catch { c = null; }
+            cursorCache[type] = c;
+            return c;
+        }
+
+        private void SetPointerCursor(StandardCursorType type)
+        {
+            if (appliedCursorType == type) return;
+            var c = GetCachedCursor(type);
+            if (c == null) return;
+            appliedCursorType = type;
+            Cursor = c;
+        }
+
+        private double CodeAreaRight => ShowMinimap ? Math.Max(GutterWidth + 60, Bounds.Width - MinimapWidth) : Bounds.Width;
+
+        /// <summary>The character the pointer is over (not the nearest caret boundary); -1 past the end of the line.</summary>
+        private int CharIndexUnderPoint(int docLine, double x)
+        {
+            var buf = Buffer;
+            if (buf == null || docLine < 0 || docLine >= buf.Lines.Count) return -1;
+            string line = buf.Lines[docLine] ?? "";
+            double vcol = (x - GutterWidth - 8 + buf.ScrollLeftPx) / CharWidth;
+            if (vcol < 0) return -1;
+            int tab = Math.Max(1, DisplayTabSize);
+            int v = 0;
+            for (int i = 0; i < line.Length; i++)
+            {
+                int w = line[i] == '\t' ? tab - (v % tab) : CellsForChar(line, i);
+                if (w == 0) continue;
+                if (vcol < v + w) return i;
+                v += w;
+            }
+            return -1;
+        }
+
+        /// <summary>Recomputes which pointer shape the editor should show at <paramref name="pt"/> (VS Code parity:
+        /// I-beam over text, arrow over the gutter / minimap, hand over links and inline buttons).</summary>
+        private void UpdatePointerCursor(Point pt)
+        {
+            if (isGutterSelecting) { SetPointerCursor(StandardCursorType.Arrow); return; }
+            if (isMouseSelecting) { SetPointerCursor(StandardCursorType.Ibeam); return; }
+            foreach (var hb in hunkActionHitBoxes)
+            {
+                if (hb.Rect.Contains(pt)) { SetPointerCursor(StandardCursorType.Hand); return; }
+            }
+            if (ShowMinimap && pt.X >= Bounds.Width - MinimapWidth) { SetPointerCursor(StandardCursorType.Arrow); return; }
+            if (pt.X < GutterWidth)
+            {
+                var buf = Buffer;
+                bool overChevron = buf != null && pt.X >= GutterWidth - 18 && CanFoldLine(buf, ScreenYToDocLine(pt.Y));
+                SetPointerCursor(overChevron ? StandardCursorType.Hand : StandardCursorType.Arrow);
+                return;
+            }
+            SetPointerCursor(linkHover != null ? StandardCursorType.Hand : StandardCursorType.Ibeam);
+        }
+
+        /// <summary>Resolves the link under the pointer while the primary modifier is held and underlines it.</summary>
+        private void UpdateLinkHover(Point pt, KeyModifiers mods)
+        {
+            EditorLinkTarget next = null;
+            int nextLine = -1;
+            var buf = Buffer;
+            bool primary = MacKeymap.IsPrimary(mods) && (mods & (KeyModifiers.Shift | KeyModifiers.Alt)) == 0;
+            if (buf != null && primary && !isMouseSelecting && !isGutterSelecting && IsPointerOver &&
+                pt.X >= GutterWidth && pt.X < CodeAreaRight && pt.Y >= 0 && pt.Y < Bounds.Height)
+            {
+                int line = ScreenYToDocLine(pt.Y);
+                int col = CharIndexUnderPoint(line, pt.X);
+                if (col >= 0)
+                {
+                    nextLine = line;
+                    if (linkHover != null && linkHoverLine == line && col >= linkHover.StartCol && col < linkHover.EndCol)
+                        next = linkHover;
+                    else
+                        next = owner.ResolveLinkAt(buf, line, col);
+                }
+            }
+            if (!ReferenceEquals(next, linkHover))
+            {
+                bool changed = next == null || linkHover == null || linkHoverLine != nextLine || !next.SameSpan(linkHover);
+                linkHover = next;
+                linkHoverLine = next != null ? nextLine : -1;
+                if (changed) InvalidateVisual();
+            }
+            UpdatePointerCursor(pt);
+        }
+
+        private void ClearLinkHover()
+        {
+            if (linkHover == null) return;
+            linkHover = null;
+            linkHoverLine = -1;
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerExited(PointerEventArgs e)
+        {
+            base.OnPointerExited(e);
+            ClearLinkHover();
+        }
+
+        protected override void OnLostFocus(global::Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            base.OnLostFocus(e);
+            ClearLinkHover();
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+            // Releasing Cmd / Ctrl removes the link underline without needing a pointer move (VS Code parity).
+            if (IsModifierKey(e.Key)) UpdateLinkHover(lastHoverPt, e.KeyModifiers);
+        }
+
+        private static bool IsModifierKey(Key k) =>
+            k == Key.LWin || k == Key.RWin || k == Key.LeftCtrl || k == Key.RightCtrl ||
+            k == Key.LeftShift || k == Key.RightShift || k == Key.LeftAlt || k == Key.RightAlt;
+
+        private bool IsInsideSelection(EditorTabBuffer buf, int line, int col)
+        {
+            if (buf == null || !buf.HasSelection()) return false;
+            int sl = buf.SelectionStartLine, sc = buf.SelectionStartCol, el = buf.CursorLine, ec = buf.CursorCol;
+            if (sl > el || (sl == el && sc > ec)) { (sl, el) = (el, sl); (sc, ec) = (ec, sc); }
+            if (line < sl || line > el) return false;
+            if (line == sl && col < sc) return false;
+            if (line == el && col > ec) return false;
+            return true;
+        }
+
+        private void SelectWholeLines(EditorTabBuffer buf, int anchorLine, int activeLine)
+        {
+            int last = buf.Lines.Count - 1;
+            anchorLine = Math.Max(0, Math.Min(last, anchorLine));
+            activeLine = Math.Max(0, Math.Min(last, activeLine));
+            if (activeLine >= anchorLine)
+            {
+                buf.SelectionStartLine = anchorLine;
+                buf.SelectionStartCol = 0;
+                if (activeLine < last) { buf.CursorLine = activeLine + 1; buf.CursorCol = 0; }
+                else { buf.CursorLine = activeLine; buf.CursorCol = buf.Lines[activeLine].Length; }
+            }
+            else
+            {
+                // Dragging upward: anchor at the end of the anchor line so it stays fully selected.
+                if (anchorLine < last) { buf.SelectionStartLine = anchorLine + 1; buf.SelectionStartCol = 0; }
+                else { buf.SelectionStartLine = anchorLine; buf.SelectionStartCol = buf.Lines[anchorLine].Length; }
+                buf.CursorLine = activeLine;
+                buf.CursorCol = 0;
+            }
+        }
+
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
@@ -1741,14 +1938,44 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
 
             var pt = e.GetPosition(this);
+            lastHoverPt = pt;
             var props = e.GetCurrentPoint(this).Properties;
+            var mods = e.KeyModifiers;
 
-            if (props.IsRightButtonPressed)
+            // Mouse back / forward buttons navigate history like VS Code.
+            if (props.IsXButton1Pressed || props.IsXButton2Pressed)
             {
+                owner.NotifyNavigateHistory(props.IsXButton1Pressed ? -1 : 1);
+                e.Handled = true;
+                return;
+            }
+
+            // macOS: Control+Click is the secondary click.
+            bool macCtrlClick = MacKeymap.IsMacOS && props.IsLeftButtonPressed &&
+                                (mods & KeyModifiers.Control) != 0 && (mods & KeyModifiers.Meta) == 0;
+            if (props.IsRightButtonPressed || macCtrlClick)
+            {
+                // Like VS Code: a right-click outside the selection moves the caret there first, so context-menu
+                // commands (Go to Definition, Rename, ...) act on the clicked word, not the old caret position.
+                if (pt.X >= GutterWidth && pt.X < CodeAreaRight)
+                {
+                    int rl = ScreenYToDocLine(pt.Y);
+                    int rc = ScreenXToDocCol(rl, pt.X);
+                    if (!IsInsideSelection(buf, rl, rc))
+                    {
+                        ExtraCursors.Clear();
+                        buf.ClearSelection();
+                        buf.CursorLine = rl;
+                        buf.CursorCol = rc;
+                        owner.NotifyCaretMoved();
+                        InvalidateVisual();
+                    }
+                }
                 owner.NotifyContextMenu(pt);
                 e.Handled = true;
                 return;
             }
+            if (!props.IsLeftButtonPressed) return;
 
             // Check per-hunk Accept / Reject buttons
             foreach (var hb in hunkActionHitBoxes)
@@ -1775,15 +2002,51 @@ namespace codeLess.AvaloniaApp
             int docLine = ScreenYToDocLine(pt.Y);
             int docCol = ScreenXToDocCol(docLine, pt.X);
 
-            // Check gutter fold chevron click
-            if (pt.X >= GutterWidth - 18 && pt.X < GutterWidth)
+            if (pt.X < GutterWidth)
             {
-                if (CanFoldLine(buf, docLine))
+                // Fold chevron
+                if (pt.X >= GutterWidth - 18 && CanFoldLine(buf, docLine))
                 {
                     ToggleFoldAtLine(docLine);
                     e.Handled = true;
                     return;
                 }
+                // Line numbers: click selects the whole line, Shift+click extends, drag selects a line range.
+                ExtraCursors.Clear();
+                int anchor = docLine;
+                if ((mods & KeyModifiers.Shift) != 0)
+                    anchor = buf.HasSelection() ? Math.Min(buf.SelectionStartLine, buf.CursorLine) : buf.CursorLine;
+                gutterAnchorLine = anchor;
+                SelectWholeLines(buf, anchor, docLine);
+                isGutterSelecting = true;
+                e.Pointer.Capture(this);
+                caretBlinkOn = true;
+                owner.NotifyCaretMoved();
+                InvalidateVisual();
+                e.Handled = true;
+                return;
+            }
+
+            // Cmd+Click (macOS) / Ctrl+Click: follow the import / path / URL or go to the definition (VS Code).
+            if (MacKeymap.IsPrimary(mods) && (mods & (KeyModifiers.Shift | KeyModifiers.Alt)) == 0 && e.ClickCount == 1)
+            {
+                int charIdx = CharIndexUnderPoint(docLine, pt.X);
+                EditorLinkTarget target = charIdx >= 0
+                    ? (linkHover != null && linkHoverLine == docLine && charIdx >= linkHover.StartCol && charIdx < linkHover.EndCol
+                        ? linkHover
+                        : owner.ResolveLinkAt(buf, docLine, charIdx))
+                    : null;
+                ExtraCursors.Clear();
+                buf.ClearSelection();
+                buf.CursorLine = docLine;
+                buf.CursorCol = docCol;
+                caretBlinkOn = true;
+                owner.NotifyCaretMoved();
+                ClearLinkHover();
+                InvalidateVisual();
+                e.Handled = true;
+                if (target != null) owner.NotifyLinkActivated(target, docLine);
+                return;
             }
 
             // Alt+Click adds/removes multi-cursor
@@ -1819,6 +2082,8 @@ namespace codeLess.AvaloniaApp
                 }
                 buf.CursorLine = docLine;
                 buf.CursorCol = docCol;
+                isMouseSelecting = true;
+                e.Pointer.Capture(this);
             }
             else if (e.ClickCount == 2)
             {
@@ -1826,10 +2091,8 @@ namespace codeLess.AvaloniaApp
             }
             else if (e.ClickCount >= 3)
             {
-                buf.SelectionStartLine = docLine;
-                buf.SelectionStartCol = 0;
-                buf.CursorLine = docLine;
-                buf.CursorCol = buf.Lines[docLine].Length;
+                // Triple-click selects the whole line including its line break (VS Code).
+                SelectWholeLines(buf, docLine, docLine);
             }
             else
             {
@@ -1837,10 +2100,12 @@ namespace codeLess.AvaloniaApp
                 buf.CursorCol = docCol;
                 buf.ClearSelection();
                 isMouseSelecting = true;
+                e.Pointer.Capture(this);
             }
 
             caretBlinkOn = true;
             owner.NotifyCaretMoved();
+            UpdatePointerCursor(pt);
             InvalidateVisual();
             e.Handled = true;
         }
@@ -1849,9 +2114,9 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerMoved(e);
             var buf = Buffer;
-            if (buf == null) return;
             var pt = e.GetPosition(this);
             lastHoverPt = pt;
+            if (buf == null) { SetPointerCursor(StandardCursorType.Arrow); return; }
 
             if (isMinimapDragging)
             {
@@ -1870,10 +2135,34 @@ namespace codeLess.AvaloniaApp
                     InvalidateVisual();
             }
 
-            if (isMouseSelecting)
+            if (isGutterSelecting || isMouseSelecting)
+            {
+                lastDragPt = pt;
+                ApplyDragSelection(pt, e.KeyModifiers);
+                UpdateDragAutoScroll(pt);
+                UpdatePointerCursor(pt);
+                return;
+            }
+
+            UpdateLinkHover(pt, e.KeyModifiers);
+        }
+
+        private KeyModifiers lastDragMods;
+
+        private void ApplyDragSelection(Point pt, KeyModifiers mods)
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            lastDragMods = mods;
+            int docLine = ScreenYToDocLine(Math.Max(0, Math.Min(Bounds.Height - 1, pt.Y)));
+            if (isGutterSelecting)
+            {
+                SelectWholeLines(buf, gutterAnchorLine, docLine);
+            }
+            else
             {
                 int docCol = ScreenXToDocCol(docLine, pt.X);
-                if (e.KeyModifiers.HasFlag(KeyModifiers.Alt) || ColumnSelectionMode)
+                if (mods.HasFlag(KeyModifiers.Alt) || ColumnSelectionMode)
                 {
                     int anchorL = buf.SelectionStartLine >= 0 ? buf.SelectionStartLine : buf.CursorLine;
                     int anchorC = buf.SelectionStartCol >= 0 ? buf.SelectionStartCol : buf.CursorCol;
@@ -1889,9 +2178,39 @@ namespace codeLess.AvaloniaApp
                     buf.CursorLine = docLine;
                     buf.CursorCol = docCol;
                 }
-                owner.NotifyCaretMoved();
-                InvalidateVisual();
+                // Horizontal follow while dragging past the left / right edge.
+                if (!buf.WordWrap && (pt.X > CodeAreaRight - 8 || (pt.X < GutterWidth + 8 && buf.ScrollLeftPx > 0)))
+                    EnsureCursorVisible();
             }
+            owner.NotifyCaretMoved();
+            InvalidateVisual();
+        }
+
+        /// <summary>While drag-selecting above / below the viewport, keep scrolling and extending the selection.</summary>
+        private void UpdateDragAutoScroll(Point pt)
+        {
+            bool outside = pt.Y < 0 || pt.Y > Bounds.Height;
+            if (!outside)
+            {
+                dragScrollTimer?.Stop();
+                return;
+            }
+            if (dragScrollTimer == null)
+            {
+                dragScrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+                dragScrollTimer.Tick += (s, e) =>
+                {
+                    var b = Buffer;
+                    if (b == null || (!isMouseSelecting && !isGutterSelecting)) { dragScrollTimer.Stop(); return; }
+                    double over = lastDragPt.Y < 0 ? lastDragPt.Y : lastDragPt.Y - Bounds.Height;
+                    if (Math.Abs(over) < 0.5) { dragScrollTimer.Stop(); return; }
+                    int step = Math.Max(1, Math.Min(12, (int)(Math.Abs(over) / Math.Max(4, LineHeight)) + 1));
+                    int maxTop = Math.Max(0, b.Lines.Count - 1);
+                    b.ScrollTopLine = Math.Max(0, Math.Min(maxTop, b.ScrollTopLine + (over < 0 ? -step : step)));
+                    ApplyDragSelection(lastDragPt, lastDragMods);
+                };
+            }
+            if (!dragScrollTimer.IsEnabled) dragScrollTimer.Start();
         }
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -1899,6 +2218,27 @@ namespace codeLess.AvaloniaApp
             base.OnPointerReleased(e);
             isMouseSelecting = false;
             isMinimapDragging = false;
+            isGutterSelecting = false;
+            dragScrollTimer?.Stop();
+            var pt = e.GetPosition(this);
+            lastHoverPt = pt;
+            UpdateLinkHover(pt, e.KeyModifiers);
+        }
+
+        protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+        {
+            base.OnPointerCaptureLost(e);
+            isMouseSelecting = false;
+            isMinimapDragging = false;
+            isGutterSelecting = false;
+            dragScrollTimer?.Stop();
+        }
+
+        /// <summary>macOS hides the pointer while typing until the mouse moves (NSTextView / VS Code behaviour).</summary>
+        private static void HidePointerWhileTyping()
+        {
+            if (!MacKeymap.IsMacOS || !AvaloniaTerminalEmulatorControl.IsDesktopRuntime) return;
+            try { MacCursorNative.SetHiddenUntilMouseMoves(); } catch { }
         }
 
         private void ScrollFromMinimapY(double y)
@@ -2631,6 +2971,8 @@ namespace codeLess.AvaloniaApp
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buf);
             }
             EnsureCursorVisible();
+            linkHover = null;
+            linkHoverLine = -1;
             owner.NotifyBufferModified();
             owner.NotifyCaretMoved();
             InvalidateVisual();
@@ -2839,6 +3181,15 @@ namespace codeLess.AvaloniaApp
             bool ctrlOrCmd = MacKeymap.IsPrimary(e.KeyModifiers);
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            if (IsModifierKey(e.Key))
+            {
+                // Pressing Cmd / Ctrl over a link underlines it immediately, without a pointer move.
+                UpdateLinkHover(lastHoverPt, e.KeyModifiers);
+                return;
+            }
+            if (linkHover != null) ClearLinkHover();
+            if (!ctrlOrCmd && (e.Key == Key.Back || e.Key == Key.Delete || e.Key == Key.Enter || e.Key == Key.Tab))
+                HidePointerWhileTyping();
             ClampExtraCursors(buf);
 
             // macOS Cocoa text-system / VS Code emacs bindings (Ctrl, not Cmd)
@@ -3480,6 +3831,7 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrEmpty(e.Text)) return;
             char ch = e.Text[0];
             if (ch < 32 && ch != '\t') return;
+            HidePointerWhileTyping();
             InsertTextAcrossCursors(e.Text);
             e.Handled = true;
         }
@@ -3871,6 +4223,16 @@ namespace codeLess.AvaloniaApp
                     context.DrawRectangle(null, new Pen(accentBrush, 1.3), new Rect(bx, y + 2, CharWidth + 1, LineHeight - 4));
                 }
 
+                // Cmd/Ctrl+hover link underline (VS Code "editor link")
+                if (linkHover != null && docLine == linkHoverLine && linkHover.EndCol > linkHover.StartCol)
+                {
+                    double lx0 = codeBaseX + ColX(buf, docLine, linkHover.StartCol);
+                    double lx1 = codeBaseX + ColX(buf, docLine, Math.Min(lineText.Length, linkHover.EndCol));
+                    double ly = Math.Round(y + (LineHeight + FontSizePx) / 2.0 + 1.5) + 0.5;
+                    if (lx1 > lx0)
+                        context.DrawLine(new Pen(accentBrush, 1.0), new Point(lx0, ly), new Point(lx1, ly));
+                }
+
                 // Diagnostics squiggles on this line
                 if (buf.Diagnostics != null && buf.Diagnostics.Count > 0)
                 {
@@ -4063,6 +4425,29 @@ namespace codeLess.AvaloniaApp
                 null,
                 new Pen(new SolidColorBrush(Color.FromArgb(110, accent.R, accent.G, accent.B)), 1),
                 vpRect);
+        }
+    }
+
+    /// <summary>[NSCursor setHiddenUntilMouseMoves:YES] — the native macOS "hide the pointer while typing" behaviour.</summary>
+    internal static class MacCursorNative
+    {
+        [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_getClass")]
+        private static extern IntPtr objc_getClass(string name);
+        [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "sel_registerName")]
+        private static extern IntPtr sel_registerName(string name);
+        [DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")]
+        private static extern void objc_msgSend_bool(IntPtr receiver, IntPtr selector, [MarshalAs(UnmanagedType.I1)] bool value);
+
+        private static IntPtr cls, sel;
+
+        public static void SetHiddenUntilMouseMoves()
+        {
+            if (cls == IntPtr.Zero)
+            {
+                cls = objc_getClass("NSCursor");
+                sel = sel_registerName("setHiddenUntilMouseMoves:");
+            }
+            if (cls != IntPtr.Zero && sel != IntPtr.Zero) objc_msgSend_bool(cls, sel, true);
         }
     }
 }
