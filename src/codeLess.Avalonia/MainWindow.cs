@@ -243,6 +243,8 @@ namespace codeLess.AvaloniaApp
                 settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
+            // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
+            Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
@@ -2501,6 +2503,18 @@ namespace codeLess.AvaloniaApp
 
             workspaceFiles.Clear();
             ExplorerTree.Nodes.Clear();
+            lock (workspaceIndexLock)
+            {
+                // New folder: drop the previous workspace's index (frees its memory); rebuilt lazily on first use.
+                if (workspaceIndexState != 1)
+                {
+                    workspaceIndexState = 0;
+                    indexCandidateFiles = null;
+                    aiEngine.IndexedChunks = new List<Bm25CodeChunk>();
+                    aiEngine.WorkspaceSymbolMap = new List<WorkspaceSymbolLocation>();
+                    aiEngine.WorkspaceSymbols = new List<string>();
+                }
+            }
 
             var excluded = GetExcludedFolderSet(workspaceRoot);
             excluded.Add("DerivedData");
@@ -2558,6 +2572,7 @@ namespace codeLess.AvaloniaApp
                 // Headless test mode: complete indexing synchronously for immediate deterministic assertions
                 CollectWorkspaceFilesRecursive(workspaceRoot, excluded, depth: 0, seenSet: seenFiles, maxLimit: 1400, ct: CancellationToken.None);
                 aiEngine.IndexWorkspace(workspaceRoot, workspaceFiles);
+                lock (workspaceIndexLock) { workspaceIndexState = 2; indexCandidateFiles = new List<string>(workspaceFiles); }
                 if (!noGit) RefreshGitStatus();
                 if (!keepCurrentTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
                     OpenFileInTab(workspaceFiles[0], preview: true);
@@ -2586,8 +2601,9 @@ namespace codeLess.AvaloniaApp
                 CollectWorkspaceFilesListRecursive(capturedRoot, excluded, 0, bgFiles, bgSeen, 12000, token);
                 if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
 
-                var indexSubset = bgFiles.Count <= 1500 ? bgFiles : bgFiles.Take(1500).ToList();
-                aiEngine.IndexWorkspace(capturedRoot, indexSubset, token, null);
+                // The BM25 / symbol index (~25-30 MB for a mid-size repo) is built lazily on first use
+                // (AI chat, Go to Definition, workspace symbol search) instead of on every folder open.
+                lock (workspaceIndexLock) { workspaceIndexState = 0; indexCandidateFiles = bgFiles.Count <= 1500 ? bgFiles : bgFiles.Take(1500).ToList(); }
                 if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
 
                 List<GitStatusEntry> bgGitEntries = noGit
@@ -2603,7 +2619,11 @@ namespace codeLess.AvaloniaApp
                     ApplyGitEntriesToUi(fastBranch, bgGitEntries);
                     if (!capturedKeepTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
                         OpenFileInTab(workspaceFiles[0], preview: true);
-                    AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files, {aiEngine.WorkspaceSymbols.Count} symbols).");
+                    AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files).");
+                    // Startup burst is over: hand freed native pages back to the OS (cheap, non-blocking). The managed
+                    // heap is NOT force-compacted here: a blocking full GC right as the user starts working cost ~4%
+                    // scroll smoothness in benchmarks. Compaction happens only when the window is in the background.
+                    DispatcherTimer.RunOnce(() => ProcessMemoryTrimmer.Trim(compactManagedHeap: false), TimeSpan.FromSeconds(3));
                     sidebarProgressBar.StopProgress();
                 });
             }, token);

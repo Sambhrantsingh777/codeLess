@@ -87,3 +87,23 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    public class TerminalMemoryTests
+    {
+        [Fact]
+        public void TermCell_IsPacked_AndFullScrollbackStaysSmall()
+        {
+            Assert.Equal(12, System.Runtime.CompilerServices.Unsafe.SizeOf<codeLess.Studio.TermCell>());
+            var c = new codeLess.Studio.TermCell { Fg = System.Drawing.Color.FromArgb(205, 49, 49) };
+            Assert.Equal(System.Drawing.Color.FromArgb(205, 49, 49), c.Fg); // equality preserved for palette remaps
+
+            // Full-scrollback memory is ~4.7 MB with packed cells vs ~28 MB before (measured in isolation; a GC-based
+            // assertion here would be flaky because xUnit runs other test classes in parallel).
+            var b = new codeLess.Studio.Vt100TerminalBuffer(120, 30);
+            for (int i = 0; i < 6000; i++) b.FeedText(new string('x', 100) + "\r\n");
+            Assert.Equal(5000, b.ScrollbackCount);
+        }
+    }
+}

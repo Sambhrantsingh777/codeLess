@@ -470,7 +470,9 @@ namespace codeLess.AvaloniaApp
 
         // Text runs are cached across frames (cursor blink and incremental output repaint mostly identical
         // rows). Bounded: the cache is dropped wholesale once it exceeds the cap so it can never grow unbounded.
-        private const int MaxTextCacheEntries = 4096;
+        // Each entry pins a native glyph run; 4096 cost ~10 MB per terminal. (CODELESS_TERM_TEXTCACHE overrides, for benchmarking.)
+        private static readonly int MaxTextCacheEntries =
+            int.TryParse(Environment.GetEnvironmentVariable("CODELESS_TERM_TEXTCACHE"), out int tc) && tc >= 64 ? tc : 1024;
         private readonly Dictionary<(string, int, Color), FormattedText> textCache = new Dictionary<(string, int, Color), FormattedText>();
         private FormattedText GetFormattedText(string text, bool bold, bool italic, Color fg)
         {

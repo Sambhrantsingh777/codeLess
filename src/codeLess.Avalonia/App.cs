@@ -19,6 +19,7 @@ namespace codeLess.AvaloniaApp
         public static string ScreenshotOutputPath { get; set; }
         public static string ScreenshotSuiteDir { get; set; }
         public static string SmokeQuitReportPath { get; set; }
+        public static string BenchmarkReportPath { get; set; }
 
         public App()
         {
@@ -91,11 +92,15 @@ namespace codeLess.AvaloniaApp
                     };
                 }
 
-                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath);
+                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath);
                 if (!automatedRun)
                     mainWindow.Opened += (s, e) => Dispatcher.UIThread.Post(mainWindow.MaybeAutoCheckForUpdates, DispatcherPriority.Background);
 
-                if (!string.IsNullOrWhiteSpace(SmokeQuitReportPath))
+                if (!string.IsNullOrWhiteSpace(BenchmarkReportPath))
+                {
+                    mainWindow.Opened += async (s, e) => await mainWindow.RunBenchmarkAsync(BenchmarkReportPath);
+                }
+                else if (!string.IsNullOrWhiteSpace(SmokeQuitReportPath))
                 {
                     mainWindow.Opened += async (s, e) => await mainWindow.RunSmokeQuitAsync(SmokeQuitReportPath);
                 }

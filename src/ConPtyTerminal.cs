@@ -566,14 +566,28 @@ namespace codeLess.Studio
         public const byte FLAG_DEFAULT_BG = 32;
         public const byte FLAG_DIM = 64;
 
+        // Packed layout: 12 bytes per cell (was ~56 with two System.Drawing.Color structs, each carrying a name
+        // reference and state). A terminal with full 5000-line scrollback drops from ~30 MB to ~7 MB.
         public char Char;
-        public Color Fg;
-        public Color Bg;
         public byte Flags;
+        private int fgArgb;
+        private int bgArgb;
+
+        public Color Fg
+        {
+            get { return Color.FromArgb(fgArgb); }
+            set { fgArgb = value.ToArgb(); }
+        }
+
+        public Color Bg
+        {
+            get { return Color.FromArgb(bgArgb); }
+            set { bgArgb = value.ToArgb(); }
+        }
 
         public static TermCell Empty(Color defaultFg, Color defaultBg)
         {
-            TermCell c;
+            TermCell c = new TermCell();
             c.Char = ' ';
             c.Fg = defaultFg;
             c.Bg = defaultBg;
@@ -1289,7 +1303,7 @@ namespace codeLess.Studio
             TermCell[,] g = ActiveGrid;
             if (CursorRow >= 0 && CursorRow < Rows && col >= 0 && col < Cols)
             {
-                TermCell cell;
+                TermCell cell = new TermCell();
                 cell.Char = ch;
                 cell.Fg = curFg;
                 cell.Bg = curBg;
@@ -1522,7 +1536,7 @@ namespace codeLess.Studio
 
         private TermCell BlankAttrCell()
         {
-            TermCell cell;
+            TermCell cell = new TermCell();
             cell.Char = ' ';
             cell.Fg = DefaultFg;
             cell.Bg = ((curFlags & TermCell.FLAG_DEFAULT_BG) != 0) ? DefaultBg : curBg;

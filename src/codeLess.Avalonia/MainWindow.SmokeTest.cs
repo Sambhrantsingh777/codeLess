@@ -14,6 +14,51 @@ namespace codeLess.AvaloniaApp
         /// through the normal window-close path with an unsaved tab. The external runner verifies the process
         /// exits promptly and leaves no orphaned children.
         /// </summary>
+        /// <summary>
+        /// Fixed performance workload (`codeLess --bench report.txt --workspace dir`): 600 editor scroll frames through
+        /// a large file at ~60 fps and a 200k-line terminal flood. Reports wall time and process CPU time so memory
+        /// changes can be checked for performance regressions.
+        /// </summary>
+        public async Task RunBenchmarkAsync(string reportPath)
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                await Task.Delay(2500);
+                var proc = System.Diagnostics.Process.GetCurrentProcess();
+                string big = Path.Combine(workspaceRoot ?? "", "src", "CodeLessMainForm.cs");
+                var tab = File.Exists(big) ? OpenFileInTab(big, preview: false) : activeTab;
+                await Task.Delay(800);
+
+                proc.Refresh();
+                var cpu0 = proc.TotalProcessorTime;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                for (int i = 0; i < 600 && tab != null; i++)
+                {
+                    tab.ScrollTopLine = (i * 17) % Math.Max(1, tab.Lines.Count - 60);
+                    PrimaryEditor.Canvas.InvalidateVisual();
+                    await Task.Delay(16);
+                }
+                proc.Refresh();
+                sb.AppendLine($"editor_scroll: wall_ms={sw.ElapsedMilliseconds} cpu_ms={(proc.TotalProcessorTime - cpu0).TotalMilliseconds:F0}");
+
+                var term = CreateNewTerminalSession();
+                await Task.Delay(2500);
+                proc.Refresh();
+                cpu0 = proc.TotalProcessorTime;
+                sw.Restart();
+                term.Control.WriteAutomatedInput("seq 1 200000; echo BENCH_$((40+2))_DONE\r");
+                while (sw.ElapsedMilliseconds < 60000 && !(term.Control.GetVisibleScreenText() ?? "").Contains("BENCH_42_DONE"))
+                    await Task.Delay(50);
+                proc.Refresh();
+                sb.AppendLine($"terminal_flood: wall_ms={sw.ElapsedMilliseconds} cpu_ms={(proc.TotalProcessorTime - cpu0).TotalMilliseconds:F0}");
+            }
+            catch (Exception ex) { sb.AppendLine("error=" + ex.Message); }
+            try { File.WriteAllText(reportPath, sb.ToString()); } catch { }
+            SuppressUnsavedPrompts = true;
+            Close();
+        }
+
         public async Task RunSmokeQuitAsync(string reportPath)
         {
             var sb = new StringBuilder();

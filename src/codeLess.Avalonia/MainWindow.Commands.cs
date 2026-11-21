@@ -712,12 +712,17 @@ namespace codeLess.AvaloniaApp
                 return;
             }
 
-            var wsSym = aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.Ordinal));
-            if (wsSym != null)
+            void jump()
             {
-                OpenFileInTab(wsSym.FilePath, preview: false);
-                PrimaryEditor.GoToLine(wsSym.LineNumber);
+                var wsSym = aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.Ordinal));
+                if (wsSym != null)
+                {
+                    OpenFileInTab(wsSym.FilePath, preview: false);
+                    PrimaryEditor.GoToLine(wsSym.LineNumber);
+                }
             }
+            if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime) EnsureWorkspaceIndexedInBackground(jump);
+            else { EnsureWorkspaceIndexed(); jump(); }
         }
 
         public void JumpDiagnostic(int direction)
@@ -2363,6 +2368,7 @@ namespace codeLess.AvaloniaApp
             }
             if (prefix == "#")
             {
+                EnsureWorkspaceIndexed(); // lazy index: built on first workspace-symbol search
                 var wsSymEntries = new List<PaletteEntryItem>();
                 if (aiEngine?.WorkspaceSymbolMap != null)
                 {
@@ -3120,8 +3126,11 @@ namespace codeLess.AvaloniaApp
             string wsSnapshot = workspaceRoot;
             var filesSnapshot = workspaceFiles.ToList();
             string termText = activeTerminalSession?.Control?.GetVisibleScreenText() ?? "";
-            var loopTask = Task.Run(() => aiEngine.RunAutonomousAgentLoopAsync(
-                mode, prompt, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText));
+            var loopTask = Task.Run(() =>
+            {
+                EnsureWorkspaceIndexed(); // lazy index: built on first AI use, off the UI thread
+                return aiEngine.RunAutonomousAgentLoopAsync(mode, prompt, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText);
+            });
             var turnResult = AvaloniaTerminalEmulatorControl.IsDesktopRuntime
                 ? await loopTask
                 : loopTask.GetAwaiter().GetResult();

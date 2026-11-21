@@ -28,6 +28,10 @@ namespace codeLess.AvaloniaApp
                     {
                         App.ScreenshotSuiteDir = args[++i];
                     }
+                    else if (a == "--bench" && i + 1 < args.Length)
+                    {
+                        App.BenchmarkReportPath = args[++i];
+                    }
                     else if (a == "--smoke-quit" && i + 1 < args.Length)
                     {
                         App.SmokeQuitReportPath = args[++i];
@@ -47,6 +51,7 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
+            ConfigureSkiaCpuCaches();
             int exitCode = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args ?? Array.Empty<string>());
             // The UI lifetime has ended (last window closed / Cmd+Q). Terminate deterministically so no lingering
             // worker (blocked pty write, git subprocess wait, HTTP stream) can keep a windowless process alive.
@@ -185,9 +190,35 @@ namespace codeLess.AvaloniaApp
                 // Avalonia's default Skia GPU resource cache is ~100 MB of texture memory (shown as "graphics" in
                 // Activity Monitor). An editor's working set of glyph atlases / layers fits comfortably in 24 MB;
                 // Skia evicts LRU textures beyond the limit.
-                .With(new SkiaOptions { MaxGpuResourceSizeBytes = 24L * 1024 * 1024 })
+                .With(new SkiaOptions { MaxGpuResourceSizeBytes = ResolveGpuCacheBytes() })
                 .With(new AvaloniaNativePlatformOptions { RenderingMode = ResolveMacRenderingModes() })
                 .LogToTrace();
+        }
+
+        /// <summary>
+        /// Skia's process-wide CPU caches default to generous limits (glyph cache, raster resource cache) that an
+        /// editor never needs; they kept tens of MB of malloc'd glyph images alive.
+        /// </summary>
+        private static void ConfigureSkiaCpuCaches()
+        {
+            try
+            {
+                int fontMb = 4, resMb = 16;
+                int v;
+                if (int.TryParse(Environment.GetEnvironmentVariable("CODELESS_SKIA_FONT_MB"), out v) && v > 0) fontMb = v;
+                if (int.TryParse(Environment.GetEnvironmentVariable("CODELESS_SKIA_RES_MB"), out v) && v > 0) resMb = v;
+                SkiaSharp.SKGraphics.SetFontCacheLimit(fontMb * 1024L * 1024L);
+                SkiaSharp.SKGraphics.SetResourceCacheTotalByteLimit(resMb * 1024L * 1024L);
+            }
+            catch { }
+        }
+
+        private static long ResolveGpuCacheBytes()
+        {
+            int mb;
+            if (int.TryParse(Environment.GetEnvironmentVariable("CODELESS_GPU_CACHE_MB"), out mb) && mb >= 0 && mb <= 512)
+                return mb * 1024L * 1024L;
+            return 24L * 1024 * 1024;
         }
 
         private static AvaloniaNativeRenderingMode[] ResolveMacRenderingModes()

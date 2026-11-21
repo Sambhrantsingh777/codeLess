@@ -20,6 +20,35 @@ namespace codeLess.AvaloniaApp
     /// Explorer behaviour aligned with VS Code: what is hidden vs. dimmed, state-preserving refresh,
     /// file-system watching, and safe file operations (create / rename / trash).
     /// </summary>
+    /// <summary>Returns freed memory to the OS after bursts (macOS malloc zones / glibc arenas keep it otherwise).</summary>
+    public static class ProcessMemoryTrimmer
+    {
+        [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "malloc_zone_pressure_relief")]
+        private static extern UIntPtr malloc_zone_pressure_relief(IntPtr zone, UIntPtr goal);
+
+        [DllImport("libc", EntryPoint = "malloc_trim")]
+        private static extern int malloc_trim(UIntPtr pad);
+
+        private static DateTime lastTrimUtc = DateTime.MinValue;
+
+        public static void Trim(bool compactManagedHeap)
+        {
+            if ((DateTime.UtcNow - lastTrimUtc).TotalSeconds < 60) return;
+            lastTrimUtc = DateTime.UtcNow;
+            try
+            {
+                if (compactManagedHeap)
+                {
+                    System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                    GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                }
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) malloc_zone_pressure_relief(IntPtr.Zero, UIntPtr.Zero);
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) malloc_trim(UIntPtr.Zero);
+            }
+            catch { }
+        }
+    }
+
     public partial class MainWindow
     {
         // VS Code "files.exclude" defaults. Everything else (node_modules, build, dist, nested repos, gitignored
@@ -434,6 +463,52 @@ namespace codeLess.AvaloniaApp
             KeyModifiers mods = MacKeymap.PrimaryModifier | (cmd == "redo" ? KeyModifiers.Shift : KeyModifiers.None);
             PrimaryEditor.Canvas.Focus();
             SimulateShortcut(key, mods); // same path as the keyboard: repaint, dirty state, diagnostics
+        }
+
+        // ---------------------------------------------------------------------------------------------
+        // Lazy workspace index (BM25 chunks + symbol map)
+        // ---------------------------------------------------------------------------------------------
+        private readonly object workspaceIndexLock = new object();
+        private int workspaceIndexState; // 0 = not built, 1 = building, 2 = ready
+        private List<string> indexCandidateFiles;
+
+        /// <summary>Builds the AI / symbol index if needed. Safe to call from any thread; blocks until ready.</summary>
+        public void EnsureWorkspaceIndexed()
+        {
+            string root;
+            List<string> files;
+            lock (workspaceIndexLock)
+            {
+                if (workspaceIndexState == 2) return;
+                while (workspaceIndexState == 1) System.Threading.Monitor.Wait(workspaceIndexLock, 200);
+                if (workspaceIndexState == 2) return;
+                workspaceIndexState = 1;
+                root = workspaceRoot;
+                files = indexCandidateFiles ?? workspaceFiles.Take(1500).ToList();
+            }
+            try
+            {
+                if (!string.IsNullOrEmpty(root)) aiEngine.IndexWorkspace(root, files, CancellationToken.None, null);
+            }
+            catch { }
+            finally
+            {
+                lock (workspaceIndexLock) { workspaceIndexState = 2; System.Threading.Monitor.PulseAll(workspaceIndexLock); }
+            }
+        }
+
+        /// <summary>Starts building the index in the background (used by UI features that can wait for it).</summary>
+        public void EnsureWorkspaceIndexedInBackground(Action onReadyOnUiThread = null)
+        {
+            lock (workspaceIndexLock)
+            {
+                if (workspaceIndexState == 2) { onReadyOnUiThread?.Invoke(); return; }
+            }
+            _ = Task.Run(() =>
+            {
+                EnsureWorkspaceIndexed();
+                if (onReadyOnUiThread != null) Dispatcher.UIThread.Post(onReadyOnUiThread);
+            });
         }
 
         public int TerminalSessionCount => terminalSessions.Count;

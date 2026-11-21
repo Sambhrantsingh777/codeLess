@@ -345,10 +345,10 @@ namespace codeLess.Avalonia.Tests
             string exe = Path.Combine(_root, "setup.sh.bin");
             File.WriteAllBytes(exe, new byte[] { 0x7F, 0x45, 0x4C, 0x46, 0, 0, 0, 1 });
             Assert.True(MainWindow.IsLikelyBinaryFile(exe));
-            Assert.False(MainWindow.SafeViewerExtensions.Contains(".exe"));
-            Assert.False(MainWindow.SafeViewerExtensions.Contains(".app"));
-            Assert.False(MainWindow.SafeViewerExtensions.Contains(".command"));
-            Assert.True(MainWindow.SafeViewerExtensions.Contains(".png"));
+            Assert.DoesNotContain(".exe", MainWindow.SafeViewerExtensions);
+            Assert.DoesNotContain(".app", MainWindow.SafeViewerExtensions);
+            Assert.DoesNotContain(".command", MainWindow.SafeViewerExtensions);
+            Assert.Contains(".png", MainWindow.SafeViewerExtensions);
             var w = new MainWindow(_root);
             w.Show();
             Assert.Null(w.OpenFileInTab(exe));
