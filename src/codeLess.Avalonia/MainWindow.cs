@@ -2578,12 +2578,14 @@ namespace codeLess.AvaloniaApp
             string capturedRoot = workspaceRoot;
             bool capturedKeepTabs = keepCurrentTabs;
             var token = cts.Token;
+            var ignoreRules = CreateWorkspaceIgnoreRules(capturedRoot);
+            var capturedRoots = GetWorkspaceRootFolders().ToList();
 
             _ = Task.Run(() =>
             {
-                var bgFiles = new List<string>(workspaceFiles);
-                var bgSeen = new HashSet<string>(bgFiles, StringComparer.OrdinalIgnoreCase);
-                CollectWorkspaceFilesListRecursive(capturedRoot, excluded, 0, bgFiles, bgSeen, 12000, token);
+                // .gitignore-aware walk, no depth limit, capped at MaxIndexedWorkspaceFiles (was: 12,000 files / depth 7).
+                var bgFiles = CollectIndexableFiles(ignoreRules, capturedRoots, token, out bool bgCapped);
+                WorkspaceFileListCapped = bgCapped;
                 if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
 
                 // The BM25 / symbol index (~25-30 MB for a mid-size repo) is built lazily on first use
@@ -2604,7 +2606,8 @@ namespace codeLess.AvaloniaApp
                     ApplyGitEntriesToUi(fastBranch, bgGitEntries);
                     if (!capturedKeepTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
                         OpenFileInTab(workspaceFiles[0], preview: true);
-                    AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files).");
+                    AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files{(WorkspaceFileListCapped ? $", capped at {MaxIndexedWorkspaceFiles:N0}: Quick Open / indexing cover the first {MaxIndexedWorkspaceFiles:N0} files" : "")}).");
+                    if (WorkspaceFileListCapped) SetStatusMessage($"Large workspace: indexed the first {MaxIndexedWorkspaceFiles:N0} files (node_modules, build output and .gitignore'd files are skipped).");
                     PerfWorkspaceLoadCompletions++;
                     // Startup burst is over: hand freed native pages back to the OS (cheap, non-blocking). The managed
                     // heap is NOT force-compacted here: a blocking full GC right as the user starts working cost ~4%

@@ -221,22 +221,19 @@ namespace codeLess.AvaloniaApp
             string root = workspaceRoot;
             var roots = GetWorkspaceRootFolders().ToList();
             var excluded = GetExcludedFolderSet(root);
+            var ignoreRules = CreateWorkspaceIgnoreRules(root);
             if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
             {
-                var files = new List<string>();
-                var seen = new HashSet<string>(PathKeyComparer);
-                foreach (string r in roots)
-                    CollectWorkspaceFilesListRecursive(r, excluded, 0, files, seen, 12000, CancellationToken.None);
+                var files = CollectIndexableFiles(ignoreRules, roots, CancellationToken.None, out bool cappedSync);
+                WorkspaceFileListCapped = cappedSync;
                 workspaceFiles.Clear();
                 workspaceFiles.AddRange(files);
                 return;
             }
             _ = Task.Run(() =>
             {
-                var files = new List<string>();
-                var seen = new HashSet<string>(PathKeyComparer);
-                foreach (string r in roots)
-                    CollectWorkspaceFilesListRecursive(r, excluded, 0, files, seen, 12000, CancellationToken.None);
+                var files = CollectIndexableFiles(ignoreRules, roots, CancellationToken.None, out bool cappedBg);
+                WorkspaceFileListCapped = cappedBg;
                 Dispatcher.UIThread.Post(() =>
                 {
                     if (gen != reindexGeneration || !string.Equals(root, workspaceRoot, PathKeyComparison)) return;
@@ -336,6 +333,7 @@ namespace codeLess.AvaloniaApp
             string sep = Path.DirectorySeparatorChar.ToString();
             int gitIdx = fullPath.IndexOf(sep + ".git" + sep, StringComparison.Ordinal);
             bool insideGitDir = gitIdx >= 0 || fullPath.EndsWith(sep + ".git", StringComparison.Ordinal);
+            bool indexExcluded = !insideGitDir && IsPathExcludedFromIndex(fullPath);
             lock (fsChangeLock)
             {
                 if (insideGitDir)
@@ -347,9 +345,15 @@ namespace codeLess.AvaloniaApp
                     else
                         return;
                 }
+                else if (indexExcluded)
+                {
+                    // node_modules / build output / .gitignore'd: no re-index, no git status; Explorer only if visible.
+                    if (!structural) return;
+                    RecordStructuralFsChange(fullPath, excludedFromIndex: true);
+                }
                 else
                 {
-                    if (structural) fsTreeDirty = true;
+                    if (structural) { fsTreeDirty = true; RecordStructuralFsChange(fullPath, excludedFromIndex: false); }
                     fsGitDirty = true;
                     if (!structural && fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
                 }
@@ -399,7 +403,12 @@ namespace codeLess.AvaloniaApp
             if (tree)
             {
                 RefreshExplorerTree();
-                ScheduleBackgroundReindex();
+                if (!ApplyIncrementalIndexChanges()) ScheduleBackgroundReindex();
+                ExcludedChangesAffectVisibleTree(); // tree already refreshed; just drain the queue
+            }
+            else if (ExcludedChangesAffectVisibleTree())
+            {
+                RefreshExplorerTree();
             }
             if (git)
                 RefreshGitStatusInBackground();

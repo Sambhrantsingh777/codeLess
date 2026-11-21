@@ -274,6 +274,9 @@ namespace codeLess.Studio
             ".a", ".lib", ".o", ".wasm", ".sqlite", ".db", ".psd", ".tiff", ".heic"
         };
 
+        /// <summary>When true (default) workspace enumeration for search / quick open / indexing honours .gitignore files.</summary>
+        public static bool RespectGitIgnore = true;
+
         public static List<string> EnumerateWorkspaceFiles(string workspaceRoot, IEnumerable<string> excludedFolders = null, int maxFiles = 5000)
         {
             return EnumerateSearchFiles(new[] { workspaceRoot }, workspaceRoot, excludedFolders, null, null, maxFiles, CancellationToken.None);
@@ -294,7 +297,10 @@ namespace codeLess.Studio
         {
             List<string> results = new List<string>();
             if (roots == null) return results;
-            HashSet<string> excluded = new HashSet<string>(excludedFolders ?? DefaultExcludedFolders, StringComparer.OrdinalIgnoreCase);
+            // Excluded folder names + .gitignore (VS Code: files.exclude / search.exclude + search.useIgnoreFiles).
+            string rulesRoot = workspaceRoot;
+            if (string.IsNullOrEmpty(rulesRoot)) foreach (string r0 in roots) { rulesRoot = r0; break; }
+            WorkspaceIgnoreRules ignoreRules = new WorkspaceIgnoreRules(rulesRoot, excludedFolders ?? DefaultExcludedFolders, RespectGitIgnore);
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool hasInclude = include != null && !include.IsEmpty;
             bool hasExclude = exclude != null && !exclude.IsEmpty;
@@ -315,10 +321,7 @@ namespace codeLess.Studio
                 {
                     foreach (string file in Directory.EnumerateFiles(current))
                     {
-                        string name = Path.GetFileName(file);
-                        if (string.IsNullOrEmpty(name)) continue;
-                        string ext = Path.GetExtension(name);
-                        if (!string.IsNullOrEmpty(ext) && BinaryExtensions.Contains(ext)) continue;
+                        if (ignoreRules.IsIgnoredFile(file)) continue;
                         if (hasInclude || hasExclude)
                         {
                             string rel = GetRelative(workspaceRoot, file);
@@ -333,7 +336,7 @@ namespace codeLess.Studio
                     foreach (string sub in Directory.EnumerateDirectories(current))
                     {
                         string name = Path.GetFileName(sub);
-                        if (string.IsNullOrEmpty(name) || excluded.Contains(name)) continue;
+                        if (string.IsNullOrEmpty(name) || ignoreRules.IsExcludedDirectory(sub)) continue;
                         if (hasExclude && exclude.IsMatch(sub, GetRelative(workspaceRoot, sub))) continue;
                         subs.Add(sub);
                     }

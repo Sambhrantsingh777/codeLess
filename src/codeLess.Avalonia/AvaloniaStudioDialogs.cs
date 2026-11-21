@@ -140,6 +140,7 @@ namespace codeLess.AvaloniaApp
 
         public void Open(string prefix, List<PaletteEntryItem> entries, string currentThemeId = null)
         {
+            QuickOpenFileSearch = null;
             InitialPrefix = prefix ?? "";
             AllEntries = entries ?? new List<PaletteEntryItem>();
             originalThemeIdBeforePreview = currentThemeId;
@@ -150,8 +151,12 @@ namespace codeLess.AvaloniaApp
             SearchInput.Focus();
         }
 
+        /// <summary>Optional fast file search used by Quick Open for big workspaces (set by the host, cleared on Close).</summary>
+        public Func<string, int, List<(PaletteEntryItem Entry, int Score)>> QuickOpenFileSearch { get; set; }
+
         public void Close(bool restorePreviewTheme = false)
         {
+            QuickOpenFileSearch = null;
             if (!IsVisible) return;
             IsVisible = false;
             if (restorePreviewTheme && !string.IsNullOrEmpty(originalThemeIdBeforePreview))
@@ -195,7 +200,7 @@ namespace codeLess.AvaloniaApp
             pendingQuickOpenLine = 0;
             pendingQuickOpenColumn = 0;
             bool fileMode = raw.Length == 0 || !(raw.StartsWith(">") || raw.StartsWith("@") || raw.StartsWith("#") || raw.StartsWith(":"));
-            bool hasFileEntries = fileMode && AllEntries.Any(en => !string.IsNullOrEmpty(en.FilePath));
+            bool hasFileEntries = fileMode && (QuickOpenFileSearch != null || AllEntries.Any(en => !string.IsNullOrEmpty(en.FilePath)));
             if (hasFileEntries)
             {
                 // Quick Open (Ctrl/Cmd+P): files only, fuzzy ranked, recent first, optional ":line[:col]" suffix.
@@ -203,7 +208,9 @@ namespace codeLess.AvaloniaApp
                 var files = AllEntries.Where(en => !string.IsNullOrEmpty(en.FilePath));
                 if (string.IsNullOrEmpty(fileQuery))
                 {
-                    FilteredEntries = files.Where(en => en.IsRecent).Concat(files.Where(en => !en.IsRecent)).Take(120).ToList();
+                    var ordered = files.Where(en => en.IsRecent).Concat(files.Where(en => !en.IsRecent));
+                    if (QuickOpenFileSearch != null) ordered = ordered.Concat(QuickOpenFileSearch("", 120).Select(x => x.Entry));
+                    FilteredEntries = ordered.Take(120).ToList();
                 }
                 else
                 {
@@ -226,6 +233,8 @@ namespace codeLess.AvaloniaApp
                             return (Entry: en, Score: total);
                         })
                         .Where(x => x.Score > 0)
+                        // Large workspaces: the indexed file list is searched by QuickOpenFileIndex (top 120 only).
+                        .Concat(QuickOpenFileSearch != null ? QuickOpenFileSearch(fileQuery, 120) : new List<(PaletteEntryItem Entry, int Score)>())
                         .OrderByDescending(x => x.Score)
                         .ThenBy(x => x.Entry.stringSubtitleOrPath.Length)
                         .Take(120)

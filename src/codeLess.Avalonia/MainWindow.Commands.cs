@@ -2349,6 +2349,19 @@ namespace codeLess.AvaloniaApp
                 if (seen.Add(f)) entries.Add(makeFileEntry(f, true));
             }
             // Every indexed workspace file (was capped at the first 250, so most files could not be found).
+            if (workspaceFiles.Count > QuickOpenInlineFileLimit)
+            {
+                // Big workspace: don't materialise 200k palette entries; search the lower-cased index per keystroke.
+                var qoIndex = GetQuickOpenIndex();
+                var skip = new HashSet<string>(seen, PathKeyComparer);
+                var commands = BuildAllPaletteCommands();
+                entries.AddRange(commands);
+                CommandPalette.Open("", entries, currentTheme?.Id);
+                CommandPalette.QuickOpenFileSearch = (q, max) => qoIndex.Search(q, max, skip)
+                    .Select(h => (makeFileEntry(qoIndex.GetFullPath(h.Index), false), h.Score)).ToList();
+                CommandPalette.RefreshFilter();
+                return;
+            }
             foreach (string file in workspaceFiles)
             {
                 if (seen.Add(file)) entries.Add(makeFileEntry(file, false));

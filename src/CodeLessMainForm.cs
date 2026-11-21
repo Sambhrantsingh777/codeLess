@@ -8117,43 +8117,18 @@ if __name__ == '__main__':
 
                 try
                 {
-                    Queue<string> dirQueue = new Queue<string>();
-                    dirQueue.Enqueue(rootDir);
+                    // .gitignore-aware walk (excluded folder names + .gitignore files), no depth limit, capped at 200k files
+                    // (shared with the Avalonia UI: WorkspaceIgnoreRules in codeLess.Core).
+                    List<string> walkRoots = new List<string>();
+                    walkRoots.Add(rootDir);
                     foreach (string extraDir in additionalWorkspaceFolders.ToList())
                     {
                         if (!string.IsNullOrEmpty(extraDir) && Directory.Exists(extraDir))
-                            dirQueue.Enqueue(extraDir);
+                            walkRoots.Add(extraDir);
                     }
-                    Stopwatch swStatus = Stopwatch.StartNew();
-
-                    while (dirQueue.Count > 0 && !token.IsCancellationRequested && discoveredFiles.Count < 25000)
-                    {
-                        string currentDir = dirQueue.Dequeue();
-                        try
-                        {
-                            foreach (string subDir in Directory.EnumerateDirectories(currentDir))
-                            {
-                                if (token.IsCancellationRequested) break;
-                                string dName = Path.GetFileName(subDir);
-                                if (string.IsNullOrEmpty(dName) || excludedFolders.Contains(dName)) continue;
-                                dirQueue.Enqueue(subDir);
-                            }
-
-                            foreach (string file in Directory.EnumerateFiles(currentDir))
-                            {
-                                if (token.IsCancellationRequested) break;
-                                string fName = Path.GetFileName(file);
-                                if (string.IsNullOrEmpty(fName) || fName.StartsWith("unins000.", StringComparison.OrdinalIgnoreCase))
-                                    continue;
-                                string ext = Path.GetExtension(fName);
-                                if (!string.IsNullOrEmpty(ext) && DefaultIgnoredBinaryExtensions.Contains(ext))
-                                    continue;
-                                discoveredFiles.Add(file);
-                                if (discoveredFiles.Count >= 25000) break;
-                            }
-                        }
-                        catch { }
-                    }
+                    HashSet<string> walkExcluded = new HashSet<string>(excludedFolders, StringComparer.OrdinalIgnoreCase);
+                    WorkspaceIgnoreRules ignoreRules = new WorkspaceIgnoreRules(rootDir, walkExcluded, WorkspaceSearchEngine.RespectGitIgnore);
+                    discoveredFiles = ignoreRules.EnumerateFiles(walkRoots, WorkspaceIgnoreRules.DefaultMaxIndexedFiles, token);
 
                     if (token.IsCancellationRequested || gen != workspaceLoadGeneration) return;
 
@@ -8482,7 +8457,20 @@ if __name__ == '__main__':
                     if ((string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext)) && File.Exists(c) && known.Add(c))
                         workspaceFiles.Add(c);
                 }
-                if (deleted.Count > 0) workspaceFiles.RemoveAll(f => !File.Exists(f));
+                if (deleted.Count > 0)
+                {
+                    // Drop deleted paths (and everything under deleted folders) without stat-ing every indexed file:
+                    // with a 200k-file monorepo the old File.Exists sweep cost seconds per flush.
+                    List<string> gone = deleted.Where(d => !IsUnderExcludedFolder(d, excludedNames)).ToList();
+                    if (gone.Count > 200)
+                        workspaceFiles.RemoveAll(f => !File.Exists(f));
+                    else if (gone.Count > 0)
+                    {
+                        HashSet<string> goneSet = new HashSet<string>(gone, StringComparer.OrdinalIgnoreCase);
+                        List<string> gonePrefixes = gone.Select(d => d.TrimEnd('\\', '/') + Path.DirectorySeparatorChar).ToList();
+                        workspaceFiles.RemoveAll(f => goneSet.Contains(f) || gonePrefixes.Any(px => f.StartsWith(px, StringComparison.OrdinalIgnoreCase)));
+                    }
+                }
             }
             foreach (string d in deleted)
             {
