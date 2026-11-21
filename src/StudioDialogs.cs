@@ -1249,6 +1249,11 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "help_devtools"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Help", "Help: About codeLess", "",
                 () => { SelectedCommandId = "help_about"; this.DialogResult = DialogResult.OK; this.Close(); });
+            foreach (string[] dev in CodeLessMainForm.DevToolsPaletteCommands)
+            {
+                string devId = dev[3];
+                addCmd(dev[0], dev[1], dev[2], () => { SelectedCommandId = devId; this.DialogResult = DialogResult.OK; this.Close(); });
+            }
             addCmd("Arena", "Launch Multi-Harness Parallel Arena (Race 2 Harnesses Side-by-Side)", "",
                 () => { SelectedCommandId = "open_arena"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Architecture", "Open Interactive Live Code & Dependency Map", "",

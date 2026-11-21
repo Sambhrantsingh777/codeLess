@@ -419,6 +419,7 @@ namespace codeLess.Studio
 
             BuildWorkbenchLayout();
             InitDebugWorkbench();
+            InitDevTools();
             editorControl.ShowWelcomePage = IsWelcomeTabOpen;
             splitEditorControl.ShowWelcomePage = false;
             ApplySettingsToEditors();
@@ -921,6 +922,7 @@ namespace codeLess.Studio
             lastCtrlKChordTime = DateTime.MinValue;
             if (editorControl != null)
                 editorControl.DisarmCtrlKChord();
+            if (TryDevToolsCtrlKChord(e)) return true;
 
             if (e.KeyCode == Keys.O) // Ctrl+K Ctrl+O -> Open Folder
             {
@@ -1049,6 +1051,8 @@ namespace codeLess.Studio
                     return;
                 }
             }
+
+            if (HandleDevToolsKey(e)) return;
 
             if ((e.Control && e.Shift && e.KeyCode == Keys.P) || e.KeyCode == Keys.F1) // VS Code Command Palette (>)
             {
@@ -10598,6 +10602,7 @@ if __name__ == '__main__':
                 if (lspController != null) lspController.ExecuteCommand(cmdId, editorControl);
                 return;
             }
+            if (ExecuteDevToolsCommand(cmdId)) return;
             if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
@@ -11330,6 +11335,7 @@ if __name__ == '__main__':
             activeTheme = theme;
             if (networkPrivacy != null) networkPrivacy.ApplyTheme(theme);
             ApplyDebugTheme(theme);
+            ApplyDevToolsTheme(theme);
             EnableNativeDarkTitleBar();
             this.BackColor = theme.BgWorkbench;
             this.ForeColor = theme.FgPrimary;
