@@ -497,3 +497,72 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    [Collection("SequentialWorkbench")]
+    public class InlineAiTests : IDisposable
+    {
+        private readonly string _settingsFilePath = IdePersistentSettings.GetSettingsFilePath();
+        private readonly string _settingsBackup;
+        private readonly string _root;
+        public InlineAiTests()
+        {
+            _settingsBackup = File.Exists(_settingsFilePath) ? File.ReadAllText(_settingsFilePath) : null;
+            _root = Path.Combine(Path.GetTempPath(), "codeLess_AI_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(_root);
+        }
+        public void Dispose()
+        {
+            try { if (_settingsBackup != null) File.WriteAllText(_settingsFilePath, _settingsBackup); else if (File.Exists(_settingsFilePath)) File.Delete(_settingsFilePath); } catch { }
+            try { Directory.Delete(_root, true); } catch { }
+        }
+
+        [AvaloniaFact]
+        public async System.Threading.Tasks.Task InlineEdit_ReplacesSelection_ViaReviewableDiff()
+        {
+            string f = Path.Combine(_root, "a.c");
+            File.WriteAllText(f, "int a = 1;\nint b = 2;\n");
+            var w = new MainWindow(_root);
+            w.SuppressUnsavedPrompts = true;
+            w.Show();
+            var tab = w.OpenFileInTab(f);
+            tab.SelectionStartLine = 0; tab.SelectionStartCol = 0; tab.CursorLine = 0; tab.CursorCol = 10;
+            string seenUser = null;
+            w.HarnessEngine.CustomModelResponder = (sys, msgs) =>
+            {
+                seenUser = msgs.Last()["content"];
+                return System.Threading.Tasks.Task.FromResult("Sure:\n```c\nint alpha = 1;\n```");
+            };
+            Assert.True(await w.ExecuteInlineAiEditAsync("rename a to alpha", tab));
+            Assert.Contains("<<<SELECTION_START>>>int a = 1;<<<SELECTION_END>>>", seenUser);
+            Assert.True(tab.HasPendingDiff);
+            w.PrimaryEditor.AcceptAllPendingDiffs();
+            Assert.Equal("int alpha = 1;", tab.Lines[0]);
+            Assert.Equal("int b = 2;", tab.Lines[1]);
+            w.Close();
+        }
+
+        [AvaloniaFact]
+        public async System.Threading.Tasks.Task TerminalAi_ReturnsSingleCleanCommand_AndNoKeyStagesNothing()
+        {
+            File.WriteAllText(Path.Combine(_root, "x.txt"), "x");
+            var w = new MainWindow(_root);
+            w.SuppressUnsavedPrompts = true;
+            w.Show();
+            w.HarnessEngine.CustomModelResponder = (sys, msgs) => System.Threading.Tasks.Task.FromResult("```bash\n$ ls -la\n```");
+            string cmd = null;
+            await w.HandleTerminalInlineAiRequestAsync("list files", c => cmd = c);
+            Assert.Equal("ls -la", cmd);
+
+            // No provider configured: nothing staged, no exception.
+            w.HarnessEngine.CustomModelResponder = null;
+            foreach (var v in w.HarnessEngine.Vendors) v.ApiKey = "";
+            var tab = w.OpenFileInTab(Path.Combine(_root, "x.txt"));
+            bool ok = await w.ExecuteInlineAiEditAsync("anything", tab);
+            Assert.False(ok);
+            Assert.False(tab.HasPendingDiff);
+            w.Close();
+        }
+    }
+}

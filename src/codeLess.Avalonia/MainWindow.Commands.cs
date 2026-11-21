@@ -2123,17 +2123,6 @@ namespace codeLess.AvaloniaApp
             AppendOutputLog("[Build] Triggered 'dotnet build --nologo' in terminal.");
         }
 
-        private void HandleTerminalInlineAiRequest(string prompt, Action<string> callback)
-        {
-            string lower = (prompt ?? "").ToLowerInvariant();
-            string cmd = "git status -sb";
-            if (lower.Contains("large") || lower.Contains("size")) cmd = "git ls-files";
-            else if (lower.Contains("undo") || lower.Contains("reset")) cmd = "git status";
-            else if (lower.Contains("test")) cmd = "dotnet test --nologo";
-            else if (lower.Contains("build")) cmd = "dotnet build --nologo";
-            callback?.Invoke(cmd);
-        }
-
         // AI Agent & Composer Workflows
         public void SetAgentMode(string modeId)
         {
@@ -2237,20 +2226,6 @@ namespace codeLess.AvaloniaApp
             };
             AgentFeed.AddMessage(diffCard);
             AgentFeed.ScrollToTop();
-        }
-
-        private void ExecuteInlineAiEdit(string instruction, EditorTabBuffer buf)
-        {
-            if (buf == null || string.IsNullOrWhiteSpace(instruction)) return;
-            int line = Math.Max(0, Math.Min(buf.Lines.Count - 1, buf.CursorLine));
-            string curText = buf.Lines[line];
-            int indent = curText.Length - curText.TrimStart().Length;
-            string pad = indent > 0 ? curText.Substring(0, indent) : "";
-
-            var updated = new List<string>(buf.Lines);
-            updated.Insert(line, $"{pad}// ✦ AI Edit: {instruction.Trim()}");
-            PrimaryEditor.StageProposedDiffContent(string.Join("\n", updated));
-            RefreshChangesetBanner();
         }
 
         private async void HandleAgentCodeBlockAction(string action, string code)
