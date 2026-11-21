@@ -249,6 +249,7 @@ namespace codeLess.AvaloniaApp
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
+            InitializeDevTools();
             BuildNativeMacMenu();
             ApplyTheme(currentTheme);
 
@@ -2413,6 +2414,7 @@ namespace codeLess.AvaloniaApp
             // Overlays
             CommandPalette.ApplyTheme(theme);
             ModalHost.ApplyTheme(theme);
+            ApplyDevToolsTheme(theme);
         }
 
         private void UpdateActivityBarSelectionVisuals()

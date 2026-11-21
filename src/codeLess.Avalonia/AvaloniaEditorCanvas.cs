@@ -92,6 +92,18 @@ namespace codeLess.AvaloniaApp
         public event Action<EditorTabBuffer, bool> DiffAllDecisionRequested; // (buf, accepted)
         public event Action<string> StatusMessagePublished;
 
+        /// <summary>End-of-line annotations (inline git blame, "Send Request" lens). Called per visible line while rendering.</summary>
+        public Func<EditorTabBuffer, int, EditorLineAnnotation> LineAnnotationProvider { get; set; }
+        /// <summary>Annotation clicked: (buffer, annotation, 0-based line, rect in canvas coordinates).</summary>
+        public event Action<EditorTabBuffer, EditorLineAnnotation, int, Rect> LineAnnotationClicked;
+        /// <summary>Pointer entered (annotation) or left (null) an annotation.</summary>
+        public event Action<EditorTabBuffer, EditorLineAnnotation, int, Rect> LineAnnotationHovered;
+        internal void NotifyAnnotationClicked(EditorLineAnnotation a, int line, Rect r) { if (CurrentBuffer != null) LineAnnotationClicked?.Invoke(CurrentBuffer, a, line, r); }
+        internal void NotifyAnnotationHovered(EditorLineAnnotation a, int line, Rect r) { LineAnnotationHovered?.Invoke(CurrentBuffer, a, line, r); }
+        /// <summary>Raised after the canvas scrolled vertically (Markdown preview scroll sync).</summary>
+        public event Action<EditorTabBuffer> ScrollChanged;
+        internal void NotifyScrollChanged() { if (CurrentBuffer != null) ScrollChanged?.Invoke(CurrentBuffer); }
+
         public AvaloniaEditorControl()
         {
             RowDefinitions = new RowDefinitions("Auto,Auto,*");
@@ -1524,6 +1536,9 @@ namespace codeLess.AvaloniaApp
         private Point lastHoverPt;
 
         private readonly List<(Rect Rect, int Line, bool IsAccept)> hunkActionHitBoxes = new List<(Rect, int, bool)>();
+        private readonly List<(Rect Rect, int Line, EditorLineAnnotation Ann)> annotationHitBoxes = new List<(Rect, int, EditorLineAnnotation)>();
+        private EditorLineAnnotation hoveredAnnotation;
+        private int lastNotifiedScrollTop = -1;
 
         private static readonly HashSet<string> LanguageKeywords = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1824,6 +1839,10 @@ namespace codeLess.AvaloniaApp
             {
                 if (hb.Rect.Contains(pt)) { SetPointerCursor(StandardCursorType.Hand); return; }
             }
+            foreach (var ah in annotationHitBoxes)
+            {
+                if (ah.Rect.Contains(pt)) { SetPointerCursor(StandardCursorType.Hand); return; }
+            }
             if (ShowMinimap && pt.X >= Bounds.Width - MinimapWidth) { SetPointerCursor(StandardCursorType.Arrow); return; }
             if (pt.X < GutterWidth)
             {
@@ -1878,6 +1897,7 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerExited(e);
             ClearLinkHover();
+            if (hoveredAnnotation != null) { hoveredAnnotation = null; owner.NotifyAnnotationHovered(null, -1, default); InvalidateVisual(); }
         }
 
         protected override void OnLostFocus(global::Avalonia.Interactivity.RoutedEventArgs e)
@@ -1941,6 +1961,20 @@ namespace codeLess.AvaloniaApp
             lastHoverPt = pt;
             var props = e.GetCurrentPoint(this).Properties;
             var mods = e.KeyModifiers;
+
+            // End-of-line annotation click (Send Request lens / blame details)
+            if (props.IsLeftButtonPressed && annotationHitBoxes.Count > 0)
+            {
+                foreach (var ah in annotationHitBoxes)
+                {
+                    if (ah.Rect.Contains(pt))
+                    {
+                        owner.NotifyAnnotationClicked(ah.Ann, ah.Line, ah.Rect);
+                        e.Handled = true;
+                        return;
+                    }
+                }
+            }
 
             // Mouse back / forward buttons navigate history like VS Code.
             if (props.IsXButton1Pressed || props.IsXButton2Pressed)
@@ -2144,8 +2178,28 @@ namespace codeLess.AvaloniaApp
                 return;
             }
 
+            UpdateAnnotationHover(pt);
             UpdateLinkHover(pt, e.KeyModifiers);
         }
+
+        private void UpdateAnnotationHover(Point pt)
+        {
+            EditorLineAnnotation hit = null;
+            int hitLine = -1;
+            Rect hitRect = default;
+            foreach (var ah in annotationHitBoxes)
+            {
+                if (ah.Rect.Contains(pt)) { hit = ah.Ann; hitLine = ah.Line; hitRect = ah.Rect; break; }
+            }
+            if (!ReferenceEquals(hit, hoveredAnnotation))
+            {
+                hoveredAnnotation = hit;
+                owner.NotifyAnnotationHovered(hit, hitLine, hitRect);
+                InvalidateVisual();
+            }
+        }
+
+        internal bool IsPointerOverAnnotation => hoveredAnnotation != null;
 
         private KeyModifiers lastDragMods;
 
@@ -3955,6 +4009,13 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
 
             hunkActionHitBoxes.Clear();
+            annotationHitBoxes.Clear();
+            if (buf.ScrollTopLine != lastNotifiedScrollTop)
+            {
+                lastNotifiedScrollTop = buf.ScrollTopLine;
+                Dispatcher.UIThread.Post(() => owner.NotifyScrollChanged(), DispatcherPriority.Background);
+            }
+            var annotationProvider = owner.LineAnnotationProvider;
             double codeAreaRight = ShowMinimap ? Math.Max(GutterWidth + 60, w - MinimapWidth) : w;
 
             // Gutter background & divider
@@ -4178,6 +4239,34 @@ namespace codeLess.AvaloniaApp
                     var pillRect = new Rect(curX + 6, y + 2, pillFt.Width + 6, LineHeight - 4);
                     context.DrawRectangle(new SolidColorBrush(Color.FromArgb(40, accent.R, accent.G, accent.B)), new Pen(accentBrush, 1), pillRect, 3, 3);
                     context.DrawText(pillFt, new Point(pillRect.X + 3, y + (LineHeight - pillFt.Height) / 2.0));
+                }
+
+                // End-of-line annotation (inline blame / code lens)
+                if (annotationProvider != null && !(docLine == buf.CursorLine && !string.IsNullOrEmpty(buf.GhostTextSuggestion)) &&
+                    !(hasFolds && buf.FoldedBlockRanges.ContainsKey(docLine)))
+                {
+                    EditorLineAnnotation ann = null;
+                    try { ann = annotationProvider(buf, docLine); } catch { ann = null; }
+                    if (ann != null && !string.IsNullOrEmpty(ann.Text))
+                    {
+                        double ax = codeBaseX + ColX(buf, docLine, lineText.Length) + CharWidth * 3;
+                        if (lineText.Length == 0) ax = codeBaseX + CharWidth * (ann.IsAction ? 0 : 1);
+                        if (ax < GutterWidth + 4) ax = GutterWidth + 4;
+                        if (ax < codeAreaRight - 40)
+                        {
+                            bool hot = ReferenceEquals(ann, hoveredAnnotation) || (hoveredAnnotation != null && hoveredAnnotation.Tag != null && ReferenceEquals(hoveredAnnotation.Tag, ann.Tag));
+                            IBrush annBrush = ann.IsAction
+                                ? new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.AccentPrimary, (byte)(hot ? 255 : 200)))
+                                : new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.TextSecondary, (byte)(hot ? 200 : 125)));
+                            var aft = new FormattedText(ann.Text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, ann.IsAction ? CachedUiFontBold : fontItalic, FontSizePx - (ann.IsAction ? 1.5 : 0.5), annBrush);
+                            aft.MaxTextWidth = Math.Max(20, codeAreaRight - ax - 8);
+                            aft.MaxLineCount = 1;
+                            aft.Trimming = TextTrimming.CharacterEllipsis;
+                            if (hot && ann.IsAction) aft.SetTextDecorations(TextDecorations.Underline);
+                            context.DrawText(aft, new Point(ax, y + (LineHeight - aft.Height) / 2.0));
+                            annotationHitBoxes.Add((new Rect(ax, y, Math.Min(aft.WidthIncludingTrailingWhitespace, aft.MaxTextWidth), LineHeight), docLine, ann));
+                        }
+                    }
                 }
 
                 // Ghost text suggestion after cursor
