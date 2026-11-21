@@ -144,6 +144,9 @@ $sourceFiles = @(
     "src\CodeLessEditorCanvas.Debug.cs",
     "src\CodeLessMainForm.Debug.cs",
     "src\LanguageServerWinForms.cs",
+    "src\CodeLessEditorCanvas.DevTools.cs",
+    "src\DevToolsWinForms.cs",
+    "src\CodeLessMainForm.DevTools.cs",
     "src\LargeFileViewerWinForms.cs",
     "src\CodeLessMainForm.cs"
 )

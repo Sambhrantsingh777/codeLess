@@ -224,6 +224,11 @@ namespace codeLess.AvaloniaApp
                     if (activeTab != null) PrimaryEditor.Canvas.UnfoldAtLine(activeTab.CursorLine);
                     return true;
                 }
+                if (key == Key.V && !ctrlOrCmd && !shift)
+                {
+                    OpenMarkdownPreview(toSide: true);
+                    return true;
+                }
                 if (key == Key.K && ctrlOrCmd)
                 {
                     // Double Ctrl+K / Cmd+K opens inline AI edit bar in editor
@@ -242,6 +247,8 @@ namespace codeLess.AvaloniaApp
                 // chord (Cmd+K S/F/Z/W/M/Enter...) type into the box instead. Cmd+K Cmd+K or Cmd+I opens it.
                 return true;
             }
+
+            if (HandleDevToolsShortcut(key, modifiers)) return true;
 
             // Escape closes open modal or command palette or Zen mode
             if (key == Key.Escape)
@@ -2466,7 +2473,7 @@ namespace codeLess.AvaloniaApp
 
         public List<PaletteEntryItem> BuildAllPaletteCommands()
         {
-            return new List<PaletteEntryItem>
+            var all = new List<PaletteEntryItem>
             {
                 new PaletteEntryItem { Category = "File", Title = "New Text File", Shortcut = "Ctrl+N", Execute = () => CreateNewUntitledTab() },
                 new PaletteEntryItem { Category = "File", Title = "New File in Workspace...", Shortcut = "Ctrl+Alt+N", Execute = PromptCreateNewFileInWorkspace },
@@ -2525,7 +2532,10 @@ namespace codeLess.AvaloniaApp
                 BuildDebugPaletteCommands(),
                 new PaletteEntryItem { Category = "Help", Title = "Welcome", Execute = OpenWelcomeTab },
                 new PaletteEntryItem { Category = "Help", Title = "About codeLess", Execute = ShowAboutModal }
-            }.Concat(BuildLanguageServerPaletteCommands()).ToList();
+            };
+            all.AddRange(BuildLanguageServerPaletteCommands());
+            all.AddRange(BuildDevToolsPaletteCommands());
+            return all;
         }
 
         /// <summary>
