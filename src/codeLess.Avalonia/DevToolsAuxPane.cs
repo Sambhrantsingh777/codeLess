@@ -183,30 +183,21 @@ namespace codeLess.AvaloniaApp
                 var title = new TextBlock
                 {
                     Text = d.Title,
-                    FontSize = 12,
+                    FontSize = UiTokens.FontUi,
                     VerticalAlignment = VerticalAlignment.Center,
                     Foreground = AvaloniaColorHelper.ToBrush(isActive ? theme.FgPrimary : theme.FgMuted),
                     MaxWidth = 220,
                     TextTrimming = TextTrimming.CharacterEllipsis
                 };
-                var x = new Button
-                {
-                    Content = "✕",
-                    FontSize = 10,
-                    Padding = new Thickness(3, 0),
-                    Margin = new Thickness(6, 0, 0, 0),
-                    Background = Brushes.Transparent,
-                    Foreground = AvaloniaColorHelper.ToBrush(theme.FgMuted),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                ToolTip.SetTip(x, "Close");
-                x.Click += (s, e) => { Close(captured); e.Handled = true; };
+                var x = WorkbenchStyles.IconButton("close", "Close", () => Close(captured), theme, 20, 14);
+                x.Margin = new Thickness(6, 0, 0, 0);
+                WorkbenchStyles.ThemeIconButton(x, theme, isActive);
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Children = { title, x } };
                 var tab = new Border
                 {
                     Child = row,
                     Padding = new Thickness(12, 0, 6, 0),
-                    Height = 30,
+                    Height = UiTokens.TabHeight - UiTokens.DividerWidth,
                     Background = AvaloniaColorHelper.ToBrush(isActive ? theme.BgEditor : theme.BgSidebar),
                     BorderBrush = AvaloniaColorHelper.ToBrush(isActive ? theme.AccentPrimary : theme.BorderSubtle),
                     BorderThickness = isActive ? new Thickness(0, 2, 1, 0) : new Thickness(0, 0, 1, 0),

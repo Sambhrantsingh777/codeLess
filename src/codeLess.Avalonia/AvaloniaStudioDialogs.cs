@@ -64,27 +64,28 @@ namespace codeLess.AvaloniaApp
             MaxHeight = 440;
             HorizontalAlignment = HorizontalAlignment.Center;
             VerticalAlignment = VerticalAlignment.Top;
-            Margin = new Thickness(0, 38, 0, 0);
-            CornerRadius = new CornerRadius(7);
+            Margin = new Thickness(0, 40, 0, 0);
+            CornerRadius = new CornerRadius(UiTokens.PopupRadius);
             BorderThickness = new Thickness(1);
-            Padding = new Thickness(10, 10, 10, 8);
+            Padding = new Thickness(6, 6, 6, 6);
             IsVisible = false;
             ZIndex = 200;
 
-            var rootStack = new StackPanel { Spacing = 6 };
+            var rootStack = new StackPanel { Spacing = 4 };
 
             SearchInput = new TextBox
             {
                 Watermark = "Type the name of a command, file, @symbol, #workspace-symbol, or :line...",
-                FontSize = 13,
-                Padding = new Thickness(10, 7)
+                FontSize = UiTokens.FontUi,
+                Padding = new Thickness(8, 4),
+                MinHeight = UiTokens.ControlHeight
             };
 
             ModeHintLabel = new TextBlock
             {
                 Text = "Tip: '>' Commands  •  '@' File Symbols  •  '#' Workspace Symbols  •  ':' Go to Line",
-                FontSize = 11,
-                Margin = new Thickness(4, 0, 4, 2)
+                FontSize = UiTokens.FontSmall - 0.5,
+                Margin = new Thickness(8, 2, 8, 2)
             };
 
             ResultsListBox = new ListBox
@@ -129,13 +130,27 @@ namespace codeLess.AvaloniaApp
         {
             if (theme == null) return;
             currentTheme = theme;
-            Background = AvaloniaColorHelper.ToBrush(theme.FloatingBg);
-            BorderBrush = AvaloniaColorHelper.ToBrush(theme.AccentPrimary);
-            ModeHintLabel.Foreground = AvaloniaColorHelper.ToBrush(theme.TextSecondary);
-            SearchInput.Background = AvaloniaColorHelper.ToBrush(theme.EditorBg);
+            // Elevated quick-input widget: widget background, subtle border and a soft shadow (no accent frame).
+            Background = WorkbenchStyles.B(UiTokens.WidgetBackground(theme));
+            BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(theme));
+            BoxShadow = new BoxShadows(new BoxShadow { OffsetY = 8, Blur = 24, Color = WorkbenchStyles.C(UiTokens.WidgetShadow(theme)) });
+            ModeHintLabel.Foreground = AvaloniaColorHelper.ToBrush(theme.FgMuted);
+            SearchInput.ClearValue(TextBox.BackgroundProperty);
+            SearchInput.ClearValue(TextBox.BorderBrushProperty);
             SearchInput.Foreground = AvaloniaColorHelper.ToBrush(theme.TextPrimary);
-            SearchInput.BorderBrush = AvaloniaColorHelper.ToBrush(theme.BorderSubtle);
+            ApplyListSelectionResources(theme);
             RenderListItems();
+        }
+
+        /// <summary>Selection colors are resolved from the list's own resources so they follow the widget background.</summary>
+        private void ApplyListSelectionResources(StudioTheme t)
+        {
+            var w = UiTokens.WidgetBackground(t);
+            ResultsListBox.Resources["SystemControlHighlightListAccentLowBrush"] = WorkbenchStyles.B(UiTokens.ListActiveSelection(t, w));
+            ResultsListBox.Resources["SystemControlHighlightListAccentMediumBrush"] = WorkbenchStyles.B(UiTokens.Blend(UiTokens.ListActiveSelection(t, w), t.FgPrimary, 0.04));
+            ResultsListBox.Resources["SystemControlHighlightListAccentHighBrush"] = WorkbenchStyles.B(UiTokens.Blend(UiTokens.ListActiveSelection(t, w), t.FgPrimary, 0.08));
+            ResultsListBox.Resources["SystemControlHighlightListLowBrush"] = WorkbenchStyles.B(UiTokens.Hover(t, w));
+            ResultsListBox.Resources["SystemControlHighlightListMediumBrush"] = WorkbenchStyles.B(UiTokens.Pressed(t, w));
         }
 
         public void Open(string prefix, List<PaletteEntryItem> entries, string currentThemeId = null)
@@ -278,7 +293,8 @@ namespace codeLess.AvaloniaApp
                 var row = new Grid
                 {
                     ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-                    Margin = new Thickness(2, 1)
+                    Margin = new Thickness(0, 0),
+                    MinHeight = UiTokens.ListRowHeight - 4
                 };
 
                 if (!string.IsNullOrEmpty(entry.Category))
@@ -286,10 +302,10 @@ namespace codeLess.AvaloniaApp
                     row.Children.Add(new TextBlock
                     {
                         Text = entry.Category + ":",
-                        FontWeight = FontWeight.SemiBold,
-                        FontSize = 12,
-                        Foreground = new SolidColorBrush(accent),
-                        Margin = new Thickness(0, 0, 6, 0),
+                        FontWeight = FontWeight.Normal,
+                        FontSize = UiTokens.FontUi,
+                        Foreground = new SolidColorBrush(textSecondary),
+                        Margin = new Thickness(0, 0, 5, 0),
                         VerticalAlignment = VerticalAlignment.Center
                     });
                 }
@@ -298,7 +314,7 @@ namespace codeLess.AvaloniaApp
                 titleStack.Children.Add(new TextBlock
                 {
                     Text = entry.Title,
-                    FontSize = 12.5,
+                    FontSize = UiTokens.FontUi,
                     Foreground = new SolidColorBrush(textPrimary),
                     VerticalAlignment = VerticalAlignment.Center
                 });
@@ -307,8 +323,8 @@ namespace codeLess.AvaloniaApp
                     titleStack.Children.Add(new TextBlock
                     {
                         Text = entry.stringSubtitleOrPath,
-                        FontSize = 11,
-                        Foreground = new SolidColorBrush(textSecondary),
+                        FontSize = UiTokens.FontSmall,
+                        Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.FgMuted)),
                         VerticalAlignment = VerticalAlignment.Center
                     });
                 }
@@ -318,18 +334,18 @@ namespace codeLess.AvaloniaApp
                 if (!string.IsNullOrEmpty(entry.Shortcut))
                 {
                     string sc = FormatShortcutForPlatform(entry.Shortcut);
+                    // Keybinding label: quiet neutral chip in the UI font (VS Code keybindingLabel).
                     var kbdBadge = new Border
                     {
-                        Background = new SolidColorBrush(isLight ? Color.FromRgb(226, 232, 240) : Color.FromRgb(38, 42, 54)),
-                        BorderBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.BorderSubtle)),
-                        BorderThickness = new Thickness(1),
+                        Background = WorkbenchStyles.B(UiTokens.ButtonSecondaryBackground(currentTheme)),
+                        BorderThickness = new Thickness(0),
                         CornerRadius = new CornerRadius(3),
-                        Padding = new Thickness(6, 1),
+                        Padding = new Thickness(5, 1),
+                        VerticalAlignment = VerticalAlignment.Center,
                         Child = new TextBlock
                         {
                             Text = sc,
-                            FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
-                            FontSize = 10.5,
+                            FontSize = UiTokens.FontSmall - 1,
                             Foreground = new SolidColorBrush(textSecondary)
                         }
                     };
@@ -433,30 +449,24 @@ namespace codeLess.AvaloniaApp
         {
             HorizontalAlignment = HorizontalAlignment.Stretch;
             VerticalAlignment = VerticalAlignment.Stretch;
-            Background = new SolidColorBrush(Color.FromArgb(145, 0, 0, 0));
+            Background = new SolidColorBrush(Color.FromArgb(110, 0, 0, 0));
             IsVisible = false;
             ZIndex = 250;
 
             titleBlock = new TextBlock
             {
-                FontSize = 14,
-                FontWeight = FontWeight.Bold,
+                FontSize = UiTokens.FontUi + 1,
+                FontWeight = FontWeight.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            var closeBtn = new Button
-            {
-                Content = "✕",
-                FontSize = 12,
-                Padding = new Thickness(8, 3),
-                Background = Brushes.Transparent
-            };
-            closeBtn.Click += (s, e) => CloseModal();
+            closeButton = WorkbenchStyles.IconButton("close", "Close (Escape)", CloseModal, currentTheme);
 
             var headerGrid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                Margin = new Thickness(0, 0, 0, 10)
+                Margin = new Thickness(0, 0, -6, 12)
             };
+            var closeBtn = closeButton;
             headerGrid.Children.Add(titleBlock);
             Grid.SetColumn(closeBtn, 1);
             headerGrid.Children.Add(closeBtn);
@@ -474,21 +484,25 @@ namespace codeLess.AvaloniaApp
                 MaxHeight = 560,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                CornerRadius = new CornerRadius(8),
+                CornerRadius = new CornerRadius(UiTokens.PopupRadius + 2),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(18, 14)
+                Padding = new Thickness(20, 14, 20, 18)
             };
 
             Child = cardBorder;
         }
 
+        private readonly Button closeButton;
+
         public void ApplyTheme(StudioTheme theme)
         {
             if (theme == null) return;
             currentTheme = theme;
-            cardBorder.Background = AvaloniaColorHelper.ToBrush(theme.FloatingBg);
-            cardBorder.BorderBrush = AvaloniaColorHelper.ToBrush(theme.AccentPrimary);
+            cardBorder.Background = WorkbenchStyles.B(UiTokens.WidgetBackground(theme));
+            cardBorder.BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(theme));
+            cardBorder.BoxShadow = new BoxShadows(new BoxShadow { OffsetY = 10, Blur = 32, Color = WorkbenchStyles.C(UiTokens.WidgetShadow(theme)) });
             titleBlock.Foreground = AvaloniaColorHelper.ToBrush(theme.TextPrimary);
+            WorkbenchStyles.ThemeIconButton(closeButton, theme);
         }
 
         private IInputElement focusBeforeModal;
@@ -706,7 +720,7 @@ namespace codeLess.AvaloniaApp
             Color textSecondary = AvaloniaColorHelper.ToAvColor(theme.TextSecondary);
             Color accent = AvaloniaColorHelper.ToAvColor(theme.AccentPrimary);
 
-            var stack = new StackPanel { Spacing = 10 };
+            var stack = new StackPanel { Spacing = 8 };
 
             // Theme selector
             var themes = StudioTheme.GetAllBuiltInThemes();
@@ -750,13 +764,13 @@ namespace codeLess.AvaloniaApp
                 }
             };
 
-            stack.Children.Add(new TextBlock { Text = "Color Theme", FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = new SolidColorBrush(textPrimary) });
+            stack.Children.Add(WorkbenchStyles.SectionLabel("Color Theme", theme));
             stack.Children.Add(themeCombo);
 
-            var rowMetrics = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
-            rowMetrics.Children.Add(new TextBlock { Text = "Font Size:", VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(textSecondary) });
+            var rowMetrics = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
+            rowMetrics.Children.Add(new TextBlock { Text = "Font Size", FontSize = UiTokens.FontUi, VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(textSecondary) });
             rowMetrics.Children.Add(fontBox);
-            rowMetrics.Children.Add(new TextBlock { Text = "Tab Size:", VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(textSecondary) });
+            rowMetrics.Children.Add(new TextBlock { Text = "Tab Size", FontSize = UiTokens.FontUi, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Foreground = new SolidColorBrush(textSecondary) });
             rowMetrics.Children.Add(tabBox);
             stack.Children.Add(rowMetrics);
 
@@ -768,10 +782,10 @@ namespace codeLess.AvaloniaApp
             stack.Children.Add(venvChk);
             stack.Children.Add(offlineChk);
 
-            stack.Children.Add(new TextBlock { Text = "Excluded Workspace Folders (comma-separated)", FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = new SolidColorBrush(textPrimary) });
+            stack.Children.Add(WorkbenchStyles.SectionLabel("Excluded Workspace Folders (comma-separated)", theme));
             stack.Children.Add(excludedBox);
 
-            stack.Children.Add(new TextBlock { Text = "AI Provider & BYOK Configuration", FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = new SolidColorBrush(textPrimary) });
+            stack.Children.Add(WorkbenchStyles.SectionLabel("AI Provider & BYOK Configuration", theme));
             stack.Children.Add(providerCombo);
             stack.Children.Add(modelBox);
             stack.Children.Add(apiKeyBox);
@@ -786,15 +800,15 @@ namespace codeLess.AvaloniaApp
             var saveBtn = new Button
             {
                 Content = "Save & Apply",
-                FontWeight = FontWeight.SemiBold,
-                Padding = new Thickness(14, 6),
-                Background = new SolidColorBrush(accent),
-                Foreground = Brushes.White
+                Padding = new Thickness(14, 4),
+                MinHeight = UiTokens.ControlHeight
             };
+            WorkbenchStyles.StylePrimaryButton(saveBtn, theme);
             var closeBtn = new Button
             {
                 Content = "Cancel",
-                Padding = new Thickness(14, 6)
+                Padding = new Thickness(14, 4),
+                MinHeight = UiTokens.ControlHeight
             };
 
             saveBtn.Click += (s, e) =>

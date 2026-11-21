@@ -837,7 +837,7 @@ namespace codeLess.Studio
 
                 if (isSel)
                 {
-                    Color selBg = theme != null ? StudioTheme.Blend(this.BackColor, theme.AccentPrimary, 0.18) : Color.FromArgb(26, 46, 74);
+                    Color selBg = theme != null ? UiTokens.ListActiveSelection(theme, this.BackColor) : Color.FromArgb(26, 46, 74);
                     Color accentBar = theme != null ? theme.AccentPrimary : Color.FromArgb(56, 189, 248);
                     using (SolidBrush sb = new SolidBrush(selBg))
                         g.FillRectangle(sb, rowRect);
@@ -846,7 +846,7 @@ namespace codeLess.Studio
                 }
                 else if (isHov)
                 {
-                    Color hovBg = theme != null ? theme.BgHover : Color.FromArgb(22, 27, 38);
+                    Color hovBg = theme != null ? UiTokens.Hover(theme, this.BackColor) : Color.FromArgb(22, 27, 38);
                     using (SolidBrush hb = new SolidBrush(hovBg))
                         g.FillRectangle(hb, rowRect);
                 }
@@ -1656,8 +1656,9 @@ namespace codeLess.Studio
 
                 if (isSel || isActiveEditor)
                 {
-                    double alpha = isSel ? 0.20 : 0.12;
-                    Color selBg = theme != null ? StudioTheme.Blend(this.BackColor, theme.AccentPrimary, alpha) : Color.FromArgb(26, 46, 74);
+                    Color selBg = theme != null
+                        ? (isSel ? UiTokens.ListActiveSelection(theme, this.BackColor) : UiTokens.ListInactiveSelection(theme, this.BackColor))
+                        : Color.FromArgb(26, 46, 74);
                     Color accentBar = theme != null ? theme.AccentPrimary : Color.FromArgb(56, 189, 248);
                     using (SolidBrush sb = new SolidBrush(selBg))
                         g.FillRectangle(sb, r);
@@ -1669,7 +1670,7 @@ namespace codeLess.Studio
                 }
                 else if (isHov)
                 {
-                    Color hovBg = theme != null ? theme.BgHover : Color.FromArgb(22, 27, 38);
+                    Color hovBg = theme != null ? UiTokens.Hover(theme, this.BackColor) : Color.FromArgb(22, 27, 38);
                     using (SolidBrush hb = new SolidBrush(hovBg))
                         g.FillRectangle(hb, r);
                 }
@@ -3981,21 +3982,22 @@ namespace codeLess.Studio
             else if (severity == "warning") { accent = Color.FromArgb(245, 158, 11); icon = "⚠"; }
             else if (severity == "success") { accent = Color.FromArgb(16, 185, 129); icon = "✓"; }
 
-            using (SolidBrush stripe = new SolidBrush(accent))
-                g.FillRectangle(stripe, 0, 0, 4, this.Height);
-            using (Pen bp = new Pen(t.BorderSubtle, 1f))
+            // VS Code notification: widget background, 1 px widget border, severity glyph (no colored stripe).
+            using (Pen bp = new Pen(UiTokens.WidgetBorder(t), 1f))
                 g.DrawRectangle(bp, 0, 0, this.Width - 1, this.Height - 1);
 
             using (Font fIcon = new Font("Segoe UI Semibold", 11f, FontStyle.Bold))
             using (Font fTitle = new Font("Segoe UI Semibold", 9.0f, FontStyle.Bold))
             using (Font fBody = new Font("Segoe UI", 8.5f))
             {
-                TextRenderer.DrawText(g, icon, fIcon, new Rectangle(12, 10, 22, 22), accent, TextFormatFlags.NoPadding);
+                if (severity == "error") CodeLessVectorIcons.DrawIcon(g, "error-circle", new Rectangle(12, 12, 16, 16), accent, 1.5f);
+                else if (severity == "warning") CodeLessVectorIcons.DrawIcon(g, "warning-triangle", new Rectangle(12, 12, 16, 16), accent, 1.5f);
+                else TextRenderer.DrawText(g, icon, fIcon, new Rectangle(12, 10, 22, 22), accent, TextFormatFlags.NoPadding);
                 TextRenderer.DrawText(g, titleText, fTitle, new Rectangle(34, 10, this.Width - 64, 20), t.FgPrimary, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 TextRenderer.DrawText(g, messageText, fBody, new Rectangle(34, 30, this.Width - 46, 32), t.FgSecondary, TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
 
                 closeBtnRect = new Rectangle(this.Width - 26, 8, 20, 20);
-                TextRenderer.DrawText(g, "×", fTitle, closeBtnRect, t.FgSecondary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                CodeLessVectorIcons.DrawIcon(g, "close", new Rectangle(closeBtnRect.X + 4, closeBtnRect.Y + 4, 12, 12), t.FgSecondary, 1.4f);
 
                 if (!string.IsNullOrEmpty(actionLabel))
                 {

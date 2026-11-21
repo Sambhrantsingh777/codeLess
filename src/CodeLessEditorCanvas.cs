@@ -92,6 +92,7 @@ namespace codeLess.Studio
         private Button prevHunkBtn;
         private Button nextHunkBtn;
         private Button acceptDiffBtn;
+        private readonly ToolTip diffBannerToolTip = new ToolTip();
         private Button rejectDiffBtn;
 
         // Floating Ctrl+K Surgical Inline Edit Bar
@@ -644,28 +645,30 @@ namespace codeLess.Studio
 
             acceptDiffBtn = new Button
             {
-                Text = "Accept All (Ctrl+Enter)",
+                Text = "Accept All",
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(16, 185, 129),
+                BackColor = Color.FromArgb(25, 120, 229),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 8.2f, FontStyle.Regular),
-                Size = new Size(142, 22),
+                Size = new Size(96, 22),
                 Cursor = Cursors.Hand
             };
             acceptDiffBtn.FlatAppearance.BorderSize = 0;
+            diffBannerToolTip.SetToolTip(acceptDiffBtn, "Accept all proposed changes (Ctrl+Enter)");
             acceptDiffBtn.Click += (s, e) => AcceptAllHunks();
 
             rejectDiffBtn = new Button
             {
-                Text = "Reject All (Ctrl+Backspace)",
+                Text = "Reject All",
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(65, 72, 88),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 8.2f, FontStyle.Regular),
-                Size = new Size(162, 22),
+                Size = new Size(96, 22),
                 Cursor = Cursors.Hand
             };
             rejectDiffBtn.FlatAppearance.BorderSize = 0;
+            diffBannerToolTip.SetToolTip(rejectDiffBtn, "Reject all proposed changes (Ctrl+Backspace)");
             rejectDiffBtn.Click += (s, e) => RejectAllHunks();
 
             diffBanner.Controls.Add(diffSummaryLabel);
@@ -1679,10 +1682,17 @@ namespace codeLess.Studio
             findBar.BackColor = theme.BgSidebar;
             findInput.ApplyTheme(theme);
             replaceInput.ApplyTheme(theme);
-            findStatusLabel.ForeColor = theme.AccentPrimary;
+            findStatusLabel.ForeColor = theme.FgSecondary;
 
-            diffBanner.BackColor = StudioTheme.Blend(theme.BgSidebar, Color.FromArgb(16, 185, 129), 0.16);
-            diffSummaryLabel.ForeColor = theme.IsLight ? Color.FromArgb(4, 120, 87) : Color.FromArgb(110, 231, 183);
+            // Calm review banner (docs/UI_GUIDELINES.md): widget background, neutral text, accent primary action.
+            diffBanner.BackColor = UiTokens.WidgetBackground(theme);
+            diffSummaryLabel.ForeColor = theme.FgPrimary;
+            if (acceptDiffBtn != null)
+            {
+                acceptDiffBtn.BackColor = UiTokens.ButtonPrimaryBackground(theme);
+                acceptDiffBtn.ForeColor = UiTokens.ButtonPrimaryForeground(theme);
+                acceptDiffBtn.FlatAppearance.MouseOverBackColor = UiTokens.ButtonPrimaryHover(theme);
+            }
             if (prevHunkBtn != null)
             {
                 prevHunkBtn.BackColor = theme.IsLight ? theme.BgElevated : Color.FromArgb(45, 52, 66);
@@ -1697,10 +1707,10 @@ namespace codeLess.Studio
             }
             if (rejectDiffBtn != null)
             {
-                rejectDiffBtn.BackColor = theme.IsLight ? theme.BgElevated : Color.FromArgb(65, 72, 88);
-                rejectDiffBtn.ForeColor = theme.IsLight ? theme.FgPrimary : Color.White;
-                rejectDiffBtn.FlatAppearance.BorderSize = theme.IsLight ? 1 : 0;
-                rejectDiffBtn.FlatAppearance.BorderColor = theme.BorderSubtle;
+                rejectDiffBtn.BackColor = UiTokens.ButtonSecondaryBackground(theme);
+                rejectDiffBtn.ForeColor = theme.FgPrimary;
+                rejectDiffBtn.FlatAppearance.BorderSize = 0;
+                rejectDiffBtn.FlatAppearance.MouseOverBackColor = UiTokens.ButtonSecondaryHover(theme);
             }
             ctrlKPanel.BackColor = theme.BgSidebar;
             ctrlKInput.ApplyTheme(theme);
@@ -3596,14 +3606,15 @@ namespace codeLess.Studio
                                 g.FillRectangle(pillBackdrop, groupLeft, y + 1, pillRight - groupLeft + 2, LineHeight - 2);
 
                             g.SmoothingMode = SmoothingMode.AntiAlias;
-                            using (SolidBrush ab = new SolidBrush(Color.FromArgb(16, 185, 129)))
+                            // Calm per-hunk actions: primary (accent) Accept, secondary (neutral) Reject.
+                            using (SolidBrush ab = new SolidBrush(UiTokens.ButtonPrimaryBackground(th)))
                                 g.FillRectangle(ab, acceptRect);
-                            using (SolidBrush rb = new SolidBrush(Color.FromArgb(190, 50, 68)))
+                            using (SolidBrush rb = new SolidBrush(UiTokens.ButtonSecondaryBackground(th)))
                                 g.FillRectangle(rb, rejectRect);
                             g.SmoothingMode = SmoothingMode.Default;
 
-                            TextRenderer.DrawText(g, "✓ Accept", gutterFont, acceptRect, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-                            TextRenderer.DrawText(g, "✕ Reject", gutterFont, rejectRect, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                            TextRenderer.DrawText(g, "Accept", gutterFont, acceptRect, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                            TextRenderer.DrawText(g, "Reject", gutterFont, rejectRect, th.FgPrimary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
                             if (showRemTag)
                             {

@@ -98,16 +98,16 @@ namespace codeLess.AvaloniaApp
             this.theme = theme ?? StudioTheme.GetById(StudioTheme.DefaultThemeId);
             Padding = new Thickness(14, 10, 14, 12);
 
-            summaryText = new TextBlock { FontSize = 13.5, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
-            noteText = new TextBlock { FontSize = 11, TextWrapping = TextWrapping.Wrap, Text = NetworkLedger.UntrackedNote, Margin = new Thickness(0, 3, 0, 8) };
+            summaryText = new TextBlock { FontSize = UiTokens.FontUi + 1, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
+            noteText = new TextBlock { FontSize = UiTokens.FontSmall - 0.5, TextWrapping = TextWrapping.Wrap, Text = NetworkLedger.UntrackedNote, Margin = new Thickness(0, 4, 0, 10), MaxWidth = 820, HorizontalAlignment = HorizontalAlignment.Left };
 
-            offlineBox = new CheckBox { Content = "Offline Mode (block all non-local requests)", IsChecked = NetworkLedger.OfflineMode, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+            offlineBox = new CheckBox { Content = "Offline Mode (block all non-local requests)", IsChecked = NetworkLedger.OfflineMode, FontSize = UiTokens.FontUi, VerticalAlignment = VerticalAlignment.Center };
             offlineBox.IsCheckedChanged += (s, e) => NetworkLedger.SetOfflineMode(offlineBox.IsChecked == true);
-            filterBox = new TextBox { Watermark = "Filter (feature, host, path, status, blocked)", FontSize = 12, Width = 260, Padding = new Thickness(7, 3), VerticalAlignment = VerticalAlignment.Center };
+            filterBox = new TextBox { Watermark = "Filter (feature, host, path, status, blocked)", FontSize = UiTokens.FontUi, Width = 280, Padding = new Thickness(8, 3), VerticalAlignment = VerticalAlignment.Center };
             filterBox.PropertyChanged += (s, e) => { if (e.Property == TextBox.TextProperty) RefreshNow(); };
-            clearBtn = new Button { Content = "Clear", FontSize = 12, Padding = new Thickness(12, 4) };
-            exportJsonBtn = new Button { Content = "Export JSON…", FontSize = 12, Padding = new Thickness(12, 4) };
-            exportCsvBtn = new Button { Content = "Export CSV…", FontSize = 12, Padding = new Thickness(12, 4) };
+            clearBtn = new Button { Content = "Clear", FontSize = UiTokens.FontSmall, Padding = new Thickness(10, 3), MinHeight = UiTokens.ControlHeight, VerticalAlignment = VerticalAlignment.Center };
+            exportJsonBtn = new Button { Content = "Export JSON…", FontSize = UiTokens.FontSmall, Padding = new Thickness(10, 3), MinHeight = UiTokens.ControlHeight, VerticalAlignment = VerticalAlignment.Center };
+            exportCsvBtn = new Button { Content = "Export CSV…", FontSize = UiTokens.FontSmall, Padding = new Thickness(10, 3), MinHeight = UiTokens.ControlHeight, VerticalAlignment = VerticalAlignment.Center };
             clearBtn.Click += (s, e) => NetworkLedger.Clear();
             exportJsonBtn.Click += (s, e) => _ = ExportAsync(true);
             exportCsvBtn.Click += (s, e) => _ = ExportAsync(false);
@@ -125,7 +125,7 @@ namespace codeLess.AvaloniaApp
             headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions(ColumnWidths) };
             for (int i = 0; i < ColumnNames.Length; i++)
             {
-                var tb = new TextBlock { Text = ColumnNames[i], FontSize = 11, FontWeight = FontWeight.SemiBold, Margin = new Thickness(6, 4), TextTrimming = TextTrimming.CharacterEllipsis };
+                var tb = new TextBlock { Text = ColumnNames[i].ToUpperInvariant(), FontSize = UiTokens.FontHeader, FontWeight = FontWeight.SemiBold, Margin = new Thickness(6, 6), TextTrimming = TextTrimming.CharacterEllipsis, Tag = "header" };
                 Grid.SetColumn(tb, i);
                 headerGrid.Children.Add(tb);
             }
@@ -289,11 +289,13 @@ namespace codeLess.AvaloniaApp
 
         private Control BuildRow(NetworkLedgerEntry e)
         {
-            var g = new Grid { ColumnDefinitions = new ColumnDefinitions(ColumnWidths), Margin = new Thickness(-8, -3) };
+            var g = new Grid { ColumnDefinitions = new ColumnDefinitions(ColumnWidths), Margin = new Thickness(-8, -2) };
             if (e == null) return g;
+            // Only the Status / Blocked cells carry the error / warning color; the rest of the row stays neutral.
             IBrush fg = AvaloniaColorHelper.ToBrush(theme.TextPrimary);
-            if (e.Blocked) fg = AvaloniaColorHelper.ToBrush(theme.WarnAmber);
-            else if (e.Status <= 0 || e.Status >= 400) fg = AvaloniaColorHelper.ToBrush(theme.DangerCoral);
+            IBrush statusFg = fg;
+            if (e.Blocked) statusFg = AvaloniaColorHelper.ToBrush(theme.WarnAmber);
+            else if (e.Status <= 0 || e.Status >= 400) statusFg = AvaloniaColorHelper.ToBrush(theme.DangerCoral);
             string[] cells =
             {
                 e.TimestampUtc.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture),
@@ -309,7 +311,7 @@ namespace codeLess.AvaloniaApp
             };
             for (int i = 0; i < cells.Length; i++)
             {
-                var tb = new TextBlock { Text = cells[i] ?? "", FontSize = 11.5, Foreground = fg, Margin = new Thickness(6, 2), TextTrimming = TextTrimming.CharacterEllipsis };
+                var tb = new TextBlock { Text = cells[i] ?? "", FontSize = UiTokens.FontSmall, Foreground = (i == 7 || i == 9) ? statusFg : fg, Margin = new Thickness(6, 2), TextTrimming = TextTrimming.CharacterEllipsis };
                 Grid.SetColumn(tb, i);
                 g.Children.Add(tb);
             }

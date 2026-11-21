@@ -595,6 +595,7 @@ namespace codeLess.AvaloniaApp
                 b.Foreground = new SolidColorBrush(active ? textPrimary : textSecondary);
                 b.BorderBrush = active ? new SolidColorBrush(accent) : Brushes.Transparent;
             }
+            foreach (var ib in panelToolbarIconButtons) WorkbenchStyles.ThemeIconButton(ib, currentTheme);
             StyleBtn(btmProblemsTabBtn, "problems");
             StyleBtn(btmOutputTabBtn, "output");
             StyleBtn(btmTerminalTabBtn, "terminal");
@@ -1365,7 +1366,7 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot))
             {
                 scmBranchBanner.Text = "No folder opened";
-                statusBranchBtn.Content = new LiteralTextBlock("⎇ no-git");
+                SetStatusBranch("no-git");
                 return;
             }
 
@@ -1382,7 +1383,7 @@ namespace codeLess.AvaloniaApp
             currentGitEntries = entries ?? new List<GitStatusEntry>();
             bool noGit = string.IsNullOrEmpty(branch) || branch == "no-git";
             scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
-            statusBranchBtn.Content = new LiteralTextBlock(noGit ? "⎇ no-git" : $"⎇ {branch}");
+            SetStatusBranch(noGit ? "no-git" : branch);
 
             // Update Activity Bar Git badge
             if (activityBarButtons.TryGetValue("git", out var gitBtnTuple))
@@ -1447,8 +1448,7 @@ namespace codeLess.AvaloniaApp
                     Padding = new Thickness(4, 1)
                 };
                 openBtn.Click += (s, e) => OpenGitFileDiffInEditor(captured.FullPath);
-                var unstageBtn = new Button { Content = "-", FontSize = 11, Padding = new Thickness(6, 1) };
-                unstageBtn.Click += (s, e) => ExecuteGitUnstageFile(captured);
+                var unstageBtn = WorkbenchStyles.IconButton("minus", "Unstage Changes", () => ExecuteGitUnstageFile(captured), currentTheme, 22, 14);
                 row.Children.Add(openBtn);
                 Grid.SetColumn(unstageBtn, 1);
                 row.Children.Add(unstageBtn);
@@ -1474,10 +1474,8 @@ namespace codeLess.AvaloniaApp
                     Padding = new Thickness(4, 1)
                 };
                 openBtn.Click += (s, e) => OpenGitFileDiffInEditor(captured.FullPath);
-                var stageBtn = new Button { Content = "+", FontSize = 11, Padding = new Thickness(6, 1), Margin = new Thickness(2, 0) };
-                stageBtn.Click += (s, e) => ExecuteGitStageFile(captured);
-                var discardBtn = new Button { Content = "↺", FontSize = 11, Padding = new Thickness(6, 1) };
-                discardBtn.Click += (s, e) => ConfirmAndDiscardGitFile(captured);
+                var stageBtn = WorkbenchStyles.IconButton("plus", "Stage Changes", () => ExecuteGitStageFile(captured), currentTheme, 22, 14);
+                var discardBtn = WorkbenchStyles.IconButton("discard", "Discard Changes", () => ConfirmAndDiscardGitFile(captured), currentTheme, 22, 14);
                 row.Children.Add(openBtn);
                 Grid.SetColumn(stageBtn, 1);
                 row.Children.Add(stageBtn);
@@ -2064,55 +2062,51 @@ namespace codeLess.AvaloniaApp
                 bool isActive = ReferenceEquals(session, activeTerminalSession);
                 bool isSplitRight = isTerminalSplit && ReferenceEquals(session, secondarySplitTerminalSession);
 
+                // VS Code terminal tabs list: 22 px rows, terminal glyph + name, calm selection, trash on the right.
                 var rowGrid = new Grid
                 {
-                    ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                    Height = 24
+                    ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+                    Height = UiTokens.ListRowHeight
                 };
-
-                string prefix = isSplitRight ? "◫ " : "› ";
-                var selectBtn = new Button
+                var glyph = new VectorIconControl
                 {
-                    Content = new LiteralTextBlock($"{prefix}{i + 1}: {session.Title}")
-                    {
-                        FontSize = 11.5,
-                        FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
-                        Foreground = new SolidColorBrush(isActive ? textPrimary : textSecondary)
-                    },
-                    FontSize = 11.5,
-                    FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
+                    IconName = isSplitRight ? "split-right" : "terminal",
+                    Width = 14,
+                    Height = 14,
+                    StrokeWidth = 1.3f,
+                    IconColor = isActive ? textPrimary : textSecondary,
+                    Margin = new Thickness(10, 0, 6, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                var label = new LiteralTextBlock($"{i + 1}: {session.Title}")
+                {
+                    FontSize = UiTokens.FontSmall + 0.5,
                     Foreground = new SolidColorBrush(isActive ? textPrimary : textSecondary),
-                    Background = Brushes.Transparent,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    HorizontalContentAlignment = HorizontalAlignment.Left,
-                    Padding = new Thickness(6, 2)
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis
                 };
-                selectBtn.Click += (s, e) => ActivateTerminalSession(session);
-
-                var killBtn = new Button
-                {
-                    Content = new VectorIconControl { IconName = "trash", Width = 12, Height = 12, IconColor = textSecondary },
-                    Width = 22,
-                    Height = 20,
-                    Padding = new Thickness(0),
-                    Background = Brushes.Transparent
-                };
-                killBtn.Click += (s, e) => KillTerminalSession(session);
-
-                rowGrid.Children.Add(selectBtn);
-                Grid.SetColumn(killBtn, 1);
+                Grid.SetColumn(label, 1);
+                var killBtn = WorkbenchStyles.IconButton("trash", "Kill Terminal", () => KillTerminalSession(session), currentTheme, 20, 13);
+                killBtn.Margin = new Thickness(0, 0, 6, 0);
+                killBtn.Opacity = isActive ? 1 : 0;
+                Grid.SetColumn(killBtn, 2);
+                rowGrid.Children.Add(glyph);
+                rowGrid.Children.Add(label);
                 rowGrid.Children.Add(killBtn);
 
                 var itemBorder = new Border
                 {
                     Child = rowGrid,
-                    CornerRadius = new CornerRadius(4),
                     Background = isActive
-                        ? new SolidColorBrush(Color.FromArgb(45, accent.R, accent.G, accent.B))
+                        ? WorkbenchStyles.B(UiTokens.ListInactiveSelection(currentTheme, currentTheme.SidebarBg))
                         : Brushes.Transparent,
-                    BorderBrush = isActive ? new SolidColorBrush(accent) : Brushes.Transparent,
-                    BorderThickness = new Thickness(isActive ? 2 : 0, 0, 0, 0)
+                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand)
                 };
+                var hoverBrush = WorkbenchStyles.B(UiTokens.Hover(currentTheme, currentTheme.SidebarBg));
+                itemBorder.PointerEntered += (s, e) => { killBtn.Opacity = 1; if (!isActive) itemBorder.Background = hoverBrush; };
+                itemBorder.PointerExited += (s, e) => { killBtn.Opacity = isActive ? 1 : 0; if (!isActive) itemBorder.Background = Brushes.Transparent; };
+                itemBorder.PointerPressed += (s, e) => { if (!e.Handled) ActivateTerminalSession(session); };
+                ToolTip.SetTip(itemBorder, session.Title);
                 terminalSessionListStack.Children.Add(itemBorder);
             }
         }
@@ -2160,8 +2154,8 @@ namespace codeLess.AvaloniaApp
             foreach (var kv in agentModeButtons)
             {
                 bool active = string.Equals(kv.Key, currentAgentMode, StringComparison.OrdinalIgnoreCase);
-                kv.Value.Background = active ? new SolidColorBrush(accent) : Brushes.Transparent;
-                kv.Value.Foreground = new SolidColorBrush(active ? Colors.White : textSecondary);
+                kv.Value.Background = active ? WorkbenchStyles.B(UiTokens.ListActiveSelection(currentTheme, UiTokens.InputBackground(currentTheme))) : Brushes.Transparent;
+                kv.Value.Foreground = new SolidColorBrush(active ? textPrimary : textSecondary);
             }
         }
 
@@ -2850,7 +2844,7 @@ namespace codeLess.AvaloniaApp
             if (outlineListBox != null && outlineHeaderBtn != null)
             {
                 outlineListBox.IsVisible = true;
-                outlineHeaderBtn.Content = new LiteralTextBlock("▾ OUTLINE");
+                outlineHeaderBtn.Content = new SectionHeaderLabel("▾ OUTLINE");
             }
             await PumpAndRenderAsync("r10b_avalonia_explorer.png");
 
@@ -2869,6 +2863,7 @@ namespace codeLess.AvaloniaApp
             }
             await PumpAndRenderAsync("r10b_avalonia_editor.png");
             PrimaryEditor.HideFindBar();
+            DismissLanguageServerHintToast();
             if (activeTab != null) activeTab.GhostTextSuggestion = "";
 
             // 4. r10b_avalonia_terminal.png (Terminal panel with 2 active sessions in session list + side-by-side split + ANSI colors)
@@ -2929,6 +2924,9 @@ namespace codeLess.AvaloniaApp
             if (lightTheme != null)
                 ApplyTheme(lightTheme, persistSetting: false);
             await PumpAndRenderAsync("r10b_avalonia_light.png");
+            ApplyTheme(StudioTheme.GetById(StudioTheme.DefaultThemeId), persistSetting: false);
+
+            await RunExtendedScreenshotScreensAsync(outputDir, repoDir);
         }
 
         // ============================================================

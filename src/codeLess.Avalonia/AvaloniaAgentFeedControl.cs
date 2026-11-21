@@ -111,14 +111,12 @@ namespace codeLess.AvaloniaApp
                     Margin = new Thickness(8, 36, 8, 12),
                     HorizontalAlignment = HorizontalAlignment.Center
                 };
-                emptyCard.Children.Add(new TextBlock
-                {
-                    Text = "✦ codeLess Agent",
-                    FontWeight = FontWeight.Bold,
-                    FontSize = 15,
-                    Foreground = new SolidColorBrush(accent),
-                    HorizontalAlignment = HorizontalAlignment.Center
-                });
+                var emptyTitle = new IconLabel("sparkle", "codeLess Agent", 16, 14, "✦ ") { Spacing = 7, HorizontalAlignment = HorizontalAlignment.Center };
+                emptyTitle.Icon.FollowForeground = false;
+                emptyTitle.Icon.IconColor = accent;
+                emptyTitle.Label.FontWeight = FontWeight.SemiBold;
+                emptyTitle.Label.Foreground = new SolidColorBrush(textPrimary);
+                emptyCard.Children.Add(emptyTitle);
                 emptyCard.Children.Add(new TextBlock
                 {
                     Text = "Ask questions, edit files with inline diffs, or run multi-step workspace tools.",
@@ -138,19 +136,23 @@ namespace codeLess.AvaloniaApp
                 foreach (string st in starters)
                 {
                     string promptText = st;
+                    var chipLabel = new IconLabel("chevron-right", promptText, 11, UiTokens.FontSmall) { Spacing = 8 };
+                    chipLabel.Icon.FollowForeground = false;
+                    chipLabel.Icon.IconColor = textSecondary;
                     var chipBtn = new Button
                     {
-                        Content = new LiteralTextBlock("→  " + promptText) { FontSize = 11.5 },
-                        FontSize = 11.5,
+                        Content = chipLabel,
+                        FontSize = UiTokens.FontSmall,
                         HorizontalAlignment = HorizontalAlignment.Stretch,
                         HorizontalContentAlignment = HorizontalAlignment.Left,
-                        Padding = new Thickness(10, 6),
-                        Background = new SolidColorBrush(isLight ? Color.FromRgb(235, 240, 248) : Color.FromRgb(28, 30, 38)),
+                        Padding = new Thickness(10, 5),
+                        Background = Brushes.Transparent,
                         Foreground = new SolidColorBrush(textPrimary),
-                        BorderBrush = new SolidColorBrush(borderCol),
+                        BorderBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.InputBorder(currentTheme))),
                         BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(5)
+                        CornerRadius = new CornerRadius(UiTokens.ToolbarRadius)
                     };
+                    chipBtn.Classes.Add("flat");
                     chipBtn.Click += (s, e) => QuickPromptClicked?.Invoke(promptText);
                     emptyCard.Children.Add(chipBtn);
                 }
@@ -248,7 +250,7 @@ namespace codeLess.AvaloniaApp
             bodyStack.Children.Add(new TextBlock
             {
                 Text = item.Content ?? "",
-                FontSize = 12.5,
+                FontSize = UiTokens.FontUi,
                 Foreground = new SolidColorBrush(textPrimary),
                 TextWrapping = TextWrapping.Wrap
             });
@@ -256,10 +258,10 @@ namespace codeLess.AvaloniaApp
             return new Border
             {
                 Child = bodyStack,
-                Background = new SolidColorBrush(isLight ? Color.FromRgb(232, 238, 248) : Color.FromRgb(30, 34, 46)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(90, accent.R, accent.G, accent.B)),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
+                Background = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ListInactiveSelection(currentTheme, currentTheme.ChatBg))),
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(UiTokens.PopupRadius),
                 Padding = new Thickness(10, 8)
             };
         }
@@ -496,15 +498,15 @@ namespace codeLess.AvaloniaApp
             var topBar = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
-                Background = new SolidColorBrush(isLight ? Color.FromRgb(226, 232, 240) : Color.FromRgb(18, 20, 26)),
+                Background = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.Blend(currentTheme.BgEditor, currentTheme.FgPrimary, isLight ? 0.04 : 0.03))),
                 Margin = new Thickness(0)
             };
             topBar.Children.Add(new TextBlock
             {
                 Text = string.IsNullOrEmpty(lang) ? "code" : lang,
                 FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
-                FontSize = 10.5,
-                FontWeight = FontWeight.Bold,
+                FontSize = 11,
+                FontWeight = FontWeight.Normal,
                 Foreground = new SolidColorBrush(textSecondary),
                 Margin = new Thickness(8, 4),
                 VerticalAlignment = VerticalAlignment.Center
@@ -515,12 +517,14 @@ namespace codeLess.AvaloniaApp
                 var b = new Button
                 {
                     Content = label,
-                    FontSize = 10.5,
-                    Padding = new Thickness(7, 2),
+                    FontSize = 11,
+                    Padding = new Thickness(7, 1),
+                    MinHeight = 20,
                     Margin = new Thickness(2, 2, 4, 2),
                     Background = primary ? new SolidColorBrush(accent) : Brushes.Transparent,
-                    Foreground = new SolidColorBrush(primary ? Colors.White : textPrimary)
+                    Foreground = new SolidColorBrush(primary ? Colors.White : textSecondary)
                 };
+                b.Classes.Add(primary ? "primary" : "flat");
                 string capturedCode = code ?? "";
                 b.Click += (s, e) => CodeActionRequested?.Invoke(actionKey, capturedCode);
                 Grid.SetColumn(b, col);
@@ -588,10 +592,10 @@ namespace codeLess.AvaloniaApp
             return new Border
             {
                 Child = outer,
-                Background = new SolidColorBrush(isLight ? Color.FromRgb(241, 245, 249) : Color.FromRgb(15, 17, 23)),
+                Background = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.BgEditor)),
                 BorderBrush = new SolidColorBrush(borderCol),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(5),
+                CornerRadius = new CornerRadius(UiTokens.ToolbarRadius),
                 ClipToBounds = true
             };
         }
@@ -603,9 +607,9 @@ namespace codeLess.AvaloniaApp
 
             headerGrid.Children.Add(new TextBlock
             {
-                Text = $"Δ Proposed Edit: {System.IO.Path.GetFileName(item.DiffFilePath ?? "active file")}",
-                FontWeight = FontWeight.Bold,
-                FontSize = 12,
+                Text = $"Proposed Edit: {System.IO.Path.GetFileName(item.DiffFilePath ?? "active file")}",
+                FontWeight = FontWeight.SemiBold,
+                FontSize = UiTokens.FontUi,
                 Foreground = new SolidColorBrush(textPrimary),
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -642,21 +646,20 @@ namespace codeLess.AvaloniaApp
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
             var acceptBtn = new Button
             {
-                Content = "✓ Accept Changes",
-                FontSize = 11.5,
-                FontWeight = FontWeight.SemiBold,
-                Padding = new Thickness(10, 4),
-                Background = new SolidColorBrush(Color.FromRgb(22, 163, 74)),
-                Foreground = Brushes.White
+                Content = "Accept Changes",
+                FontSize = UiTokens.FontSmall,
+                Padding = new Thickness(10, 3),
+                MinHeight = 24
             };
+            WorkbenchStyles.StylePrimaryButton(acceptBtn, currentTheme);
             var rejectBtn = new Button
             {
-                Content = "✕ Reject",
-                FontSize = 11.5,
-                Padding = new Thickness(10, 4),
-                Background = new SolidColorBrush(Color.FromRgb(185, 28, 28)),
-                Foreground = Brushes.White
+                Content = "Reject",
+                FontSize = UiTokens.FontSmall,
+                Padding = new Thickness(10, 3),
+                MinHeight = 24
             };
+            WorkbenchStyles.StyleSecondaryButton(rejectBtn, currentTheme);
             acceptBtn.Click += (s, e) =>
             {
                 item.DiffStatus = "Accepted";
@@ -676,10 +679,10 @@ namespace codeLess.AvaloniaApp
             return new Border
             {
                 Child = stack,
-                Background = new SolidColorBrush(isLight ? Color.FromRgb(240, 249, 255) : Color.FromRgb(20, 28, 40)),
-                BorderBrush = new SolidColorBrush(accent),
+                Background = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBackground(currentTheme))),
+                BorderBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBorder(currentTheme))),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
+                CornerRadius = new CornerRadius(UiTokens.PopupRadius),
                 Padding = new Thickness(10, 8)
             };
         }

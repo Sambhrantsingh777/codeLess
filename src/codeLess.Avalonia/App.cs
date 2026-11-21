@@ -16,6 +16,33 @@ namespace codeLess.AvaloniaApp
     public class App : Application
     {
         public static string StartupWorkspacePath { get; set; }
+
+        private static readonly System.Diagnostics.Stopwatch launchClock = System.Diagnostics.Stopwatch.StartNew();
+
+        /// <summary>
+        /// AppKit treats every path on the process command line as a document to open and re-delivers it as an
+        /// "open file" Apple Event right after launch. Started as `dotnet codeLess.dll ...` that echoed the managed
+        /// entry assembly itself ("'codeLess.dll' is a binary file and was not opened"), and `--workspace` /
+        /// `--screenshot-suite` values were opened a second time. Program.Main already handled argv, so drop those
+        /// echoes during startup; later Open With / dock drops of the same path still work.
+        /// </summary>
+        public static bool IsEchoedStartupArgument(string path)
+        {
+            if (string.IsNullOrEmpty(path) || launchClock.Elapsed > TimeSpan.FromSeconds(15)) return false;
+            try
+            {
+                string full = Path.GetFullPath(path).TrimEnd('/', '\\');
+                foreach (string arg in Environment.GetCommandLineArgs())
+                {
+                    if (string.IsNullOrEmpty(arg) || arg.StartsWith("-", StringComparison.Ordinal)) continue;
+                    string a;
+                    try { a = Path.GetFullPath(arg).TrimEnd('/', '\\'); } catch { continue; }
+                    if (string.Equals(a, full, StringComparison.Ordinal)) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
         public static string ScreenshotOutputPath { get; set; }
         public static string ScreenshotSuiteDir { get; set; }
         public static string SmokeQuitReportPath { get; set; }
@@ -85,7 +112,7 @@ namespace codeLess.AvaloniaApp
                             foreach (var item in fe.Files)
                             {
                                 string path = item?.TryGetLocalPath();
-                                if (!string.IsNullOrEmpty(path))
+                                if (!string.IsNullOrEmpty(path) && !IsEchoedStartupArgument(path))
                                     Dispatcher.UIThread.Post(() => mainWindow.OpenPathFromOs(path));
                             }
                         }

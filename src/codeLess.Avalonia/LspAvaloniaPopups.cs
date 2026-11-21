@@ -31,12 +31,13 @@ namespace codeLess.AvaloniaApp
             HorizontalAlignment = HorizontalAlignment.Left;
             VerticalAlignment = VerticalAlignment.Top;
             BorderThickness = new Thickness(1);
-            CornerRadius = new CornerRadius(4);
+            CornerRadius = new CornerRadius(UiTokens.ToolbarRadius);
+            Padding = new Thickness(0, 2);
             IsVisible = false;
             ZIndex = 150;
-            ClipToBounds = true;
+            ClipToBounds = false;
 
-            docText = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, MaxWidth = 340 };
+            docText = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = UiTokens.FontSmall, MaxWidth = 340 };
             docPanel = new Border
             {
                 Padding = new Thickness(8, 6),
@@ -66,10 +67,11 @@ namespace codeLess.AvaloniaApp
         {
             if (t == null) return;
             theme = t;
-            Background = AvaloniaColorHelper.ToBrush(t.FloatingBg);
-            BorderBrush = AvaloniaColorHelper.ToBrush(t.BorderSubtle);
-            docPanel.BorderBrush = AvaloniaColorHelper.ToBrush(t.BorderSubtle);
-            docText.Foreground = AvaloniaColorHelper.ToBrush(t.TextPrimary);
+            Background = WorkbenchStyles.B(UiTokens.WidgetBackground(t));
+            BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(t));
+            BoxShadow = WorkbenchStyles.WidgetShadow(t);
+            docPanel.BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(t));
+            docText.Foreground = AvaloniaColorHelper.ToBrush(t.TextSecondary);
             if (IsVisible) Render();
         }
 
@@ -107,29 +109,41 @@ namespace codeLess.AvaloniaApp
             var fg = AvaloniaColorHelper.ToBrush(theme.TextPrimary);
             var fg2 = AvaloniaColorHelper.ToBrush(theme.TextSecondary);
             var accent = AvaloniaColorHelper.ToBrush(theme.AccentPrimary);
-            var selBg = AvaloniaColorHelper.ToBrush(theme.SelectionBg);
+            var selBg = WorkbenchStyles.B(UiTokens.ListActiveSelection(theme, UiTokens.WidgetBackground(theme)));
             for (int i = scrollTop; i < end; i++)
             {
                 var it = session.Visible[i];
                 int index = i;
                 var row = new Grid { ColumnDefinitions = new ColumnDefinitions("22,*,Auto"), Height = RowHeight };
-                var glyph = new TextBlock { Text = KindGlyph(it.Kind), Foreground = accent, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+                var glyph = new TextBlock { Text = KindGlyph(it.Kind), Foreground = KindBrush(it.Kind), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
                 var label = new TextBlock
                 {
                     Text = LspCompletionSession.LeftText(it),
                     Foreground = fg,
-                    FontSize = 12.5,
+                    FontSize = UiTokens.FontUi,
                     VerticalAlignment = VerticalAlignment.Center,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     TextDecorations = it.Deprecated ? TextDecorations.Strikethrough : null
                 };
-                var right = new TextBlock { Text = LspCompletionSession.RightText(it), Foreground = fg2, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 6, 0), MaxWidth = 170, TextTrimming = TextTrimming.CharacterEllipsis };
+                var right = new TextBlock { Text = LspCompletionSession.RightText(it), Foreground = fg2, FontSize = UiTokens.FontSmall, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0), MaxWidth = 170, TextTrimming = TextTrimming.CharacterEllipsis };
                 row.Children.Add(glyph);
                 Grid.SetColumn(label, 1); row.Children.Add(label);
                 Grid.SetColumn(right, 2); row.Children.Add(right);
                 var b = new Border { Child = row, Background = i == sel ? selBg : Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand) };
                 b.PointerPressed += (s, e) => { ItemClicked?.Invoke(index); e.Handled = true; };
                 rows.Children.Add(b);
+            }
+        }
+
+        /// <summary>Kind glyph colors from the theme's syntax roles (VS Code: purple methods, blue members, orange types).</summary>
+        private IBrush KindBrush(int kind)
+        {
+            switch (kind)
+            {
+                case 2: case 3: case 4: return AvaloniaColorHelper.ToBrush(theme.TokenFunction);
+                case 5: case 6: case 10: return AvaloniaColorHelper.ToBrush(theme.TokenKeyword);
+                case 7: case 8: case 22: case 13: case 20: return AvaloniaColorHelper.ToBrush(theme.TokenNumber);
+                default: return AvaloniaColorHelper.ToBrush(theme.FgSecondary);
             }
         }
 
@@ -163,8 +177,8 @@ namespace codeLess.AvaloniaApp
             HorizontalAlignment = HorizontalAlignment.Left;
             VerticalAlignment = VerticalAlignment.Top;
             BorderThickness = new Thickness(1);
-            CornerRadius = new CornerRadius(4);
-            Padding = new Thickness(9, 6);
+            CornerRadius = new CornerRadius(UiTokens.ToolbarRadius);
+            Padding = new Thickness(10, 6);
             IsVisible = false;
             IsHitTestVisible = false; // never steal pointer events from the editor (hover would flicker)
             ZIndex = 140;
@@ -184,8 +198,9 @@ namespace codeLess.AvaloniaApp
         {
             if (t == null) return;
             theme = t;
-            Background = AvaloniaColorHelper.ToBrush(t.FloatingBg);
-            BorderBrush = AvaloniaColorHelper.ToBrush(t.BorderSubtle);
+            Background = WorkbenchStyles.B(UiTokens.WidgetBackground(t));
+            BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(t));
+            BoxShadow = WorkbenchStyles.WidgetShadow(t);
             text.Foreground = AvaloniaColorHelper.ToBrush(t.TextPrimary);
         }
 

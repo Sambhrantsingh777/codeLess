@@ -31,6 +31,7 @@ namespace codeLess.AvaloniaApp
         private UiPost lspUi;
         private Button statusLspBtn;
         private Border lspToast;
+        private TextBlock lspToastText;
         private readonly Dictionary<string, EditorTabBuffer> lspOpenDocs = new Dictionary<string, EditorTabBuffer>(StringComparer.Ordinal);
         private readonly List<LspEditorBinding> lspBindings = new List<LspEditorBinding>();
 
@@ -61,13 +62,9 @@ namespace codeLess.AvaloniaApp
         private void ApplyLanguageServerTheme(StudioTheme theme)
         {
             if (theme == null) return;
-            if (statusLspBtn != null) statusLspBtn.Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(theme.StatusBarText));
+            if (statusLspBtn != null) statusLspBtn.Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.StatusBarForeground(theme)));
             foreach (var b in lspBindings) b.ApplyTheme(theme);
-            if (lspToast != null)
-            {
-                lspToast.Background = AvaloniaColorHelper.ToBrush(theme.FloatingBg);
-                lspToast.BorderBrush = AvaloniaColorHelper.ToBrush(theme.AccentPrimary);
-            }
+            if (lspToast != null) WorkbenchStyles.ThemeNotification(lspToast, theme);
         }
 
         private void ShutdownLanguageServers()
@@ -173,7 +170,7 @@ namespace codeLess.AvaloniaApp
                 return;
             }
             statusLspBtn.IsVisible = true;
-            statusLspBtn.Content = new LiteralTextBlock(st.StatusBarText) { FontSize = 11 };
+            statusLspBtn.Content = new LiteralTextBlock(st.StatusBarText) { FontSize = UiTokens.FontSmall };
             ToolTip.SetTip(statusLspBtn, st.Tooltip);
         }
 
@@ -224,47 +221,44 @@ namespace codeLess.AvaloniaApp
             var host = CommandPalette?.Parent as Panel;
             if (host == null) return;
             if (lspToast != null) host.Children.Remove(lspToast);
-            var text = new TextBlock { Text = hint.Message, TextWrapping = TextWrapping.Wrap, MaxWidth = 380, FontSize = 12, Foreground = AvaloniaColorHelper.ToBrush(currentTheme.TextPrimary) };
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
+            var text = new TextBlock { Text = hint.Message };
             Border toast = null;
-            void Close() { if (toast != null) host.Children.Remove(toast); if (ReferenceEquals(lspToast, toast)) lspToast = null; }
+            void Close() { if (toast != null) host.Children.Remove(toast); if (ReferenceEquals(lspToast, toast)) { lspToast = null; lspToastText = null; } }
+            var buttons = new List<Button>();
             if (!string.IsNullOrEmpty(hint.InstallCommand))
             {
-                var install = new Button { Content = "Install in Terminal", FontSize = 11.5, Padding = new Thickness(10, 3) };
+                var install = new Button { Content = "Install in Terminal" };
+                ToolTip.SetTip(install, hint.InstallCommand);
                 install.Click += (s, e) => { Close(); TypeInstallCommandInTerminal(hint.InstallCommand); };
-                row.Children.Add(install);
+                buttons.Add(install);
             }
-            var never = new Button { Content = "Don't Show Again", FontSize = 11.5, Padding = new Thickness(10, 3) };
+            var never = new Button { Content = "Don't Show Again" };
             never.Click += (s, e) =>
             {
                 settings.DismissLanguageServerHint(hint.LanguageId);
                 try { settings.Save(); } catch { }
                 Close();
             };
-            var dismiss = new Button { Content = "Close", FontSize = 11.5, Padding = new Thickness(10, 3) };
-            dismiss.Click += (s, e) => Close();
-            row.Children.Add(never);
-            row.Children.Add(dismiss);
-            toast = new Border
-            {
-                Child = new StackPanel { Spacing = 8, Children = { text, row } },
-                Padding = new Thickness(12, 10),
-                CornerRadius = new CornerRadius(6),
-                BorderThickness = new Thickness(1),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(0, 0, 16, 36),
-                ZIndex = 180,
-                Background = AvaloniaColorHelper.ToBrush(currentTheme.FloatingBg),
-                BorderBrush = AvaloniaColorHelper.ToBrush(currentTheme.AccentPrimary)
-            };
+            buttons.Add(never);
+            toast = WorkbenchStyles.BuildNotification(currentTheme, "info", text, null, buttons.ToArray(), !string.IsNullOrEmpty(hint.InstallCommand), () => Close());
+            toast.Margin = new Thickness(0, 0, 12, UiTokens.StatusBarHeight + 10);
+            toast.ZIndex = 180;
+            lspToastText = text;
             lspToast = toast;
             host.Children.Add(toast);
             DispatcherTimer.RunOnce(Close, TimeSpan.FromSeconds(20));
         }
 
         /// <summary>Text of the visible "install a language server" hint ("" when none). Test hook.</summary>
-        public string LanguageServerHintText => lspToast != null ? ((lspToast.Child as StackPanel)?.Children[0] as TextBlock)?.Text ?? "" : "";
+        public string LanguageServerHintText => lspToast != null ? lspToastText?.Text ?? "" : "";
+
+        /// <summary>Closes the "install a language server" toast if it is showing.</summary>
+        public void DismissLanguageServerHintToast()
+        {
+            if (lspToast != null && lspToast.Parent is Panel p) p.Children.Remove(lspToast);
+            lspToast = null;
+            lspToastText = null;
+        }
 
         public void ShowLanguageServerLog()
         {
@@ -716,6 +710,24 @@ namespace codeLess.AvaloniaApp
             CloseCompletion();
             HideHover();
             HideSignature();
+        }
+
+        /// <summary>Screenshot harness only: shows the suggest widget with fixture items at (line, col).</summary>
+        public void ShowFixtureCompletion(LspCompletionList list, int line, int col)
+        {
+            var buf = Buf;
+            if (buf == null || list == null || list.Items.Count == 0) return;
+            buf.CursorLine = Math.Min(line, buf.Lines.Count - 1);
+            buf.CursorCol = Math.Min(col, buf.Lines[buf.CursorLine].Length);
+            foreach (var it in list.Items) it.Resolved = true;
+            var s = new LspCompletionSession { FilePath = buf.FilePath, Line = buf.CursorLine, StartCol = buf.CursorCol };
+            s.SetItems(list);
+            if (!s.Refilter(buf.Lines[buf.CursorLine], buf.CursorLine, buf.CursorCol)) return;
+            session = s;
+            Editor.Canvas.InvalidateVisual();
+            PositionCompletion();
+            Completion.Show(s);
+            Completion.SetDocumentation(DocFor(s.Selected));
         }
 
         private void HideHover()

@@ -410,7 +410,7 @@ namespace codeLess.AvaloniaApp
 
             var mainShellGrid = new Grid
             {
-                RowDefinitions = new RowDefinitions("34,*,24")
+                RowDefinitions = new RowDefinitions("34,*," + UiTokens.StatusBarHeight)
             };
 
             // Row 0: Custom VS Code Title & Menu Bar
@@ -527,14 +527,15 @@ namespace codeLess.AvaloniaApp
             cmdInner.Children.Add(new VectorIconControl
             {
                 IconName = "search",
-                Width = 13,
-                Height = 13,
-                IconColor = Color.FromRgb(148, 163, 184)
+                Width = 14,
+                Height = 14,
+                FollowForeground = true,
+                VerticalAlignment = VerticalAlignment.Center
             });
             commandCenterText = new TextBlock
             {
-                Text = "codeLess — Search files (Ctrl+P) or >commands (Ctrl+Shift+P)",
-                FontSize = 11.5,
+                Text = "codeLess",
+                FontSize = UiTokens.FontSmall,
                 VerticalAlignment = VerticalAlignment.Center
             };
             cmdInner.Children.Add(commandCenterText);
@@ -547,8 +548,9 @@ namespace codeLess.AvaloniaApp
                 Height = 24,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                Padding = new Thickness(14, 2),
-                CornerRadius = new CornerRadius(5)
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                Padding = new Thickness(14, 0),
+                CornerRadius = new CornerRadius(UiTokens.PopupRadius)
             };
             commandCenterBtn.Click += (s, e) => OpenQuickOpen();
             Grid.SetColumn(commandCenterBtn, 2);
@@ -565,17 +567,8 @@ namespace codeLess.AvaloniaApp
 
             Button MakeLayoutBtn(string iconName, string tip, Action onClick)
             {
-                var ic = new VectorIconControl { IconName = iconName, Width = 16, Height = 16 };
-                var b = new Button
-                {
-                    Content = ic,
-                    Width = 28,
-                    Height = 26,
-                    Padding = new Thickness(0),
-                    Background = Brushes.Transparent
-                };
-                ToolTip.SetTip(b, tip);
-                b.Click += (s, e) => onClick?.Invoke();
+                var b = WorkbenchStyles.IconButton(iconName, tip, onClick, currentTheme, 26, 16);
+                sidebarHeaderIconButtons.Add(b);
                 return b;
             }
 
@@ -585,28 +578,20 @@ namespace codeLess.AvaloniaApp
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                Button MakeWinCaptionBtn(string glyph, string tip, Action onClick)
+                Button MakeWinCaptionBtn(string icon, string tip, Action onClick)
                 {
-                    var b = new Button
-                    {
-                        Content = glyph,
-                        FontSize = 11,
-                        Width = 34,
-                        Height = 28,
-                        HorizontalContentAlignment = HorizontalAlignment.Center,
-                        VerticalContentAlignment = VerticalAlignment.Center,
-                        Padding = new Thickness(0),
-                        Background = Brushes.Transparent
-                    };
-                    ToolTip.SetTip(b, tip);
-                    b.Click += (s, e) => onClick?.Invoke();
+                    var b = WorkbenchStyles.IconButton(icon, tip, onClick, currentTheme, 34, 14);
+                    b.Height = 30;
+                    b.CornerRadius = new CornerRadius(0);
+                    sidebarHeaderIconButtons.Add(b);
                     return b;
                 }
 
-                rightIcons.Children.Add(MakeWinCaptionBtn("—", "Minimize", () => WindowState = WindowState.Minimized));
-                rightIcons.Children.Add(MakeWinCaptionBtn("□", "Maximize / Restore", () =>
+                rightIcons.Children.Add(new Border { Width = 8 });
+                rightIcons.Children.Add(MakeWinCaptionBtn("min", "Minimize", () => WindowState = WindowState.Minimized));
+                rightIcons.Children.Add(MakeWinCaptionBtn("max", "Maximize / Restore", () =>
                     WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized));
-                rightIcons.Children.Add(MakeWinCaptionBtn("✕", "Close (Alt+F4)", Close));
+                rightIcons.Children.Add(MakeWinCaptionBtn("close", "Close (Alt+F4)", Close));
             }
 
             Grid.SetColumn(rightIcons, 3);
@@ -986,48 +971,52 @@ namespace codeLess.AvaloniaApp
 
             var topStack = new StackPanel
             {
-                Spacing = 2,
-                Margin = new Thickness(0, 4, 0, 0)
+                Spacing = 0,
+                Margin = new Thickness(0, 0, 0, 0)
             };
 
             var bottomStack = new StackPanel
             {
-                Spacing = 2,
-                Margin = new Thickness(0, 0, 0, 6)
+                Spacing = 0,
+                Margin = new Thickness(0, 0, 0, 4)
             };
 
             Button AddActivityIcon(StackPanel host, string id, string iconName, string tooltip, Action customAction = null)
             {
+                // VS Code activity bar item: 48x48 cell, 24 px glyph, 2 px full-height accent bar when active,
+                // no hover fill (the glyph brightens instead).
                 var activeBar = new Border
                 {
-                    Width = 3,
-                    Height = 24,
+                    Width = 2,
                     HorizontalAlignment = HorizontalAlignment.Left,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    CornerRadius = new CornerRadius(1.5),
+                    VerticalAlignment = VerticalAlignment.Stretch,
                     IsVisible = false
                 };
                 var iconCtrl = new VectorIconControl
                 {
                     IconName = iconName,
-                    Width = 22,
-                    Height = 22,
+                    Width = UiTokens.ActivityIconSize,
+                    Height = UiTokens.ActivityIconSize,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 };
-                var cellGrid = new Grid { Width = 46, Height = 42 };
+                var cellGrid = new Grid { Width = UiTokens.ActivityBarWidth - 1, Height = UiTokens.ActivityBarWidth };
                 cellGrid.Children.Add(activeBar);
                 cellGrid.Children.Add(iconCtrl);
 
                 var btn = new Button
                 {
                     Content = cellGrid,
-                    Width = 48,
-                    Height = 44,
+                    Width = UiTokens.ActivityBarWidth,
+                    Height = UiTokens.ActivityBarWidth,
                     Padding = new Thickness(0),
                     Background = Brushes.Transparent,
-                    BorderThickness = new Thickness(0)
+                    BorderThickness = new Thickness(0),
+                    CornerRadius = new CornerRadius(0)
                 };
+                btn.Classes.Add("paneltab");
+                btn.PointerEntered += (s, e) => { iconCtrl.IconColor = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary); iconCtrl.InvalidateVisual(); };
+                btn.PointerExited += (s, e) => UpdateActivityBarSelectionVisuals();
                 ToolTip.SetTip(btn, AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform(tooltip));
                 btn.Click += (s, e) =>
                 {
@@ -1105,20 +1094,20 @@ namespace codeLess.AvaloniaApp
         {
             var sidebarGrid = new Grid
             {
-                RowDefinitions = new RowDefinitions("32,2,*")
+                RowDefinitions = new RowDefinitions(UiTokens.ViewHeaderHeight + ",2,*")
             };
 
             // Row 0: Sidebar Header + Action Icons
             var headerGrid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                Margin = new Thickness(12, 0, 6, 0)
+                Margin = new Thickness(20, 0, 8, 0)
             };
             sidebarHeaderTitle = new TextBlock
             {
                 Text = "EXPLORER",
-                FontSize = 11,
-                FontWeight = FontWeight.Bold,
+                FontSize = UiTokens.FontHeader,
+                FontWeight = FontWeight.Normal,
                 VerticalAlignment = VerticalAlignment.Center
             };
             sidebarHeaderActions = new StackPanel
@@ -1130,16 +1119,8 @@ namespace codeLess.AvaloniaApp
 
             Button MakeHeaderAction(string iconName, string tooltip, Action onClick)
             {
-                var b = new Button
-                {
-                    Content = new VectorIconControl { IconName = iconName, Width = 15, Height = 15 },
-                    Width = 24,
-                    Height = 22,
-                    Padding = new Thickness(0),
-                    Background = Brushes.Transparent
-                };
-                ToolTip.SetTip(b, tooltip);
-                b.Click += (s, e) => onClick?.Invoke();
+                var b = WorkbenchStyles.IconButton(iconName, tooltip, onClick, currentTheme);
+                sidebarHeaderIconButtons.Add(b);
                 return b;
             }
 
@@ -1195,19 +1176,21 @@ namespace codeLess.AvaloniaApp
             // Section 1: OPEN EDITORS
             openEditorsHeaderBtn = new Button
             {
-                Content = new LiteralTextBlock("▾ OPEN EDITORS"),
-                FontSize = 10.5,
-                FontWeight = FontWeight.Bold,
+                Content = new SectionHeaderLabel("▾ OPEN EDITORS"),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(8, 3),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(4, 0),
+                Height = UiTokens.SectionHeaderHeight,
+                MinHeight = 0,
+                CornerRadius = new CornerRadius(0),
                 Background = Brushes.Transparent
             };
             openEditorsStack = new StackPanel { Spacing = 1, Margin = new Thickness(0, 0, 0, 4) };
             openEditorsHeaderBtn.Click += (s, e) =>
             {
                 openEditorsStack.IsVisible = !openEditorsStack.IsVisible;
-                openEditorsHeaderBtn.Content = new LiteralTextBlock((openEditorsStack.IsVisible ? "▾ " : "▸ ") + $"OPEN EDITORS ({openTabs.Count})");
+                openEditorsHeaderBtn.Content = new SectionHeaderLabel((openEditorsStack.IsVisible ? "▾ " : "▸ ") + $"OPEN EDITORS ({openTabs.Count})");
             };
             Grid.SetRow(openEditorsHeaderBtn, 0);
             grid.Children.Add(openEditorsHeaderBtn);
@@ -1217,12 +1200,14 @@ namespace codeLess.AvaloniaApp
             // Section 2: WORKSPACE FOLDER HEADER
             workspaceFolderHeaderBtn = new Button
             {
-                Content = new LiteralTextBlock("▾ WORKSPACE"),
-                FontSize = 10.5,
-                FontWeight = FontWeight.Bold,
+                Content = new SectionHeaderLabel("▾ WORKSPACE"),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(8, 3),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(4, 0),
+                Height = UiTokens.SectionHeaderHeight,
+                MinHeight = 0,
+                CornerRadius = new CornerRadius(0),
                 Background = Brushes.Transparent
             };
             Grid.SetRow(workspaceFolderHeaderBtn, 2);
@@ -1247,12 +1232,14 @@ namespace codeLess.AvaloniaApp
             // Section 4: OUTLINE (Bottom collapsible symbol list)
             outlineHeaderBtn = new Button
             {
-                Content = new LiteralTextBlock("▸ OUTLINE"),
-                FontSize = 10.5,
-                FontWeight = FontWeight.Bold,
+                Content = new SectionHeaderLabel("▸ OUTLINE"),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(8, 3),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(4, 0),
+                Height = UiTokens.SectionHeaderHeight,
+                MinHeight = 0,
+                CornerRadius = new CornerRadius(0),
                 Background = Brushes.Transparent
             };
             outlineListBox = new ListBox
@@ -1265,7 +1252,7 @@ namespace codeLess.AvaloniaApp
             outlineHeaderBtn.Click += (s, e) =>
             {
                 outlineListBox.IsVisible = !outlineListBox.IsVisible;
-                outlineHeaderBtn.Content = new LiteralTextBlock((outlineListBox.IsVisible ? "▾ " : "▸ ") + "OUTLINE");
+                outlineHeaderBtn.Content = new SectionHeaderLabel((outlineListBox.IsVisible ? "▾ " : "▸ ") + "OUTLINE");
             };
             outlineListBox.SelectionChanged += (s, e) =>
             {
@@ -1317,7 +1304,8 @@ namespace codeLess.AvaloniaApp
             };
             var stageAllBtn = new Button { Content = "+ All", FontSize = 11, Padding = new Thickness(7, 4), Margin = new Thickness(4, 0, 0, 0) };
             var unstageAllBtn = new Button { Content = "- All", FontSize = 11, Padding = new Thickness(7, 4), Margin = new Thickness(4, 0, 0, 0) };
-            var refreshGitBtn = new Button { Content = "↻", FontSize = 11, Padding = new Thickness(7, 4), Margin = new Thickness(4, 0, 0, 0) };
+            var refreshGitBtn = WorkbenchStyles.IconButton("refresh", "Refresh", null, currentTheme, 26, 15);
+            refreshGitBtn.Margin = new Thickness(4, 0, 0, 0);
 
             commitBtn.Click += (s, e) => ExecuteGitCommit();
             stageAllBtn.Click += (s, e) => ExecuteGitStageAll();
@@ -1534,16 +1522,8 @@ namespace codeLess.AvaloniaApp
                 Margin = new Thickness(4, 0, 8, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            var splitBtn = new Button
-            {
-                Content = new VectorIconControl { IconName = "split-right", Width = 15, Height = 15 },
-                Width = 26,
-                Height = 24,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(splitBtn, AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Split Editor Right (Ctrl+\\)"));
-            splitBtn.Click += (s, e) => ToggleSplitEditor();
+            var splitBtn = WorkbenchStyles.IconButton("split-right", AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Split Editor Right (Ctrl+\\)"), ToggleSplitEditor, currentTheme);
+            sidebarHeaderIconButtons.Add(splitBtn);
             tabRightActions.Children.Add(splitBtn);
             Grid.SetColumn(tabRightActions, 1);
             tabBarGrid.Children.Add(tabRightActions);
@@ -1615,21 +1595,21 @@ namespace codeLess.AvaloniaApp
         {
             var grid = new Grid
             {
-                RowDefinitions = new RowDefinitions("30,*")
+                RowDefinitions = new RowDefinitions(UiTokens.PanelHeaderHeight + ",*")
             };
 
             // Row 0: Panel Tab Header + Right Terminal Actions
             var headerGrid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                Margin = new Thickness(10, 0, 8, 0)
+                Margin = new Thickness(8, 0, 8, 0)
             };
 
             var tabsRow = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 12,
-                VerticalAlignment = VerticalAlignment.Center
+                Spacing = 4,
+                VerticalAlignment = VerticalAlignment.Stretch
             };
 
             Button MakePanelTab(string label, string id, bool visibleByDefault = true)
@@ -1637,13 +1617,19 @@ namespace codeLess.AvaloniaApp
                 var b = new Button
                 {
                     Content = label,
-                    FontSize = 11,
-                    FontWeight = FontWeight.Bold,
-                    Padding = new Thickness(4, 4),
+                    FontSize = UiTokens.FontHeader,
+                    FontWeight = FontWeight.Normal,
+                    Padding = new Thickness(8, 0),
+                    MinHeight = 0,
+                    VerticalAlignment = VerticalAlignment.Stretch,
+                    VerticalContentAlignment = VerticalAlignment.Center,
                     Background = Brushes.Transparent,
-                    BorderThickness = new Thickness(0, 0, 0, 2),
-                    IsVisible = visibleByDefault
+                    CornerRadius = new CornerRadius(0),
+                    BorderThickness = new Thickness(0, 0, 0, UiTokens.PanelTabIndicatorWidth),
+                    IsVisible = visibleByDefault,
+                    Focusable = false
                 };
+                b.Classes.Add("paneltab");
                 b.Click += (s, e) => SwitchBottomTab(id);
                 return b;
             }
@@ -1666,7 +1652,7 @@ namespace codeLess.AvaloniaApp
             terminalToolbarActions = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 4,
+                Spacing = 2,
                 VerticalAlignment = VerticalAlignment.Center
             };
 
@@ -1679,92 +1665,42 @@ namespace codeLess.AvaloniaApp
             {
                 ItemsSource = profiles,
                 SelectedIndex = 0,
-                Height = 23,
-                FontSize = 11,
-                Padding = new Thickness(6, 1)
+                Height = UiTokens.IconButtonSize,
+                MinHeight = UiTokens.IconButtonSize,
+                FontSize = UiTokens.FontSmall,
+                Padding = new Thickness(6, 0, 0, 0),
+                Margin = new Thickness(0, 0, 4, 0),
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                VerticalAlignment = VerticalAlignment.Center
             };
+            ToolTip.SetTip(shellProfileSelector, "Shell profile for new terminals");
 
-            var newTermBtn = new Button
-            {
-                Name = "NewTerminalBtn",
-                Content = new VectorIconControl { IconName = "plus", Width = 14, Height = 14 },
-                Width = 24,
-                Height = 22,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(newTermBtn, "New Terminal (Ctrl+Shift+`)");
-            newTermBtn.Click += (s, e) =>
+            var newTermBtn = WorkbenchStyles.IconButton("plus", "New Terminal (Ctrl+Shift+`)", () =>
             {
                 string prof = shellProfileSelector.SelectedItem?.ToString();
                 RequestNewTerminal(prof);
-            };
-
-            var splitTermBtn = new Button
-            {
-                Name = "SplitTerminalBtn",
-                Content = new VectorIconControl { IconName = "split-right", Width = 14, Height = 14 },
-                Width = 24,
-                Height = 22,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(splitTermBtn, "Split Terminal (Ctrl+Shift+5)");
-            splitTermBtn.Click += (s, e) => ToggleSplitTerminal();
-
-            var renameTermBtn = new Button
-            {
-                Name = "RenameTerminalBtn",
-                Content = "✎",
-                FontSize = 11,
-                Width = 24,
-                Height = 22,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(renameTermBtn, "Rename Active Terminal Session...");
-            renameTermBtn.Click += (s, e) => PromptRenameActiveTerminalSession();
-
-            var killTermBtn = new Button
-            {
-                Name = "KillTerminalBtn",
-                Content = new VectorIconControl { IconName = "trash", Width = 14, Height = 14 },
-                Width = 24,
-                Height = 22,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(killTermBtn, "Kill Active Terminal Session");
-            killTermBtn.Click += (s, e) => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); };
-
-            var maxPanelBtn = new Button
-            {
-                Content = new VectorIconControl { IconName = "maximize-up", Width = 14, Height = 14 },
-                Width = 24,
-                Height = 22,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(maxPanelBtn, "Maximize Panel Size");
-            maxPanelBtn.Click += (s, e) => ToggleMaximizeBottomPanel();
-
-            var closePanelBtn = new Button
-            {
-                Content = new VectorIconControl { IconName = "close", Width = 13, Height = 13 },
-                Width = 24,
-                Height = 22,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(closePanelBtn, "Close Panel (Ctrl+J)");
-            closePanelBtn.Click += (s, e) => ToggleBottomPanel();
+            }, currentTheme);
+            newTermBtn.Name = "NewTerminalBtn";
+            var splitTermBtn = WorkbenchStyles.IconButton("split-right", "Split Terminal (Ctrl+Shift+5)", ToggleSplitTerminal, currentTheme);
+            splitTermBtn.Name = "SplitTerminalBtn";
+            var renameTermBtn = WorkbenchStyles.IconButton("pencil", "Rename Active Terminal Session...", PromptRenameActiveTerminalSession, currentTheme);
+            renameTermBtn.Name = "RenameTerminalBtn";
+            var killTermBtn = WorkbenchStyles.IconButton("trash", "Kill Active Terminal Session", () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); }, currentTheme);
+            killTermBtn.Name = "KillTerminalBtn";
+            var maxPanelBtn = WorkbenchStyles.IconButton("chevron-up", "Maximize Panel Size", ToggleMaximizeBottomPanel, currentTheme);
+            var closePanelBtn = WorkbenchStyles.IconButton("close", "Close Panel (Ctrl+J)", ToggleBottomPanel, currentTheme);
+            panelToolbarIconButtons = new[] { newTermBtn, splitTermBtn, renameTermBtn, killTermBtn, maxPanelBtn, closePanelBtn };
 
             outputChannelCombo = new ComboBox
             {
                 ItemsSource = new[] { "codeLess Workbench", "AI Harness Engine", "Git Source Control", "Extension Host" },
                 SelectedIndex = 0,
-                Height = 23,
-                FontSize = 11,
+                Height = UiTokens.IconButtonSize,
+                MinHeight = UiTokens.IconButtonSize,
+                FontSize = UiTokens.FontSmall,
+                Margin = new Thickness(0, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center,
                 IsVisible = false
             };
 
@@ -1808,8 +1744,9 @@ namespace codeLess.AvaloniaApp
                 IsReadOnly = true,
                 AcceptsReturn = true,
                 FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
-                FontSize = 11.5,
+                FontSize = 12,
                 BorderThickness = new Thickness(0),
+                Padding = new Thickness(12, 6),
                 Text = $"[codeLess] Workbench initialized ({RuntimeInformation.OSDescription}, {RuntimeInformation.ProcessArchitecture}).\n",
                 IsVisible = false
             };
@@ -1830,8 +1767,8 @@ namespace codeLess.AvaloniaApp
 
             terminalSessionListStack = new StackPanel
             {
-                Spacing = 2,
-                Margin = new Thickness(4, 4)
+                Spacing = 0,
+                Margin = new Thickness(0, 2)
             };
             terminalSessionListBorder = new Border
             {
@@ -1853,48 +1790,62 @@ namespace codeLess.AvaloniaApp
             };
         }
 
+        private Button[] panelToolbarIconButtons = new Button[0];
+        private readonly List<Button> sidebarHeaderIconButtons = new List<Button>();
+        private Button[] chatHeaderIconButtons = new Button[0];
+        private Button[] changesetButtons = new Button[0];
+        private IconLabel chatHeaderTitle;
+        private Border composerBorder;
+
+        private void ApplyComposerTheme()
+        {
+            if (currentTheme == null || composerBorder == null) return;
+            var t = currentTheme;
+            composerBorder.Background = WorkbenchStyles.B(UiTokens.InputBackground(t));
+            composerBorder.BorderBrush = WorkbenchStyles.B(chatPromptInput != null && chatPromptInput.IsFocused ? UiTokens.FocusBorder(t) : UiTokens.InputBorder(t));
+        }
+
+        private void ApplyChatDockChromeTheme(StudioTheme t)
+        {
+            if (t == null) return;
+            if (chatHeaderTitle != null) { chatHeaderTitle.Label.Foreground = WorkbenchStyles.B(t.FgSecondary); chatHeaderTitle.Icon.FollowForeground = false; chatHeaderTitle.Icon.IconColor = WorkbenchStyles.C(t.AccentPrimary); chatHeaderTitle.Icon.InvalidateVisual(); }
+            foreach (var b in chatHeaderIconButtons) WorkbenchStyles.ThemeIconButton(b, t);
+            if (changesetButtons.Length == 2) { WorkbenchStyles.StylePrimaryButton(changesetButtons[0], t); WorkbenchStyles.StyleSecondaryButton(changesetButtons[1], t); }
+            if (chatSendBtn != null) WorkbenchStyles.StylePrimaryButton(chatSendBtn, t);
+            foreach (var c in new[] { chatProviderCombo, chatModelCombo })
+                if (c != null) { c.Foreground = WorkbenchStyles.B(t.FgSecondary); }
+            ApplyComposerTheme();
+        }
+
         private Border BuildRightChatDock()
         {
             var grid = new Grid
             {
-                RowDefinitions = new RowDefinitions("32,2,Auto,*,Auto")
+                RowDefinitions = new RowDefinitions(UiTokens.ViewHeaderHeight + ",2,Auto,*,Auto")
             };
 
             // Row 0: Chat Header (New, History, and Close — matching WinForms)
             var headerGrid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
-                Margin = new Thickness(12, 0, 6, 0)
+                Margin = new Thickness(12, 0, 8, 0)
             };
-            headerGrid.Children.Add(new TextBlock
-            {
-                Text = "✦ AI AGENT & COMPOSER",
-                FontSize = 11,
-                FontWeight = FontWeight.Bold,
-                VerticalAlignment = VerticalAlignment.Center
-            });
+            chatHeaderTitle = new IconLabel("sparkle", "AI AGENT & COMPOSER", 13, UiTokens.FontHeader, "✦ ") { Spacing = 6 };
+            chatHeaderTitle.Label.FontWeight = FontWeight.SemiBold;
+            headerGrid.Children.Add(chatHeaderTitle);
 
-            var newChatBtn = new Button { Content = "+ New", FontSize = 10.5, Padding = new Thickness(6, 2), Background = Brushes.Transparent };
-            newChatBtn.Click += (s, e) => AgentFeed.ClearFeed();
+            var newChatBtn = WorkbenchStyles.IconButton("plus", "New Chat", () => AgentFeed.ClearFeed(), currentTheme);
             Grid.SetColumn(newChatBtn, 1);
             headerGrid.Children.Add(newChatBtn);
 
-            var historyChatBtn = new Button { Content = "History", FontSize = 10.5, Padding = new Thickness(6, 2), Background = Brushes.Transparent };
-            historyChatBtn.Click += (s, e) => SetStatusMessage($"Chat history: {AgentFeed.Items.Count} message(s) in current session");
+            var historyChatBtn = WorkbenchStyles.IconButton("history", "Chat History", () => SetStatusMessage($"Chat history: {AgentFeed.Items.Count} message(s) in current session"), currentTheme);
             Grid.SetColumn(historyChatBtn, 2);
             headerGrid.Children.Add(historyChatBtn);
 
-            var closeChatBtn = new Button
-            {
-                Content = new VectorIconControl { IconName = "close", Width = 12, Height = 12 },
-                Width = 24,
-                Height = 22,
-                Padding = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            closeChatBtn.Click += (s, e) => ToggleRightChatDock();
+            var closeChatBtn = WorkbenchStyles.IconButton("close", "Close AI Chat (Ctrl+Alt+I)", ToggleRightChatDock, currentTheme);
             Grid.SetColumn(closeChatBtn, 3);
             headerGrid.Children.Add(closeChatBtn);
+            chatHeaderIconButtons = new[] { newChatBtn, historyChatBtn, closeChatBtn };
 
             Grid.SetRow(headerGrid, 0);
             grid.Children.Add(headerGrid);
@@ -1912,29 +1863,29 @@ namespace codeLess.AvaloniaApp
             };
             changesetSummaryText = new TextBlock
             {
-                Text = "Δ 1 file pending",
-                FontSize = 11,
-                FontWeight = FontWeight.SemiBold,
+                Text = "1 file pending",
+                FontSize = UiTokens.FontSmall,
+                FontWeight = FontWeight.Normal,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center
             };
             var csAcceptBtn = new Button
             {
-                Content = "✓ Accept All",
-                FontSize = 10.5,
-                Padding = new Thickness(7, 2),
-                Margin = new Thickness(4, 0),
-                Background = new SolidColorBrush(Color.FromRgb(22, 163, 74)),
-                Foreground = Brushes.White
+                Content = "Accept All",
+                FontSize = UiTokens.FontSmall,
+                Padding = new Thickness(8, 2),
+                MinHeight = 22,
+                Margin = new Thickness(4, 0)
             };
+            csAcceptBtn.Classes.Add("primary");
             var csRejectBtn = new Button
             {
-                Content = "✕ Reject All",
-                FontSize = 10.5,
-                Padding = new Thickness(7, 2),
-                Background = new SolidColorBrush(Color.FromRgb(185, 28, 28)),
-                Foreground = Brushes.White
+                Content = "Reject All",
+                FontSize = UiTokens.FontSmall,
+                Padding = new Thickness(8, 2),
+                MinHeight = 22
             };
+            changesetButtons = new[] { csAcceptBtn, csRejectBtn };
             csAcceptBtn.Click += (s, e) => PrimaryEditor.AcceptAllPendingDiffs();
             csRejectBtn.Click += (s, e) => PrimaryEditor.RejectAllPendingDiffs();
             csGrid.Children.Add(changesetSummaryText);
@@ -1963,7 +1914,7 @@ namespace codeLess.AvaloniaApp
             grid.Children.Add(AgentFeed);
 
             // Row 4: Footer Composer Card (Context Pills + Prompt Input + Mode Picker + Provider/Model Picker + Send)
-            var composerStack = new StackPanel { Spacing = 6 };
+            var composerStack = new StackPanel { Spacing = 4 };
 
             // Context pills row
             contextPillsWrap = new WrapPanel { Orientation = Orientation.Horizontal };
@@ -1977,9 +1928,11 @@ namespace codeLess.AvaloniaApp
                 Watermark = "Plan, @context, ask questions, or request multi-file edits (Enter to send)...",
                 AcceptsReturn = false,
                 Height = 52,
-                FontSize = 12,
+                FontSize = UiTokens.FontUi,
                 TextWrapping = TextWrapping.Wrap,
-                Padding = new Thickness(8, 6)
+                Padding = new Thickness(2, 4),
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent
             };
             chatPromptInput.KeyDown += (s, e) =>
             {
@@ -1993,15 +1946,18 @@ namespace codeLess.AvaloniaApp
 
             // Mode pills row: ✦ Agent | Ask | Edit | Auto-Fix
             var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            foreach (var m in new (string Id, string Label)[] { ("agent", "✦ Agent"), ("ask", "Ask"), ("edit", "Edit"), ("autofix", "Auto-Fix") })
+            foreach (var m in new (string Id, string Label)[] { ("agent", "Agent"), ("ask", "Ask"), ("edit", "Edit"), ("autofix", "Auto-Fix") })
             {
                 string modeId = m.Id;
                 var mb = new Button
                 {
                     Content = m.Label,
-                    FontSize = 10.5,
-                    Padding = new Thickness(7, 2)
+                    FontSize = UiTokens.FontSmall,
+                    Padding = new Thickness(8, 2),
+                    MinHeight = 22,
+                    BorderThickness = new Thickness(0)
                 };
+                mb.Classes.Add("flat");
                 mb.Click += (s, e) => SetAgentMode(modeId);
                 agentModeButtons[modeId] = mb;
                 modeRow.Children.Add(mb);
@@ -2018,19 +1974,29 @@ namespace codeLess.AvaloniaApp
             {
                 ItemsSource = providers.Select(p => p.Name).ToList(),
                 SelectedIndex = Math.Max(0, providers.FindIndex(p => string.Equals(p.Name, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase))),
-                FontSize = 10.5,
-                Height = 25,
-                Width = 144,
-                Padding = new Thickness(6, 1)
+                FontSize = UiTokens.FontSmall,
+                Height = 24,
+                MinHeight = 24,
+                Width = 140,
+                Padding = new Thickness(6, 0, 0, 0),
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                VerticalAlignment = VerticalAlignment.Center
             };
+            ToolTip.SetTip(chatProviderCombo, "AI provider");
             chatModelCombo = new ComboBox
             {
-                FontSize = 10.5,
-                Height = 25,
-                Margin = new Thickness(4, 0),
+                FontSize = UiTokens.FontSmall,
+                Height = 24,
+                MinHeight = 24,
+                Margin = new Thickness(2, 0, 6, 0),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(6, 1)
+                Padding = new Thickness(6, 0, 0, 0),
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                VerticalAlignment = VerticalAlignment.Center
             };
+            ToolTip.SetTip(chatModelCombo, "Model");
             PopulateModelsForActiveProvider();
 
             chatProviderCombo.SelectionChanged += (s, e) =>
@@ -2054,13 +2020,14 @@ namespace codeLess.AvaloniaApp
             chatSendBtn = new Button
             {
                 Name = "ChatSendBtn",
-                Content = "Send ↑",
-                FontSize = 11.5,
-                FontWeight = FontWeight.SemiBold,
-                Padding = new Thickness(12, 4),
-                Background = new SolidColorBrush(Color.FromRgb(59, 130, 246)),
-                Foreground = Brushes.White
+                Content = new IconLabel("send", "Send", 13, UiTokens.FontSmall),
+                FontSize = UiTokens.FontSmall,
+                Padding = new Thickness(10, 2),
+                MinHeight = 24,
+                VerticalAlignment = VerticalAlignment.Center
             };
+            chatSendBtn.Classes.Add("primary");
+            ToolTip.SetTip(chatSendBtn, "Send (Enter)");
             chatSendBtn.Click += (s, e) => SubmitChatMessage();
 
             Grid.SetColumn(chatProviderCombo, 0); bottomRow.Children.Add(chatProviderCombo);
@@ -2068,14 +2035,18 @@ namespace codeLess.AvaloniaApp
             Grid.SetColumn(chatSendBtn, 2); bottomRow.Children.Add(chatSendBtn);
             composerStack.Children.Add(bottomRow);
 
-            var composerBorder = new Border
+            // VS Code chat input: one input-colored card (pills, prompt, toolbar) with a 1 px border that turns
+            // accent while the prompt has focus.
+            composerBorder = new Border
             {
                 Child = composerStack,
-                Margin = new Thickness(8, 4, 8, 8),
-                Padding = new Thickness(8, 8),
-                CornerRadius = new CornerRadius(6),
+                Margin = new Thickness(10, 4, 10, 10),
+                Padding = new Thickness(8, 6, 6, 6),
+                CornerRadius = new CornerRadius(UiTokens.ToolbarRadius),
                 BorderThickness = new Thickness(1)
             };
+            chatPromptInput.GotFocus += (s, e) => ApplyComposerTheme();
+            chatPromptInput.LostFocus += (s, e) => ApplyComposerTheme();
             Grid.SetRow(composerBorder, 4);
             grid.Children.Add(composerBorder);
 
@@ -2111,13 +2082,20 @@ namespace codeLess.AvaloniaApp
             if (contextPillsWrap == null) return;
             contextPillsWrap.Children.Clear();
 
+            var pillTheme = currentTheme ?? StudioTheme.GetById(StudioTheme.DefaultThemeId);
             var addCtxBtn = new Button
             {
                 Content = "+ @ Context",
-                FontSize = 10.5,
+                FontSize = UiTokens.FontSmall - 0.5,
                 Padding = new Thickness(6, 1),
-                Margin = new Thickness(0, 0, 4, 3)
+                MinHeight = 20,
+                Margin = new Thickness(0, 0, 4, 3),
+                Background = Brushes.Transparent,
+                Foreground = WorkbenchStyles.B(pillTheme.FgSecondary),
+                BorderThickness = new Thickness(1),
+                BorderBrush = WorkbenchStyles.B(UiTokens.InputBorder(pillTheme))
             };
+            ToolTip.SetTip(addCtxBtn, "Attach the active file as context");
             addCtxBtn.Click += (s, e) =>
             {
                 if (activeTab != null && !attachedContextPills.Contains(activeTab.FileName))
@@ -2131,12 +2109,11 @@ namespace codeLess.AvaloniaApp
             string activePillText = activeTab != null ? $"@{activeTab.FileName}" : "@Workspace";
             contextPillsWrap.Children.Add(new Border
             {
-                CornerRadius = new CornerRadius(3),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(6, 1),
+                CornerRadius = new CornerRadius(UiTokens.ControlRadius),
+                Padding = new Thickness(6, 2),
                 Margin = new Thickness(0, 0, 4, 3),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(59, 130, 246)),
-                Child = new TextBlock { Text = activePillText, FontSize = 10.5 }
+                Background = WorkbenchStyles.B(UiTokens.ButtonSecondaryBackground(pillTheme)),
+                Child = new TextBlock { Text = activePillText, FontSize = UiTokens.FontSmall - 0.5, Foreground = WorkbenchStyles.B(pillTheme.FgPrimary) }
             });
 
             foreach (string pill in attachedContextPills.ToList())
@@ -2144,11 +2121,13 @@ namespace codeLess.AvaloniaApp
                 string captured = pill;
                 var pBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"@{captured}  ✕") { FontSize = 10 },
-                    FontSize = 10,
-                    Padding = new Thickness(5, 1),
+                    Content = new LiteralTextBlock($"@{captured}  ✕") { FontSize = UiTokens.FontSmall - 0.5 },
+                    FontSize = UiTokens.FontSmall - 0.5,
+                    Padding = new Thickness(6, 1),
+                    MinHeight = 20,
                     Margin = new Thickness(0, 0, 4, 3)
                 };
+                ToolTip.SetTip(pBtn, "Remove context");
                 pBtn.Click += (s, e) =>
                 {
                     attachedContextPills.Remove(captured);
@@ -2168,61 +2147,56 @@ namespace codeLess.AvaloniaApp
             var leftRow = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 4,
-                VerticalAlignment = VerticalAlignment.Center
+                Spacing = 0,
+                VerticalAlignment = VerticalAlignment.Stretch
             };
 
-            Button MakeStatusBtn(string text, Action onClick, bool isRemoteBadge = false)
-            {
-                var b = new Button
-                {
-                    Content = new LiteralTextBlock(text) { FontSize = 11 },
-                    FontSize = 11,
-                    Padding = new Thickness(isRemoteBadge ? 10 : 7, 1),
-                    Height = 24,
-                    CornerRadius = new CornerRadius(0),
-                    Background = isRemoteBadge ? new SolidColorBrush(Color.FromRgb(37, 99, 235)) : Brushes.Transparent,
-                    Foreground = Brushes.White,
-                    BorderThickness = new Thickness(0)
-                };
-                if (onClick != null)
-                    b.Click += (s, e) => onClick();
-                return b;
-            }
+            Button MakeStatusBtn(string text, Action onClick, bool isRemoteBadge = false) => MakeStatusBarItem(text, onClick, isRemoteBadge);
 
-            statusRemoteBtn = MakeStatusBtn(">< codeLess", () => OpenCommandPalette(">"), isRemoteBadge: true);
-            statusBranchBtn = MakeStatusBtn("⎇ main", () => SwitchSidebarView("git"));
-            statusProblemsBtn = MakeStatusBtn("⊗ 0  △ 0", () => SwitchBottomTab("problems"));
+            statusRemoteBtn = MakeStatusBarItem(new IconLabel("remote", "codeLess", 12, UiTokens.FontSmall, "><  "), () => OpenCommandPalette(">"), isRemoteBadge: true);
+            ToolTip.SetTip(statusRemoteBtn, "codeLess — Show All Commands");
+            statusBranchBtn = MakeStatusBarItem(new IconLabel("branch", "main", 14, UiTokens.FontSmall, "⎇ "), () => SwitchSidebarView("git"));
+            statusProblemsBtn = MakeStatusBarItem(new StatusProblemsContent(), () => SwitchBottomTab("problems"));
             statusMessageLabel = new TextBlock
             {
                 Text = "",
-                FontSize = 11,
+                FontSize = UiTokens.FontSmall,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 0, 0)
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                TextWrapping = TextWrapping.NoWrap,
+                Margin = new Thickness(8, 0, 8, 0)
             };
             statusChordLabel = new TextBlock
             {
                 Text = "",
-                FontSize = 11,
+                FontSize = UiTokens.FontSmall,
                 FontWeight = FontWeight.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(10, 0, 0, 0)
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(4, 0, 8, 0)
             };
 
             leftRow.Children.Add(statusRemoteBtn);
             leftRow.Children.Add(statusBranchBtn);
             leftRow.Children.Add(statusProblemsBtn);
-            leftRow.Children.Add(statusMessageLabel);
-            leftRow.Children.Add(statusChordLabel);
             Grid.SetColumn(leftRow, 0);
             grid.Children.Add(leftRow);
+
+            // Transient messages live in the flexible middle column and are ellipsized, so they can never push
+            // the right-hand items off the bar.
+            var middle = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ClipToBounds = true };
+            Grid.SetColumn(statusMessageLabel, 1);
+            middle.Children.Add(statusChordLabel);
+            middle.Children.Add(statusMessageLabel);
+            Grid.SetColumn(middle, 1);
+            grid.Children.Add(middle);
 
             var rightRow = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 2,
-                Margin = new Thickness(0, 0, 6, 0),
-                VerticalAlignment = VerticalAlignment.Center
+                Spacing = 0,
+                Margin = new Thickness(0, 0, 4, 0),
+                VerticalAlignment = VerticalAlignment.Stretch
             };
 
             statusLnColBtn = MakeStatusBtn("Ln 1, Col 1", PromptGoToLineModal);
@@ -2270,7 +2244,7 @@ namespace codeLess.AvaloniaApp
 
             return new Border
             {
-                Height = 24,
+                Height = UiTokens.StatusBarHeight,
                 Child = grid
             };
         }
@@ -2300,6 +2274,8 @@ namespace codeLess.AvaloniaApp
             RequestedThemeVariant = isLight
                 ? global::Avalonia.Styling.ThemeVariant.Light
                 : global::Avalonia.Styling.ThemeVariant.Dark;
+            WorkbenchStyles.Apply(theme);
+            InstallChromeStyles(theme);
 
             Background = AvaloniaColorHelper.ToBrush(theme.EditorBg);
 
@@ -2312,10 +2288,11 @@ namespace codeLess.AvaloniaApp
                 foreach (var mi in mainTopMenu.ItemsSource.OfType<MenuItem>())
                     mi.Foreground = new SolidColorBrush(textPrimary);
             }
-            commandCenterBtn.Background = new SolidColorBrush(isLight ? Color.FromRgb(226, 232, 240) : Color.FromRgb(28, 30, 38));
-            commandCenterBtn.BorderBrush = new SolidColorBrush(borderCol);
+            commandCenterBtn.Background = WorkbenchStyles.B(UiTokens.Blend(theme.TitleBarBg, theme.FgPrimary, isLight ? 0.04 : 0.05));
+            commandCenterBtn.BorderBrush = WorkbenchStyles.B(UiTokens.Blend(theme.TitleBarBg, theme.FgPrimary, isLight ? 0.14 : 0.12));
             commandCenterBtn.BorderThickness = new Thickness(1);
             commandCenterText.Foreground = new SolidColorBrush(textSecondary);
+            commandCenterBtn.Foreground = new SolidColorBrush(textSecondary);
 
             // Activity Bar
             activityBarBorder.Background = AvaloniaColorHelper.ToBrush(theme.ActivityBarBg);
@@ -2326,6 +2303,7 @@ namespace codeLess.AvaloniaApp
             sidebarBorder.Background = AvaloniaColorHelper.ToBrush(theme.SidebarBg);
             sidebarBorder.BorderBrush = new SolidColorBrush(borderCol);
             sidebarHeaderTitle.Foreground = new SolidColorBrush(textSecondary);
+            foreach (var hb in sidebarHeaderIconButtons) WorkbenchStyles.ThemeIconButton(hb, theme);
             sidebarProgressBar.TrackColor = AvaloniaColorHelper.ToAvColor(theme.SidebarBg);
             sidebarProgressBar.BarColor = accent;
             openEditorsHeaderBtn.Foreground = new SolidColorBrush(textSecondary);
@@ -2361,15 +2339,18 @@ namespace codeLess.AvaloniaApp
             rightChatDockBorder.BorderBrush = new SolidColorBrush(borderCol);
             chatProgressBar.TrackColor = AvaloniaColorHelper.ToAvColor(theme.ChatBg);
             chatProgressBar.BarColor = accent;
-            multiFileChangesetBar.Background = new SolidColorBrush(isLight ? Color.FromRgb(224, 242, 254) : Color.FromRgb(22, 34, 52));
-            multiFileChangesetBar.BorderBrush = new SolidColorBrush(accent);
+            multiFileChangesetBar.Background = WorkbenchStyles.B(UiTokens.WidgetBackground(theme));
+            multiFileChangesetBar.BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(theme));
+            ApplyChatDockChromeTheme(theme);
             changesetSummaryText.Foreground = new SolidColorBrush(textPrimary);
+            RebuildContextPillsBar();
             AgentFeed.ApplyTheme(theme);
             SetAgentMode(currentAgentMode);
 
             // Status Bar
-            statusBarBorder.Background = AvaloniaColorHelper.ToBrush(theme.StatusBarBg);
-            Color statusFg = AvaloniaColorHelper.ToAvColor(theme.StatusBarText);
+            statusBarBorder.Background = AvaloniaColorHelper.ToBrush(UiTokens.StatusBarBackground(theme));
+            Color statusFg = AvaloniaColorHelper.ToAvColor(UiTokens.StatusBarForeground(theme));
+            ApplyStatusBarTheme(theme);
             statusBranchBtn.Foreground = new SolidColorBrush(statusFg);
             statusProblemsBtn.Foreground = new SolidColorBrush(statusFg);
             statusMessageLabel.Foreground = new SolidColorBrush(statusFg);
@@ -2483,10 +2464,11 @@ namespace codeLess.AvaloniaApp
 
             string folderName = Path.GetFileName(workspaceRoot.TrimEnd('\\', '/'));
             if (string.IsNullOrEmpty(folderName)) folderName = workspaceRoot;
-            workspaceFolderHeaderBtn.Content = new LiteralTextBlock("▾ " + folderName.ToUpperInvariant());
+            workspaceFolderHeaderBtn.Content = new SectionHeaderLabel("▾ " + folderName.ToUpperInvariant());
             string scP = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+P");
             string scShiftP = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+Shift+P");
-            commandCenterText.Text = $"{folderName} — Search files ({scP}) or >commands ({scShiftP})";
+            commandCenterText.Text = folderName;
+            ToolTip.SetTip(commandCenterBtn, $"Search files by name ({scP}) · Show and run commands ({scShiftP})");
 
             workspaceFiles.Clear();
             ExplorerTree.Nodes.Clear();
@@ -2550,7 +2532,7 @@ namespace codeLess.AvaloniaApp
             // Fast branch read via .git/HEAD file (zero subprocess spawn)
             string fastBranch = LlmHarnessAndAgentEngine.GetGitBranch(workspaceRoot);
             bool noGit = string.IsNullOrEmpty(fastBranch) || fastBranch == "no-git";
-            statusBranchBtn.Content = new LiteralTextBlock(noGit ? "⎇ no-git" : $"⎇ {fastBranch}");
+            SetStatusBranch(noGit ? "no-git" : fastBranch);
             scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {fastBranch}";
 
             bool isLiveDesktop = AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
@@ -3087,7 +3069,7 @@ namespace codeLess.AvaloniaApp
             int pendingFiles = openTabs.Count(t => t.HasPendingDiff);
             if (pendingFiles > 0)
             {
-                changesetSummaryText.Text = pendingFiles == 1 ? "Δ 1 file pending review" : $"Δ {pendingFiles} files pending review";
+                changesetSummaryText.Text = pendingFiles == 1 ? "1 file pending review" : $"{pendingFiles} files pending review";
                 multiFileChangesetBar.IsVisible = true;
             }
             else
@@ -3120,26 +3102,19 @@ namespace codeLess.AvaloniaApp
                 wRow.Children.Add(new TextBlock
                 {
                     Text = "Welcome",
-                    FontSize = 12,
+                    FontSize = UiTokens.FontUi,
                     Foreground = new SolidColorBrush(isWelcomeActive ? textPrimary : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
                 });
-                var wClose = new Button
-                {
-                    Content = "✕",
-                    FontSize = 10,
-                    Padding = new Thickness(4, 1),
-                    Background = Brushes.Transparent,
-                    Foreground = new SolidColorBrush(textSecondary)
-                };
-                wClose.Click += (s, e) => { CloseWelcomeTab(); e.Handled = true; };
+                var wClose = WorkbenchStyles.IconButton("close", "Close", CloseWelcomeTab, currentTheme, 20, 14);
+                WorkbenchStyles.ThemeIconButton(wClose, currentTheme, isWelcomeActive);
                 wRow.Children.Add(wClose);
 
                 var wTabBorder = new Border
                 {
                     Child = wRow,
-                    Height = 34,
-                    Padding = new Thickness(12, 0, 8, 0),
+                    Height = UiTokens.TabHeight - UiTokens.DividerWidth,
+                    Padding = new Thickness(12, 0, 6, 0),
                     Background = new SolidColorBrush(isWelcomeActive ? activeBg : inactiveBg),
                     BorderBrush = new SolidColorBrush(isWelcomeActive ? accent : borderCol),
                     BorderThickness = isWelcomeActive ? new Thickness(0, 2, 1, 0) : new Thickness(0, 0, 1, 0)
@@ -3169,9 +3144,9 @@ namespace codeLess.AvaloniaApp
                 row.Children.Add(new TextBlock
                 {
                     Text = labelText,
-                    FontSize = 12,
+                    FontSize = UiTokens.FontUi,
                     FontStyle = captured.IsPreviewTab ? FontStyle.Italic : FontStyle.Normal,
-                    FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
+                    FontWeight = FontWeight.Normal,
                     Foreground = new SolidColorBrush(isActive ? textPrimary : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
                 });
@@ -3188,30 +3163,24 @@ namespace codeLess.AvaloniaApp
                     });
                 }
 
-                var closeBtn = new Button
-                {
-                    Content = "✕",
-                    FontSize = 10,
-                    Padding = new Thickness(4, 1),
-                    Background = Brushes.Transparent,
-                    Foreground = new SolidColorBrush(textSecondary)
-                };
-                closeBtn.Click += (s, e) =>
-                {
-                    CloseTab(captured);
-                    e.Handled = true;
-                };
+                // VS Code: the close glyph shows on the active tab and on hover; a dirty tab shows its dot instead.
+                var closeBtn = WorkbenchStyles.IconButton("close", "Close (Ctrl+W)", () => CloseTab(captured), currentTheme, 20, 14);
+                WorkbenchStyles.ThemeIconButton(closeBtn, currentTheme, isActive);
+                closeBtn.Opacity = isActive ? 1 : 0;
                 row.Children.Add(closeBtn);
 
                 var tabBorder = new Border
                 {
                     Child = row,
-                    Height = 34,
+                    Height = UiTokens.TabHeight - UiTokens.DividerWidth,
                     Padding = new Thickness(12, 0, 6, 0),
                     Background = new SolidColorBrush(isActive ? activeBg : inactiveBg),
                     BorderBrush = new SolidColorBrush(isActive ? accent : borderCol),
                     BorderThickness = isActive ? new Thickness(0, 2, 1, 0) : new Thickness(0, 0, 1, 0)
                 };
+                var tabHoverBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.Hover(currentTheme, currentTheme.TabBarBg)));
+                tabBorder.PointerEntered += (s, e) => { closeBtn.Opacity = 1; if (!isActive) tabBorder.Background = tabHoverBrush; };
+                tabBorder.PointerExited += (s, e) => { closeBtn.Opacity = isActive ? 1 : 0; if (!isActive) tabBorder.Background = new SolidColorBrush(inactiveBg); };
                 tabBorder.PointerPressed += (s, e) =>
                 {
                     var props = e.GetCurrentPoint(tabBorder).Properties;
@@ -3240,7 +3209,7 @@ namespace codeLess.AvaloniaApp
         {
             if (openEditorsStack == null || currentTheme == null) return;
             openEditorsStack.Children.Clear();
-            openEditorsHeaderBtn.Content = new LiteralTextBlock((openEditorsStack.IsVisible ? "▾ " : "▸ ") + $"OPEN EDITORS ({openTabs.Count})");
+            openEditorsHeaderBtn.Content = new SectionHeaderLabel((openEditorsStack.IsVisible ? "▾ " : "▸ ") + $"OPEN EDITORS ({openTabs.Count})");
 
             Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
             Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
@@ -3349,7 +3318,7 @@ namespace codeLess.AvaloniaApp
             problemsListBox.ItemsSource = probItems;
             int totalProbs = errCount + warnCount;
             btmProblemsTabBtn.Content = new LiteralTextBlock($"PROBLEMS ({totalProbs})");
-            statusProblemsBtn.Content = new LiteralTextBlock($"⊗ {errCount}  △ {warnCount}");
+            SetStatusProblems(errCount, warnCount);
         }
 
         public void UpdateWindowTitle()
@@ -3439,8 +3408,7 @@ namespace codeLess.AvaloniaApp
 
         public void SetStatusMessage(string msg)
         {
-            if (statusMessageLabel != null)
-                statusMessageLabel.Text = msg ?? "";
+            ApplyStatusMessage(msg);
         }
 
         public void AppendOutputLog(string line)
