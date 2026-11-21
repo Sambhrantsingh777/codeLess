@@ -370,6 +370,7 @@ namespace codeLess.Studio
                 ShowMinimap = baseLoaded.ShowMinimap,
                 ShowBreadcrumbs = baseLoaded.ShowBreadcrumbs,
                 ShowWelcomeOnStartup = baseLoaded.ShowWelcomeOnStartup,
+                ActivatePythonEnvironmentInTerminal = baseLoaded.ActivatePythonEnvironmentInTerminal,
                 ExcludedFolders = baseLoaded.ExcludedFolders,
                 DefaultAgentModel = baseLoaded.DefaultAgentModel,
                 DefaultAskModel = baseLoaded.DefaultAskModel,

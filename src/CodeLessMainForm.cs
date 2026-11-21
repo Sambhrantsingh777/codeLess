@@ -5472,13 +5472,15 @@ if __name__ == '__main__':
                 termCtrl.IsAiProviderConfiguredCallback = () => IsActiveVendorConfigured();
                 termCtrl.OpenAiSettingsCallback = () => OpenByokConfigurationDialog();
                 termCtrl.SwitchTerminalDeltaRequested += (delta) => SwitchTerminalSessionByDelta(delta);
-                termCtrl.FileLinkClicked += (fp, ln) =>
+                // Ctrl+Click file links arrive already resolved (shell cwd, then workspace root) and verified to exist.
+                termCtrl.WorkspaceRootProvider = () => workspaceRoot;
+                termCtrl.FileLinkClicked += (fp, ln, col) =>
                 {
-                    string resolved = LlmHarnessAndAgentEngine.ResolveWorkspacePath(workspaceRoot, fp);
-                    if (File.Exists(resolved))
+                    if (File.Exists(fp))
                     {
-                        OpenFileInTab(resolved);
-                        if (ln > 0) editorControl.JumpToLine(ln);
+                        OpenFileInTab(fp);
+                        if (ln > 0 && col > 0) editorControl.JumpToLineAndColumn(ln, col);
+                        else if (ln > 0) editorControl.JumpToLine(ln);
                     }
                 };
                 termCtrl.RequestNewTerminal += () => RequestNewTerminal(null, null);
@@ -5858,6 +5860,16 @@ if __name__ == '__main__':
                     handleExitOnUi();
                 }
             };
+            // Every new interactive session is wired here right after creation: activate the workspace venv in it.
+            MaybeActivatePythonVenv(session);
+        }
+
+        /// <summary>VS Code-style Python venv activation (Preferences: "Activate Python environment in new terminals").</summary>
+        private void MaybeActivatePythonVenv(ConPtyTerminalSession pty)
+        {
+            if (pty == null || (settings != null && !settings.ActivatePythonEnvironmentInTerminal)) return;
+            try { PythonVenvActivator.ScheduleActivation(pty, workspaceRoot); }
+            catch { }
         }
 
         private void RemoveExitedTerminalSession(TerminalSessionState state)
@@ -5892,6 +5904,7 @@ if __name__ == '__main__':
                         }
                     };
                     splitConPtyTerminalControl.Session = splitPty;
+                    MaybeActivatePythonVenv(splitPty);
                 }
                 else
                 {
