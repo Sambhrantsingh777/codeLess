@@ -2814,7 +2814,7 @@ namespace codeLess.Studio
     /// gutter breakpoints & code folding, inline AI ghost text, surgical diff overlays,
     /// wavy diagnostic squiggles, and an interactive pixel minimap.
     /// </summary>
-    public class CodeLessVirtualCanvas : Control
+    public partial class CodeLessVirtualCanvas : Control
     {
         private readonly CodeLessEditorControl owner;
         public string FontFamilyName = "Consolas";
@@ -3372,6 +3372,7 @@ namespace codeLess.Studio
                         using (SolidBrush gutterHl = new SolidBrush(th.BgElevated))
                             g.FillRectangle(gutterHl, 0, y, GutterWidth - 1, LineHeight);
                     }
+                    if (buf.DebugStoppedLine == docLine) DrawDebugStoppedLineBackground(g, buf, y, codeAreaRight);
 
                     // Staged AI Diff Line Tint
                     if (hunk != null)
@@ -3398,13 +3399,7 @@ namespace codeLess.Studio
                     // Gutter decorations on non-continuation rows
                     if (!seg.IsContinuation)
                     {
-                        if (buf.Breakpoints.Contains(docLine))
-                        {
-                            g.SmoothingMode = SmoothingMode.AntiAlias;
-                            using (SolidBrush bpBrush = new SolidBrush(Color.FromArgb(244, 63, 94)))
-                                g.FillEllipse(bpBrush, 5, y + (LineHeight - 10) / 2, 10, 10);
-                            g.SmoothingMode = SmoothingMode.Default;
-                        }
+                        DrawDebugGutterGlyphs(g, buf, docLine, y);
 
                         string numStr = (docLine + 1).ToString();
                         Size numSize = TextRenderer.MeasureText(numStr, gutterFont, new Size(200, 50), TextFormatFlags.NoPadding);
@@ -4419,6 +4414,7 @@ namespace codeLess.Studio
                         buf.Breakpoints.Remove(clickedLine);
                     else
                         buf.Breakpoints.Add(clickedLine);
+                    EditorDebugHooks.NotifyBreakpointToggled(buf, clickedLine);
                 }
                 else
                 {

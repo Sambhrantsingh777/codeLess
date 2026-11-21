@@ -1042,6 +1042,9 @@ namespace codeLess.Studio
             this.ResultsList = resultsList;
 
             List<PaletteEntry> entries = new List<PaletteEntry>();
+            // Quick Open "file:line[:col]" suffix (VS Code), parsed by refreshList and applied when a file is picked.
+            int quickOpenLine = 0;
+            int quickOpenCol = 0;
 
             Action<string, string, string, Action> addCmd = (category, title, shortcut, cb) =>
             {
@@ -1191,14 +1194,37 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "next_problem"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Go", "Go: Previous Problem", "Shift+F8",
                 () => { SelectedCommandId = "prev_problem"; this.DialogResult = DialogResult.OK; this.Close(); });
-            addCmd("Run", "Run: Start Debugging / Run Active File", "F5",
-                () => { SelectedCommandId = "run_file"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Run", "Debug: Start Debugging", "F5",
+                () => { SelectedCommandId = "debug_start"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Run", "Run: Run Without Debugging", "Ctrl+F5",
                 () => { SelectedCommandId = "run_file"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Run", "Run: Stop Execution", "Shift+F5",
                 () => { SelectedCommandId = "stop_run"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Run", "Run: Toggle Breakpoint", "F9",
                 () => { SelectedCommandId = "toggle_breakpoint"; this.DialogResult = DialogResult.OK; this.Close(); });
+            string[][] debugCmds = new string[][]
+            {
+                new string[] { "Debug: Stop", "Shift+F5", "debug_stop" },
+                new string[] { "Debug: Restart", "Ctrl+Shift+F5", "debug_restart" },
+                new string[] { "Debug: Pause", "F6", "debug_pause" },
+                new string[] { "Debug: Step Over", "F10", "debug_step_over" },
+                new string[] { "Debug: Step Into", "F11", "debug_step_into" },
+                new string[] { "Debug: Step Out", "Shift+F11", "debug_step_out" },
+                new string[] { "Debug: Add Conditional Breakpoint / Logpoint...", "", "debug_conditional_breakpoint" },
+                new string[] { "Debug: Remove All Breakpoints", "", "debug_remove_all_breakpoints" },
+                new string[] { "Debug: Debug Active File", "", "debug_active_file" },
+                new string[] { "Debug: Create launch.json", "", "debug_create_launch_json" },
+                new string[] { "View: Show Run and Debug", "Ctrl+Shift+D", "debug_open_view" },
+                new string[] { "Debug: Open Debug Console", "Ctrl+Shift+Y", "debug_console" },
+                new string[] { "Python: Select Interpreter", "", "python_select_interpreter" },
+                new string[] { "Python: Run Python File", "", "python_run_file" },
+                new string[] { "Python: Debug Python File", "", "python_debug_file" }
+            };
+            foreach (string[] dc in debugCmds)
+            {
+                string dcId = dc[2];
+                addCmd("Run", dc[0], dc[1], () => { SelectedCommandId = dcId; this.DialogResult = DialogResult.OK; this.Close(); });
+            }
             addCmd("Terminal", "Terminal: Create New Terminal", "Ctrl+Shift+`",
                 () => { SelectedCommandId = "terminal_new"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Terminal", "Terminal: Split Terminal", "Ctrl+Shift+5",
@@ -1231,6 +1257,10 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "open_checkpoints"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("API Client", "Open Native HTTP / REST & Latency Playground", "",
                 () => { SelectedCommandId = "open_rest_client"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("View", "Show Network Activity", "",
+                () => { SelectedCommandId = "show_network_activity"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Preferences", "Toggle Offline Mode", "",
+                () => { SelectedCommandId = "toggle_offline_mode"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Self-Heal", "Auto-Heal Last Terminal / Compiler Crash", "",
                 () => { SelectedCommandId = "auto_heal_terminal"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Workspace", "Create New Project from Template Wizard...", "",
@@ -1337,7 +1367,7 @@ namespace codeLess.Studio
 
             if (workspaceFiles != null)
             {
-                foreach (string fp in workspaceFiles.Take(5000))
+                foreach (string fp in workspaceFiles.Take(50000))
                 {
                     string capturedFile = fp;
                     string rel = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, capturedFile);
@@ -1349,7 +1379,17 @@ namespace codeLess.Studio
                         DisplayTitle = rel,
                         Category = ext,
                         Shortcut = Path.GetFileName(capturedFile),
-                        Callback = () => { SelectedFilePath = capturedFile; this.DialogResult = DialogResult.OK; this.Close(); }
+                        Callback = () =>
+                        {
+                            SelectedFilePath = capturedFile;
+                            if (quickOpenLine > 0)
+                            {
+                                SelectedLineToJump = quickOpenLine;
+                                SelectedColumnToJump = Math.Max(1, quickOpenCol);
+                            }
+                            this.DialogResult = DialogResult.OK;
+                            this.Close();
+                        }
                     });
                 }
             }
@@ -1442,6 +1482,8 @@ namespace codeLess.Studio
             Action refreshList = () =>
             {
                 string rawQ = searchBox.Text.Trim();
+                quickOpenLine = 0;
+                quickOpenCol = 0;
                 if (rawQ == ">")
                 {
                     filtered = entries.Where(x => x.RawText.StartsWith(">")).Take(60).ToList();
@@ -1525,7 +1567,12 @@ namespace codeLess.Studio
                 }
                 else
                 {
-                    string q = rawQ.ToLowerInvariant();
+                    int qoL;
+                    int qoC;
+                    string fileQ = WorkspaceSearchEngine.SplitQuickOpenLineSuffix(rawQ, out qoL, out qoC);
+                    quickOpenLine = qoL;
+                    quickOpenCol = qoC;
+                    string q = fileQ.ToLowerInvariant();
                     filtered = entries
                         .Select(x => new { Entry = x, Score = fuzzyScore(x.DisplayTitle + " " + x.RawText, q) + (x.RawText.StartsWith("≡") ? 20 : 0) })
                         .Where(x => x.Score > 0)
@@ -1585,6 +1632,12 @@ namespace codeLess.Studio
             };
 
             resultsList.DoubleClick += (s, e) =>
+            {
+                if (resultsList.SelectedIndex >= 0 && resultsList.SelectedIndex < filtered.Count)
+                    filtered[resultsList.SelectedIndex].Callback();
+            };
+            // VS Code: a single click picks the row (was double-click only).
+            resultsList.ItemClicked += (s, e) =>
             {
                 if (resultsList.SelectedIndex >= 0 && resultsList.SelectedIndex < filtered.Count)
                     filtered[resultsList.SelectedIndex].Callback();
@@ -2609,27 +2662,30 @@ namespace codeLess.Studio
                     var sw = Stopwatch.StartNew();
                     try
                     {
-                        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                        req.Method = method;
-                        req.UserAgent = "codeLess-Native-REST/3.0";
-                        req.Timeout = 10000;
-                        using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                        using (StreamReader sr = new StreamReader(res.GetResponseStream()))
+                        // Routed through the NetworkLedger (Network Activity panel; refused in Offline Mode unless loopback).
+                        LedgerHttpRequest lreq = new LedgerHttpRequest();
+                        lreq.Feature = "HTTP Client (REST playground)";
+                        lreq.Method = method;
+                        lreq.Url = url;
+                        lreq.UserAgent = "codeLess-Native-REST/3.0";
+                        lreq.TimeoutMs = 10000;
+                        LedgerHttpResponse res = LedgerHttp.Send(lreq);
+                        if (res.Status == 0) throw new Exception(res.Error);
                         {
-                            string body = sr.ReadToEnd();
+                            string body = res.Body ?? "";
                             sw.Stop();
                             StringBuilder sb = new StringBuilder();
                             sb.AppendLine(string.Format("HTTP/{0} {1} {2}  •  Latency: {3} ms  •  Payload: {4:N0} bytes",
-                                res.ProtocolVersion, (int)res.StatusCode, res.StatusDescription, sw.ElapsedMilliseconds, body.Length));
+                                res.ProtocolVersion, res.Status, res.StatusDescription, sw.ElapsedMilliseconds, res.BytesReceived));
                             sb.AppendLine("--------------------------------------------------------------------------------");
-                            foreach (string hk in res.Headers.AllKeys)
-                                sb.AppendLine(hk + ": " + res.Headers[hk]);
+                            foreach (KeyValuePair<string, string> hk in res.Headers)
+                                sb.AppendLine(hk.Key + ": " + hk.Value);
                             sb.AppendLine("--------------------------------------------------------------------------------\n");
                             sb.AppendLine(body.Length > 12000 ? body.Substring(0, 12000) + "\n... [Truncated]" : body);
 
                             this.BeginInvoke(new Action(() =>
                             {
-                                latencyBadge.Text = string.Format("✓ {0} ({1} ms)", (int)res.StatusCode, sw.ElapsedMilliseconds);
+                                latencyBadge.Text = string.Format((res.IsSuccess ? "✓" : "✗") + " {0} ({1} ms)", res.Status, sw.ElapsedMilliseconds);
                                 responseBox.Text = sb.ToString();
                                 sendBtn.Enabled = true;
                             }));
@@ -2676,6 +2732,8 @@ namespace codeLess.Studio
         public CheckBox AutoSaveBox;
         public CheckBox AgentApprovalBox;
         public CheckBox ShowWelcomeBox;
+        public CheckBox ActivatePythonEnvBox;
+        public CheckBox OfflineModeBox;
         public CodeLessDarkInputBox ExcludedFoldersInput;
 
         // AI Section controls
@@ -2705,6 +2763,8 @@ namespace codeLess.Studio
             bool origAutoSave = currentSettings.AutoSave;
             bool origApproval = currentSettings.RequireAgentToolApproval;
             bool origWelcome = currentSettings.ShowWelcomeOnStartup;
+            bool origActivateVenv = currentSettings.ActivatePythonEnvironmentInTerminal;
+            bool origOffline = currentSettings.OfflineMode;
             string origExcluded = currentSettings.ExcludedFolders;
             string origAgentModel = currentSettings.DefaultAgentModel;
             string origAskModel = currentSettings.DefaultAskModel;
@@ -2850,6 +2910,9 @@ namespace codeLess.Studio
             AgentApprovalBox = addCheck("Require Approval Before Agent Runs Commands", settings.RequireAgentToolApproval, 380, y);
             y += 24;
             ShowWelcomeBox = addCheck("Show Welcome page on startup", settings.ShowWelcomeOnStartup, 24, y);
+            ActivatePythonEnvBox = addCheck("Activate Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, 380, y);
+            y += 24;
+            OfflineModeBox = addCheck("Offline Mode (block all non-local network requests)", settings.OfflineMode, 24, y);
             y += 28;
             addLabel("Excluded Folders (files.exclude):", y);
             ExcludedFoldersInput = new CodeLessDarkInputBox
@@ -3046,6 +3109,7 @@ namespace codeLess.Studio
             AutoSaveBox.CheckedChanged += (s, e) => liveApply();
             AgentApprovalBox.CheckedChanged += (s, e) => liveApply();
             ShowWelcomeBox.CheckedChanged += (s, e) => liveApply();
+            OfflineModeBox.CheckedChanged += (s, e) => liveApply();
             ExcludedFoldersInput.TextChanged += (s, e) => liveApply();
             DefaultAgentModelCombo.SelectedIndexChanged += (s, e) => liveApply();
             DefaultAskModelCombo.SelectedIndexChanged += (s, e) => liveApply();
@@ -3100,6 +3164,9 @@ namespace codeLess.Studio
                 settings.AutoSave = origAutoSave;
                 settings.RequireAgentToolApproval = origApproval;
                 settings.ShowWelcomeOnStartup = origWelcome;
+                settings.ActivatePythonEnvironmentInTerminal = origActivateVenv;
+                settings.OfflineMode = origOffline;
+                NetworkLedger.SetOfflineMode(origOffline);
                 settings.ExcludedFolders = origExcluded;
                 settings.DefaultAgentModel = origAgentModel;
                 settings.DefaultAskModel = origAskModel;
@@ -3149,6 +3216,13 @@ namespace codeLess.Studio
             settings.RequireAgentToolApproval = AgentApprovalBox.Checked;
             if (ShowWelcomeBox != null)
                 settings.ShowWelcomeOnStartup = ShowWelcomeBox.Checked;
+            if (ActivatePythonEnvBox != null)
+                settings.ActivatePythonEnvironmentInTerminal = ActivatePythonEnvBox.Checked;
+            if (OfflineModeBox != null)
+            {
+                settings.OfflineMode = OfflineModeBox.Checked;
+                NetworkLedger.SetOfflineMode(settings.OfflineMode);
+            }
             if (ExcludedFoldersInput != null && !string.IsNullOrWhiteSpace(ExcludedFoldersInput.Text))
                 settings.ExcludedFolders = ExcludedFoldersInput.Text.Trim();
             if (DefaultAgentModelCombo != null && !string.IsNullOrWhiteSpace(DefaultAgentModelCombo.Text))

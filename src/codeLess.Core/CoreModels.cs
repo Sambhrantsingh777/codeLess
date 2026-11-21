@@ -1553,6 +1553,8 @@ namespace codeLess.Studio
         public bool ShowMinimap { get; set; }
         public bool ShowBreadcrumbs { get; set; }
         public bool ShowWelcomeOnStartup { get; set; }
+        /// <summary>Activate the workspace's Python venv (.venv/venv/env/.env) in new terminals, like VS Code.</summary>
+        public bool ActivatePythonEnvironmentInTerminal { get; set; }
         public string ExcludedFolders { get; set; }
         public string DefaultAgentModel { get; set; }
         public string DefaultAskModel { get; set; }
@@ -1587,6 +1589,7 @@ namespace codeLess.Studio
             ShowMinimap = true;
             ShowBreadcrumbs = true;
             ShowWelcomeOnStartup = true;
+            ActivatePythonEnvironmentInTerminal = true;
             ExcludedFolders = DefaultExcludedFoldersList;
             DefaultAgentModel = "claude-sonnet-4-6";
             DefaultAskModel = "gpt-4o";
@@ -1644,6 +1647,7 @@ namespace codeLess.Studio
                         if (string.IsNullOrWhiteSpace(loaded.ExcludedFolders)) loaded.ExcludedFolders = DefaultExcludedFoldersList;
                         if (!json.Contains("\"ShowWelcomeOnStartup\"")) loaded.ShowWelcomeOnStartup = true;
                         if (!json.Contains("\"ShowBreadcrumbs\"")) loaded.ShowBreadcrumbs = true;
+                        if (!json.Contains("\"ActivatePythonEnvironmentInTerminal\"")) loaded.ActivatePythonEnvironmentInTerminal = true;
                         return loaded;
                     }
                 }

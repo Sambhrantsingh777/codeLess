@@ -63,7 +63,7 @@ namespace codeLess.AvaloniaApp
                     string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codeless");
                     Directory.CreateDirectory(dir);
                     File.AppendAllText(Path.Combine(dir, "crash.log"),
-                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [UIThread] {e.Exception}{Environment.NewLine}");
+                        "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture) + "] [UIThread] " + e.Exception + Environment.NewLine);
                 }
                 catch { }
                 e.Handled = true;
