@@ -107,3 +107,28 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    public class EditorVisualColumnTests
+    {
+        [Fact]
+        public void VisualColumns_HandleTabsWideCharsEmojiAndCombiningMarks()
+        {
+            codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DisplayTabSize = 4;
+            System.Func<string, int, int> V = codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.VisualColumn;
+            System.Func<string, double, int> I = codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.CharIndexForVisualColumn;
+            Assert.Equal(4, V("\tx", 1));          // tab to first stop
+            Assert.Equal(4, V("ab\tx", 3));        // tab from col 2 -> 4
+            Assert.Equal(8, V("abcd\tx", 5));      // tab exactly at a stop -> next stop
+            Assert.Equal(4, V("你好x", 2));         // CJK = 2 cells each
+            Assert.Equal(2, V("🚀x", 2));          // emoji surrogate pair = 2 cells
+            Assert.Equal(1, V("éx", 2));     // e + combining acute = 1 cell
+            // inverse mapping lands on character boundaries
+            Assert.Equal(1, I("\tx", 4.2));
+            Assert.Equal(1, I("你好x", 2.4));
+            Assert.Equal(2, I("🚀x", 2.1));
+            Assert.Equal(0, I("你好", 0.6));
+        }
+    }
+}

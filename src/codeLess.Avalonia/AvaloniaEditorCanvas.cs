@@ -1359,6 +1359,68 @@ namespace codeLess.AvaloniaApp
         private double measuredCharWidth = 0;
         private double measuredCharWidthFontSize = -1;
         public double CharWidth => measuredCharWidth > 3.0 ? measuredCharWidth : Math.Round(FontSizePx * 0.60, 2);
+
+        // ---- Visual column model -------------------------------------------------------------------------
+        // Text, caret, selection, find highlights and click hit-testing all use the same grid: a tab advances to
+        // the next tab stop, CJK / emoji occupy 2 cells, combining marks 0. (Previously text was drawn with
+        // measured glyph widths while carets used column * CharWidth, so they drifted apart on such lines.)
+        public static int DisplayTabSize = 4;
+
+        private static int CellsForChar(string s, int i)
+        {
+            char c = s[i];
+            if (char.IsLowSurrogate(c)) return 0; // counted with its high surrogate
+            if (char.IsHighSurrogate(c))
+            {
+                if (i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]))
+                {
+                    int cp = char.ConvertToUtf32(c, s[i + 1]);
+                    if (Vt100TerminalBuffer.IsZeroWidthAstral(cp)) return 0;
+                    return Vt100TerminalBuffer.IsWideAstral(cp) ? 2 : 1;
+                }
+                return 1;
+            }
+            if (Vt100TerminalBuffer.IsZeroWidthBmp(c)) return 0;
+            return Vt100TerminalBuffer.IsWideBmp(c) ? 2 : 1;
+        }
+
+        /// <summary>Visual column (in cells) of character index <paramref name="col"/> in <paramref name="line"/>.</summary>
+        public static int VisualColumn(string line, int col)
+        {
+            if (string.IsNullOrEmpty(line) || col <= 0) return Math.Max(0, col);
+            int tab = Math.Max(1, DisplayTabSize);
+            int v = 0;
+            int n = Math.Min(col, line.Length);
+            for (int i = 0; i < n; i++)
+            {
+                if (line[i] == '\t') v += tab - (v % tab);
+                else v += CellsForChar(line, i);
+            }
+            return v + Math.Max(0, col - line.Length); // virtual space past end of line
+        }
+
+        /// <summary>Character index nearest to visual column <paramref name="vcol"/> (inverse of VisualColumn).</summary>
+        public static int CharIndexForVisualColumn(string line, double vcol)
+        {
+            if (string.IsNullOrEmpty(line) || vcol <= 0) return 0;
+            int tab = Math.Max(1, DisplayTabSize);
+            int v = 0;
+            for (int i = 0; i < line.Length; i++)
+            {
+                int w = line[i] == '\t' ? tab - (v % tab) : CellsForChar(line, i);
+                if (w == 0) continue;
+                if (vcol < v + w / 2.0) return i;
+                v += w;
+            }
+            return line.Length;
+        }
+
+        /// <summary>X offset (relative to the start of the code area) of a character index on a document line.</summary>
+        private double ColX(EditorTabBuffer buf, int docLine, int col)
+        {
+            if (buf == null || docLine < 0 || docLine >= buf.Lines.Count) return col * CharWidth;
+            return VisualColumn(buf.Lines[docLine], col) * CharWidth;
+        }
         public const double GutterWidth = 58.0;
         public const double MinimapWidth = 76.0;
 
@@ -1448,7 +1510,7 @@ namespace codeLess.AvaloniaApp
             // Horizontal: keep the caret inside the viewport when typing past the right edge (was never scrolled).
             if (!buf.WordWrap && Bounds.Width > GutterWidth + 40)
             {
-                double caretX = buf.CursorCol * CharWidth;
+                double caretX = ColX(buf, buf.CursorLine, buf.CursorCol);
                 double viewW = Bounds.Width - GutterWidth - 24;
                 if (caretX < buf.ScrollLeftPx) buf.ScrollLeftPx = Math.Max(0, caretX - CharWidth * 4);
                 else if (caretX > buf.ScrollLeftPx + viewW) buf.ScrollLeftPx = caretX - viewW + CharWidth * 4;
@@ -1815,7 +1877,7 @@ namespace codeLess.AvaloniaApp
             var buf = Buffer;
             if (buf == null || docLine < 0 || docLine >= buf.Lines.Count) return 0;
             double relX = Math.Max(0, x - GutterWidth - 8 + buf.ScrollLeftPx);
-            int col = (int)Math.Round(relX / CharWidth);
+            int col = CharIndexForVisualColumn(buf.Lines[docLine], relX / CharWidth);
             return Math.Max(0, Math.Min(buf.Lines[docLine].Length, col));
         }
 
@@ -3482,8 +3544,8 @@ namespace codeLess.AvaloniaApp
                     while (fmIdx < owner.FindMatches.Count && owner.FindMatches[fmIdx].Line == docLine)
                     {
                         var fm = owner.FindMatches[fmIdx++];
-                        double fx = codeBaseX + fm.StartCol * CharWidth;
-                        double fw = Math.Max(CharWidth, fm.Length * CharWidth);
+                        double fx = codeBaseX + ColX(buf, docLine, fm.StartCol);
+                        double fw = Math.Max(CharWidth, ColX(buf, docLine, fm.StartCol + fm.Length) - ColX(buf, docLine, fm.StartCol));
                         if (fx + fw >= GutterWidth && fx <= codeAreaRight)
                             context.FillRectangle(findMatchBrush, new Rect(fx, y + 1, fw, LineHeight - 2));
                     }
@@ -3528,30 +3590,63 @@ namespace codeLess.AvaloniaApp
                 // Syntax-highlighted tokens (horizontally windowed for ultra-long / minified lines)
                 double curX = codeBaseX;
                 string renderLineText = lineText;
+                int renderVcol = 0;
                 if (lineText.Length > 360)
                 {
                     int sliceStart = Math.Min(lineText.Length, firstHorizCol);
                     int sliceLen = Math.Min(lineText.Length - sliceStart, maxHorizCols);
                     renderLineText = sliceLen > 0 ? lineText.Substring(sliceStart, sliceLen) : "";
-                    curX = codeBaseX + sliceStart * CharWidth;
+                    renderVcol = VisualColumn(lineText, sliceStart);
+                    curX = codeBaseX + renderVcol * CharWidth;
                 }
 
                 if (renderLineText.Length > 0)
                 {
                     var tokens = TokenizeLineForTheme(renderLineText, Theme);
+                    int tabStop = Math.Max(1, DisplayTabSize);
                     foreach (var tk in tokens)
                     {
                         var tf = tk.IsBold ? fontBold : (tk.IsItalic ? fontItalic : fontRegular);
-                        var ft = new FormattedText(
-                            tk.Text,
-                            CultureInfo.InvariantCulture,
-                            FlowDirection.LeftToRight,
-                            tf,
-                            FontSizePx,
-                            new SolidColorBrush(tk.Color));
-                        if (curX + ft.WidthIncludingTrailingWhitespace >= GutterWidth && curX <= codeAreaRight)
-                            context.DrawText(ft, new Point(curX, y + (LineHeight - ft.Height) / 2.0));
-                        curX += ft.WidthIncludingTrailingWhitespace;
+                        var brush = new SolidColorBrush(tk.Color);
+                        string t = tk.Text ?? "";
+                        bool simple = true;
+                        for (int ci = 0; ci < t.Length; ci++)
+                        {
+                            char ch = t[ci];
+                            if (ch == '\t' || ch >= '\u1100') { simple = false; break; }
+                        }
+                        if (simple)
+                        {
+                            // Fast path: plain monospace run, one FormattedText positioned on the grid.
+                            double x0 = codeBaseX + renderVcol * CharWidth;
+                            double runW = t.Length * CharWidth;
+                            if (x0 + runW >= GutterWidth && x0 <= codeAreaRight)
+                            {
+                                var ft = new FormattedText(t, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, FontSizePx, brush);
+                                context.DrawText(ft, new Point(x0, y + (LineHeight - ft.Height) / 2.0));
+                            }
+                            renderVcol += t.Length;
+                        }
+                        else
+                        {
+                            // Tabs / wide / astral characters: place each glyph cluster at its own cell.
+                            for (int ci = 0; ci < t.Length; ci++)
+                            {
+                                char ch = t[ci];
+                                if (ch == '\t') { renderVcol += tabStop - (renderVcol % tabStop); continue; }
+                                int cells = CellsForChar(t, ci);
+                                string glyph = (char.IsHighSurrogate(ch) && ci + 1 < t.Length) ? t.Substring(ci, 2) : ch.ToString();
+                                double gx0 = codeBaseX + renderVcol * CharWidth;
+                                if (gx0 + CharWidth * Math.Max(1, cells) >= GutterWidth && gx0 <= codeAreaRight && !char.IsLowSurrogate(ch))
+                                {
+                                    var gft = new FormattedText(glyph, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, FontSizePx, brush);
+                                    context.DrawText(gft, new Point(gx0, y + (LineHeight - gft.Height) / 2.0));
+                                }
+                                if (glyph.Length == 2) ci++;
+                                renderVcol += cells;
+                            }
+                        }
+                        curX = codeBaseX + renderVcol * CharWidth;
                         if (curX > codeAreaRight + 40) break;
                     }
                 }
@@ -3574,7 +3669,7 @@ namespace codeLess.AvaloniaApp
                 // Ghost text suggestion after cursor
                 if (docLine == buf.CursorLine && !string.IsNullOrEmpty(buf.GhostTextSuggestion))
                 {
-                    double gx = Math.Max(curX + (lineText.Length > 0 ? 8 : 0), codeBaseX + buf.CursorCol * CharWidth);
+                    double gx = Math.Max(curX + (lineText.Length > 0 ? 8 : 0), codeBaseX + ColX(buf, docLine, buf.CursorCol));
                     int nlIdx = buf.GhostTextSuggestion.IndexOf('\n');
                     string firstGhostLine = nlIdx >= 0 ? buf.GhostTextSuggestion.Substring(0, nlIdx) : buf.GhostTextSuggestion;
                     var gft = new FormattedText(
@@ -3590,7 +3685,7 @@ namespace codeLess.AvaloniaApp
                 // Matching bracket highlight box
                 if (docLine == matchBLine && matchBCol >= 0)
                 {
-                    double bx = codeBaseX + matchBCol * CharWidth;
+                    double bx = codeBaseX + ColX(buf, docLine, matchBCol);
                     context.DrawRectangle(null, new Pen(accentBrush, 1.3), new Rect(bx, y + 2, CharWidth + 1, LineHeight - 4));
                 }
 
@@ -3607,8 +3702,8 @@ namespace codeLess.AvaloniaApp
                                 ? AvaloniaColorHelper.ToAvColor(Theme.DiagnosticError)
                                 : AvaloniaColorHelper.ToAvColor(Theme.DiagnosticWarning);
                             int firstChar = GetLeadingSpaces(lineText);
-                            double sx = codeBaseX + firstChar * CharWidth;
-                            double sw = Math.Max(CharWidth * 4, Math.Min(codeAreaRight - sx, (lineText.Length - firstChar) * CharWidth));
+                            double sx = codeBaseX + ColX(buf, docLine, firstChar);
+                            double sw = Math.Max(CharWidth * 4, Math.Min(codeAreaRight - sx, ColX(buf, docLine, lineText.Length) - ColX(buf, docLine, firstChar)));
                             if (sw > 0)
                                 DrawSquiggleUnderline(context, sx, y + LineHeight - 3, sw, sqCol);
                         }
@@ -3620,7 +3715,7 @@ namespace codeLess.AvaloniaApp
                 {
                     if (docLine == buf.CursorLine)
                     {
-                        double cx = codeBaseX + buf.CursorCol * CharWidth;
+                        double cx = codeBaseX + ColX(buf, docLine, buf.CursorCol);
                         context.FillRectangle(accentBrush, new Rect(cx, y + 2, 2.0, LineHeight - 4));
                     }
                     for (int eci = 0; eci < ExtraCursors.Count; eci++)
@@ -3628,7 +3723,7 @@ namespace codeLess.AvaloniaApp
                         var ec = ExtraCursors[eci];
                         if (ec.Line == docLine)
                         {
-                            double ecx = codeBaseX + ec.Col * CharWidth;
+                            double ecx = codeBaseX + ColX(buf, docLine, ec.Col);
                             context.FillRectangle(accentBrush, new Rect(ecx, y + 2, 2.0, LineHeight - 4));
                         }
                     }
@@ -3683,7 +3778,8 @@ namespace codeLess.AvaloniaApp
                     int endC = (docLine == l1) ? c1 : Math.Max(1, buf.Lines[docLine].Length);
                     if (endC > startC)
                     {
-                        context.FillRectangle(selBrush, new Rect(codeBaseX + startC * CharWidth, y, (endC - startC) * CharWidth, LineHeight));
+                        double sx0 = ColX(buf, docLine, startC);
+                        context.FillRectangle(selBrush, new Rect(codeBaseX + sx0, y, Math.Max(CharWidth * 0.5, ColX(buf, docLine, endC) - sx0), LineHeight));
                     }
                 }
             }
@@ -3696,7 +3792,8 @@ namespace codeLess.AvaloniaApp
                     int ecCol = Math.Max(ec.Col, ec.AnchorCol);
                     if (ecCol > sc)
                     {
-                        context.FillRectangle(selBrush, new Rect(codeBaseX + sc * CharWidth, y, (ecCol - sc) * CharWidth, LineHeight));
+                        double esx = ColX(buf, docLine, sc);
+                        context.FillRectangle(selBrush, new Rect(codeBaseX + esx, y, ColX(buf, docLine, ecCol) - esx, LineHeight));
                     }
                 }
             }

@@ -1376,7 +1376,7 @@ namespace codeLess.Studio
             }
         }
 
-        internal static bool IsZeroWidthBmp(char c)
+        public static bool IsZeroWidthBmp(char c)
         {
             return (c >= '̀' && c <= 'ͯ') ||   // combining diacritics
                    (c >= '᪰' && c <= '᫿') ||
@@ -1417,14 +1417,14 @@ namespace codeLess.Studio
                    (c >= '￠' && c <= '￦');
         }
 
-        internal static bool IsZeroWidthAstral(int cp)
+        public static bool IsZeroWidthAstral(int cp)
         {
             return (cp >= 0x1F3FB && cp <= 0x1F3FF) ||   // emoji skin-tone modifiers
                    (cp >= 0xE0000 && cp <= 0xE007F) ||   // tag characters
                    (cp >= 0xE0100 && cp <= 0xE01EF);     // variation selectors supplement
         }
 
-        internal static bool IsWideAstral(int cp)
+        public static bool IsWideAstral(int cp)
         {
             return cp == 0x1F004 || cp == 0x1F0CF || cp == 0x1F18E ||
                    (cp >= 0x1F191 && cp <= 0x1F19A) ||

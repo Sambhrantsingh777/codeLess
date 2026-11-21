@@ -242,6 +242,7 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrWhiteSpace(settings.ThemeId))
                 settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
+            AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(8, settings.TabSize));
             aiEngine = new LlmHarnessAndAgentEngine(settings);
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
@@ -2257,6 +2258,9 @@ namespace codeLess.AvaloniaApp
             statusSpacesBtn = MakeStatusBtn("Spaces: 4", () =>
             {
                 settings.TabSize = settings.TabSize == 4 ? 2 : 4;
+                AvaloniaVirtualEditorCanvas.DisplayTabSize = settings.TabSize;
+                PrimaryEditor?.Canvas?.InvalidateVisual();
+                SplitEditor?.Canvas?.InvalidateVisual();
                 UpdateStatusBar();
             });
             statusEncodingBtn = MakeStatusBtn("UTF-8", () =>
