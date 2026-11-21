@@ -14,6 +14,7 @@ namespace codeLess.AvaloniaApp
         [STAThread]
         public static void Main(string[] args)
         {
+            App.MainEnteredUtc = DateTime.UtcNow;
             EnsureDeveloperPathOnUnix();
             RegisterCrashGuards();
 
@@ -35,6 +36,23 @@ namespace codeLess.AvaloniaApp
                     else if (a == "--idle-probe" && i + 1 < args.Length)
                     {
                         App.IdleProbeReportPath = args[++i];
+                    }
+                    else if (a == "--bench-ready" && i + 1 < args.Length)
+                    {
+                        App.BenchReadyPath = args[++i];
+                    }
+                    else if (a == "--bench-open-file" && i + 1 < args.Length)
+                    {
+                        App.BenchOpenFilePath = args[++i];
+                    }
+                    else if (a == "--bench-open-report" && i + 1 < args.Length)
+                    {
+                        App.BenchOpenReportPath = args[++i];
+                    }
+                    else if (a == "--bench-open-delay-ms" && i + 1 < args.Length)
+                    {
+                        int.TryParse(args[++i], out int benchDelay);
+                        App.BenchOpenDelayMs = benchDelay;
                     }
                     else if (a == "--smoke-quit" && i + 1 < args.Length)
                     {

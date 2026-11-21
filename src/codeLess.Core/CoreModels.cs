@@ -1606,6 +1606,9 @@ namespace codeLess.Studio
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             string dir = Path.Combine(appData, "codeLess");
+            // Isolated profile for benchmarks / automated runs (macOS ignores $HOME for Application Support).
+            string overrideDir = Environment.GetEnvironmentVariable("CODELESS_SETTINGS_DIR");
+            if (!string.IsNullOrEmpty(overrideDir)) dir = overrideDir;
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             return Path.Combine(dir, "settings.json");
         }

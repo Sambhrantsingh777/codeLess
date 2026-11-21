@@ -21,6 +21,11 @@ namespace codeLess.AvaloniaApp
         public static string SmokeQuitReportPath { get; set; }
         public static string BenchmarkReportPath { get; set; }
         public static string IdleProbeReportPath { get; set; }
+        public static string BenchReadyPath { get; set; }
+        public static string BenchOpenFilePath { get; set; }
+        public static string BenchOpenReportPath { get; set; }
+        public static int BenchOpenDelayMs { get; set; }
+        public static DateTime MainEnteredUtc { get; set; }
 
         public App()
         {
@@ -93,8 +98,10 @@ namespace codeLess.AvaloniaApp
                     };
                 }
 
-                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(IdleProbeReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath) || MainWindow.IsMonorepoBenchRequested;
+                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(IdleProbeReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath) || MainWindow.IsMonorepoBenchRequested || !string.IsNullOrWhiteSpace(BenchReadyPath) || !string.IsNullOrWhiteSpace(BenchOpenReportPath);
                 MainWindow.AttachMonorepoBenchIfRequested(mainWindow);
+                if (!string.IsNullOrWhiteSpace(BenchReadyPath) || !string.IsNullOrWhiteSpace(BenchOpenFilePath))
+                    mainWindow.StartBenchProbes(BenchReadyPath, BenchOpenFilePath, BenchOpenReportPath, BenchOpenDelayMs);
                 if (!automatedRun)
                     mainWindow.Opened += (s, e) => Dispatcher.UIThread.Post(mainWindow.MaybeAutoCheckForUpdates, DispatcherPriority.Background);
 

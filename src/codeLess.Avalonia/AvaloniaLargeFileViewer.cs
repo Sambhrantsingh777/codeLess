@@ -43,6 +43,7 @@ namespace codeLess.AvaloniaApp
         private StudioTheme theme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
         private DispatcherTimer followTimer;
         private DispatcherTimer searchDebounce;
+        private readonly UiPost ui = UiPost.CaptureCurrent();
         private bool pollInFlight;
         private bool pollAgain;
         private bool uiUpdatePending;
@@ -241,7 +242,7 @@ namespace codeLess.AvaloniaApp
 
         private void OnDocAppended(object sender, EventArgs e)
         {
-            Dispatcher.UIThread.Post(() =>
+            ui.Post(() =>
             {
                 if (Document == null || !ReferenceEquals(sender, Document)) return;
                 if (Document.Follow && Viewport.AutoScrollToEnd) Viewport.ScrollToEnd(false);
@@ -251,7 +252,7 @@ namespace codeLess.AvaloniaApp
 
         private void OnDocReset(object sender, EventArgs e)
         {
-            Dispatcher.UIThread.Post(() =>
+            ui.Post(() =>
             {
                 if (Document == null || !ReferenceEquals(sender, Document)) return;
                 CancelSearch();
@@ -268,7 +269,7 @@ namespace codeLess.AvaloniaApp
         {
             if (uiUpdatePending) return;
             uiUpdatePending = true;
-            Dispatcher.UIThread.Post(() =>
+            ui.Post(() =>
             {
                 uiUpdatePending = false;
                 RefreshUi();
@@ -352,7 +353,7 @@ namespace codeLess.AvaloniaApp
                 catch { }
                 finally
                 {
-                    Dispatcher.UIThread.Post(() =>
+                    ui.Post(() =>
                     {
                         pollInFlight = false;
                         if (pollAgain) { pollAgain = false; PollNow(); }
@@ -478,7 +479,7 @@ namespace codeLess.AvaloniaApp
             ActiveSearch = search;
             long caretLine = Viewport.CaretLine;
             int caretCol = Viewport.CaretColumn;
-            search.Progress += (s, e) => Dispatcher.UIThread.Post(() =>
+            search.Progress += (s, e) => ui.Post(() =>
             {
                 if (!ReferenceEquals(ActiveSearch, search)) return;
                 if (activeMatch < 0 && !userNavigatedSinceSearch && search.StoredMatchCount > 0)
