@@ -3059,7 +3059,10 @@ namespace codeLess.Studio
                     this.Invalidate();
                 }
             };
-            caretTimer.Start();
+            // Blink only while focused (the app losing activation or the window being minimized also removes focus).
+            this.GotFocus += (s, e) => { caretBlinkOn = true; if (caretTimer != null) caretTimer.Start(); this.Invalidate(); };
+            this.LostFocus += (s, e) => { if (caretTimer != null) caretTimer.Stop(); };
+            if (this.Focused) caretTimer.Start();
         }
 
         public void ApplyTheme(StudioTheme th)

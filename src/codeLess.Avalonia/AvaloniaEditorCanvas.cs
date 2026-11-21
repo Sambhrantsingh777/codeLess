@@ -34,7 +34,7 @@ namespace codeLess.AvaloniaApp
         public int Length;
     }
 
-    public class AvaloniaEditorControl : Grid
+    public partial class AvaloniaEditorControl : Grid
     {
         public EditorTabBuffer CurrentBuffer { get; private set; }
         public AvaloniaVirtualEditorCanvas Canvas { get; }
@@ -193,6 +193,7 @@ namespace codeLess.AvaloniaApp
 
             Grid.SetRow(bodyOverlayGrid, 2);
             Children.Add(bodyOverlayGrid);
+            InitLargeFileHost(bodyOverlayGrid);
         }
 
         public bool IsFindOverlayVisible => findReplaceOverlay.IsVisible;
@@ -213,6 +214,7 @@ namespace codeLess.AvaloniaApp
         public void LoadBuffer(EditorTabBuffer tab)
         {
             CurrentBuffer = tab;
+            if (SyncLargeFileViewer(tab)) return;
             if (tab == null)
             {
                 ShowWelcomeView = true;
@@ -240,6 +242,7 @@ namespace codeLess.AvaloniaApp
         public void ShowWelcomeScreen()
         {
             CurrentBuffer = null;
+            SyncLargeFileViewer(null);
             ShowWelcomeView = true;
             welcomeHost.IsVisible = true;
             Canvas.IsVisible = false;
@@ -270,6 +273,7 @@ namespace codeLess.AvaloniaApp
             RebuildWelcomeThemeColors();
             RefreshBreadcrumbs();
             Canvas.ApplyTheme(theme);
+            LargeFileViewer?.ApplyTheme(theme);
         }
 
         public void RefreshBreadcrumbs(bool onlyIfChanged = false)
@@ -539,6 +543,7 @@ namespace codeLess.AvaloniaApp
         public void GoToLine(int oneBasedLine, int oneBasedCol = 1)
         {
             if (CurrentBuffer == null) return;
+            if (IsShowingLargeFile) { LargeFileViewer.GoToLine(oneBasedLine, oneBasedCol); return; }
             int line = Math.Max(0, Math.Min(CurrentBuffer.Lines.Count - 1, oneBasedLine - 1));
             int maxCol = CurrentBuffer.Lines[line].Length;
             int col = Math.Max(0, Math.Min(maxCol, oneBasedCol - 1));
@@ -554,6 +559,7 @@ namespace codeLess.AvaloniaApp
 
         public void ShowFindBar(bool includeReplace)
         {
+            if (IsShowingLargeFile) { LargeFileViewer.ShowFind(); return; }
             findReplaceOverlay.IsVisible = true;
             replaceRowPanel.IsVisible = includeReplace;
             if (CurrentBuffer != null && CurrentBuffer.HasSelection())
@@ -1557,10 +1563,22 @@ namespace codeLess.AvaloniaApp
                 caretBlinkOn = !caretBlinkOn;
                 if (IsVisible) InvalidateVisual();
             };
-            blinkTimer.Start();
+            // Blink only while focused in an active, visible window; otherwise draw a steady caret and stay asleep.
+            blinkGate = new UiTimerGate(this, blinkTimer, requireFocus: true);
+            blinkGate.RunningChanged += () => { caretBlinkOn = true; InvalidateVisual(); };
+            AddHandler(KeyDownEvent, (s, e) => RestartCaretBlink(), global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+            AddHandler(TextInputEvent, (s, e) => RestartCaretBlink(), global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+        }
 
-            AttachedToVisualTree += (s, e) => { if (!blinkTimer.IsEnabled) blinkTimer.Start(); };
-            DetachedFromVisualTree += (s, e) => { if (blinkTimer.IsEnabled) blinkTimer.Stop(); };
+        private readonly UiTimerGate blinkGate;
+        public bool IsCaretBlinkTimerRunning => blinkTimer.IsEnabled;
+        public bool IsCaretShown => caretBlinkOn;
+
+        /// <summary>Typing keeps the caret solid (VS Code): show it now and restart the blink interval.</summary>
+        private void RestartCaretBlink()
+        {
+            caretBlinkOn = true;
+            if (blinkTimer.IsEnabled) { blinkTimer.Stop(); blinkTimer.Start(); }
         }
 
         public EditorTabBuffer Buffer => owner.CurrentBuffer;

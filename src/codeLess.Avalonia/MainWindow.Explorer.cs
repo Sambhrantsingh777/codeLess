@@ -144,6 +144,7 @@ namespace codeLess.AvaloniaApp
         public void RefreshExplorerTree(string revealPath = null)
         {
             if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot)) return;
+            PerfTreeRefreshCount++;
 
             var expanded = new HashSet<string>(PathKeyComparer);
             CollectExpandedPaths(ExplorerTree.Nodes, expanded);
@@ -216,6 +217,7 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot)) return;
             int gen = Interlocked.Increment(ref reindexGeneration);
+            PerfReindexCount++;
             string root = workspaceRoot;
             var roots = GetWorkspaceRootFolders().ToList();
             var excluded = GetExcludedFolderSet(root);
@@ -410,6 +412,7 @@ namespace codeLess.AvaloniaApp
         {
             var tab = openTabs.FirstOrDefault(t => !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison));
             if (tab == null || tab.IsDirty || !File.Exists(fullPath)) return;
+            if (tab.IsLargeFileViewer) return; // the viewer pages from disk; Follow mode handles growth
             try
             {
                 string content = EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out var enc, out bool bom, out string eol, out bool finalNl);

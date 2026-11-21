@@ -483,13 +483,19 @@ namespace codeLess.Studio
                 UpdateTelemetryBadges();
             };
 
+            // Idle cost: the status-bar refresh only polls while this window is active (not when another app is in
+            // front or the window is minimized), and the autosave timer only runs while a saved file is dirty.
             telemetryTimer = new Timer { Interval = 3500 };
             telemetryTimer.Tick += (s, e) => UpdateTelemetryBadges();
-            telemetryTimer.Start();
+            this.Activated += (s, e) => { UpdateTelemetryBadges(); if (telemetryTimer != null) telemetryTimer.Start(); };
+            this.Deactivate += (s, e) => { if (telemetryTimer != null) telemetryTimer.Stop(); };
 
             autoSaveTimer = new Timer { Interval = 3000 };
-            autoSaveTimer.Tick += (s, e) => RunAutoSaveTick();
-            autoSaveTimer.Start();
+            autoSaveTimer.Tick += (s, e) =>
+            {
+                RunAutoSaveTick();
+                if (!HasPendingAutoSave()) autoSaveTimer.Stop();
+            };
 
             UpdateTelemetryBadges();
             UpdateWindowTitle();
@@ -1505,6 +1511,22 @@ namespace codeLess.Studio
                 statusLeftLabel.Text = "";
                 LayoutStatusBarItems();
             }
+        }
+
+        private bool HasPendingAutoSave()
+        {
+            if (settings == null || !settings.AutoSave) return false;
+            foreach (var t in openTabs)
+            {
+                if (t.IsDirty && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>Starts the autosave timer when there is something to save (called whenever buffers / tabs change).</summary>
+        private void ArmAutoSaveTimer()
+        {
+            if (autoSaveTimer != null && !autoSaveTimer.Enabled && HasPendingAutoSave()) autoSaveTimer.Start();
         }
 
         public void RunAutoSaveTick()
@@ -3158,6 +3180,7 @@ if __name__ == '__main__':
                 }
                 RefreshChangesetReviewBar();
                 UpdateStatusBarCursorAndLanguage(buf);
+                ArmAutoSaveTimer();
             };
             ctrl.OnCursorOrSelectionChanged += (buf) =>
             {
@@ -8452,6 +8475,7 @@ if __name__ == '__main__':
 
         private void RefreshTabStrip()
         {
+            ArmAutoSaveTimer();
             tabStrip.SuspendLayout();
             Control[] oldTabControls = new Control[tabStrip.Controls.Count];
             tabStrip.Controls.CopyTo(oldTabControls, 0);

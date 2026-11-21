@@ -20,6 +20,7 @@ namespace codeLess.AvaloniaApp
         public static string ScreenshotSuiteDir { get; set; }
         public static string SmokeQuitReportPath { get; set; }
         public static string BenchmarkReportPath { get; set; }
+        public static string IdleProbeReportPath { get; set; }
 
         public App()
         {
@@ -92,11 +93,16 @@ namespace codeLess.AvaloniaApp
                     };
                 }
 
-                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath);
+                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(IdleProbeReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath) || MainWindow.IsMonorepoBenchRequested;
+                MainWindow.AttachMonorepoBenchIfRequested(mainWindow);
                 if (!automatedRun)
                     mainWindow.Opened += (s, e) => Dispatcher.UIThread.Post(mainWindow.MaybeAutoCheckForUpdates, DispatcherPriority.Background);
 
-                if (!string.IsNullOrWhiteSpace(BenchmarkReportPath))
+                if (!string.IsNullOrWhiteSpace(IdleProbeReportPath))
+                {
+                    mainWindow.Opened += async (s, e) => await mainWindow.RunIdleProbeAsync(IdleProbeReportPath);
+                }
+                else if (!string.IsNullOrWhiteSpace(BenchmarkReportPath))
                 {
                     mainWindow.Opened += async (s, e) => await mainWindow.RunBenchmarkAsync(BenchmarkReportPath);
                 }

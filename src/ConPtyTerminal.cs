@@ -3878,7 +3878,7 @@ namespace codeLess.Studio
                     this.Invalidate();
                 }
             };
-            blinkTimer.Start();
+            // Started in OnGotFocus / stopped in OnLostFocus: no wakeups while unfocused, inactive or minimized.
 
             BuildContextMenu();
             BuildCtrlKOverlay();
@@ -4235,12 +4235,14 @@ namespace codeLess.Studio
         {
             base.OnGotFocus(e);
             cursorBlinkOn = true;
+            if (blinkTimer != null) blinkTimer.Start();
             this.Invalidate();
         }
 
         protected override void OnLostFocus(EventArgs e)
         {
             base.OnLostFocus(e);
+            if (blinkTimer != null) blinkTimer.Stop();
             this.Invalidate();
         }
 

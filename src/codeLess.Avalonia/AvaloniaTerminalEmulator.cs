@@ -131,14 +131,24 @@ namespace codeLess.AvaloniaApp
                 cursorBlinkOn = !cursorBlinkOn;
                 if (IsVisible) gridCanvas.InvalidateVisual();
             };
-            cursorTimer.Start();
-
-            AttachedToVisualTree += (s, e) => { if (!cursorTimer.IsEnabled) cursorTimer.Start(); };
-            DetachedFromVisualTree += (s, e) => { if (cursorTimer.IsEnabled) cursorTimer.Stop(); };
+            // Blink only while this terminal has focus in an active window; otherwise a steady hollow cursor (VS Code).
+            cursorGate = new UiTimerGate(this, cursorTimer, requireFocus: true, wanted: () => !cursorBlinkSuspended);
+            cursorGate.RunningChanged += () => { cursorBlinkOn = true; gridCanvas.InvalidateVisual(); };
+            AddHandler(KeyDownEvent, (s, e) =>
+            {
+                cursorBlinkOn = true; // typing keeps the cursor solid; restart the blink interval
+                if (cursorTimer.IsEnabled) { cursorTimer.Stop(); cursorTimer.Start(); }
+            }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
         }
+
+        private readonly UiTimerGate cursorGate;
+        private bool cursorBlinkSuspended = false;
 
         public bool IsInlineAiBarVisible => inlineAiBar.IsVisible;
         public bool CursorBlinkOn => cursorBlinkOn;
+        public bool IsCursorBlinkTimerRunning => cursorTimer.IsEnabled;
+        /// <summary>False when the terminal is unfocused or its window is inactive: the cursor is drawn as a hollow box.</summary>
+        public bool CursorHasFocus => cursorGate.HasActiveFocus;
 
         public void ShowInlineAiBar()
         {
@@ -237,7 +247,8 @@ namespace codeLess.AvaloniaApp
         {
             StopShell(notifyExit: false);
             exitedNotified = false;
-            if (!cursorTimer.IsEnabled) cursorTimer.Start();
+            cursorBlinkSuspended = false;
+            cursorGate.Update();
             WorkingDirectory = (!string.IsNullOrEmpty(workingDir) && workingDir != "/" && Directory.Exists(workingDir))
                 ? workingDir
                 : ConPtyTerminalSession.GetDefaultHomeDirectory();
@@ -300,8 +311,8 @@ namespace codeLess.AvaloniaApp
 
         public void StopShell(bool notifyExit = false)
         {
-            if (cursorTimer != null && cursorTimer.IsEnabled)
-                cursorTimer.Stop();
+            cursorBlinkSuspended = true;
+            if (cursorGate != null) cursorGate.Update();
             if (Session != null)
             {
                 try { Session.Dispose(); } catch { }
@@ -1202,9 +1213,11 @@ namespace codeLess.AvaloniaApp
                 double cy = PadTop + buf.CursorRow * CellH;
                 // Cursor covers exactly the same vertical box the glyphs are drawn in.
                 var cursorRect = new Rect(cx, cy + textTop, cellW, TextLineHeight);
-                context.FillRectangle(
-                    GetBrush(Color.FromArgb(185, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B)),
-                    cursorRect);
+                var cursorBrush = GetBrush(Color.FromArgb(185, owner.AccentColor.R, owner.AccentColor.G, owner.AccentColor.B));
+                if (owner.CursorHasFocus)
+                    context.FillRectangle(cursorBrush, cursorRect);
+                else
+                    context.DrawRectangle(new Pen(cursorBrush, 1), cursorRect.Deflate(0.5));
             }
         }
 

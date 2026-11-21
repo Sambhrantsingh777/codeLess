@@ -2873,10 +2873,13 @@ namespace codeLess.Studio
                 if (anyStreaming)
                 {
                     shimmerPhase = (shimmerPhase + 1) % 24;
-                    this.Invalidate();
+                    if (this.Visible) this.Invalidate();
+                }
+                else
+                {
+                    shimmerTimer.Stop(); // nothing streaming: stop waking 11x a second (restarted by BeginStreamingMessage)
                 }
             };
-            shimmerTimer.Start();
 
             ContextMenuStrip ctx = new ContextMenuStrip
             {
@@ -2963,6 +2966,7 @@ namespace codeLess.Studio
             RecalculateLayout();
             scrollY = Math.Max(0, totalContentHeight - Math.Max(40, this.Height - 16));
             this.Invalidate();
+            shimmerTimer.Start(); // stops itself on the first tick if no restored card is streaming
         }
 
         public AgentMessageCard AddMessage(bool isUser, string senderLabel, string metaBadge, string markdownText, string thinkingText = null, List<AgentToolChip> tools = null, string checkpointId = null)
@@ -3005,6 +3009,7 @@ namespace codeLess.Studio
             RecalculateLayout();
             scrollY = Math.Max(0, totalContentHeight - Math.Max(40, this.Height - 16));
             this.Invalidate();
+            shimmerTimer.Start();
             return card;
         }
 

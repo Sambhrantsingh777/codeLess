@@ -447,20 +447,25 @@ namespace codeLess.AvaloniaApp
                 phase = (phase + 0.035) % 1.0;
                 InvalidateVisual();
             };
+            // 33 frames/s only while animating AND on screen (not minimized, not inside a hidden panel).
+            animGate = new UiTimerGate(this, animTimer, requireFocus: false, wanted: () => isAnimating);
         }
+
+        private readonly UiTimerGate animGate;
+        public bool IsAnimationTimerRunning => animTimer.IsEnabled;
 
         public void StartProgress()
         {
             isAnimating = true;
             IsVisible = true;
-            animTimer.Start();
+            animGate.Update();
             InvalidateVisual();
         }
 
         public void StopProgress()
         {
             isAnimating = false;
-            animTimer.Stop();
+            animGate.Update();
             IsVisible = false;
             InvalidateVisual();
         }

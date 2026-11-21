@@ -32,6 +32,10 @@ namespace codeLess.AvaloniaApp
                     {
                         App.BenchmarkReportPath = args[++i];
                     }
+                    else if (a == "--idle-probe" && i + 1 < args.Length)
+                    {
+                        App.IdleProbeReportPath = args[++i];
+                    }
                     else if (a == "--smoke-quit" && i + 1 < args.Length)
                     {
                         App.SmokeQuitReportPath = args[++i];

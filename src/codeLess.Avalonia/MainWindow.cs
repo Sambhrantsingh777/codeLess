@@ -2628,6 +2628,7 @@ namespace codeLess.AvaloniaApp
                     if (!capturedKeepTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
                         OpenFileInTab(workspaceFiles[0], preview: true);
                     AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files).");
+                    PerfWorkspaceLoadCompletions++;
                     // Startup burst is over: hand freed native pages back to the OS (cheap, non-blocking). The managed
                     // heap is NOT force-compacted here: a blocking full GC right as the user starts working cost ~4%
                     // scroll smoothness in benchmarks. Compaction happens only when the window is in the background.
@@ -2786,6 +2787,7 @@ namespace codeLess.AvaloniaApp
                 if (prevTab != null)
                     openTabs.Remove(prevTab);
             }
+            if (TryOpenLargeFileTab(fullPath, preview, out var largeFileTab)) return largeFileTab;
 
             Encoding fileEnc = new UTF8Encoding(false);
             bool hasBom = false;
@@ -2875,6 +2877,7 @@ namespace codeLess.AvaloniaApp
 
         public void ActivateTab(EditorTabBuffer tab)
         {
+            SweepClosedLargeFileTabs();
             activeTab = tab;
             if (tab != null)
             {
@@ -2930,6 +2933,7 @@ namespace codeLess.AvaloniaApp
 
             int idx = openTabs.IndexOf(tab);
             openTabs.Remove(tab);
+            SweepClosedLargeFileTabs();
 
             if (ReferenceEquals(activeTab, tab))
             {
@@ -2982,6 +2986,7 @@ namespace codeLess.AvaloniaApp
         public bool SaveBufferToDisk(EditorTabBuffer tab)
         {
             if (tab == null) return false;
+            if (tab.IsLargeFileViewer) { SetStatusMessage($"{tab.FileName} is open read-only in the large-file viewer and cannot be saved."); return false; }
             if (string.IsNullOrWhiteSpace(tab.FilePath))
             {
                 string dir = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot)
@@ -3015,6 +3020,7 @@ namespace codeLess.AvaloniaApp
         public void RevertActiveTab()
         {
             if (activeTab == null || string.IsNullOrEmpty(activeTab.FilePath) || !File.Exists(activeTab.FilePath)) return;
+            if (activeTab.IsLargeFileViewer) return;
             activeTab.PushUndoSnapshot();
             string disk = File.ReadAllText(activeTab.FilePath);
             activeTab.Content = disk;
