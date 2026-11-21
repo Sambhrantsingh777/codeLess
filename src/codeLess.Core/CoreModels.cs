@@ -57,10 +57,43 @@ namespace codeLess.Studio
         public Color TokenOperator;
         public bool IsLight { get { return BgEditor.R > 180; } }
 
+        /// <summary>Default theme id (Savatarr brand: neutral graphite greys + Savatarr blue #1978E5).</summary>
+        public const string DefaultThemeId = "savatarr-graphite";
+
         public static List<StudioTheme> GetBuiltInThemes()
         {
             return new List<StudioTheme>
             {
+                new StudioTheme
+                {
+                    // Matches savatarr.com: ink greys (#0E1420 / #4B5768 / #5B6472), light surface text (#E3E7ED)
+                    // and the Savatarr brand blue (#1978E5, hover #125FBD) as the single accent.
+                    Id = "savatarr-graphite",
+                    Name = "Savatarr Graphite (Default)",
+                    BgWorkbench = Hex("#17191d"),
+                    BgActivity = Hex("#1b1d21"),
+                    BgSidebar = Hex("#1e2024"),
+                    BgEditor = Hex("#232529"),
+                    BgElevated = Hex("#2b2d32"),
+                    BgHover = Hex("#33363c"),
+                    BgLineHighlight = Hex("#2a2c31"),
+                    BgSelection = Color.FromArgb(95, 25, 120, 229),
+                    BgStatus = Hex("#1978e5"),
+                    BorderSubtle = Hex("#34373d"),
+                    AccentPrimary = Hex("#1978e5"),
+                    AccentSecondary = Hex("#3fb68b"),
+                    FgPrimary = Hex("#e3e7ed"),
+                    FgSecondary = Hex("#a0a8b3"),
+                    FgMuted = Hex("#6e7681"),
+                    TokenKeyword = Hex("#5aa7ff"),
+                    TokenControl = Hex("#f47067"),
+                    TokenFunction = Hex("#dcbdfb"),
+                    TokenString = Hex("#8ddb8c"),
+                    TokenComment = Hex("#737b87"),
+                    TokenNumber = Hex("#f69d50"),
+                    TokenType = Hex("#56d4dd"),
+                    TokenOperator = Hex("#adbac7")
+                },
                 new StudioTheme
                 {
                     Id = "codeless-obsidian",
@@ -1513,6 +1546,7 @@ namespace codeLess.Studio
         public bool RequireAgentToolApproval { get; set; }
         /// <summary>Check GitHub Releases for a newer codeLess at most once a day (anonymous request, can be disabled).</summary>
         public bool AutoCheckForUpdates { get; set; }
+        public bool ThemeDefaultMigrated { get; set; }
         public string LastUpdateCheckUtc { get; set; }
         public string SkippedUpdateVersion { get; set; }
         public bool EnableInlineGhostText { get; set; }
@@ -1534,7 +1568,10 @@ namespace codeLess.Studio
 
         public IdePersistentSettings()
         {
-            ActiveThemeId = "codeless-obsidian";
+            ActiveThemeId = StudioTheme.DefaultThemeId;
+            // NOTE: ThemeDefaultMigrated is intentionally left false here. The JSON deserializer runs this constructor
+            // and only overwrites fields present in the file, so defaulting it to true would skip the migration for
+            // every existing settings file. Fresh installs already start on the new default.
             ActiveVendorId = "anthropic";
             ActiveHarnessId = "auto";
             LastWorkspacePath = "";
@@ -1592,7 +1629,14 @@ namespace codeLess.Studio
                         if (string.IsNullOrWhiteSpace(loaded.EditorFontFamily)) loaded.EditorFontFamily = "Consolas";
                         if (loaded.EditorFontSize < 7f || loaded.EditorFontSize > 28f) loaded.EditorFontSize = 10.5f;
                         if (loaded.TabSize < 1 || loaded.TabSize > 8) loaded.TabSize = 4;
-                        if (string.IsNullOrEmpty(loaded.ActiveThemeId)) loaded.ActiveThemeId = "codeless-obsidian";
+                        if (string.IsNullOrEmpty(loaded.ActiveThemeId)) loaded.ActiveThemeId = StudioTheme.DefaultThemeId;
+                        // One-time move from the old default (Obsidian) to the Savatarr Graphite default. Users who
+                        // pick another theme afterwards keep it.
+                        if (!loaded.ThemeDefaultMigrated)
+                        {
+                            if (loaded.ActiveThemeId == "codeless-obsidian") loaded.ActiveThemeId = StudioTheme.DefaultThemeId;
+                            loaded.ThemeDefaultMigrated = true;
+                        }
                         if (string.IsNullOrEmpty(loaded.DefaultAgentModel)) loaded.DefaultAgentModel = "claude-sonnet-4-6";
                         if (string.IsNullOrEmpty(loaded.DefaultAskModel)) loaded.DefaultAskModel = "gpt-4o";
                         if (string.IsNullOrEmpty(loaded.DefaultEditModel)) loaded.DefaultEditModel = "claude-sonnet-4-6";

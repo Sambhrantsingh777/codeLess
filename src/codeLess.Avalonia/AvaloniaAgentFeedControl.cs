@@ -36,7 +36,7 @@ namespace codeLess.AvaloniaApp
         public List<AvaloniaAgentFeedItem> Items { get; } = new List<AvaloniaAgentFeedItem>();
         private readonly ScrollViewer scrollViewer;
         private readonly StackPanel cardsStack;
-        private StudioTheme currentTheme = StudioTheme.DarkObsidian();
+        private StudioTheme currentTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
 
         public event Action<string, string> CodeActionRequested; // (action: "copy"|"insert"|"apply", code)
         public event Action<AvaloniaAgentFeedItem, bool> CommandApprovalClicked; // (item, approved)

@@ -47,7 +47,7 @@ namespace codeLess.AvaloniaApp
         public event Action<int> GoToLineRequested;
         public event Action Closed;
 
-        private StudioTheme currentTheme = StudioTheme.DarkObsidian();
+        private StudioTheme currentTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
 
         public AvaloniaCommandPaletteOverlay()
         {
@@ -350,7 +350,7 @@ namespace codeLess.AvaloniaApp
         private readonly Border cardBorder;
         private readonly TextBlock titleBlock;
         private readonly ContentControl bodyHost;
-        private StudioTheme currentTheme = StudioTheme.DarkObsidian();
+        private StudioTheme currentTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
 
         public string ActiveDialogId { get; private set; } = "";
         public Control ActiveDialogBody => bodyHost.Content as Control;

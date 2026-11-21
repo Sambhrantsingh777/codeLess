@@ -78,7 +78,7 @@ namespace codeLess.AvaloniaApp
         private int activeFindMatchIndex = -1;
         public List<FindMatchSpan> FindMatches { get; } = new List<FindMatchSpan>();
 
-        private StudioTheme currentTheme = StudioTheme.DarkObsidian();
+        private StudioTheme currentTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
         private string workspaceRoot = "";
         private List<string> recentWorkspaces = new List<string>();
         private string lastBreadcrumbStateKey = "";
@@ -1132,7 +1132,7 @@ namespace codeLess.AvaloniaApp
             {
                 ("✦ Configure BYOK AI Providers & Keys", "Connect OpenAI, Anthropic, Gemini, DeepSeek, Groq, or local Ollama models.", "byok-dialog"),
                 ("✓ Autonomous Verification & Tool Harness", "Run tool-calling agents with build/test loops and inline diff previews.", "open-chat"),
-                ("◐ Customize Color Themes & Layout", "Switch between 10 built-in dark and light studio themes with live preview.", "theme-picker")
+                ("◐ Customize Color Themes & Layout", "Switch between 11 built-in dark and light studio themes with live preview.", "theme-picker")
             };
             foreach (var wt in walkthroughs)
             {
@@ -1352,7 +1352,7 @@ namespace codeLess.AvaloniaApp
     public class AvaloniaVirtualEditorCanvas : Control
     {
         private readonly AvaloniaEditorControl owner;
-        public new StudioTheme Theme { get; private set; } = StudioTheme.DarkObsidian();
+        public new StudioTheme Theme { get; private set; } = StudioTheme.GetById(StudioTheme.DefaultThemeId);
 
         public double FontSizePx { get; set; } = 13.0;
         public double LineHeight => Math.Round(FontSizePx * 1.54);

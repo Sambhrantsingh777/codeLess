@@ -270,7 +270,7 @@ namespace codeLess.Studio
     {
         public string ThemeId
         {
-            get => ActiveThemeId ?? "codeless-obsidian";
+            get => ActiveThemeId ?? StudioTheme.DefaultThemeId;
             set => ActiveThemeId = value;
         }
 
@@ -358,6 +358,7 @@ namespace codeLess.Studio
                 AutoSave = baseLoaded.AutoSave,
                 RequireAgentToolApproval = baseLoaded.RequireAgentToolApproval,
                 AutoCheckForUpdates = baseLoaded.AutoCheckForUpdates,
+                ThemeDefaultMigrated = baseLoaded.ThemeDefaultMigrated,
                 LastUpdateCheckUtc = baseLoaded.LastUpdateCheckUtc,
                 SkippedUpdateVersion = baseLoaded.SkippedUpdateVersion,
                 EnableInlineGhostText = baseLoaded.EnableInlineGhostText,

@@ -240,7 +240,7 @@ namespace codeLess.AvaloniaApp
 
             settings = StudioSettings.Load();
             if (string.IsNullOrWhiteSpace(settings.ThemeId))
-                settings.ThemeId = "codeless-obsidian";
+                settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;

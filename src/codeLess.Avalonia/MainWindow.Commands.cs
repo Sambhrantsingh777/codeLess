@@ -2761,8 +2761,8 @@ namespace codeLess.AvaloniaApp
                 rtb.Save(fullOut);
             }
 
-            // Ensure Obsidian Dark theme & clean workspace
-            ApplyTheme(StudioTheme.GetById("codeless-obsidian"), persistSetting: false);
+            // Ensure the default (Savatarr Graphite) theme & clean workspace
+            ApplyTheme(StudioTheme.GetById(StudioTheme.DefaultThemeId), persistSetting: false);
             string repoDir = workspaceRoot;
             if (File.Exists(Path.Combine(Environment.CurrentDirectory, "src", "codeLess.Core", "CoreModels.cs")))
                 repoDir = Environment.CurrentDirectory;

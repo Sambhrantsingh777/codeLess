@@ -60,3 +60,30 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    public class DefaultThemeTests
+    {
+        [Fact]
+        public void SavatarrGraphite_IsTheDefaultTheme()
+        {
+            Assert.Equal("savatarr-graphite", codeLess.Studio.StudioTheme.DefaultThemeId);
+            Assert.Equal("savatarr-graphite", codeLess.Studio.StudioTheme.GetBuiltInThemes()[0].Id);
+            Assert.Equal("savatarr-graphite", new codeLess.Studio.IdePersistentSettings().ActiveThemeId);
+            var t = codeLess.Studio.StudioTheme.GetBuiltInThemes()[0];
+            Assert.False(t.IsLight);
+            Assert.Equal(System.Drawing.Color.FromArgb(25, 120, 229).ToArgb(), t.AccentPrimary.ToArgb()); // Savatarr blue
+        }
+
+        [Fact]
+        public void OldSettingsFile_WithoutMigrationFlag_IsNotTreatedAsMigrated()
+        {
+            // The deserializer runs the constructor; the flag must default to false or old Obsidian users never migrate.
+            var ser = new System.Web.Script.Serialization.JavaScriptSerializer();
+            var old = ser.Deserialize<codeLess.Studio.IdePersistentSettings>("{\"ActiveThemeId\":\"codeless-obsidian\"}");
+            Assert.False(old.ThemeDefaultMigrated);
+            Assert.Equal("codeless-obsidian", old.ActiveThemeId);
+        }
+    }
+}

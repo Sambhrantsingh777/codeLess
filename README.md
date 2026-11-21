@@ -69,7 +69,7 @@ Connect API keys (via Preferences `Ctrl/Cmd+,` or standard environment variables
 - **Inline Diff Staging & Time-Travel Checkpoints**: Review AI edits directly in the editor with per-hunk **Accept** / **Reject** controls and instant rollback via disk-backed **Time-Travel Checkpoints** (`~/.codeless/checkpoints`).
 - **Byte-Accurate Git Integration**: Preserves `CRLF`, `LF`, `UTF-8 BOM`, and trailing-newline metadata across saves, formatting, search/replace, and AI diff staging so single-line edits produce clean 1-line `git diff` hunks. Includes sidebar Source Control (stage, unstage, discard, commit) and live gutter diff bars.
 - **Native Integrated Terminal (ConPTY & Unix PTY)**: Interactive shells (`pwsh`, `powershell`, `cmd`, `zsh`, `bash`, `WSL`) with 24-bit Truecolor ANSI/VT100 rendering, alternate screen (`?1049h`), 5,000-line scrollback, split terminal panes (`Ctrl+Shift+5`), multiple named sessions, and `file:line` click-to-jump.
-- **10 Built-In Studio Themes + VSIX / OpenVSX Extensions**: Ships 10 dark and light themes (`codeLess Obsidian Pro`, `Tokyo Night Storm`, `Catppuccin Mocha`, `Sublime Mariana`, `Solarized Light`, `GitHub Light Daylight`, and more), plus `.vsix` theme/snippet installation and OpenVSX registry search.
+- **11 Built-In Studio Themes + VSIX / OpenVSX Extensions**: Ships 11 dark and light themes (`Savatarr Graphite` (default), `codeLess Obsidian Pro`, `Tokyo Night Storm`, `Catppuccin Mocha`, `Sublime Mariana`, `Solarized Light`, `GitHub Light Daylight`, and more), plus `.vsix` theme/snippet installation and OpenVSX registry search.
 
 ---
 
