@@ -25,8 +25,8 @@ chmod +x ./build-mac.sh
 ```
 
 Output artifacts in `dist/`:
-- `dist/macos-arm64/codeLess.app` · `dist/codeLess-mac-arm64.dmg` (`~45.6 MB`) · `dist/codeLess-mac-arm64.zip`
-- `dist/macos-x64/codeLess.app` · `dist/codeLess-mac-x64.dmg` (`~47.1 MB`) · `dist/codeLess-mac-x64.zip`
+- `dist/macos-arm64/codeLess.app` · `dist/codeLess-mac-arm64.dmg` (`~47.5 MB`) · `dist/codeLess-mac-arm64.zip`
+- `dist/macos-x64/codeLess.app` · `dist/codeLess-mac-x64.dmg` (`~48.3 MB`) · `dist/codeLess-mac-x64.zip`
 
 ---
 

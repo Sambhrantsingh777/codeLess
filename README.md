@@ -7,7 +7,7 @@
 
 **codeLess** (by **Savatarr**) is a fast, open-source, native polyglot code editor and AI software engineering IDE for **Windows**, **macOS** (`arm64` & `x64`), and **Linux** (`x64` & `arm64`).
 
-Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders its workbench, syntax-highlighted virtualized editor canvas, minimap, diff review hunks, and truecolor VT100 terminal directly through native C# graphics pipelines (**Win32 / GDI+ on `.NET Framework 4.8`** for a **`~957 KB` standalone Windows `.exe`**, and **`.NET 8 + Avalonia Skia`** for native macOS and Linux desktop bundles). It pairs **VS Code keybindings** with a **Bring-Your-Own-Key (BYOK) autonomous coding agent** and **5 model-family-tuned LLM harnesses**—with zero subscription lock-in, zero intermediary proxy servers, and zero telemetry.
+Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders its workbench, syntax-highlighted virtualized editor canvas, minimap, diff review hunks, and truecolor VT100 terminal directly through native C# graphics pipelines (**Win32 / GDI+ on `.NET Framework 4.8`** for a **`~1010 KB` standalone Windows `.exe`**, and **`.NET 8 + Avalonia Skia`** for native macOS and Linux desktop bundles). It pairs **VS Code keybindings** with a **Bring-Your-Own-Key (BYOK) autonomous coding agent** and **5 model-family-tuned LLM harnesses**—with zero subscription lock-in, zero intermediary proxy servers, and zero telemetry.
 
 ---
 
@@ -15,10 +15,10 @@ Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders
 
 | Metric | Measured Value |
 | :--- | :--- |
-| **Windows Standalone Executable (`codeLess.exe`)** | **`957 KB`** (portable single `.exe` with `codeLess.Core.dll` embedded) |
+| **Windows Standalone Executable (`codeLess.exe`)** | **`1010 KB`** (portable single `.exe` with `codeLess.Core.dll` embedded) |
 | **Shared Core Engine (`codeLess.Core.dll`)** | **`212 KB`** (`net48` / `netstandard2.0` / `net8.0`) |
-| **Windows Setup Installer (`codeLess-Setup.exe`)** | **`2.38 MB`** (Inno Setup LZMA2, per-user `PrivilegesRequired=lowest`) |
-| **macOS Self-Contained Disk Image (`.dmg`)** | **`45.6 MB`** (`osx-arm64`) / **`47.1 MB`** (`osx-x64`) *(bundles `.NET 8` + Skia runtime)* |
+| **Windows Setup Installer (`codeLess-Setup.exe`)** | **`2.39 MB`** (Inno Setup LZMA2, per-user `PrivilegesRequired=lowest`) |
+| **macOS Self-Contained Disk Image (`.dmg`)** | **`47.5 MB`** (`osx-arm64`) / **`48.3 MB`** (`osx-x64`) *(bundles `.NET 8` + Skia runtime)* |
 | **Managed (.NET GC) Heap (Full Workbench Loaded)** | **`~30 MB`** |
 | **Total Memory Footprint, macOS (Retina, Metal, incl. GPU surfaces)** | **`~250 MB`** steady · **`~300 MB`** startup peak *(Activity Monitor "Memory")* |
 | **20,000-File Repository Async Open** | **`30 ms` return**, **`23 ms` first tree paint** (non-blocking background indexing) |
@@ -32,7 +32,7 @@ Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders
 | :--- | :--- | :--- | :--- |
 | **UI & Rendering Stack** | Chromium DOM/Canvas + bundled V8 + Node.js multi-process host | Bundled Java Runtime (JBR) + Swing/AWT | **Windows**: Native Win32 + GDI+ (`csc.exe` on OS-built-in `.NET 4.8`)<br>**macOS / Linux**: Native `.NET 8` + Skia (`Avalonia`) |
 | **Bundled Browser / Node Runtime** | Bundles Chromium + Node.js in every installation | Bundles custom Java runtime | **None** (`0` Chromium processes; optional system `node` only if activating JS `.vsix` scripts) |
-| **Windows Portable Binary Size** | Multi-hundred-MB application directory | Multi-hundred-MB installation | **`957 KB` single portable `codeLess.exe`** (`2.38 MB` installer) |
+| **Windows Portable Binary Size** | Multi-hundred-MB application directory | Multi-hundred-MB installation | **`1010 KB` single portable `codeLess.exe`** (`2.39 MB` installer) |
 | **Terminal Subsystem** | `node-pty` + `xterm.js` DOM/WebGL renderer | `pty4j` + JediTerm | Direct P/Invoke **`CreatePseudoConsole` (Windows ConPTY)** & **`forkpty` (Unix PTY)** + native C# **VT100/Truecolor** cell grid |
 | **AI Routing & Data Privacy** | Cloud proxy / vendor account required in commercial AI forks | Plugin-dependent cloud routing | **Direct HTTPS from user machine to chosen API or `127.0.0.1` Ollama** (`0` proxy servers, `0` telemetry) |
 | **Codebase Search & Retrieval** | Cloud vector upload in several AI IDEs or external indexers | Heavy full-project background index | **Local in-process BM25 + 1-hop AST symbol graph** (`0` code uploaded for indexing) |
