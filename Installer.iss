@@ -1,21 +1,21 @@
 [Setup]
 AppId={{8F9E4A12-3C7B-4D9A-9E15-7C8A2B4F6031}
 AppName=codeLess
-AppVersion=3.2.2
-AppVerName=codeLess Native Agentic IDE v3.2.2
+AppVersion=3.2.3
+AppVerName=codeLess Native Agentic IDE v3.2.3
 AppPublisher=Savatarr
 AppPublisherURL=https://github.com/Sambhrantsingh777/codeLess
 AppSupportURL=https://github.com/Sambhrantsingh777/codeLess/issues
 AppUpdatesURL=https://github.com/Sambhrantsingh777/codeLess/releases
 AppCopyright=Copyright (C) 2026 Savatarr. Released under the MIT License.
-VersionInfoVersion=3.2.2.0
-VersionInfoTextVersion=3.2.2
+VersionInfoVersion=3.2.3.0
+VersionInfoTextVersion=3.2.3
 VersionInfoCompany=Savatarr
 VersionInfoDescription=codeLess Native Agentic IDE Setup
 VersionInfoCopyright=Copyright (C) 2026 Savatarr. Released under the MIT License.
 VersionInfoProductName=codeLess
-VersionInfoProductVersion=3.2.2.0
-VersionInfoProductTextVersion=3.2.2
+VersionInfoProductVersion=3.2.3.0
+VersionInfoProductTextVersion=3.2.3
 VersionInfoOriginalFileName=codeLess-Setup.exe
 DefaultDirName={autopf}\codeLess
 DefaultGroupName=codeLess

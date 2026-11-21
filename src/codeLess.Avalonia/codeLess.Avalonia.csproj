@@ -6,7 +6,7 @@
     <RootNamespace>codeLess.AvaloniaApp</RootNamespace>
     <Nullable>disable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
-    <Version>3.2.2</Version>
+    <Version>3.2.3</Version>
     <Company>Savatarr</Company>
     <Product>codeLess</Product>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
