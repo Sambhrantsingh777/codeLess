@@ -269,10 +269,59 @@ namespace codeLess.Studio
         {
             TerminalShellFlavor flavor = DetectShellFlavor(shellExecutableOrCommandLine, shellName);
             if (flavor == TerminalShellFlavor.Unknown || flavor == TerminalShellFlavor.Python) return null;
+            string selectedEnv = ResolveSelectedEnvironment(workspaceRoot);
+            if (selectedEnv != null)
+            {
+                if (IsAlreadyActive(selectedEnv, inheritedVirtualEnv)) return null;
+                if (IsCondaEnvironment(selectedEnv)) return BuildCondaActivationCommand(selectedEnv, flavor);
+                return BuildActivationCommand(selectedEnv, flavor, windowsHost);
+            }
             string venv = FindWorkspaceVenv(workspaceRoot, terminalCwd);
             if (venv == null) return null;
             if (IsAlreadyActive(venv, inheritedVirtualEnv)) return null;
             return BuildActivationCommand(venv, flavor, windowsHost);
+        }
+
+        /// <summary>
+        /// Set by PythonInterpreterService: workspace root -> root of the user's selected interpreter environment
+        /// (venv or conda prefix), or null to fall back to venv auto-detection.
+        /// </summary>
+        public static Func<string, string> SelectedEnvironmentOverride;
+
+        private static string ResolveSelectedEnvironment(string workspaceRoot)
+        {
+            Func<string, string> f = SelectedEnvironmentOverride;
+            if (f == null || string.IsNullOrEmpty(workspaceRoot)) return null;
+            try
+            {
+                string env = f(workspaceRoot);
+                return !string.IsNullOrEmpty(env) && Directory.Exists(env) ? env : null;
+            }
+            catch { return null; }
+        }
+
+        public static bool IsCondaEnvironment(string envDir)
+        {
+            try { return !File.Exists(Path.Combine(envDir, "pyvenv.cfg")) && Directory.Exists(Path.Combine(envDir, "conda-meta")); }
+            catch { return false; }
+        }
+
+        /// <summary>"conda activate &lt;prefix&gt;" for shells where conda's shell hook is usually initialized.</summary>
+        public static string BuildCondaActivationCommand(string prefix, TerminalShellFlavor flavor)
+        {
+            switch (flavor)
+            {
+                case TerminalShellFlavor.Posix:
+                case TerminalShellFlavor.Fish:
+                case TerminalShellFlavor.Csh:
+                    return " conda activate " + QuotePosix(prefix);
+                case TerminalShellFlavor.PowerShell:
+                    return "conda activate " + QuotePowerShell(prefix);
+                case TerminalShellFlavor.Cmd:
+                    return "conda activate \"" + prefix.Replace("\"", "") + "\"";
+                default:
+                    return null;
+            }
         }
 
         private static readonly object pendingLock = new object();

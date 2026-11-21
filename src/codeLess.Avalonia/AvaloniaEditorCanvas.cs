@@ -34,7 +34,7 @@ namespace codeLess.AvaloniaApp
         public int Length;
     }
 
-    public class AvaloniaEditorControl : Grid
+    public partial class AvaloniaEditorControl : Grid
     {
         public EditorTabBuffer CurrentBuffer { get; private set; }
         public AvaloniaVirtualEditorCanvas Canvas { get; }
@@ -1407,7 +1407,7 @@ namespace codeLess.AvaloniaApp
         }
     }
 
-    public class AvaloniaVirtualEditorCanvas : Control
+    public partial class AvaloniaVirtualEditorCanvas : Control
     {
         private readonly AvaloniaEditorControl owner;
         public new StudioTheme Theme { get; private set; } = StudioTheme.GetById(StudioTheme.DefaultThemeId);
@@ -1500,7 +1500,7 @@ namespace codeLess.AvaloniaApp
             if (buf == null || docLine < 0 || docLine >= buf.Lines.Count) return col * CharWidth;
             return VisualColumn(buf.Lines[docLine], col) * CharWidth;
         }
-        public const double GutterWidth = 58.0;
+        public const double GutterWidth = 66.0;
         public const double MinimapWidth = 76.0;
 
         private static readonly string CodeMonoFont = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
@@ -1971,6 +1971,7 @@ namespace codeLess.AvaloniaApp
                         InvalidateVisual();
                     }
                 }
+                if (pt.X < EditorDebugHooks.GlyphMarginWidth && owner.RaiseBreakpointGutter(buf, ScreenYToDocLine(pt.Y), true)) { e.Handled = true; return; }
                 owner.NotifyContextMenu(pt);
                 e.Handled = true;
                 return;
@@ -2004,6 +2005,8 @@ namespace codeLess.AvaloniaApp
 
             if (pt.X < GutterWidth)
             {
+                // Glyph margin (left of the line numbers): toggle a breakpoint, like VS Code.
+                if (pt.X < EditorDebugHooks.GlyphMarginWidth && owner.RaiseBreakpointGutter(buf, docLine, false)) { e.Handled = true; return; }
                 // Fold chevron
                 if (pt.X >= GutterWidth - 18 && CanFoldLine(buf, docLine))
                 {
@@ -4023,6 +4026,7 @@ namespace codeLess.AvaloniaApp
                 {
                     context.FillRectangle(lineHlBrush, new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, LineHeight));
                 }
+                if (buf.DebugStoppedLine == docLine) DrawDebugStoppedLineBackground(context, buf, y, codeAreaRight);
 
                 // Proposed inline diff highlight & per-hunk Accept/Reject pills
                 bool isProposedDiffLine = buf.ProposedNewLines != null && buf.ProposedNewLines.Contains(docLine);
@@ -4074,6 +4078,7 @@ namespace codeLess.AvaloniaApp
                     FontSizePx - 1.5,
                     docLine == buf.CursorLine ? textPriBrush : textSecBrush);
                 context.DrawText(lnFt, new Point(Math.Max(4, GutterWidth - 22 - lnFt.Width), y + (LineHeight - lnFt.Height) / 2.0));
+                DrawDebugGutterGlyphs(context, buf, docLine, y);
 
                 // Gutter Git diff indicator bar (O(1) HashSet lookup, zero dictionary allocations)
                 if (buf.GutterAddedLines != null && buf.GutterAddedLines.Contains(docLine))

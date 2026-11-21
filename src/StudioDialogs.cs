@@ -1194,14 +1194,37 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "next_problem"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Go", "Go: Previous Problem", "Shift+F8",
                 () => { SelectedCommandId = "prev_problem"; this.DialogResult = DialogResult.OK; this.Close(); });
-            addCmd("Run", "Run: Start Debugging / Run Active File", "F5",
-                () => { SelectedCommandId = "run_file"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Run", "Debug: Start Debugging", "F5",
+                () => { SelectedCommandId = "debug_start"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Run", "Run: Run Without Debugging", "Ctrl+F5",
                 () => { SelectedCommandId = "run_file"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Run", "Run: Stop Execution", "Shift+F5",
                 () => { SelectedCommandId = "stop_run"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Run", "Run: Toggle Breakpoint", "F9",
                 () => { SelectedCommandId = "toggle_breakpoint"; this.DialogResult = DialogResult.OK; this.Close(); });
+            string[][] debugCmds = new string[][]
+            {
+                new string[] { "Debug: Stop", "Shift+F5", "debug_stop" },
+                new string[] { "Debug: Restart", "Ctrl+Shift+F5", "debug_restart" },
+                new string[] { "Debug: Pause", "F6", "debug_pause" },
+                new string[] { "Debug: Step Over", "F10", "debug_step_over" },
+                new string[] { "Debug: Step Into", "F11", "debug_step_into" },
+                new string[] { "Debug: Step Out", "Shift+F11", "debug_step_out" },
+                new string[] { "Debug: Add Conditional Breakpoint / Logpoint...", "", "debug_conditional_breakpoint" },
+                new string[] { "Debug: Remove All Breakpoints", "", "debug_remove_all_breakpoints" },
+                new string[] { "Debug: Debug Active File", "", "debug_active_file" },
+                new string[] { "Debug: Create launch.json", "", "debug_create_launch_json" },
+                new string[] { "View: Show Run and Debug", "Ctrl+Shift+D", "debug_open_view" },
+                new string[] { "Debug: Open Debug Console", "Ctrl+Shift+Y", "debug_console" },
+                new string[] { "Python: Select Interpreter", "", "python_select_interpreter" },
+                new string[] { "Python: Run Python File", "", "python_run_file" },
+                new string[] { "Python: Debug Python File", "", "python_debug_file" }
+            };
+            foreach (string[] dc in debugCmds)
+            {
+                string dcId = dc[2];
+                addCmd("Run", dc[0], dc[1], () => { SelectedCommandId = dcId; this.DialogResult = DialogResult.OK; this.Close(); });
+            }
             addCmd("Terminal", "Terminal: Create New Terminal", "Ctrl+Shift+`",
                 () => { SelectedCommandId = "terminal_new"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Terminal", "Terminal: Split Terminal", "Ctrl+Shift+5",

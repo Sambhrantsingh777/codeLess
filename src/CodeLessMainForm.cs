@@ -22,7 +22,7 @@ using System.Windows.Forms;
 
 namespace codeLess.Studio
 {
-    public class CodeLessMainForm : CodeLessChromelessForm
+    public partial class CodeLessMainForm : CodeLessChromelessForm
     {
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -415,6 +415,7 @@ namespace codeLess.Studio
             }
 
             BuildWorkbenchLayout();
+            InitDebugWorkbench();
             editorControl.ShowWelcomePage = IsWelcomeTabOpen;
             splitEditorControl.ShowWelcomePage = false;
             ApplySettingsToEditors();
@@ -860,6 +861,7 @@ namespace codeLess.Studio
                 if (statusEolLabel != null) statusEolLabel.Text = "CRLF";
                 if (statusLangLabel != null) statusLangLabel.Text = emptyMode;
                 if (statusWrapLabel != null) statusWrapLabel.Text = "Wrap: OFF";
+                UpdateDebugStatusItems(null);
                 LayoutStatusBarItems();
                 return;
             }
@@ -903,6 +905,7 @@ namespace codeLess.Studio
                 statusLangLabel.Text = langDisplay;
             if (statusWrapLabel != null)
                 statusWrapLabel.Text = buf.WordWrap ? "Wrap: ON" : "Wrap: OFF";
+            UpdateDebugStatusItems(buf);
             LayoutStatusBarItems();
         }
 
@@ -2281,6 +2284,7 @@ namespace codeLess.Studio
 
             Panel tabActionsBar = new Panel { Dock = DockStyle.Right, Width = 84 };
             Button runTabActionBtn = CreateExplorerVectorIconButton("run", new Point(4, 5));
+            AttachPythonRunMenu(runTabActionBtn);
             runTabActionBtn.Click += async (s, e) => { if (activeTab != null) await ExecuteActiveFileInTerminalAsync(activeTab); };
 
             splitEditorTabBtn = CreateExplorerVectorIconButton("split", new Point(30, 5));
@@ -2457,6 +2461,7 @@ namespace codeLess.Studio
                 statusNetworkItem,
                 statusRightLabel,
                 statusLangItem,
+                statusPythonItem,
                 statusEolItem,
                 statusEncodingItem,
                 statusSpacesItem,
@@ -2941,25 +2946,21 @@ namespace codeLess.Studio
 
             // 6. RUN MENU
             ToolStripMenuItem runMenu = new ToolStripMenuItem("&Run");
-            runMenu.DropDownItems.Add(CreateMenuItem("Run Active File", "F5", async () =>
-            {
-                if (activeTab != null) await ExecuteActiveFileInTerminalAsync(activeTab);
-            }));
+            runMenu.DropDownItems.Add(CreateMenuItem("Start Debugging", "F5", () => StartOrContinueDebugging()));
             runMenu.DropDownItems.Add(CreateMenuItem("Run Without Debugging", "Ctrl+F5", async () =>
             {
                 if (activeTab != null) await ExecuteActiveFileInTerminalAsync(activeTab);
             }));
-            runMenu.DropDownItems.Add(CreateMenuItem("Stop Execution", "Shift+F5", () => KillActiveTerminalProcess()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Stop Debugging / Execution", "Shift+F5", () => { if (debugController != null && debugController.IsActive) debugController.StopAsync(); else KillActiveTerminalProcess(); }));
+            runMenu.DropDownItems.Add(CreateMenuItem("Restart Debugging", "Ctrl+Shift+F5", () => debugController.Restart()));
             runMenu.DropDownItems.Add(new ToolStripSeparator());
-            runMenu.DropDownItems.Add(CreateMenuItem("Toggle Breakpoint", "F9", () =>
-            {
-                if (activeTab != null)
-                {
-                    int ln = activeTab.CursorLine + 1;
-                    if (!activeTab.Breakpoints.Remove(ln)) activeTab.Breakpoints.Add(ln);
-                    editorControl.Invalidate(true);
-                }
-            }));
+            runMenu.DropDownItems.Add(CreateMenuItem("Step Over", "F10", () => debugController.StepOver()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Step Into", "F11", () => debugController.StepInto()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Step Out", "Shift+F11", () => debugController.StepOut()));
+            runMenu.DropDownItems.Add(new ToolStripSeparator());
+            runMenu.DropDownItems.Add(CreateMenuItem("Toggle Breakpoint", "F9", () => ToggleBreakpointAtCursor()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Add Configuration (launch.json)...", "", () => CreateLaunchJson()));
+            runMenu.DropDownItems.Add(CreateMenuItem("Python: Select Interpreter", "", () => TryExecuteDebugCommand("python_select_interpreter")));
             runMenu.DropDownItems.Add(new ToolStripSeparator());
             runMenu.DropDownItems.Add(CreateMenuItem("Auto-Heal Last Crash", "", async () => await AutoHealLastTerminalErrorAsync()));
             runMenu.DropDownItems.Add(CreateMenuItem("HTTP / REST API Playground...", "", () => OpenRestApiPlaygroundDialog()));
@@ -5725,7 +5726,7 @@ if __name__ == '__main__':
                     {
                         hb.Font = dockTabFont;
                         hb.Padding = Padding.Empty;
-                        hb.Visible = (hb != btmExtHostTabBtn && hb != btmTraceTabBtn);
+                        hb.Visible = hb != btmExtHostTabBtn;
                     }
                 }
                 shellSelectorCombo.Visible = false;
@@ -5750,9 +5751,7 @@ if __name__ == '__main__':
                 int cx = 6;
                 btmProbTabBtn.Location = new Point(cx, 1); cx += btmProbTabBtn.Width + gap;
                 btmOutTabBtn.Location = new Point(cx, 1); cx += btmOutTabBtn.Width + gap;
-                btmTraceTabBtn.Location = new Point(cx, 1);
-                btmTraceTabBtn.Width = 0;
-                btmTraceTabBtn.Visible = false;
+                btmTraceTabBtn.Location = new Point(cx, 1); cx += btmTraceTabBtn.Width + gap;
                 btmTermTabBtn.Location = new Point(cx, 1); cx += btmTermTabBtn.Width + gap;
                 btmExtHostTabBtn.Location = new Point(cx, 1);
                 btmExtHostTabBtn.Width = 0;
@@ -6469,6 +6468,7 @@ if __name__ == '__main__':
             terminalInput.Visible = false;
             problemsListBox.Visible = tabId == "problems";
             if (debugConsoleBox != null) debugConsoleBox.Visible = tabId == "debug";
+            OnBottomDockTabSwitchedForDebug(tabId);
             UpdateActiveOutputChannelVisibility();
 
             btmTermTabBtn.Tag = tabId == "terminal" ? "docktab_active" : "docktab_inactive";
@@ -7508,6 +7508,7 @@ if __name__ == '__main__':
                 : view == "extensions"
                 ? "EXTENSIONS"
                 : "AI HARNESSES";
+            OnSidebarViewSwitchedForDebug(view);
 
             if (activityBar != null) activityBar.Invalidate(true);
         }
@@ -9342,7 +9343,7 @@ if __name__ == '__main__':
             string runCmd;
 
             if (ext == ".py")
-                runCmd = "python \"" + filePath + "\"";
+                runCmd = BuildPythonRunCommandWinForms(filePath);
             else if (ext == ".js" || ext == ".mjs" || ext == ".cjs")
                 runCmd = "node \"" + filePath + "\"";
             else if (ext == ".ts" || ext == ".tsx")
@@ -10542,6 +10543,7 @@ if __name__ == '__main__':
         public void ExecutePaletteCommand(string cmdId)
         {
             if (string.IsNullOrEmpty(cmdId)) return;
+            if (TryExecuteDebugCommand(cmdId)) return;
             if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
@@ -11260,6 +11262,8 @@ if __name__ == '__main__':
 
         public static Color ResolveStatusBarBackColor(StudioTheme theme, bool hasFolderOpen)
         {
+            Color debugColor;
+            if (TryGetDebugStatusBarColor(theme, out debugColor)) return debugColor;
             if (theme == null)
                 return hasFolderOpen ? Color.FromArgb(0, 122, 204) : Color.FromArgb(104, 33, 122);
             if (!hasFolderOpen)
@@ -11271,6 +11275,7 @@ if __name__ == '__main__':
         {
             activeTheme = theme;
             if (networkPrivacy != null) networkPrivacy.ApplyTheme(theme);
+            ApplyDebugTheme(theme);
             EnableNativeDarkTitleBar();
             this.BackColor = theme.BgWorkbench;
             this.ForeColor = theme.FgPrimary;
@@ -11334,6 +11339,7 @@ if __name__ == '__main__':
             if (statusEncodingItem != null) statusEncodingItem.ForeColor = statusFg;
             if (statusEolItem != null) statusEolItem.ForeColor = statusFg;
             if (statusLangItem != null) statusLangItem.ForeColor = statusFg;
+            if (statusPythonItem != null) statusPythonItem.ForeColor = statusFg;
             if (statusChordLabel != null) statusChordLabel.ForeColor = statusFg;
             statusRightLabel.ForeColor = statusFg;
             if (statusNetworkItem != null) { statusNetworkItem.ForeColor = statusFg; statusNetworkItem.Invalidate(); }

@@ -252,6 +252,7 @@ namespace codeLess.AvaloniaApp
             BuildWorkbenchLayout();
             BuildNativeMacMenu();
             ApplyTheme(currentTheme);
+            InitDebugWorkbench();
 
             // Register tunnel & bubble key handlers so workbench shortcuts work anywhere
             AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
@@ -765,8 +766,19 @@ namespace codeLess.AvaloniaApp
                 Header = "_Run",
                 ItemsSource = new object[]
                 {
-                    Mi("Start Debugging / Run Active File", "F5", RunActiveFileInTerminal),
+                    Mi("Start Debugging", "F5", StartOrContinueDebugging),
                     Mi("Run Without Debugging", "Ctrl+F5", RunActiveFileInTerminal),
+                    Mi("Stop Debugging", "Shift+F5", () => _ = debugController.StopAsync()),
+                    Mi("Restart Debugging", "Ctrl+Shift+F5", () => debugController.Restart()),
+                    new Separator(),
+                    Mi("Step Over", "F10", () => debugController.StepOver()),
+                    Mi("Step Into", "F11", () => debugController.StepInto()),
+                    Mi("Step Out", "Shift+F11", () => debugController.StepOut()),
+                    Mi("Continue", "F5", () => debugController.Continue()),
+                    new Separator(),
+                    Mi("Toggle Breakpoint", "F9", ToggleBreakpointAtCursor),
+                    Mi("Add Configuration (launch.json)...", "", CreateLaunchJson),
+                    new Separator(),
                     Mi("Run Build Task", "Ctrl+Shift+B", RunWorkspaceBuildInTerminal),
                     Mi("Open Run & Debug View", "Ctrl+Shift+D", () => SwitchSidebarView("run"))
                 }
@@ -925,8 +937,17 @@ namespace codeLess.AvaloniaApp
 
                 var runSub = new NativeMenu
                 {
-                    Nmi("Start Debugging", RunActiveFileInTerminal, Key.F5, KeyModifiers.None),
-                    Nmi("Run Without Debugging", RunActiveFileInTerminal, Key.F5, KeyModifiers.Control)
+                    Nmi("Start Debugging", StartOrContinueDebugging, Key.F5, KeyModifiers.None),
+                    Nmi("Run Without Debugging", RunActiveFileInTerminal, Key.F5, KeyModifiers.Control),
+                    Nmi("Stop Debugging", () => _ = debugController.StopAsync(), Key.F5, KeyModifiers.Shift),
+                    Nmi("Restart Debugging", () => debugController.Restart(), Key.F5, meta | KeyModifiers.Shift),
+                    new NativeMenuItemSeparator(),
+                    Nmi("Step Over", () => debugController.StepOver(), Key.F10, KeyModifiers.None),
+                    Nmi("Step Into", () => debugController.StepInto(), Key.F11, KeyModifiers.None),
+                    Nmi("Step Out", () => debugController.StepOut(), Key.F11, KeyModifiers.Shift),
+                    new NativeMenuItemSeparator(),
+                    Nmi("Toggle Breakpoint", ToggleBreakpointAtCursor, Key.F9, KeyModifiers.None),
+                    Nmi("Add Configuration (launch.json)...", CreateLaunchJson)
                 };
                 rootMenu.Add(new NativeMenuItem("Run") { Menu = runSub });
 
@@ -1140,7 +1161,7 @@ namespace codeLess.AvaloniaApp
             explorerPanelView = BuildExplorerSidebarView();
             searchPanelView = BuildSearchSidebarView();
             scmPanelView = BuildScmSidebarView();
-            runDebugPanelView = BuildRunDebugSidebarView();
+            runDebugPanelView = BuildDebugSidebarView();
             extensionsPanelView = BuildExtensionsSidebarView();
             harnessPanelView = BuildHarnessSidebarView();
 
@@ -1790,6 +1811,7 @@ namespace codeLess.AvaloniaApp
                 IsVisible = false
             };
             bodyDeck.Children.Add(outputStreamBox);
+            bodyDeck.Children.Add(BuildDebugConsolePanel());
 
             // Terminal Host Grid: Left VT100 Emulator(s) | Right Session List (160px)
             terminalHostGrid = new Grid
@@ -2359,6 +2381,7 @@ namespace codeLess.AvaloniaApp
             // Overlays
             CommandPalette.ApplyTheme(theme);
             ModalHost.ApplyTheme(theme);
+            ApplyDebugTheme(theme);
         }
 
         private void UpdateActivityBarSelectionVisuals()
@@ -2447,6 +2470,7 @@ namespace codeLess.AvaloniaApp
             sidebarProgressBar.StartProgress();
             workspaceRoot = Path.GetFullPath(rootDir);
             settings.AddRecentWorkspace(workspaceRoot);
+            OnDebugWorkspaceChanged();
 
             string folderName = Path.GetFileName(workspaceRoot.TrimEnd('\\', '/'));
             if (string.IsNullOrEmpty(folderName)) folderName = workspaceRoot;
@@ -3371,6 +3395,7 @@ namespace codeLess.AvaloniaApp
                 statusLanguageBtn.Content = new LiteralTextBlock("");
             }
             statusAiModelBtn.Content = new LiteralTextBlock($"✦ {settings.ActiveModel}");
+            UpdateDebugStatusItems();
         }
 
         public static string MapLanguageDisplayName(string ext)

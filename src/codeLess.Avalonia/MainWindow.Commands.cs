@@ -44,6 +44,7 @@ namespace codeLess.AvaloniaApp
             bool meta = mods.HasFlag(KeyModifiers.Meta);
             bool shift = mods.HasFlag(KeyModifiers.Shift);
             if (key == Key.F1) return true;
+            if (DebugKeysSkipShell && (key == Key.F5 || key == Key.F6 || key == Key.F9 || key == Key.F10 || key == Key.F11)) return true;
             if (ctrl && (key == Key.OemTilde || key == Key.Tab || key == Key.PageUp || key == Key.PageDown)) return true;
             if (MacKeymap.IsMacOS)
             {
@@ -68,6 +69,7 @@ namespace codeLess.AvaloniaApp
                 !e.KeyModifiers.HasFlag(KeyModifiers.Alt) &&
                 e.Key != Key.Escape &&
                 e.Key != Key.F1 && e.Key != Key.F3 && e.Key != Key.F4 && e.Key != Key.F5 &&
+                e.Key != Key.F6 && e.Key != Key.F10 &&
                 e.Key != Key.F8 && e.Key != Key.F9 && e.Key != Key.F11 && e.Key != Key.F12)
             {
                 if (lastCtrlKChordTime != DateTime.MinValue)
@@ -249,6 +251,8 @@ namespace codeLess.AvaloniaApp
                 if (isZenMode && shift) { ToggleZenMode(); return true; }
                 return false;
             }
+
+            if (HandleDebugFunctionKey(key, modifiers)) return true;
 
             // Function Keys
             if (key == Key.F1 && !ctrlOrCmd && !alt && !shift)
@@ -558,7 +562,8 @@ namespace codeLess.AvaloniaApp
                 ToggleBottomPanel();
 
             problemsListBox.IsVisible = activeBottomTab == "problems";
-            outputStreamBox.IsVisible = activeBottomTab == "output" || activeBottomTab == "debug" || activeBottomTab == "ports";
+            outputStreamBox.IsVisible = activeBottomTab == "output" || activeBottomTab == "ports";
+            if (debugConsolePanel != null) debugConsolePanel.IsVisible = activeBottomTab == "debug";
             terminalHostGrid.IsVisible = activeBottomTab == "terminal";
 
             outputChannelCombo.IsVisible = activeBottomTab == "output";
@@ -2104,7 +2109,7 @@ namespace codeLess.AvaloniaApp
             {
                 string ext = (activeTab.Language ?? "").ToLowerInvariant();
                 string target = !string.IsNullOrEmpty(activeTab.FilePath) ? $"\"{activeTab.FilePath}\"" : activeTab.FileName;
-                if (ext == "py") cmd = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? $"python {target}" : $"python3 {target}";
+                if (ext == "py") cmd = !string.IsNullOrEmpty(activeTab.FilePath) ? BuildPythonRunCommand(activeTab.FilePath, activeTerminalSession) : (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? $"python {target}" : $"python3 {target}");
                 else if (ext == "js") cmd = $"node {target}";
                 else if (ext == "ps1") cmd = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? $"powershell -ExecutionPolicy Bypass -File {target}" : $"pwsh -File {target}";
                 else if (ext == "sh" || ext == "zsh") cmd = $"sh {target}";
@@ -2494,6 +2499,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Preferences", Title = "Color Theme", Shortcut = "Ctrl+K Ctrl+T", Execute = OpenThemePickerPalette },
                 new PaletteEntryItem { Category = "Preferences", Title = "Open Settings", Shortcut = "Ctrl+,", Execute = ShowSettingsModal },
                 new PaletteEntryItem { Category = "Preferences", Title = "Open Keyboard Shortcuts", Shortcut = "Ctrl+K Ctrl+S", Execute = ShowKeyboardShortcutsModal },
+                BuildDebugPaletteCommands(),
                 new PaletteEntryItem { Category = "Help", Title = "Welcome", Execute = OpenWelcomeTab },
                 new PaletteEntryItem { Category = "Help", Title = "About codeLess", Execute = ShowAboutModal }
             };
