@@ -120,6 +120,13 @@ namespace codeLess.Studio
             return s;
         }
 
+        /// <summary>Word under / just before the caret ("" when none).</summary>
+        public static string WordAtOrEmpty(string line, int col)
+        {
+            int start;
+            return WordAt(line, col, out start);
+        }
+
         /// <summary>Word under / just before the caret, or "".</summary>
         public static string WordAt(string line, int col, out int start)
         {

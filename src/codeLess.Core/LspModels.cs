@@ -209,6 +209,7 @@ namespace codeLess.Studio
                         we.Steps.Add(st);
                     }
                 }
+                we.MergeDuplicateFiles();
                 return we;
             }
             Dictionary<string, object> changes = LspJson.GetObject(o, "changes");
@@ -224,7 +225,51 @@ namespace codeLess.Studio
                     we.Steps.Add(st);
                 }
             }
+            we.MergeDuplicateFiles();
             return we;
+        }
+
+        /// <summary>
+        /// Folds text-edit steps that target the same file (the same document reported under two URIs, e.g. a symlinked
+        /// path and its real path) into the first step, dropping identical edits. Applying them separately would edit the
+        /// document twice with stale ranges. Steps separated by a resource operation are left alone.
+        /// </summary>
+        public void MergeDuplicateFiles()
+        {
+            Dictionary<string, Step> firstByKey = new Dictionary<string, Step>(StringComparer.Ordinal);
+            List<Step> result = new List<Step>();
+            foreach (Step st in Steps)
+            {
+                if (st.Resource != null)
+                {
+                    firstByKey.Clear(); // ordering matters across create / rename / delete
+                    result.Add(st);
+                    continue;
+                }
+                string key = LspText.PathKey(st.FilePath);
+                Step first;
+                if (!firstByKey.TryGetValue(key, out first))
+                {
+                    firstByKey[key] = st;
+                    result.Add(st);
+                    continue;
+                }
+                if (first.Edits == null) first.Edits = new List<LspTextEdit>();
+                if (st.Edits == null) continue;
+                foreach (LspTextEdit e in st.Edits)
+                {
+                    bool dup = false;
+                    foreach (LspTextEdit f in first.Edits)
+                    {
+                        if (f.Range != null && e.Range != null && f.Range.StartLine == e.Range.StartLine && f.Range.StartCharacter == e.Range.StartCharacter &&
+                            f.Range.EndLine == e.Range.EndLine && f.Range.EndCharacter == e.Range.EndCharacter && string.Equals(f.NewText, e.NewText, StringComparison.Ordinal))
+                        { dup = true; break; }
+                    }
+                    if (!dup) first.Edits.Add(e);
+                }
+            }
+            Steps.Clear();
+            Steps.AddRange(result);
         }
     }
 

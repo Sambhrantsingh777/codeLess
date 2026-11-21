@@ -2478,9 +2478,16 @@ namespace codeLess.Studio
             }
         }
 
+        /// <summary>Panel hosting the canvas and its floating widgets (LSP completion / hover popups are added here).</summary>
+        public Panel EditorBodyHost { get { return editorBody; } }
+
+        /// <summary>When it returns true for the current buffer the word-based popup stays hidden (a language server completes instead).</summary>
+        public Func<EditorTabBuffer, bool> SuppressBuiltInAutocomplete;
+
         public void UpdateAutocompletePopup(bool forceShow = false)
         {
             if (CurrentBuffer == null) { autocompleteFrame.Visible = false; return; }
+            if (SuppressBuiltInAutocomplete != null && SuppressBuiltInAutocomplete(CurrentBuffer)) { autocompleteFrame.Visible = false; return; }
             string line = CurrentBuffer.Lines[CurrentBuffer.CursorLine];
             int col = Math.Min(line.Length, CurrentBuffer.CursorCol);
             if (col <= 0 && !forceShow) { autocompleteFrame.Visible = false; return; }
@@ -3656,6 +3663,8 @@ namespace codeLess.Studio
                             {
                                 int sqStartX = GutterWidth + 8 + Math.Max(0, (dCol - seg.ColStart) - effScrollLeft) * CharWidth;
                                 int sqWidth = Math.Max(CharWidth * 3, Math.Min(180, (lineSlice.Length - (dCol - seg.ColStart)) * CharWidth));
+                                if (diag.IsLanguageServer && diag.EndColumn > diag.Column)
+                                    sqWidth = Math.Max(CharWidth, Math.Min(seg.ColEnd + 1, diag.EndColumn - 1) - dCol) * CharWidth; // exact LSP range
                                 Color sqColor = diag.Severity == "Error"
                                     ? Color.FromArgb(244, 63, 94)
                                     : (diag.Severity == "Warning" ? Color.FromArgb(251, 191, 36) : Color.FromArgb(56, 189, 248));
@@ -4597,6 +4606,7 @@ namespace codeLess.Studio
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            if (MouseMovedOverCanvas != null && e.Button == MouseButtons.None) MouseMovedOverCanvas(e.Location);
             int rightMinimapStart = this.Width - (EffectiveShowMinimap ? MinimapWidth : 0);
 
             bool overDiffPill = diffPillHits.Any(h => h.AcceptRect.Contains(e.Location) || h.RejectRect.Contains(e.Location));
@@ -4801,6 +4811,7 @@ namespace codeLess.Studio
         {
             base.OnMouseLeave(e);
             ClearLinkHover();
+            if (MouseLeftCanvas != null) MouseLeftCanvas();
             if (hoveredDiagnostic != null)
             {
                 hoveredDiagnostic = null;
@@ -4878,6 +4889,7 @@ namespace codeLess.Studio
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             base.OnMouseWheel(e);
+            if (MouseLeftCanvas != null) MouseLeftCanvas();
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
 
@@ -5999,6 +6011,13 @@ namespace codeLess.Studio
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
             caretBlinkOn = true;
+            // Language-server popups / shortcuts get the first look (only when a server serves this file).
+            if (PreviewKeyHandler != null && PreviewKeyHandler(e))
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
 
             // 0. Check armed Ctrl+K chord second key
             if (IsCtrlKChordArmed)
@@ -6540,6 +6559,30 @@ namespace codeLess.Studio
         }
 
         protected override void OnKeyPress(KeyPressEventArgs e)
+        {
+            OnKeyPressCore(e);
+            if (e.Handled && !char.IsControl(e.KeyChar) && e.KeyChar != '\x7f' && CharTyped != null) CharTyped(e.KeyChar);
+        }
+
+        /// <summary>Called before the editor handles a key; return true to swallow it (LSP completion / shortcuts).</summary>
+        public Func<KeyEventArgs, bool> PreviewKeyHandler;
+        /// <summary>Raised after a typed character was inserted (as-you-type completion, signature help).</summary>
+        public event Action<char> CharTyped;
+        /// <summary>Raised on mouse moves over the canvas (client coordinates); used for LSP hover.</summary>
+        public event Action<Point> MouseMovedOverCanvas;
+        /// <summary>Raised when the mouse leaves the canvas or the view scrolls.</summary>
+        public event Action MouseLeftCanvas;
+
+        /// <summary>Width of the line-number gutter in pixels.</summary>
+        public int GutterPixelWidth { get { return GutterWidth; } }
+
+        /// <summary>Document position (0-based) nearest to a client point.</summary>
+        public void HitTestLineCol(Point pt, out int line, out int col)
+        {
+            ScreenPointToLineCol(pt, out line, out col);
+        }
+
+        private void OnKeyPressCore(KeyPressEventArgs e)
         {
             base.OnKeyPress(e);
             if (char.IsControl(e.KeyChar) || e.KeyChar == '\x7f') return;

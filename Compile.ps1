@@ -140,6 +140,7 @@ $sourceFiles = @(
     "src\ConPtyTerminal.cs",
     "src\CodeLessEditorCanvas.cs",
     "src\StudioDialogs.cs",
+    "src\LanguageServerWinForms.cs",
     "src\CodeLessMainForm.cs"
 )
 

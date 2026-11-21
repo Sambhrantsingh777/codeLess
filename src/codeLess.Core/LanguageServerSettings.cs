@@ -130,4 +130,62 @@ namespace codeLess.Studio
             foreach (KeyValuePair<int, DiagnosticItem> kv in indexed) buf.Diagnostics.Add(kv.Value);
         }
     }
+
+    /// <summary>
+    /// Language-server document symbols per file. The heuristic analyzer rebuilds buf.Symbols on every edit and then calls
+    /// <see cref="ApplyTo"/>, so the outline keeps showing the (more precise) server symbols when a server provides them.
+    /// </summary>
+    public static class LspSymbolsStore
+    {
+        private static readonly object sync = new object();
+        private static readonly Dictionary<string, List<AstSymbolItem>> byFile = new Dictionary<string, List<AstSymbolItem>>(StringComparer.Ordinal);
+
+        public static void Set(string filePath, List<LspDocumentSymbol> symbols)
+        {
+            string key = LspText.PathKey(filePath);
+            if (key.Length == 0) return;
+            lock (sync)
+            {
+                if (symbols == null) { byFile.Remove(key); return; }
+                List<AstSymbolItem> list = new List<AstSymbolItem>();
+                foreach (LspDocumentSymbol d in symbols)
+                {
+                    if (d == null || d.Range == null) continue;
+                    AstSymbolItem it = new AstSymbolItem();
+                    it.Name = d.Depth > 0 ? new string(' ', Math.Min(8, d.Depth * 2)) + d.Name : d.Name;
+                    it.Kind = LspDocumentSymbol.ToOutlineKind(d.Kind);
+                    LspRange sel = d.SelectionRange ?? d.Range;
+                    it.Line = sel.StartLine + 1;
+                    it.LineSpan = Math.Max(1, d.Range.EndLine - d.Range.StartLine + 1);
+                    it.Signature = d.Detail ?? "";
+                    list.Add(it);
+                }
+                byFile[key] = list;
+            }
+        }
+
+        public static bool Has(string filePath)
+        {
+            lock (sync) { return byFile.ContainsKey(LspText.PathKey(filePath)); }
+        }
+
+        public static void Clear(string filePath)
+        {
+            Set(filePath, null);
+        }
+
+        /// <summary>Replaces buf.Symbols with the stored server symbols (no-op when none are stored).</summary>
+        public static void ApplyTo(EditorTabBuffer buf)
+        {
+            if (buf == null || string.IsNullOrEmpty(buf.FilePath) || buf.Symbols == null) return;
+            List<AstSymbolItem> l;
+            lock (sync)
+            {
+                if (!byFile.TryGetValue(LspText.PathKey(buf.FilePath), out l)) return;
+                l = new List<AstSymbolItem>(l);
+            }
+            buf.Symbols.Clear();
+            buf.Symbols.AddRange(l);
+        }
+    }
 }

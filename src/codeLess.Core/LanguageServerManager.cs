@@ -476,6 +476,7 @@ namespace codeLess.Studio
                     doc.SentText = null;
                 });
             }
+            LspSymbolsStore.Clear(path);
             if (LspDiagnosticsStore.Count(path) > 0)
             {
                 LspDiagnosticsStore.Clear(path);
@@ -1058,6 +1059,7 @@ namespace codeLess.Studio
             {
                 if (d.Instance == null || set.Contains(d.Instance))
                 {
+                    LspSymbolsStore.Clear(d.Path);
                     if (LspDiagnosticsStore.Count(d.Path) > 0)
                     {
                         LspDiagnosticsStore.Clear(d.Path);

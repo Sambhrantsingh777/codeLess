@@ -250,6 +250,7 @@ namespace codeLess.AvaloniaApp
 
             BuildWorkbenchLayout();
             BuildNativeMacMenu();
+            InitLanguageServers();
             ApplyTheme(currentTheme);
 
             // Register tunnel & bubble key handlers so workbench shortcuts work anywhere
@@ -364,6 +365,7 @@ namespace codeLess.AvaloniaApp
         protected override void OnClosed(EventArgs e)
         {
             StopWorkspaceWatcher();
+            ShutdownLanguageServers();
             try { workspaceLoadCts?.Cancel(); } catch { }
             if (debouncedUiSyncTimer != null)
                 debouncedUiSyncTimer.Stop();
@@ -1605,7 +1607,7 @@ namespace codeLess.AvaloniaApp
             PrimaryEditor.OpenRecentWorkspaceRequested += dir => { if (Directory.Exists(dir)) LoadWorkspace(dir); };
             PrimaryEditor.EditorContextMenuRequested += OpenEditorContextMenu;
             PrimaryEditor.DiffAllDecisionRequested += (buf, accepted) => RefreshChangesetBanner();
-            PrimaryEditor.LinkActivated += (buf, target, line) => FollowEditorLink(buf, target);
+            PrimaryEditor.LinkActivated += (buf, target, line) => FollowEditorLinkWithLsp(PrimaryEditor, buf, target, line);
             PrimaryEditor.NavigateHistoryRequested += dir => { if (dir < 0) NavigateBack(); else NavigateForward(); };
             Grid.SetColumn(PrimaryEditor, 0);
             editorSplitGrid.Children.Add(PrimaryEditor);
@@ -1613,7 +1615,7 @@ namespace codeLess.AvaloniaApp
             SplitEditor = new AvaloniaEditorControl();
             SplitEditor.BufferModified += OnEditorBufferModified;
             SplitEditor.CaretMoved += buf => UpdateStatusBar();
-            SplitEditor.LinkActivated += (buf, target, line) => FollowEditorLink(buf, target);
+            SplitEditor.LinkActivated += (buf, target, line) => FollowEditorLinkWithLsp(SplitEditor, buf, target, line);
             SplitEditor.NavigateHistoryRequested += dir => { if (dir < 0) NavigateBack(); else NavigateForward(); };
             splitEditorBorder = new Border
             {
@@ -2287,7 +2289,10 @@ namespace codeLess.AvaloniaApp
             });
             statusLanguageBtn = MakeStatusBtn("Plain Text", OpenLanguageModePicker);
             statusAiModelBtn = MakeStatusBtn($"✦ {settings.ActiveModel}", ShowByokAndHarnessModal);
+            statusLspBtn = MakeStatusBtn("", OpenLanguageServerStatusMenu);
+            statusLspBtn.IsVisible = false;
 
+            rightRow.Children.Add(statusLspBtn);
             rightRow.Children.Add(statusLnColBtn);
             rightRow.Children.Add(statusSpacesBtn);
             rightRow.Children.Add(statusEncodingBtn);
@@ -2409,6 +2414,7 @@ namespace codeLess.AvaloniaApp
             statusEolBtn.Foreground = new SolidColorBrush(statusFg);
             statusLanguageBtn.Foreground = new SolidColorBrush(statusFg);
             statusAiModelBtn.Foreground = new SolidColorBrush(statusFg);
+            ApplyLanguageServerTheme(theme);
 
             // Overlays
             CommandPalette.ApplyTheme(theme);
@@ -2501,6 +2507,7 @@ namespace codeLess.AvaloniaApp
             sidebarProgressBar.StartProgress();
             workspaceRoot = Path.GetFullPath(rootDir);
             settings.AddRecentWorkspace(workspaceRoot);
+            LspOnWorkspaceChanged();
 
             string folderName = Path.GetFileName(workspaceRoot.TrimEnd('\\', '/'));
             if (string.IsNullOrEmpty(folderName)) folderName = workspaceRoot;
@@ -2898,6 +2905,7 @@ namespace codeLess.AvaloniaApp
             RebuildContextPillsBar();
             UpdateWindowTitle();
             UpdateStatusBar();
+            LspOnTabActivated(tab);
         }
 
         public void OpenWelcomeTab()
@@ -2948,6 +2956,7 @@ namespace codeLess.AvaloniaApp
                 RefreshTabStrip();
                 RefreshOpenEditorsSection();
             }
+            LspOnTabClosed(tab);
             return true;
         }
 
@@ -3003,6 +3012,7 @@ namespace codeLess.AvaloniaApp
                 RefreshGitStatus();
                 UpdateWindowTitle();
                 SetStatusMessage($"Saved {tab.FileName}");
+                LspOnSaved(tab);
                 return true;
             }
             catch (Exception ex)
@@ -3026,11 +3036,13 @@ namespace codeLess.AvaloniaApp
             RefreshTabStrip();
             RefreshOpenEditorsSection();
             UpdateWindowTitle();
+            LspOnBufferModified(activeTab);
         }
 
         private void OnEditorBufferModified(EditorTabBuffer buf)
         {
             if (buf == null) return;
+            LspOnBufferModified(buf);
             bool previewChanged = false;
             if (buf.IsDirty && buf.IsPreviewTab)
             {
@@ -3422,6 +3434,7 @@ namespace codeLess.AvaloniaApp
                 statusLanguageBtn.Content = new LiteralTextBlock("");
             }
             statusAiModelBtn.Content = new LiteralTextBlock($"✦ {settings.ActiveModel}");
+            UpdateLspStatusItem();
         }
 
         public static string MapLanguageDisplayName(string ext)

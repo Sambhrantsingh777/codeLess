@@ -219,6 +219,25 @@ namespace codeLess.Avalonia.Tests
         }
 
         [Fact]
+        public void WorkspaceEdit_Merges_The_Same_File_Reported_Twice_And_Drops_Identical_Edits()
+        {
+            string edit = "{\"range\":{\"start\":{\"line\":0,\"character\":4},\"end\":{\"line\":0,\"character\":7}},\"newText\":\"sum\"}";
+            string edit2 = "{\"range\":{\"start\":{\"line\":3,\"character\":1},\"end\":{\"line\":3,\"character\":4}},\"newText\":\"sum\"}";
+            var we = LspWorkspaceEdit.Parse(LspJson.Parse("{\"documentChanges\":[{\"textDocument\":{\"uri\":\"file:///w/a.c\",\"version\":null},\"edits\":[" + edit + "]}," +
+                "{\"textDocument\":{\"uri\":\"file:///w/a.c\",\"version\":null},\"edits\":[" + edit + "," + edit2 + "]}]}"));
+            Assert.Single(we.Steps);
+            Assert.Equal(2, we.Steps[0].Edits.Count);
+            if (LspText.IsMacOS())
+            {
+                Assert.Equal(LspText.PathKey("/var/folders/x/a.c"), LspText.PathKey("/private/var/folders/x/a.c"));
+                var mac = LspWorkspaceEdit.Parse(LspJson.Parse("{\"changes\":{\"file:///var/t/a.c\":[" + edit + "],\"file:///private/var/t/a.c\":[" + edit + "]}}"));
+                Assert.Single(mac.Steps);
+                Assert.Single(mac.Steps[0].Edits);
+            }
+            Assert.NotEqual(LspText.PathKey("/privatefoo/var/a"), LspText.PathKey("/var/a"));
+        }
+
+        [Fact]
         public void UserSettings_Parse_Overrides_Quotes_And_Off()
         {
             var s = LanguageServerUserSettings.Parse("# comment\npython = \"/opt/my tools/pyright-langserver\" --stdio\nrust = off\nTypeScript=tsls --stdio", false);

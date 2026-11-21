@@ -328,6 +328,15 @@ namespace codeLess.Studio
             string full;
             try { full = Path.GetFullPath(path); } catch { full = path; }
             full = full.Replace('\\', '/').TrimEnd('/');
+            // macOS: /var, /tmp and /etc are symlinks into /private; servers that canonicalize (clangd) report the
+            // /private form for files the client opened via the short form. Both must map to the same document.
+            if (IsMacOS() && full.StartsWith("/private/", StringComparison.OrdinalIgnoreCase))
+            {
+                string rest = full.Substring(8);
+                if (rest.StartsWith("/var/", StringComparison.OrdinalIgnoreCase) || rest.StartsWith("/tmp/", StringComparison.OrdinalIgnoreCase) ||
+                    rest.StartsWith("/etc/", StringComparison.OrdinalIgnoreCase) || rest == "/var" || rest == "/tmp")
+                    full = rest;
+            }
             bool caseSensitive = Path.DirectorySeparatorChar == '/' && !IsMacOS();
             return caseSensitive ? full : full.ToLowerInvariant();
         }
