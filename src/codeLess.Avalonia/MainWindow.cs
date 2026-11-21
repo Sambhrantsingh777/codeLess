@@ -471,6 +471,7 @@ namespace codeLess.AvaloniaApp
                 if (t != null) ApplyTheme(t, persistSetting: false);
             };
             CommandPalette.GoToLineRequested += lineNum => PrimaryEditor.GoToLine(lineNum);
+            CommandPalette.FileOpenRequested += (path, line, col) => OpenFileAtLocation(path, line, Math.Max(1, col), 0, preview: false, focusEditor: true);
             CommandPalette.Closed += () => PrimaryEditor.Canvas.Focus();
             rootOverlayGrid.Children.Add(CommandPalette);
 
@@ -674,8 +675,8 @@ namespace codeLess.AvaloniaApp
                     new Separator(),
                     Mi("Find", "Ctrl+F", () => PrimaryEditor.ShowFindBar(false)),
                     Mi("Replace", "Ctrl+H", () => PrimaryEditor.ShowFindBar(true)),
-                    Mi("Find in Files", "Ctrl+Shift+F", () => SwitchSidebarView("search")),
-                    Mi("Replace in Files", "Ctrl+Shift+H", () => SwitchSidebarView("search")),
+                    Mi("Find in Files", "Ctrl+Shift+F", () => ShowSearchView(false)),
+                    Mi("Replace in Files", "Ctrl+Shift+H", () => ShowSearchView(true)),
                     new Separator(),
                     Mi("Toggle Line Comment", "Ctrl+/", () => PrimaryEditor.Canvas.ToggleLineComment()),
                     Mi("Toggle Block Comment", "Shift+Alt+A", () => PrimaryEditor.Canvas.ToggleBlockComment())
@@ -1249,70 +1250,6 @@ namespace codeLess.AvaloniaApp
             grid.Children.Add(outlineHeaderBtn);
             Grid.SetRow(outlineListBox, 5);
             grid.Children.Add(outlineListBox);
-
-            return grid;
-        }
-
-        private Grid BuildSearchSidebarView()
-        {
-            var grid = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,*"),
-                Margin = new Thickness(8, 6),
-                IsVisible = false
-            };
-
-            var topStack = new StackPanel { Spacing = 6 };
-            workspaceSearchInput = new TextBox { Watermark = "Search in workspace files...", FontSize = 12, Padding = new Thickness(7, 4) };
-            workspaceReplaceInput = new TextBox { Watermark = "Replace in workspace files...", FontSize = 12, Padding = new Thickness(7, 4) };
-
-            var toggleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            wsMatchCaseBtn = new Button { Content = "Aa", FontSize = 10.5, Padding = new Thickness(6, 2) };
-            wsWholeWordBtn = new Button { Content = "ab", FontSize = 10.5, Padding = new Thickness(6, 2) };
-            wsRegexBtn = new Button { Content = ".*", FontSize = 10.5, Padding = new Thickness(6, 2) };
-            var searchBtn = new Button { Content = "Search", FontSize = 11, Padding = new Thickness(10, 3) };
-            var replaceAllBtn = new Button { Content = "Replace All", FontSize = 11, Padding = new Thickness(10, 3) };
-
-            wsMatchCaseBtn.Click += (s, e) => { wsSearchMatchCase = !wsSearchMatchCase; ExecuteWorkspaceSearch(); };
-            wsWholeWordBtn.Click += (s, e) => { wsSearchWholeWord = !wsSearchWholeWord; ExecuteWorkspaceSearch(); };
-            wsRegexBtn.Click += (s, e) => { wsSearchRegex = !wsSearchRegex; ExecuteWorkspaceSearch(); };
-            searchBtn.Click += (s, e) => ExecuteWorkspaceSearch();
-            replaceAllBtn.Click += (s, e) => ExecuteWorkspaceReplaceAll();
-            workspaceSearchInput.KeyDown += (s, e) => { if (e.Key == Key.Enter) { ExecuteWorkspaceSearch(); e.Handled = true; } };
-
-            toggleRow.Children.Add(wsMatchCaseBtn);
-            toggleRow.Children.Add(wsWholeWordBtn);
-            toggleRow.Children.Add(wsRegexBtn);
-            toggleRow.Children.Add(searchBtn);
-            toggleRow.Children.Add(replaceAllBtn);
-
-            workspaceSearchSummary = new TextBlock { Text = "Type a query and press Enter to search across files.", FontSize = 11 };
-
-            topStack.Children.Add(workspaceSearchInput);
-            topStack.Children.Add(workspaceReplaceInput);
-            topStack.Children.Add(toggleRow);
-            topStack.Children.Add(workspaceSearchSummary);
-            Grid.SetRow(topStack, 0);
-            grid.Children.Add(topStack);
-
-            workspaceSearchResultsList = new ListBox
-            {
-                Margin = new Thickness(0, 6, 0, 0),
-                BorderThickness = new Thickness(0),
-                Background = Brushes.Transparent
-            };
-            workspaceSearchResultsList.SelectionChanged += (s, e) =>
-            {
-                int idx = workspaceSearchResultsList.SelectedIndex;
-                if (idx >= 0 && idx < workspaceSearchHits.Count)
-                {
-                    var hit = workspaceSearchHits[idx];
-                    OpenFileInTab(hit.FilePath, preview: false);
-                    PrimaryEditor.GoToLine(hit.LineNumber);
-                }
-            };
-            Grid.SetRow(workspaceSearchResultsList, 1);
-            grid.Children.Add(workspaceSearchResultsList);
 
             return grid;
         }
@@ -2410,6 +2347,8 @@ namespace codeLess.AvaloniaApp
             statusLanguageBtn.Foreground = new SolidColorBrush(statusFg);
             statusAiModelBtn.Foreground = new SolidColorBrush(statusFg);
 
+            ApplySearchViewTheme();
+
             // Overlays
             CommandPalette.ApplyTheme(theme);
             ModalHost.ApplyTheme(theme);
@@ -2875,6 +2814,8 @@ namespace codeLess.AvaloniaApp
 
         public void ActivateTab(EditorTabBuffer tab)
         {
+            // Remember where the caret was in the editor being left so Back returns there (not to where it was opened).
+            if (!suppressNavRecord && !ReferenceEquals(activeTab, tab)) CaptureCurrentNavPosition();
             activeTab = tab;
             if (tab != null)
             {
@@ -2882,6 +2823,7 @@ namespace codeLess.AvaloniaApp
                 if (isEditorSplit && SplitEditor.CurrentBuffer == null)
                     SplitEditor.LoadBuffer(tab);
                 ExplorerTree.ActiveEditorFilePath = tab.FilePath ?? "";
+                if (!string.IsNullOrEmpty(tab.FilePath)) RevealFileInExplorer(tab.FilePath);
                 ExplorerTree.InvalidateVisual();
                 RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1);
             }

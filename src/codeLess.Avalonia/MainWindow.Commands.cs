@@ -67,7 +67,7 @@ namespace codeLess.AvaloniaApp
                 !e.KeyModifiers.HasFlag(KeyModifiers.Meta) &&
                 !e.KeyModifiers.HasFlag(KeyModifiers.Alt) &&
                 e.Key != Key.Escape &&
-                e.Key != Key.F1 && e.Key != Key.F3 && e.Key != Key.F5 &&
+                e.Key != Key.F1 && e.Key != Key.F3 && e.Key != Key.F4 && e.Key != Key.F5 &&
                 e.Key != Key.F8 && e.Key != Key.F9 && e.Key != Key.F11 && e.Key != Key.F12)
             {
                 if (lastCtrlKChordTime != DateTime.MinValue)
@@ -266,6 +266,9 @@ namespace codeLess.AvaloniaApp
                 JumpDiagnostic(shift ? -1 : 1);
                 return true;
             }
+            // F4 / Shift+F4 -> next / previous Search result (VS Code); falls through when there are no results
+            if (key == Key.F4 && !ctrlOrCmd && !alt && NavigateSearchResult(shift ? -1 : 1))
+                return true;
             if (key == Key.F9 && !ctrlOrCmd && !alt && !shift)
             {
                 SetStatusMessage(activeTab != null ? $"Toggled breakpoint at {activeTab.FileName}:{activeTab.CursorLine + 1}" : "No active editor for breakpoint");
@@ -372,8 +375,8 @@ namespace codeLess.AvaloniaApp
                     case Key.P: OpenCommandPalette(">"); return true;
                     case Key.O: OpenCommandPalette("@"); return true;
                     case Key.E: SwitchSidebarView("explorer"); return true;
-                    case Key.F: SwitchSidebarView("search"); return true;
-                    case Key.H: SwitchSidebarView("search"); return true;
+                    case Key.F: ShowSearchView(false); return true;
+                    case Key.H: ShowSearchView(true); return true;
                     case Key.G: SwitchSidebarView("git"); return true;
                     case Key.D:
                         // Note: if editor canvas has focus, Ctrl+Shift+D duplicates line; otherwise opens Run & Debug
@@ -672,6 +675,7 @@ namespace codeLess.AvaloniaApp
 
         public void NavigateBack()
         {
+            CaptureCurrentNavPosition();
             if (navHistoryIndex <= 0) return;
             navHistoryIndex--;
             var target = navHistory[navHistoryIndex];
@@ -686,6 +690,7 @@ namespace codeLess.AvaloniaApp
 
         public void NavigateForward()
         {
+            CaptureCurrentNavPosition();
             if (navHistoryIndex >= navHistory.Count - 1) return;
             navHistoryIndex++;
             var target = navHistory[navHistoryIndex];
@@ -779,6 +784,11 @@ namespace codeLess.AvaloniaApp
             void jumpInSource(int line, int col)
             {
                 if (buf == null) return;
+                if (!string.IsNullOrEmpty(buf.FilePath))
+                {
+                    OpenFileAtLocation(buf.FilePath, line, col, 0, preview: false, focusEditor: true);
+                    return;
+                }
                 RecordNavigationHistory(buf.FilePath, buf.CursorLine + 1);
                 bool prevSuppress = suppressNavRecord;
                 suppressNavRecord = true;
@@ -809,17 +819,7 @@ namespace codeLess.AvaloniaApp
                             ?? aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.OrdinalIgnoreCase));
                 if (wsSym != null && File.Exists(wsSym.FilePath))
                 {
-                    if (activeTab != null) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
-                    bool prevSuppress = suppressNavRecord;
-                    suppressNavRecord = true;
-                    try
-                    {
-                        OpenFileInTab(wsSym.FilePath, preview: false);
-                        PrimaryEditor.GoToLine(wsSym.LineNumber);
-                    }
-                    finally { suppressNavRecord = prevSuppress; }
-                    RecordNavigationHistory(wsSym.FilePath, wsSym.LineNumber);
-                    PrimaryEditor.Canvas.Focus();
+                    OpenFileAtLocation(wsSym.FilePath, wsSym.LineNumber, 1, 0, preview: false, focusEditor: true);
                     SetStatusMessage($"Definition: {word} ({Path.GetFileName(wsSym.FilePath)}:{wsSym.LineNumber})");
                 }
                 else
@@ -927,7 +927,7 @@ namespace codeLess.AvaloniaApp
                     }));
                 }
             }
-            items.Add(MakeCtxItem("Find in Folder...", () => SwitchSidebarView("search")));
+            items.Add(MakeCtxItem("Find in Folder...", () => FindInFolder(ctxDir)));
             items.Add(new Separator());
             items.Add(MakeCtxItem("Copy Path   (Shift+Alt+C)", () => _ = CopyPathToClipboardAsync(fullPath)));
             items.Add(MakeCtxItem($"Copy Relative Path   ({scCopyRel})", () =>
@@ -1335,125 +1335,6 @@ namespace codeLess.AvaloniaApp
             return !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot)
                 ? workspaceRoot
                 : Environment.CurrentDirectory;
-        }
-
-        // Workspace Search & Replace
-        public void ExecuteWorkspaceSearch(string overrideQuery = null)
-        {
-            if (overrideQuery != null)
-                workspaceSearchInput.Text = overrideQuery;
-            string q = (workspaceSearchInput.Text ?? "").Trim();
-            workspaceSearchHits.Clear();
-
-            if (string.IsNullOrEmpty(q))
-            {
-                workspaceSearchSummary.Text = "Type a query to search across workspace files.";
-                workspaceSearchResultsList.ItemsSource = Array.Empty<Control>();
-                return;
-            }
-
-            Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
-            Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
-            Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
-
-            var cmp = wsSearchMatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-            Regex rx = null;
-            if (wsSearchRegex || wsSearchWholeWord)
-            {
-                try
-                {
-                    string pat = wsSearchRegex ? q : $@"\b{Regex.Escape(q)}\b";
-                    rx = new Regex(pat, wsSearchMatchCase ? RegexOptions.None : RegexOptions.IgnoreCase);
-                }
-                catch { }
-            }
-
-            var controls = new List<Control>();
-            int filesMatched = 0;
-
-            foreach (string file in workspaceFiles.Take(400))
-            {
-                if (!File.Exists(file)) continue;
-                try
-                {
-                    string[] lines = File.ReadAllLines(file);
-                    bool fileHasHit = false;
-                    for (int i = 0; i < lines.Length; i++)
-                    {
-                        string ln = lines[i] ?? "";
-                        bool hit = rx != null ? rx.IsMatch(ln) : ln.IndexOf(q, cmp) >= 0;
-                        if (hit)
-                        {
-                            if (!fileHasHit) { fileHasHit = true; filesMatched++; }
-                            workspaceSearchHits.Add((file, i + 1, ln.Trim()));
-                            string rel = !string.IsNullOrEmpty(workspaceRoot)
-                                ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, file)
-                                : Path.GetFileName(file);
-                            controls.Add(new TextBlock
-                            {
-                                Text = $"{rel}:{i + 1}  —  {ln.Trim()}",
-                                FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
-                                FontSize = 11,
-                                Foreground = new SolidColorBrush(textPrimary)
-                            });
-                            if (workspaceSearchHits.Count >= 200) break;
-                        }
-                    }
-                    if (workspaceSearchHits.Count >= 200) break;
-                }
-                catch { }
-            }
-
-            workspaceSearchSummary.Text = $"{workspaceSearchHits.Count} result(s) in {filesMatched} file(s)";
-            workspaceSearchResultsList.ItemsSource = controls;
-        }
-
-        public int ExecuteWorkspaceReplaceAll(string overrideFind = null, string overrideReplace = null)
-        {
-            if (overrideFind != null) workspaceSearchInput.Text = overrideFind;
-            if (overrideReplace != null) workspaceReplaceInput.Text = overrideReplace;
-
-            string q = (workspaceSearchInput.Text ?? "").Trim();
-            string rep = workspaceReplaceInput.Text ?? "";
-            if (string.IsNullOrEmpty(q)) return 0;
-
-            int modifiedFiles = 0;
-            var cmp = wsSearchMatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-
-            foreach (string file in workspaceFiles.Take(400))
-            {
-                if (!File.Exists(file)) continue;
-                try
-                {
-                    string content = File.ReadAllText(file);
-                    if (content.IndexOf(q, cmp) >= 0)
-                    {
-                        string updated = Regex.Replace(
-                            content,
-                            wsSearchRegex ? q : Regex.Escape(q),
-                            rep,
-                            wsSearchMatchCase ? RegexOptions.None : RegexOptions.IgnoreCase);
-                        if (updated != content)
-                        {
-                            File.WriteAllText(file, updated);
-                            modifiedFiles++;
-                            var open = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, file, StringComparison.OrdinalIgnoreCase));
-                            if (open != null)
-                            {
-                                open.Content = updated;
-                                open.SavedContent = updated;
-                                open.SyncLinesFromContent();
-                                open.IsDirty = false;
-                            }
-                        }
-                    }
-                }
-                catch { }
-            }
-
-            ExecuteWorkspaceSearch();
-            PrimaryEditor.Canvas.InvalidateVisual();
-            return modifiedFiles;
         }
 
         // Source Control (SCM) Git Operations
@@ -2421,20 +2302,41 @@ namespace codeLess.AvaloniaApp
         public void OpenQuickOpen()
         {
             var entries = new List<PaletteEntryItem>();
-            foreach (string file in workspaceFiles.Take(250))
+            var seen = new HashSet<string>(PathKeyComparer);
+            PaletteEntryItem makeFileEntry(string full, bool recent)
             {
-                string full = file;
-                string rel = !string.IsNullOrEmpty(workspaceRoot)
+                string rel = !string.IsNullOrEmpty(workspaceRoot) && IsSameOrUnder(full, workspaceRoot)
                     ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, full)
-                    : Path.GetFileName(full);
-                entries.Add(new PaletteEntryItem
+                    : full;
+                return new PaletteEntryItem
                 {
                     Id = "file:" + full,
                     Category = "File",
                     Title = Path.GetFileName(full),
                     stringSubtitleOrPath = rel,
-                    Execute = () => OpenFileInTab(full, preview: false)
-                });
+                    FilePath = full,
+                    IsRecent = recent,
+                    Execute = () => OpenFileAtLocation(full, 0, 1, 0, preview: false, focusEditor: true)
+                };
+            }
+            // Recently opened first (VS Code lists editor history when the query is empty): open tabs, then recent files.
+            var recent = new List<string>();
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) recent.Add(activeTab.FilePath);
+            recent.AddRange(openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath));
+            if (settings?.RecentFiles != null)
+            {
+                bool hasRoots = !string.IsNullOrEmpty(workspaceRoot);
+                recent.AddRange(settings.RecentFiles.Where(f => !string.IsNullOrEmpty(f) &&
+                    (!hasRoots || GetWorkspaceRootFolders().Any(r => IsSameOrUnder(f, r))) && File.Exists(f)));
+            }
+            foreach (string f in recent)
+            {
+                if (seen.Add(f)) entries.Add(makeFileEntry(f, true));
+            }
+            // Every indexed workspace file (was capped at the first 250, so most files could not be found).
+            foreach (string file in workspaceFiles)
+            {
+                if (seen.Add(file)) entries.Add(makeFileEntry(file, false));
             }
             entries.AddRange(BuildAllPaletteCommands());
             CommandPalette.Open("", entries, currentTheme?.Id);
@@ -2455,7 +2357,13 @@ namespace codeLess.AvaloniaApp
                             Category = captured.Kind,
                             Title = captured.Name,
                             stringSubtitleOrPath = $"Line {captured.LineNumber}",
-                            Execute = () => PrimaryEditor.GoToLine(captured.LineNumber)
+                            Execute = () =>
+                            {
+                                if (!string.IsNullOrEmpty(activeTab?.FilePath))
+                                    OpenFileAtLocation(activeTab.FilePath, captured.LineNumber, 1, 0, preview: false, focusEditor: true);
+                                else
+                                    PrimaryEditor.GoToLine(captured.LineNumber);
+                            }
                         });
                     }
                 }
@@ -2476,11 +2384,7 @@ namespace codeLess.AvaloniaApp
                             Category = captured.Kind,
                             Title = captured.Name,
                             stringSubtitleOrPath = $"{Path.GetFileName(captured.FilePath)}:{captured.LineNumber}",
-                            Execute = () =>
-                            {
-                                OpenFileInTab(captured.FilePath, preview: false);
-                                PrimaryEditor.GoToLine(captured.LineNumber);
-                            }
+                            Execute = () => OpenFileAtLocation(captured.FilePath, captured.LineNumber, 1, 0, preview: false, focusEditor: true)
                         });
                     }
                 }
@@ -2550,7 +2454,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "File", Title = "Close Folder", Shortcut = "Ctrl+K F", Execute = CloseWorkspaceFolder },
                 new PaletteEntryItem { Category = "Edit", Title = "Find", Shortcut = "Ctrl+F", Execute = () => PrimaryEditor.ShowFindBar(false) },
                 new PaletteEntryItem { Category = "Edit", Title = "Replace", Shortcut = "Ctrl+H", Execute = () => PrimaryEditor.ShowFindBar(true) },
-                new PaletteEntryItem { Category = "Edit", Title = "Find in Files", Shortcut = "Ctrl+Shift+F", Execute = () => SwitchSidebarView("search") },
+                new PaletteEntryItem { Category = "Edit", Title = "Find in Files", Shortcut = "Ctrl+Shift+F", Execute = () => ShowSearchView(false) },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Line Comment", Shortcut = "Ctrl+/", Execute = () => PrimaryEditor.Canvas.ToggleLineComment() },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Block Comment", Shortcut = "Shift+Alt+A", Execute = () => PrimaryEditor.Canvas.ToggleBlockComment() },
                 new PaletteEntryItem { Category = "Selection", Title = "Add Cursor Above", Shortcut = "Ctrl+Alt+Up", Execute = () => PrimaryEditor.Canvas.AddCursorVertical(-1) },

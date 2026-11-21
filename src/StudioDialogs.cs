@@ -1042,6 +1042,9 @@ namespace codeLess.Studio
             this.ResultsList = resultsList;
 
             List<PaletteEntry> entries = new List<PaletteEntry>();
+            // Quick Open "file:line[:col]" suffix (VS Code), parsed by refreshList and applied when a file is picked.
+            int quickOpenLine = 0;
+            int quickOpenCol = 0;
 
             Action<string, string, string, Action> addCmd = (category, title, shortcut, cb) =>
             {
@@ -1337,7 +1340,7 @@ namespace codeLess.Studio
 
             if (workspaceFiles != null)
             {
-                foreach (string fp in workspaceFiles.Take(5000))
+                foreach (string fp in workspaceFiles.Take(50000))
                 {
                     string capturedFile = fp;
                     string rel = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, capturedFile);
@@ -1349,7 +1352,17 @@ namespace codeLess.Studio
                         DisplayTitle = rel,
                         Category = ext,
                         Shortcut = Path.GetFileName(capturedFile),
-                        Callback = () => { SelectedFilePath = capturedFile; this.DialogResult = DialogResult.OK; this.Close(); }
+                        Callback = () =>
+                        {
+                            SelectedFilePath = capturedFile;
+                            if (quickOpenLine > 0)
+                            {
+                                SelectedLineToJump = quickOpenLine;
+                                SelectedColumnToJump = Math.Max(1, quickOpenCol);
+                            }
+                            this.DialogResult = DialogResult.OK;
+                            this.Close();
+                        }
                     });
                 }
             }
@@ -1442,6 +1455,8 @@ namespace codeLess.Studio
             Action refreshList = () =>
             {
                 string rawQ = searchBox.Text.Trim();
+                quickOpenLine = 0;
+                quickOpenCol = 0;
                 if (rawQ == ">")
                 {
                     filtered = entries.Where(x => x.RawText.StartsWith(">")).Take(60).ToList();
@@ -1525,7 +1540,12 @@ namespace codeLess.Studio
                 }
                 else
                 {
-                    string q = rawQ.ToLowerInvariant();
+                    int qoL;
+                    int qoC;
+                    string fileQ = WorkspaceSearchEngine.SplitQuickOpenLineSuffix(rawQ, out qoL, out qoC);
+                    quickOpenLine = qoL;
+                    quickOpenCol = qoC;
+                    string q = fileQ.ToLowerInvariant();
                     filtered = entries
                         .Select(x => new { Entry = x, Score = fuzzyScore(x.DisplayTitle + " " + x.RawText, q) + (x.RawText.StartsWith("≡") ? 20 : 0) })
                         .Where(x => x.Score > 0)
@@ -1585,6 +1605,12 @@ namespace codeLess.Studio
             };
 
             resultsList.DoubleClick += (s, e) =>
+            {
+                if (resultsList.SelectedIndex >= 0 && resultsList.SelectedIndex < filtered.Count)
+                    filtered[resultsList.SelectedIndex].Callback();
+            };
+            // VS Code: a single click picks the row (was double-click only).
+            resultsList.ItemClicked += (s, e) =>
             {
                 if (resultsList.SelectedIndex >= 0 && resultsList.SelectedIndex < filtered.Count)
                     filtered[resultsList.SelectedIndex].Callback();
