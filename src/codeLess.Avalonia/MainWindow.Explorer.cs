@@ -223,18 +223,33 @@ namespace codeLess.AvaloniaApp
                 RefreshGitStatus();
                 return;
             }
+            // Single-flight: overlapping git status runs completed out of order (stale state after a commit).
+            if (gitRefreshRunning) { gitRefreshPending = true; return; }
+            gitRefreshRunning = true;
             string root = workspaceRoot;
             _ = Task.Run(() =>
             {
-                string branch = LlmHarnessAndAgentEngine.GetGitBranch(root);
-                var entries = LlmHarnessAndAgentEngine.GetGitStatusEntries(root) ?? new List<GitStatusEntry>();
+                string branch = "no-git";
+                var entries = new List<GitStatusEntry>();
+                try
+                {
+                    branch = LlmHarnessAndAgentEngine.GetGitBranch(root);
+                    entries = LlmHarnessAndAgentEngine.GetGitStatusEntries(root) ?? new List<GitStatusEntry>();
+                }
+                catch { }
                 Dispatcher.UIThread.Post(() =>
                 {
-                    if (!string.Equals(root, workspaceRoot, PathKeyComparison)) return;
-                    ApplyGitEntriesToUi(branch, entries);
+                    gitRefreshRunning = false;
+                    if (string.Equals(root, workspaceRoot, PathKeyComparison))
+                        ApplyGitEntriesToUi(branch, entries);
+                    if (gitRefreshPending) { gitRefreshPending = false; RefreshGitStatusInBackground(); }
                 });
             });
         }
+
+        private bool gitRefreshRunning;
+        private bool gitRefreshPending;
+        private DateTime fsFirstPendingUtc = DateTime.MinValue;
 
         // ---------------------------------------------------------------------------------------------
         // File system watcher (external changes from terminal, git checkout, AI agent, other editors)
@@ -305,7 +320,7 @@ namespace codeLess.AvaloniaApp
                 {
                     if (structural) fsTreeDirty = true;
                     fsGitDirty = true;
-                    if (!structural) fsChangedFiles.Add(fullPath);
+                    if (!structural && fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
                 }
             }
             Dispatcher.UIThread.Post(RestartFsDebounce);
@@ -319,8 +334,18 @@ namespace codeLess.AvaloniaApp
                 fsChangeDebounceTimer.Tick += (s, e) =>
                 {
                     fsChangeDebounceTimer.Stop();
+                    fsFirstPendingUtc = DateTime.MinValue;
                     FlushFsChanges();
                 };
+            }
+            if (fsFirstPendingUtc == DateTime.MinValue) fsFirstPendingUtc = DateTime.UtcNow;
+            // Max wait: a file rewritten more often than the debounce interval must not starve all flushes.
+            if ((DateTime.UtcNow - fsFirstPendingUtc).TotalMilliseconds > 2000)
+            {
+                fsChangeDebounceTimer.Stop();
+                fsFirstPendingUtc = DateTime.MinValue;
+                FlushFsChanges();
+                return;
             }
             fsChangeDebounceTimer.Stop();
             fsChangeDebounceTimer.Start();
@@ -411,6 +436,9 @@ namespace codeLess.AvaloniaApp
             SimulateShortcut(key, mods); // same path as the keyboard: repaint, dirty state, diagnostics
         }
 
+        public int TerminalSessionCount => terminalSessions.Count;
+        public string ActiveTerminalWorkingDirectory => activeTerminalSession?.Control?.WorkingDirectory;
+
         /// <summary>Opens a folder as the workspace or a file in a tab (OS activation, drag-drop onto the dock).</summary>
         public void OpenPathFromOs(string path)
         {
@@ -446,12 +474,17 @@ namespace codeLess.AvaloniaApp
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && seg.Length > 0 && (seg.EndsWith(".") || seg.EndsWith(" ")))
                     return $"'{seg}' is not a valid name on Windows.";
             }
-            string combined = Path.GetFullPath(Path.Combine(baseDir, name));
+            string combined = Path.GetFullPath(Path.Combine(Path.GetFullPath(baseDir), name)); // never trim "/" or "C:\\" before combining
             if (!IsSameOrUnder(combined, baseDir) || string.Equals(combined.TrimEnd('\\', '/'), baseDir.TrimEnd('\\', '/'), PathKeyComparison))
                 return "The name must point inside the selected folder.";
             fullPath = combined;
             return null;
         }
+
+        public static readonly HashSet<string> SafeViewerExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".icns", ".tif", ".tiff", ".heic", ".pdf", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".ttf", ".otf", ".woff", ".woff2"
+        };
 
         public static bool IsLikelyBinaryFile(string path)
         {

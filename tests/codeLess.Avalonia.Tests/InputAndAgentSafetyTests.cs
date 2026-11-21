@@ -10,8 +10,27 @@ using Xunit;
 namespace codeLess.Avalonia.Tests
 {
     [Collection("SequentialWorkbench")]
-    public class InputAndAgentSafetyTests
+    public class InputAndAgentSafetyTests : IDisposable
     {
+        // Opening MainWindow records recent workspaces in the user's real settings file; restore it afterwards.
+        private readonly string _settingsFilePath = IdePersistentSettings.GetSettingsFilePath();
+        private readonly string _settingsBackup;
+
+        public InputAndAgentSafetyTests()
+        {
+            _settingsBackup = File.Exists(_settingsFilePath) ? File.ReadAllText(_settingsFilePath) : null;
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (_settingsBackup != null) File.WriteAllText(_settingsFilePath, _settingsBackup);
+                else if (File.Exists(_settingsFilePath)) File.Delete(_settingsFilePath);
+            }
+            catch { }
+        }
+
         private static bool IsUnix => !RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
         [Fact]

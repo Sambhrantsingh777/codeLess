@@ -191,7 +191,7 @@ namespace codeLess.AvaloniaApp
                         BorderThickness = new Thickness(1),
                         Child = new TextBlock
                         {
-                            Text = (string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase) ? "⚙ " : "• ") + (item.Content ?? ""),
+                            Text = (string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase) ? "▸ " : "• ") + (item.Content ?? ""),
                             FontSize = 11,
                             Foreground = new SolidColorBrush(textSecondary),
                             TextWrapping = TextWrapping.Wrap
@@ -336,7 +336,7 @@ namespace codeLess.AvaloniaApp
             {
                 var toolBtn = new Button
                 {
-                    Content = new LiteralTextBlock((item.ToolsExpanded ? "▾ " : "▸ ") + $"⚙ {item.ToolItems.Count} tool call(s) executed") { FontSize = 11 },
+                    Content = new LiteralTextBlock((item.ToolsExpanded ? "▾ " : "▸ ") + $"{item.ToolItems.Count} tool call(s) executed") { FontSize = 11 },
                     FontSize = 11,
                     Padding = new Thickness(8, 3),
                     Background = new SolidColorBrush(isLight ? Color.FromRgb(236, 240, 246) : Color.FromRgb(26, 28, 36)),
@@ -689,7 +689,7 @@ namespace codeLess.AvaloniaApp
             var stack = new StackPanel { Spacing = 6 };
             stack.Children.Add(new TextBlock
             {
-                Text = "⚡ Tool Approval Required — Run Shell Command",
+                Text = "△ Tool Approval Required — Run Shell Command",
                 FontWeight = FontWeight.Bold,
                 FontSize = 11.5,
                 Foreground = new SolidColorBrush(Color.FromRgb(250, 204, 21))
@@ -758,7 +758,7 @@ namespace codeLess.AvaloniaApp
             var stack = new StackPanel { Spacing = 6 };
             stack.Children.Add(new TextBlock
             {
-                Text = "⚠ AI Provider Notice",
+                Text = "△ AI Provider Notice",
                 FontWeight = FontWeight.Bold,
                 FontSize = 11.5,
                 Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113))
@@ -772,7 +772,7 @@ namespace codeLess.AvaloniaApp
             });
             var cfgBtn = new Button
             {
-                Content = "⚙ Open AI Settings & BYOK Keys",
+                Content = "⋯ Open AI Settings & BYOK Keys",
                 FontSize = 11,
                 Padding = new Thickness(10, 4),
                 HorizontalAlignment = HorizontalAlignment.Left

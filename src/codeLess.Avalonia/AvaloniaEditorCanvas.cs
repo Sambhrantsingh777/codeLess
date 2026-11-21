@@ -1132,7 +1132,7 @@ namespace codeLess.AvaloniaApp
             {
                 ("✦ Configure BYOK AI Providers & Keys", "Connect OpenAI, Anthropic, Gemini, DeepSeek, Groq, or local Ollama models.", "byok-dialog"),
                 ("✓ Autonomous Verification & Tool Harness", "Run tool-calling agents with build/test loops and inline diff previews.", "open-chat"),
-                ("🎨 Customize Color Themes & Layout", "Switch between 10 built-in dark and light studio themes with live preview.", "theme-picker")
+                ("◐ Customize Color Themes & Layout", "Switch between 10 built-in dark and light studio themes with live preview.", "theme-picker")
             };
             foreach (var wt in walkthroughs)
             {
@@ -3642,7 +3642,7 @@ namespace codeLess.AvaloniaApp
                 if (hoverDiag != null)
                 {
                     var dft = new FormattedText(
-                        $"⚠ [{hoverDiag.Severity}] {hoverDiag.Message}",
+                        $"△ [{hoverDiag.Severity}] {hoverDiag.Message}",
                         CultureInfo.InvariantCulture,
                         FlowDirection.LeftToRight,
                         uiFontBold,

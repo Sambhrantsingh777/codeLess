@@ -739,6 +739,9 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
+            // A new physical key press always clears stale suppression: Ctrl+C etc. produce no TextInput, and a
+            // dangling flag swallowed the next typed character.
+            suppressNextTextInput = false;
             base.OnKeyDown(e);
             bool isMac = MacKeymap.IsMacOS;
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);

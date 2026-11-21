@@ -294,7 +294,7 @@ namespace codeLess.AvaloniaApp
             {
                 if (shift)
                 {
-                    CreateNewTerminalSession();
+                    RequestNewTerminal();
                 }
                 else
                 {
@@ -1743,6 +1743,104 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        /// <summary>Test hook: chooses the folder for a new terminal in a multi-root workspace (null = cancel).</summary>
+        public Func<IReadOnlyList<string>, string> TerminalFolderPickerOverride { get; set; }
+
+        /// <summary>
+        /// User-initiated "New Terminal". With two or more folders in the workspace, ask which folder the terminal
+        /// should start in (VS Code behaviour); with one folder, open it there directly.
+        /// </summary>
+        public void RequestNewTerminal(string shellProfile = null)
+        {
+            var roots = new List<string>();
+            foreach (string r in GetWorkspaceRootFolders())
+            {
+                if (!string.IsNullOrEmpty(r) && Directory.Exists(r) && !roots.Contains(r, PathKeyComparer))
+                    roots.Add(r);
+            }
+            if (roots.Count < 2)
+            {
+                CreateNewTerminalSession(shellProfile);
+                return;
+            }
+            if (TerminalFolderPickerOverride != null)
+            {
+                string pick = TerminalFolderPickerOverride(roots);
+                if (!string.IsNullOrEmpty(pick)) CreateNewTerminalSession(shellProfile, pick);
+                return;
+            }
+
+            Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
+            Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
+            var stack = new StackPanel { Spacing = 6 };
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Select the folder for the new terminal:",
+                FontSize = 12.5,
+                Margin = new Thickness(0, 0, 0, 4),
+                Foreground = new SolidColorBrush(textPrimary)
+            });
+            var buttons = new List<Button>();
+            for (int i = 0; i < roots.Count; i++)
+            {
+                string root = roots[i];
+                string name = Path.GetFileName(root.TrimEnd('\\', '/'));
+                if (string.IsNullOrEmpty(name)) name = root;
+                var content = new StackPanel { Spacing = 1 };
+                content.Children.Add(new TextBlock
+                {
+                    Text = (i < 9 ? (i + 1) + "   " : "    ") + name,
+                    FontSize = 13,
+                    FontWeight = FontWeight.SemiBold,
+                    Foreground = new SolidColorBrush(textPrimary)
+                });
+                content.Children.Add(new TextBlock
+                {
+                    Text = "      " + root,
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Foreground = new SolidColorBrush(textSecondary)
+                });
+                var btn = new Button
+                {
+                    Content = content,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    HorizontalContentAlignment = HorizontalAlignment.Left,
+                    Padding = new Thickness(10, 6)
+                };
+                btn.Click += (s, e) =>
+                {
+                    ModalHost.CloseModal();
+                    CreateNewTerminalSession(shellProfile, root);
+                };
+                buttons.Add(btn);
+                stack.Children.Add(btn);
+            }
+            // Number keys 1-9 pick directly; Up/Down move between folders; Esc closes (global handler).
+            stack.AddHandler(KeyDownEvent, (s, e) =>
+            {
+                int idx = -1;
+                if (e.Key >= Key.D1 && e.Key <= Key.D9) idx = e.Key - Key.D1;
+                else if (e.Key >= Key.NumPad1 && e.Key <= Key.NumPad9) idx = e.Key - Key.NumPad1;
+                if (idx >= 0 && idx < roots.Count)
+                {
+                    e.Handled = true;
+                    ModalHost.CloseModal();
+                    CreateNewTerminalSession(shellProfile, roots[idx]);
+                    return;
+                }
+                if (e.Key == Key.Down || e.Key == Key.Up)
+                {
+                    int cur = buttons.FindIndex(b => b.IsFocused);
+                    int next = e.Key == Key.Down ? Math.Min(buttons.Count - 1, cur + 1) : Math.Max(0, cur - 1);
+                    buttons[Math.Max(0, next)].Focus();
+                    e.Handled = true;
+                }
+            }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
+            ModalHost.ShowModal("terminal-folder-picker", "New Terminal", stack, 520);
+            Dispatcher.UIThread.Post(() => buttons[0].Focus(), DispatcherPriority.Loaded);
+        }
+
         public TerminalSessionEntry CreateNewTerminalSession(string shellProfile = null, string customWorkDir = null)
         {
             string workDir = !string.IsNullOrEmpty(customWorkDir) && Directory.Exists(customWorkDir)
@@ -1946,7 +2044,7 @@ namespace codeLess.AvaloniaApp
                     Height = 24
                 };
 
-                string prefix = isSplitRight ? "◫ " : "🐚 ";
+                string prefix = isSplitRight ? "◫ " : "› ";
                 var selectBtn = new Button
                 {
                     Content = new LiteralTextBlock($"{prefix}{i + 1}: {session.Title}")
@@ -2378,7 +2476,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Go", Title = "Go to Line/Column...", Shortcut = "Ctrl+G", Execute = PromptGoToLineModal },
                 new PaletteEntryItem { Category = "Go", Title = "Go to Definition", Shortcut = "F12", Execute = GoToDefinitionAtCursor },
                 new PaletteEntryItem { Category = "Go", Title = "Go to Bracket", Shortcut = "Ctrl+Shift+\\", Execute = () => PrimaryEditor.Canvas.JumpToMatchingBracket() },
-                new PaletteEntryItem { Category = "Terminal", Title = "Create New Terminal", Shortcut = "Ctrl+Shift+`", Execute = () => CreateNewTerminalSession() },
+                new PaletteEntryItem { Category = "Terminal", Title = "Create New Terminal", Shortcut = "Ctrl+Shift+`", Execute = () => RequestNewTerminal() },
                 new PaletteEntryItem { Category = "Terminal", Title = "Split Terminal", Shortcut = "Ctrl+Shift+5", Execute = ToggleSplitTerminal },
                 new PaletteEntryItem { Category = "Terminal", Title = "Rename Active Terminal...", Execute = PromptRenameActiveTerminalSession },
                 new PaletteEntryItem { Category = "Terminal", Title = "Kill Active Terminal", Execute = () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); } },
@@ -2484,7 +2582,7 @@ namespace codeLess.AvaloniaApp
             var stack = new StackPanel { Spacing = 10 };
             stack.Children.Add(new TextBlock
             {
-                Text = "⚔ Multi-Harness Arena — Side-by-Side Model Evaluation",
+                Text = "⇄ Multi-Harness Arena — Side-by-Side Model Evaluation",
                 FontWeight = FontWeight.Bold,
                 FontSize = 13.5,
                 Foreground = new SolidColorBrush(textPrimary)
@@ -2982,6 +3080,9 @@ namespace codeLess.AvaloniaApp
                 row.Children.Add(deny);
                 row.Children.Add(allow);
                 stack.Children.Add(row);
+                Action onClosed = null;
+                onClosed = () => { ModalHost.Closed -= onClosed; tcs.TrySetResult(false); }; // Esc / dismiss = Deny
+                ModalHost.Closed += onClosed;
                 ModalHost.ShowModal("agent-tool-approval", "Allow Agent Command?", stack, 560);
                 Dispatcher.UIThread.Post(() => deny.Focus(), DispatcherPriority.Loaded); // default = safe choice
             });

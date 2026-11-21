@@ -182,7 +182,20 @@ namespace codeLess.AvaloniaApp
             return AppBuilder.Configure<App>()
                 .UsePlatformDetect()
                 .WithInterFont()
+                // Avalonia's default Skia GPU resource cache is ~100 MB of texture memory (shown as "graphics" in
+                // Activity Monitor). An editor's working set of glyph atlases / layers fits comfortably in 24 MB;
+                // Skia evicts LRU textures beyond the limit.
+                .With(new SkiaOptions { MaxGpuResourceSizeBytes = 24L * 1024 * 1024 })
+                .With(new AvaloniaNativePlatformOptions { RenderingMode = ResolveMacRenderingModes() })
                 .LogToTrace();
+        }
+
+        private static AvaloniaNativeRenderingMode[] ResolveMacRenderingModes()
+        {
+            string forced = (Environment.GetEnvironmentVariable("CODELESS_RENDER") ?? "").Trim().ToLowerInvariant();
+            if (forced == "software") return new[] { AvaloniaNativeRenderingMode.Software };
+            if (forced == "gl" || forced == "opengl") return new[] { AvaloniaNativeRenderingMode.OpenGl, AvaloniaNativeRenderingMode.Software };
+            return new[] { AvaloniaNativeRenderingMode.Metal, AvaloniaNativeRenderingMode.OpenGl, AvaloniaNativeRenderingMode.Software };
         }
     }
 }

@@ -771,7 +771,7 @@ namespace codeLess.AvaloniaApp
                 Header = "_Terminal",
                 ItemsSource = new object[]
                 {
-                    Mi("New Terminal", "Ctrl+Shift+`", () => CreateNewTerminalSession()),
+                    Mi("New Terminal", "Ctrl+Shift+`", () => RequestNewTerminal()),
                     Mi("Split Terminal", "Ctrl+Shift+5", ToggleSplitTerminal),
                     new Separator(),
                     Mi("Inline Terminal AI Assistant...", "Ctrl+K", () => activeTerminalSession?.Control?.ShowInlineAiBar()),
@@ -921,7 +921,7 @@ namespace codeLess.AvaloniaApp
 
                 var termSub = new NativeMenu
                 {
-                    Nmi("New Terminal", () => CreateNewTerminalSession()),
+                    Nmi("New Terminal", () => RequestNewTerminal()),
                     Nmi("Split Terminal", ToggleSplitTerminal),
                     Nmi("Clear Terminal", () => activeTerminalSession?.Control?.ClearTerminal())
                 };
@@ -1417,7 +1417,7 @@ namespace codeLess.AvaloniaApp
 
             var buildBtn = new Button
             {
-                Content = "⚙  Run Workspace Build Task (Ctrl+Shift+B)",
+                Content = "▶  Run Workspace Build Task (Ctrl+Shift+B)",
                 FontSize = 11.5,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 Padding = new Thickness(10, 5)
@@ -1516,7 +1516,7 @@ namespace codeLess.AvaloniaApp
 
             var openByokBtn = new Button
             {
-                Content = "⚙ Configure BYOK Providers & API Keys...",
+                Content = "⋯ Configure BYOK Providers & API Keys...",
                 FontSize = 11.5,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 Padding = new Thickness(10, 6)
@@ -1721,7 +1721,7 @@ namespace codeLess.AvaloniaApp
             newTermBtn.Click += (s, e) =>
             {
                 string prof = shellProfileSelector.SelectedItem?.ToString();
-                CreateNewTerminalSession(prof);
+                RequestNewTerminal(prof);
             };
 
             var splitTermBtn = new Button
@@ -2151,7 +2151,7 @@ namespace codeLess.AvaloniaApp
             };
             contextPillsWrap.Children.Add(addCtxBtn);
 
-            string activePillText = activeTab != null ? $"📄 {activeTab.FileName}" : "🌐 @Workspace";
+            string activePillText = activeTab != null ? $"@{activeTab.FileName}" : "@Workspace";
             contextPillsWrap.Children.Add(new Border
             {
                 CornerRadius = new CornerRadius(3),
@@ -2167,7 +2167,7 @@ namespace codeLess.AvaloniaApp
                 string captured = pill;
                 var pBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"📎 {captured} ✕") { FontSize = 10 },
+                    Content = new LiteralTextBlock($"@{captured}  ✕") { FontSize = 10 },
                     FontSize = 10,
                     Padding = new Thickness(5, 1),
                     Margin = new Thickness(0, 0, 4, 3)
@@ -2215,7 +2215,7 @@ namespace codeLess.AvaloniaApp
 
             statusRemoteBtn = MakeStatusBtn(">< codeLess", () => OpenCommandPalette(">"), isRemoteBadge: true);
             statusBranchBtn = MakeStatusBtn("⎇ main", () => SwitchSidebarView("git"));
-            statusProblemsBtn = MakeStatusBtn("⊗ 0  ⚠ 0", () => SwitchBottomTab("problems"));
+            statusProblemsBtn = MakeStatusBtn("⊗ 0  △ 0", () => SwitchBottomTab("problems"));
             statusMessageLabel = new TextBlock
             {
                 Text = "",
@@ -2723,10 +2723,18 @@ namespace codeLess.AvaloniaApp
             var existing = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fullPath, PathKeyComparison));
             if (existing == null && File.Exists(fullPath) && IsLikelyBinaryFile(fullPath))
             {
-                // The text editor would corrupt binary content on save; hand images, PDFs, archives... to the OS.
-                if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
-                    OpenWithSystemDefaultApp(fullPath);
-                SetStatusMessage($"'{Path.GetFileName(fullPath)}' is a binary file; opened with the system default application.");
+                // The text editor would corrupt binary content on save. Only passive media types go to the OS viewer:
+                // "open"/xdg-open on an .app, .command, .sh, .desktop, .jar... would execute it on a single click.
+                string bext = Path.GetExtension(fullPath);
+                if (!string.IsNullOrEmpty(bext) && SafeViewerExtensions.Contains(bext))
+                {
+                    if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime) OpenWithSystemDefaultApp(fullPath);
+                    SetStatusMessage($"'{Path.GetFileName(fullPath)}' opened in the default viewer.");
+                }
+                else
+                {
+                    SetStatusMessage($"'{Path.GetFileName(fullPath)}' is a binary file and was not opened (use Reveal in Finder / File Manager).");
+                }
                 return null;
             }
             if (existing != null)
@@ -3139,7 +3147,7 @@ namespace codeLess.AvaloniaApp
                     VerticalAlignment = VerticalAlignment.Center
                 });
 
-                string labelText = (captured.IsPinned ? "📌 " : "") + captured.FileName;
+                string labelText = (captured.IsPinned ? "◈ " : "") + captured.FileName;
                 row.Children.Add(new TextBlock
                 {
                     Text = labelText,
@@ -3303,7 +3311,7 @@ namespace codeLess.AvaloniaApp
                 {
                     bool isErr = string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase);
                     if (isErr) errCount++; else warnCount++;
-                    probItems.Add(new LiteralTextBlock($"{(isErr ? "⊗" : "⚠")} [{d.Severity}] {tab.FileName}:{d.LineNumber} — {d.Message}")
+                    probItems.Add(new LiteralTextBlock($"{(isErr ? "⊗" : "△")} [{d.Severity}] {tab.FileName}:{d.LineNumber} — {d.Message}")
                     {
                         FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
                         FontSize = 11.5,
@@ -3323,7 +3331,7 @@ namespace codeLess.AvaloniaApp
             problemsListBox.ItemsSource = probItems;
             int totalProbs = errCount + warnCount;
             btmProblemsTabBtn.Content = new LiteralTextBlock($"PROBLEMS ({totalProbs})");
-            statusProblemsBtn.Content = new LiteralTextBlock($"⊗ {errCount}  ⚠ {warnCount}");
+            statusProblemsBtn.Content = new LiteralTextBlock($"⊗ {errCount}  △ {warnCount}");
         }
 
         public void UpdateWindowTitle()

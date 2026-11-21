@@ -479,7 +479,7 @@ namespace codeLess.Studio
             var list = new List<GitStatusEntry>();
             // -z: NUL-separated, never quoted, so spaces / unicode / quotes in names survive.
             // -uall: list files inside untracked folders (VS Code does the same) so they get "U" decorations.
-            string raw = RunQuickProcess("git", "-c core.quotepath=false status --porcelain=v1 -z -uall", repoRoot, 6000, out int code);
+            string raw = RunProcessStdoutRaw("git", "--no-optional-locks -c core.quotepath=false status --porcelain=v1 -z -uall", repoRoot, 15000, out int code);
             if (code != 0 || string.IsNullOrEmpty(raw)) return list;
             string[] parts = raw.Split('\0');
             for (int i = 0; i < parts.Length; i++)

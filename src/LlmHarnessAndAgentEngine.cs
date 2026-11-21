@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Threading;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -1055,13 +1056,18 @@ namespace codeLess.Studio
                 {
                     // -z: NUL separated and never quoted (spaces/unicode/quotes survive); -uall lists files inside
                     // untracked folders. Paths are always relative to the repository root.
-                    string statusOut = RunProcessCapture("git", "-c core.quotepath=false status --porcelain=v1 -z -uall", repo, 10000);
-                    if (string.IsNullOrEmpty(statusOut) || statusOut.StartsWith("fatal:")) continue;
+                    // Raw stdout only: Trim() ate the leading space of the first " M path" record (and merged stderr
+                    // became a bogus record). --no-optional-locks keeps status from rewriting .git/index, which
+                    // raced the user's own git commands (index.lock) and re-triggered the file watcher.
+                    int statusExit;
+                    string statusOut = RunProcessStdoutRaw("git", "--no-optional-locks -c core.quotepath=false status --porcelain=v1 -z -uall", repo, 15000, out statusExit);
+                    if (statusExit != 0 || string.IsNullOrEmpty(statusOut)) continue;
 
                     Dictionary<string, int[]> numstatMap = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
-                    string numstatOut = RunProcessCapture("git", "-c core.quotepath=false diff HEAD --numstat", repo, 10000);
-                    if (string.IsNullOrWhiteSpace(numstatOut) || numstatOut.Contains("fatal:"))
-                        numstatOut = RunProcessCapture("git", "-c core.quotepath=false diff --numstat", repo, 10000);
+                    int nsExit;
+                    string numstatOut = RunProcessStdoutRaw("git", "--no-optional-locks -c core.quotepath=false diff HEAD --numstat", repo, 10000, out nsExit);
+                    if (nsExit != 0)
+                        numstatOut = RunProcessStdoutRaw("git", "--no-optional-locks -c core.quotepath=false diff --numstat", repo, 10000, out nsExit);
                     if (!string.IsNullOrWhiteSpace(numstatOut) && !numstatOut.Contains("fatal:"))
                     {
                         foreach (string ns in numstatOut.Replace("\r\n", "\n").Split('\n'))
@@ -1317,6 +1323,75 @@ namespace codeLess.Studio
             try { if (!p.HasExited) p.Kill(); } catch { }
         }
 
+        /// <summary>Runs a process and returns its stdout exactly as produced (no trim / ANSI strip / stderr merge).</summary>
+        public static string RunProcessStdoutRaw(string fileName, string args, string workingDir, int timeoutMs, out int exitCode)
+        {
+            exitCode = -1;
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    Arguments = args,
+                    WorkingDirectory = (!string.IsNullOrEmpty(workingDir) && Directory.Exists(workingDir)) ? workingDir : Environment.CurrentDirectory,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (Process p = new Process())
+                {
+                    p.StartInfo = psi;
+                    p.Start();
+                    try { p.StandardInput.Close(); } catch { }
+                    StringBuilder outSb = new StringBuilder();
+                    StringBuilder errSb = new StringBuilder();
+                    object sync = new object();
+                    StreamReader o = p.StandardOutput, er = p.StandardError;
+                    Thread t1 = new Thread(() => PumpReaderWithTail(o, outSb, sync, 32 * 1024 * 1024)) { IsBackground = true };
+                    Thread t2 = new Thread(() => PumpReaderWithTail(er, errSb, sync, 256 * 1024)) { IsBackground = true };
+                    t1.Start(); t2.Start();
+                    if (!p.WaitForExit(timeoutMs))
+                    {
+                        int pid = 0;
+                        try { pid = p.Id; } catch { }
+                        KillProcessTreeCrossPlatform(p, pid);
+                        return "";
+                    }
+                    t1.Join(2000); t2.Join(500);
+                    try { exitCode = p.ExitCode; } catch { exitCode = 0; }
+                    lock (sync) { return outSb.ToString(); }
+                }
+            }
+            catch { return ""; }
+        }
+
+        private static void PumpReaderWithTail(StreamReader reader, StringBuilder target, object sync, int maxChars)
+        {
+            try
+            {
+                char[] buf = new char[8192];
+                int n;
+                while ((n = reader.Read(buf, 0, buf.Length)) > 0)
+                {
+                    lock (sync)
+                    {
+                        target.Append(buf, 0, n);
+                        if (target.Length > maxChars + 65536)
+                        {
+                            int drop = target.Length - maxChars;
+                            target.Remove(0, drop);
+                            target.Insert(0, "[... output truncated, showing last " + (maxChars / 1024) + " KB ...]\n");
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
         private static void KillUnixTreeViaPgrep(int pid, int depth)
         {
             if (pid <= 1 || depth > 16) return;
@@ -1357,22 +1432,26 @@ namespace codeLess.Studio
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-                // Incremental capture: with ReadToEndAsync a surviving grandchild (or "cmd &") that keeps the
-                // pipe open meant the read never completed and all output was lost on timeout.
+                // Incremental, binary-clean capture (raw chars, no line splitting, so NUL-separated "git -z" output
+                // survives): with ReadToEndAsync a surviving grandchild (or "cmd &") that keeps the pipe open meant
+                // the read never completed and all output was lost on timeout. Huge output keeps its TAIL, where
+                // build / test errors usually are.
                 StringBuilder stdoutSb = new StringBuilder();
                 StringBuilder stderrSb = new StringBuilder();
                 object sync = new object();
                 using (Process p = new Process())
                 {
                     p.StartInfo = psi;
-                    p.OutputDataReceived += (s, e) => { if (e.Data != null) lock (sync) { if (stdoutSb.Length < 400000) stdoutSb.AppendLine(e.Data); } };
-                    p.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (sync) { if (stderrSb.Length < 200000) stderrSb.AppendLine(e.Data); } };
                     p.Start();
                     int pid = 0;
                     try { pid = p.Id; } catch { }
                     try { p.StandardInput.Close(); } catch { }
-                    p.BeginOutputReadLine();
-                    p.BeginErrorReadLine();
+                    StreamReader outReader = p.StandardOutput;
+                    StreamReader errReader = p.StandardError;
+                    Thread outThread = new Thread(() => PumpReaderWithTail(outReader, stdoutSb, sync, 8 * 1024 * 1024)) { IsBackground = true };
+                    Thread errThread = new Thread(() => PumpReaderWithTail(errReader, stderrSb, sync, 2 * 1024 * 1024)) { IsBackground = true };
+                    outThread.Start();
+                    errThread.Start();
                     bool exited = p.WaitForExit(timeoutMs);
                     if (!exited)
                     {
@@ -1382,9 +1461,11 @@ namespace codeLess.Studio
                     }
                     else
                     {
-                        try { p.WaitForExit(); } catch { } // flush async readers
                         try { exitCode = p.ExitCode; } catch { exitCode = 0; }
                     }
+                    // Readers finish at EOF; if a detached grandchild keeps the pipe open, stop waiting after 2 s.
+                    outThread.Join(2000);
+                    errThread.Join(1000);
                     string stdout, stderr;
                     lock (sync) { stdout = stdoutSb.ToString(); stderr = stderrSb.ToString(); }
                     string combined = (stdout.TrimEnd() + (string.IsNullOrEmpty(stderr) ? "" : "\n" + stderr.TrimEnd())).Trim();
@@ -2208,10 +2289,15 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             }
                         }
 
+                        if (!string.IsNullOrEmpty(streamErrorMessage))
+                        {
+                            // Never hide a mid-stream failure behind a truncated partial answer.
+                            return streamedText.Length > 0
+                                ? streamedText.ToString() + "\n\n[Error: " + vendor.Name + " stopped mid-response: " + streamErrorMessage + "]"
+                                : "Error: " + vendor.Name + " returned an error: " + streamErrorMessage;
+                        }
                         if (sawSseDataLine && streamedText.Length > 0)
                             return streamedText.ToString();
-                        if (!string.IsNullOrEmpty(streamErrorMessage))
-                            return "Error: " + vendor.Name + " returned an error: " + streamErrorMessage;
                         if (sawSseDataLine)
                             return "Error: " + vendor.Name + " returned an empty streamed response.";
 
@@ -3227,6 +3313,59 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         [DllImport("libc", EntryPoint = "free")]
         private static extern void free_native(IntPtr ptr);
 
+        [DllImport("libc", EntryPoint = "readlink", SetLastError = true)]
+        private static extern IntPtr readlink_native(byte[] path, byte[] buf, IntPtr bufsiz);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WIN32_FIND_DATAW
+        {
+            public uint dwFileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
+            public uint nFileSizeHigh;
+            public uint nFileSizeLow;
+            public uint dwReserved0; // reparse tag when FILE_ATTRIBUTE_REPARSE_POINT is set
+            public uint dwReserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string cFileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string cAlternateFileName;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr FindFirstFileW(string lpFileName, out WIN32_FIND_DATAW lpFindFileData);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool FindClose(IntPtr hFindFile);
+
+        /// <summary>
+        /// Windows: only name-surrogate reparse points (symlinks, junctions, mount points) redirect a path. OneDrive
+        /// Files-On-Demand placeholders, dedup and WCI layers also carry FILE_ATTRIBUTE_REPARSE_POINT but are ordinary
+        /// files; rejecting those refused every agent edit in OneDrive-synced Desktop/Documents folders.
+        /// </summary>
+        private static bool IsNameSurrogateReparsePoint(string path)
+        {
+            try
+            {
+                WIN32_FIND_DATAW data;
+                IntPtr h = FindFirstFileW(path.TrimEnd('\\'), out data);
+                if (h == IntPtr.Zero || h == new IntPtr(-1)) return true; // unknown: stay safe
+                FindClose(h);
+                return (data.dwReserved0 & 0x20000000) != 0; // IsReparseTagNameSurrogate
+            }
+            catch { return true; }
+        }
+
+        /// <summary>True for any symlink, including a dangling one (File/Directory.Exists return false for those).</summary>
+        private static bool IsSymlinkUnix(string path)
+        {
+            try
+            {
+                byte[] buf = new byte[4096];
+                return readlink_native(Encoding.UTF8.GetBytes(path + "\0"), buf, (IntPtr)buf.Length).ToInt64() >= 0;
+            }
+            catch { return false; }
+        }
+
         /// <summary>Resolves symlinks of the deepest existing ancestor (Unix realpath); the non-existent tail is appended.</summary>
         private static string ResolveRealPathUnix(string path)
         {
@@ -3274,11 +3413,23 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string cur = full;
                     while (!string.IsNullOrEmpty(cur) && cur.Length > root.Length)
                     {
-                        if ((File.Exists(cur) || Directory.Exists(cur)) && (File.GetAttributes(cur) & FileAttributes.ReparsePoint) != 0)
-                            return false;
+                        // GetAttributes also works for dangling junctions/symlinks (Exists() reports false for them).
+                        try
+                        {
+                            if ((File.GetAttributes(cur) & FileAttributes.ReparsePoint) != 0 && IsNameSurrogateReparsePoint(cur)) return false;
+                        }
+                        catch (FileNotFoundException) { }
+                        catch (DirectoryNotFoundException) { }
                         cur = Path.GetDirectoryName(cur);
                     }
                     return true;
+                }
+                // Dangling symlinks inside the workspace would be followed by a later write; reject them.
+                string walk = full;
+                while (!string.IsNullOrEmpty(walk) && walk.Length > root.Length)
+                {
+                    if (!File.Exists(walk) && !Directory.Exists(walk) && IsSymlinkUnix(walk)) return false;
+                    walk = Path.GetDirectoryName(walk);
                 }
                 string realRoot = ResolveRealPathUnix(root).TrimEnd('/');
                 string realFull = ResolveRealPathUnix(full).TrimEnd('/');

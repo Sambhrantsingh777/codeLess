@@ -1179,7 +1179,7 @@ namespace codeLess.Avalonia.Tests
                 windowTexts = window.GetVisualDescendants().OfType<TextBlock>()
                     .Select(tb => tb.Text ?? "")
                     .ToList();
-                Assert.Contains(windowTexts, t => t.Contains("📎 my_file_x.cs ✕"));
+                Assert.Contains(windowTexts, t => t.Contains("@my_file_x.cs  ✕"));
                 Assert.Contains(windowTexts, t => t.Contains("Inspect my_proj_x and my_file_x.cs"));
                 Assert.DoesNotContain(windowTexts, t => t.Contains("myprojx") || t.Contains("myfilex"));
 

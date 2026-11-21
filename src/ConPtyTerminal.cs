@@ -290,6 +290,7 @@ namespace codeLess.Studio
         public const ulong TIOCSCTTY_LINUX = 0x540EUL;
 
         public const int SIGHUP = 1;
+        public static readonly int SIGCONT = ConPtyNative.IsMacPlatform() ? 19 : 18;
         public const int SIGINT = 2;
         public const int SIGKILL = 9;
         public const int SIGTERM = 15;
@@ -3471,6 +3472,63 @@ namespace codeLess.Studio
             return WorkingDirectory;
         }
 
+        private static List<int> PgrepPids(string args)
+        {
+            List<int> result = new List<int>();
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo("pgrep", args)
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                using (Process pg = Process.Start(psi))
+                {
+                    if (pg == null) return result;
+                    string outp = pg.StandardOutput.ReadToEnd();
+                    pg.WaitForExit(1000);
+                    foreach (string line in outp.Split('\n'))
+                    {
+                        int pid;
+                        if (int.TryParse(line.Trim(), out pid) && pid > 1) result.Add(pid);
+                    }
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        /// <summary>
+        /// Hangs up every job of the shell: descendants of the shell (pgrep -P, works on macOS where session IDs are
+        /// not exposed) plus members of its session (pgrep -s, Linux). Stopped (Ctrl+Z) jobs get SIGCONT so they
+        /// can act on SIGHUP. nohup'ed processes keep ignoring SIGHUP, as in any terminal.
+        /// </summary>
+        private static void HangUpUnixSession(int sessionLeaderPid)
+        {
+            HashSet<int> targets = new HashSet<int>();
+            Queue<int> queue = new Queue<int>();
+            queue.Enqueue(sessionLeaderPid);
+            int guard = 0;
+            while (queue.Count > 0 && guard++ < 256)
+            {
+                int parent = queue.Dequeue();
+                foreach (int child in PgrepPids("-P " + parent))
+                    if (child != sessionLeaderPid && targets.Add(child)) queue.Enqueue(child);
+            }
+            if (!ConPtyNative.IsMacPlatform())
+            {
+                foreach (int pid in PgrepPids("-s " + sessionLeaderPid))
+                    if (pid != sessionLeaderPid) targets.Add(pid);
+            }
+            foreach (int pid in targets)
+            {
+                try { UnixPtyNative.kill(pid, UnixPtyNative.SIGHUP); } catch { }
+                try { UnixPtyNative.kill(pid, UnixPtyNative.SIGCONT); } catch { }
+            }
+        }
+
         private void CleanupCurrentProcessInternal()
         {
             sessionGeneration++;
@@ -3519,6 +3577,10 @@ namespace codeLess.Studio
                     }
                     if (oldPid > 0 && !wasExited)
                     {
+                        // With job control (controlling tty) every "cmd &" / Ctrl+Z job has its own process group,
+                        // so signalling only the shell's group left dev servers orphaned holding their ports.
+                        // Hang up every process in the shell's session (the shell is the session leader).
+                        HangUpUnixSession(oldPid);
                         try { UnixPtyNative.kill(-oldPid, UnixPtyNative.SIGHUP); } catch { }
                         try { UnixPtyNative.kill(oldPid, UnixPtyNative.SIGKILL); } catch { }
                     }

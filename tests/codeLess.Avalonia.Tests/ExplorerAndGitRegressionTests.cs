@@ -242,3 +242,117 @@ namespace codeLess.Avalonia.Tests
         }
     }
 }
+
+namespace codeLess.Avalonia.Tests
+{
+    [Collection("SequentialWorkbench")]
+    public class MultiRootAndReviewRegressionTests : IDisposable
+    {
+        private readonly string _settingsFilePath = IdePersistentSettings.GetSettingsFilePath();
+        private readonly string _settingsBackup;
+        private readonly string _root;
+
+        public MultiRootAndReviewRegressionTests()
+        {
+            _settingsBackup = File.Exists(_settingsFilePath) ? File.ReadAllText(_settingsFilePath) : null;
+            _root = Path.Combine(Path.GetTempPath(), "codeLess_MR_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(_root);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (_settingsBackup != null) File.WriteAllText(_settingsFilePath, _settingsBackup);
+                else if (File.Exists(_settingsFilePath)) File.Delete(_settingsFilePath);
+            }
+            catch { }
+            try { Directory.Delete(_root, true); } catch { }
+        }
+
+        [AvaloniaFact]
+        public void NewTerminal_InMultiRootWorkspace_AsksWhichFolder()
+        {
+            string a = Path.Combine(_root, "api"); string b = Path.Combine(_root, "web");
+            Directory.CreateDirectory(a); Directory.CreateDirectory(b);
+            File.WriteAllText(Path.Combine(a, "x.txt"), "x");
+            var w = new MainWindow(a);
+            w.SuppressUnsavedPrompts = true;
+            w.Show();
+
+            // Single folder: no prompt.
+            int asked = 0;
+            w.TerminalFolderPickerOverride = roots => { asked++; return roots[1]; };
+            w.RequestNewTerminal();
+            Assert.Equal(0, asked);
+
+            // Second folder added: the picker is offered both roots, and cancelling creates nothing.
+            var field = typeof(MainWindow).GetField("additionalWorkspaceFolders", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            ((System.Collections.Generic.List<string>)field.GetValue(w)).Add(b);
+            System.Collections.Generic.IReadOnlyList<string> offered = null;
+            w.TerminalFolderPickerOverride = roots => { asked++; offered = roots; return null; };
+            int before = w.TerminalSessionCount;
+            w.RequestNewTerminal();
+            Assert.Equal(1, asked);
+            Assert.Equal(2, offered.Count);
+            Assert.Contains(a, offered);
+            Assert.Contains(b, offered);
+            Assert.Equal(before, w.TerminalSessionCount);
+
+            // Picking a folder creates the terminal there.
+            w.TerminalFolderPickerOverride = roots => b;
+            w.RequestNewTerminal();
+            Assert.Equal(before + 1, w.TerminalSessionCount);
+            Assert.Equal(b, w.ActiveTerminalWorkingDirectory);
+            w.Close();
+        }
+
+        [Fact]
+        public void GitStatusZ_FirstRecordUnstagedModified_IsParsedCorrectly()
+        {
+            try { using (var p = Process.Start(new ProcessStartInfo("git", "--version") { UseShellExecute = false, RedirectStandardOutput = true })) p.WaitForExit(5000); }
+            catch { return; }
+            string repo = Path.Combine(_root, "repo");
+            Directory.CreateDirectory(repo);
+            void Git(params string[] args)
+            {
+                var psi = new ProcessStartInfo("git") { WorkingDirectory = repo, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+                foreach (var x in new[] { "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false" }) psi.ArgumentList.Add(x);
+                foreach (var x in args) psi.ArgumentList.Add(x);
+                using var p = Process.Start(psi); p.WaitForExit(15000);
+            }
+            Git("init", "-q");
+            File.WriteAllText(Path.Combine(repo, "a.txt"), "1\n");
+            Git("add", "-A"); Git("commit", "-q", "-m", "i");
+            File.WriteAllText(Path.Combine(repo, "a.txt"), "2\n"); // " M a.txt" is the FIRST record
+
+            var engine = new LlmHarnessAndAgentEngine(new IdePersistentSettings());
+            var items = engine.QueryGitWorkspaceStatus(repo);
+            var e = items.Single();
+            Assert.Equal(Path.Combine(repo, "a.txt"), e.FilePath);
+            Assert.Equal("a.txt", e.RepoRelativePath);
+            Assert.Equal("M", e.StatusCode);
+            Assert.False(e.IsStaged);
+
+            var av = LlmHarnessAndAgentEngine.GetGitStatusEntries(repo).Single();
+            Assert.Equal(' ', av.IndexStatus);
+            Assert.Equal('M', av.WorkingTreeStatus);
+        }
+
+        [AvaloniaFact]
+        public void OpeningExecutableBinary_NeverLaunchesIt()
+        {
+            string exe = Path.Combine(_root, "setup.sh.bin");
+            File.WriteAllBytes(exe, new byte[] { 0x7F, 0x45, 0x4C, 0x46, 0, 0, 0, 1 });
+            Assert.True(MainWindow.IsLikelyBinaryFile(exe));
+            Assert.False(MainWindow.SafeViewerExtensions.Contains(".exe"));
+            Assert.False(MainWindow.SafeViewerExtensions.Contains(".app"));
+            Assert.False(MainWindow.SafeViewerExtensions.Contains(".command"));
+            Assert.True(MainWindow.SafeViewerExtensions.Contains(".png"));
+            var w = new MainWindow(_root);
+            w.Show();
+            Assert.Null(w.OpenFileInTab(exe));
+            w.Close();
+        }
+    }
+}

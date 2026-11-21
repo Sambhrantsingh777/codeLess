@@ -1085,7 +1085,7 @@ namespace codeLess.Studio
                 e.SuppressKeyPress = true;
                 if (!bottomDockPanel.Visible) ToggleBottomDockVisibility();
                 SwitchBottomDockTab("terminal");
-                CreateNewTerminalSession();
+                RequestNewTerminal(null, null);
             }
             else if (e.Control && (e.KeyCode == Keys.J || e.KeyCode == Keys.Oemtilde)) // VS Code Toggle Bottom Panel / Terminal
             {
@@ -2954,7 +2954,7 @@ namespace codeLess.Studio
             {
                 if (!bottomDockPanel.Visible) ToggleBottomDockVisibility();
                 SwitchBottomDockTab("terminal");
-                CreateNewTerminalSession();
+                RequestNewTerminal(null, null);
             }));
             terminalMenu.DropDownItems.Add(CreateMenuItem("Split Terminal", "Ctrl+Shift+5", () => ToggleSplitTerminalView()));
             terminalMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -3896,8 +3896,11 @@ if __name__ == '__main__':
                     }
                     AfterExplorerFileOperation(targetPath);
                 }
-                else if (Directory.Exists(explorerClipboardPath) && !string.Equals(explorerClipboardPath, targetPath, StringComparison.OrdinalIgnoreCase))
+                else if (Directory.Exists(explorerClipboardPath))
                 {
+                    // Cut + paste into the same parent is a no-op; copy + paste there creates "<name>_copy".
+                    if (explorerClipboardIsCut && string.Equals(explorerClipboardPath, targetPath, StringComparison.OrdinalIgnoreCase))
+                        return;
                     if (targetPath.StartsWith(explorerClipboardPath.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
                     {
                         ShowToastNotification("Paste Failed", "Cannot paste a folder into itself.");
@@ -4660,9 +4663,15 @@ if __name__ == '__main__':
             return res ?? "";
         }
 
+        private bool gitRefreshRunning;
+        private bool gitRefreshPending;
+
         private void RefreshGitSidebarStatus()
         {
             if (gitStatusList == null) return;
+            // Single-flight: overlapping status runs finished out of order (stale "modified" after a commit).
+            if (gitRefreshRunning) { gitRefreshPending = true; return; }
+            gitRefreshRunning = true;
             string snapRoot = workspaceRoot;
             string curBranch = (aiEngine != null && !string.IsNullOrEmpty(aiEngine.ActiveGitBranch)) ? aiEngine.ActiveGitBranch : "";
             if (gitBranchLabel != null && string.IsNullOrEmpty(gitBranchLabel.Text))
@@ -4692,7 +4701,9 @@ if __name__ == '__main__':
                 }
                 Action applyGit = () =>
                 {
-                    if (gitStatusList == null || this.IsDisposed) return;
+                    gitRefreshRunning = false;
+                    if (gitRefreshPending) { gitRefreshPending = false; RefreshGitSidebarStatus(); }
+                    if (gitStatusList == null || this.IsDisposed) return; // single-flight => results always arrive in order
                     gitStatusItems = items;
                     if (explorerTree != null)
                     {
@@ -5065,7 +5076,7 @@ if __name__ == '__main__':
                                     break;
                                 }
                             }
-                            CreateNewTerminalSession(capProf.Name, capProf.CommandLine);
+                            RequestNewTerminal(capProf.Name, capProf.CommandLine);
                         });
                     }
                     profMenu.Items.Add(new ToolStripSeparator());
@@ -5074,7 +5085,7 @@ if __name__ == '__main__':
                 }
                 else if (e.Button == MouseButtons.Left)
                 {
-                    CreateNewTerminalSession();
+                    RequestNewTerminal(null, null);
                 }
             };
 
@@ -5417,7 +5428,7 @@ if __name__ == '__main__':
                         if (ln > 0) editorControl.JumpToLine(ln);
                     }
                 };
-                termCtrl.RequestNewTerminal += () => CreateNewTerminalSession();
+                termCtrl.RequestNewTerminal += () => RequestNewTerminal(null, null);
                 termCtrl.RequestSplitTerminal += () => ToggleSplitTerminalView();
                 termCtrl.RequestKillTerminal += () =>
                 {
@@ -7023,13 +7034,20 @@ if __name__ == '__main__':
                 string stem = seg.Split('.')[0].ToUpperInvariant();
                 if (WindowsReservedNames.Contains(stem)) return "'" + seg + "' is a reserved name on Windows.";
             }
-            string root = Path.GetFullPath(baseDir).TrimEnd('\\', '/');
-            string combined = Path.GetFullPath(Path.Combine(root, name)).TrimEnd('\\', '/');
+            // Combine with the untrimmed full path: trimming "D:\\" to "D:" made Path.Combine drive-relative.
+            string rootFull = Path.GetFullPath(baseDir);
+            string root = rootFull.TrimEnd('\\', '/');
+            string combined = Path.GetFullPath(Path.Combine(rootFull, name)).TrimEnd('\\', '/');
             if (!combined.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 return "The name must point inside the selected folder.";
             fullPath = combined;
             return null;
         }
+
+        private static readonly HashSet<string> SafeViewerExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".icns", ".tif", ".tiff", ".heic", ".pdf", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".ttf", ".otf", ".woff", ".woff2"
+        };
 
         private static bool IsLikelyBinaryFile(string path)
         {
@@ -7072,6 +7090,8 @@ if __name__ == '__main__':
 
             RefreshExplorerDimmedNames();
             HashSet<string> hidden = GetExplorerHiddenSet();
+            bool rootCollapsed = explorerTree.IsRootCollapsedByHeader;
+            explorerTree.ClearExpanded();
             List<string> roots = new List<string>();
             roots.Add(workspaceRoot);
             foreach (string extra in additionalWorkspaceFolders)
@@ -7086,7 +7106,8 @@ if __name__ == '__main__':
                 if (rootNode.Nodes.Count == 0)
                     rootNode.Nodes.Add(new TreeNode("No files in folder") { Tag = "__EMPTY_FOLDER__", StateImageIndex = 2 });
                 explorerTree.Nodes.Add(rootNode);
-                explorerTree.MarkExpanded(rootNode);
+                if (!(rootCollapsed && string.Equals(root, workspaceRoot, StringComparison.OrdinalIgnoreCase)))
+                    explorerTree.MarkExpanded(rootNode);
                 RestoreExpandedChildren(rootNode, expanded, hidden);
             }
 
@@ -7096,6 +7117,10 @@ if __name__ == '__main__':
             {
                 if (!string.IsNullOrEmpty(revealPath)) explorerTree.RevealAndSelect(sel);
                 else explorerTree.SelectedNode = sel;
+            }
+            else
+            {
+                explorerTree.SelectedNode = null; // never keep a reference to a detached node
             }
             explorerTree.Invalidate();
         }
@@ -7119,6 +7144,34 @@ if __name__ == '__main__':
             RefreshExplorerPreservingState(revealPath);
             if (!string.IsNullOrEmpty(revealPath) && File.Exists(revealPath) && !workspaceFiles.Contains(revealPath))
                 workspaceFiles.Add(revealPath);
+            else if (!string.IsNullOrEmpty(revealPath) && Directory.Exists(revealPath))
+            {
+                // Renamed / pasted / moved folder: index its files (they were dropped from Quick Open before).
+                HashSet<string> excluded = GetExcludedFolderSet(workspaceRoot);
+                HashSet<string> known = new HashSet<string>(workspaceFiles, StringComparer.OrdinalIgnoreCase);
+                Stack<string> dirs = new Stack<string>();
+                dirs.Push(revealPath);
+                int added = 0;
+                while (dirs.Count > 0 && added < 20000)
+                {
+                    string d = dirs.Pop();
+                    try
+                    {
+                        foreach (string sub in Directory.GetDirectories(d))
+                            if (!excluded.Contains(Path.GetFileName(sub))) dirs.Push(sub);
+                        foreach (string f in Directory.GetFiles(d))
+                        {
+                            string ext = Path.GetExtension(f);
+                            if ((string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext)) && known.Add(f))
+                            {
+                                workspaceFiles.Add(f);
+                                added++;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
             workspaceFiles.RemoveAll(f => !File.Exists(f));
             try { RefreshGitSidebarStatus(); } catch { }
         }
@@ -7693,6 +7746,7 @@ if __name__ == '__main__':
         private readonly HashSet<string> fsChangedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> fsDeletedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private System.Windows.Forms.Timer fsFlushTimer;
+        private DateTime fsFirstPendingUtc = DateTime.MinValue;
         private readonly HashSet<EditorTabBuffer> tabsWithReloadPromptOpen = new HashSet<EditorTabBuffer>();
 
         private void QueueWorkspaceFsChange(string fullPath, bool structural, bool deleted)
@@ -7730,13 +7784,30 @@ if __name__ == '__main__':
                     if (fsFlushTimer == null)
                     {
                         fsFlushTimer = new System.Windows.Forms.Timer { Interval = 450 };
-                        fsFlushTimer.Tick += (ts, te) => { fsFlushTimer.Stop(); FlushWorkspaceFsChanges(); };
+                        fsFlushTimer.Tick += (ts, te) => { fsFlushTimer.Stop(); fsFirstPendingUtc = DateTime.MinValue; FlushWorkspaceFsChanges(); };
+                    }
+                    if (fsFirstPendingUtc == DateTime.MinValue) fsFirstPendingUtc = DateTime.UtcNow;
+                    // Max wait: a file rewritten more often than the debounce (dev-server log) must not starve flushes.
+                    if ((DateTime.UtcNow - fsFirstPendingUtc).TotalMilliseconds > 2000)
+                    {
+                        fsFlushTimer.Stop();
+                        fsFirstPendingUtc = DateTime.MinValue;
+                        FlushWorkspaceFsChanges();
+                        return;
                     }
                     fsFlushTimer.Stop();
                     fsFlushTimer.Start();
                 }));
             }
             catch { }
+        }
+
+        private bool IsUnderExcludedFolder(string fullPath, HashSet<string> excludedNames)
+        {
+            if (string.IsNullOrEmpty(workspaceRoot) || !fullPath.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase)) return false;
+            foreach (string seg in fullPath.Substring(workspaceRoot.Length).Split(new char[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries))
+                if (excludedNames.Contains(seg)) return true;
+            return false;
         }
 
         private void FlushWorkspaceFsChanges()
@@ -7751,13 +7822,17 @@ if __name__ == '__main__':
                 fsChangedFiles.Clear(); fsDeletedFiles.Clear();
             }
             if (string.IsNullOrEmpty(workspaceRoot)) return;
+            HashSet<string> excludedNames = GetExcludedFolderSet(workspaceRoot);
             if (tree)
             {
                 RefreshExplorerPreservingState(null);
+                HashSet<string> known = new HashSet<string>(workspaceFiles, StringComparer.OrdinalIgnoreCase);
                 foreach (string c in changed)
                 {
+                    // node_modules / bin / obj churn refreshes the tree but never enters the search index.
+                    if (IsUnderExcludedFolder(c, excludedNames)) continue;
                     string ext = Path.GetExtension(c);
-                    if (File.Exists(c) && !workspaceFiles.Contains(c) && (string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext)))
+                    if ((string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext)) && File.Exists(c) && known.Add(c))
                         workspaceFiles.Add(c);
                 }
                 if (deleted.Count > 0) workspaceFiles.RemoveAll(f => !File.Exists(f));
@@ -7769,13 +7844,20 @@ if __name__ == '__main__':
             }
             if (deleted.Count > 0) RefreshTabStrip();
             // One reload check per file per debounce window: a single save fires several Changed events.
-            foreach (string c in changed) HandleExternalFileChanged(c);
+            HashSet<string> openPaths = new HashSet<string>(openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath), StringComparer.OrdinalIgnoreCase);
+            foreach (string c in changed)
+                if (openPaths.Contains(c)) HandleExternalFileChanged(c);
             if (git) { try { RefreshGitSidebarStatus(); } catch { } }
         }
 
         public void HandleExternalFileChanged(string fullPath)
         {
             if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath)) return;
+            foreach (EditorTabBuffer back in openTabs.Where(t => t.IsDeletedOnDisk && string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                back.IsDeletedOnDisk = false; // file came back (branch switch / stash pop), even if content is unchanged
+                RefreshTabStrip();
+            }
             DateTime lastSave;
             if (internalSaveTimestamps.TryGetValue(fullPath, out lastSave) && (DateTime.UtcNow - lastSave).TotalMilliseconds < 1500)
                 return;
@@ -7893,9 +7975,19 @@ if __name__ == '__main__':
             );
             if (existing == null && !string.IsNullOrEmpty(filePath) && File.Exists(filePath) && IsLikelyBinaryFile(filePath))
             {
-                // Images, PDFs, archives... would be corrupted by the text editor on save; hand them to the OS.
-                try { Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true }); } catch { }
-                if (statusLeftLabel != null) statusLeftLabel.Text = Path.GetFileName(filePath) + " is a binary file; opened with the default app.";
+                // Binary content would be corrupted by the text editor on save. Only passive media types are handed to
+                // the OS viewer: shell-executing arbitrary binaries would RUN .exe/.msi/.lnk/.jar... on a single click
+                // (explorer, terminal file links, Quick Open, tab restore).
+                string ext = Path.GetExtension(filePath);
+                if (!string.IsNullOrEmpty(ext) && SafeViewerExtensions.Contains(ext))
+                {
+                    try { Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true }); } catch { }
+                    if (statusLeftLabel != null) statusLeftLabel.Text = Path.GetFileName(filePath) + " opened in the default viewer.";
+                }
+                else if (statusLeftLabel != null)
+                {
+                    statusLeftLabel.Text = Path.GetFileName(filePath) + " is a binary file and was not opened (use Reveal in File Explorer).";
+                }
                 return null;
             }
             if (existing != null)
@@ -8732,6 +8824,103 @@ if __name__ == '__main__':
 
         public TerminalSessionState CreateNewTerminalSession(string explicitShellName, string explicitCmdLine)
         {
+            return CreateNewTerminalSession(explicitShellName, explicitCmdLine, null);
+        }
+
+        /// <summary>Test hook: picks the folder for a new terminal in a multi-root workspace (null = cancel).</summary>
+        public Func<List<string>, string> TerminalFolderPickerOverride;
+
+        /// <summary>
+        /// User-initiated "New Terminal": with two or more folders in the workspace, ask which folder the terminal
+        /// should start in (VS Code behaviour); with a single folder, open it there directly.
+        /// </summary>
+        public void RequestNewTerminal(string explicitShellName, string explicitCmdLine)
+        {
+            List<string> roots = new List<string>();
+            if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot)) roots.Add(workspaceRoot);
+            foreach (string extra in additionalWorkspaceFolders)
+            {
+                if (!string.IsNullOrEmpty(extra) && Directory.Exists(extra) && !roots.Contains(extra, StringComparer.OrdinalIgnoreCase))
+                    roots.Add(extra);
+            }
+            if (roots.Count < 2)
+            {
+                CreateNewTerminalSession(explicitShellName, explicitCmdLine, null);
+                return;
+            }
+            string pick = TerminalFolderPickerOverride != null
+                ? TerminalFolderPickerOverride(roots)
+                : ShowTerminalFolderPicker(roots);
+            if (!string.IsNullOrEmpty(pick))
+                CreateNewTerminalSession(explicitShellName, explicitCmdLine, pick);
+        }
+
+        private string ShowTerminalFolderPicker(List<string> roots)
+        {
+            using (Form dlg = new Form())
+            {
+                dlg.Text = "New Terminal — Select Folder";
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.MinimizeBox = false;
+                dlg.MaximizeBox = false;
+                dlg.ShowInTaskbar = false;
+                dlg.KeyPreview = true;
+                dlg.ClientSize = new Size(520, Math.Min(360, 70 + roots.Count * 40));
+                Color bg = activeTheme != null ? activeTheme.BgSidebar : Color.FromArgb(30, 30, 34);
+                Color fg = activeTheme != null ? activeTheme.FgPrimary : Color.White;
+                Color fg2 = activeTheme != null ? activeTheme.FgSecondary : Color.Silver;
+                dlg.BackColor = bg;
+                dlg.ForeColor = fg;
+
+                Label lbl = new Label { Text = "Select the folder for the new terminal:", Dock = DockStyle.Top, Height = 28, Padding = new Padding(10, 8, 10, 0), ForeColor = fg };
+                ListBox list = new ListBox
+                {
+                    Dock = DockStyle.Fill,
+                    BorderStyle = BorderStyle.None,
+                    BackColor = bg,
+                    ForeColor = fg,
+                    DrawMode = DrawMode.OwnerDrawFixed,
+                    ItemHeight = 40,
+                    IntegralHeight = false
+                };
+                foreach (string r in roots) list.Items.Add(r);
+                list.DrawItem += (s, e) =>
+                {
+                    if (e.Index < 0) return;
+                    bool sel = (e.State & DrawItemState.Selected) != 0;
+                    using (SolidBrush b = new SolidBrush(sel ? (activeTheme != null ? activeTheme.AccentPrimary : Color.SteelBlue) : bg))
+                        e.Graphics.FillRectangle(b, e.Bounds);
+                    string path = (string)list.Items[e.Index];
+                    string name = Path.GetFileName(path.TrimEnd('\\', '/'));
+                    if (string.IsNullOrEmpty(name)) name = path;
+                    string prefix = e.Index < 9 ? (e.Index + 1) + "   " : "    ";
+                    using (Font bold = new Font(list.Font, FontStyle.Bold))
+                        TextRenderer.DrawText(e.Graphics, prefix + name, bold, new Rectangle(e.Bounds.X + 8, e.Bounds.Y + 3, e.Bounds.Width - 16, 18), sel ? Color.White : fg, TextFormatFlags.Left | TextFormatFlags.NoPrefix);
+                    TextRenderer.DrawText(e.Graphics, path, list.Font, new Rectangle(e.Bounds.X + 30, e.Bounds.Y + 20, e.Bounds.Width - 38, 18), sel ? Color.White : fg2, TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.PathEllipsis);
+                };
+                list.SelectedIndex = 0;
+                list.DoubleClick += (s, e) => { if (list.SelectedIndex >= 0) dlg.DialogResult = DialogResult.OK; };
+                dlg.KeyDown += (s, e) =>
+                {
+                    if (e.KeyCode == Keys.Enter && list.SelectedIndex >= 0) { dlg.DialogResult = DialogResult.OK; e.Handled = true; }
+                    else if (e.KeyCode == Keys.Escape) { dlg.DialogResult = DialogResult.Cancel; e.Handled = true; }
+                    else
+                    {
+                        int idx = -1;
+                        if (e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9) idx = e.KeyCode - Keys.D1;
+                        else if (e.KeyCode >= Keys.NumPad1 && e.KeyCode <= Keys.NumPad9) idx = e.KeyCode - Keys.NumPad1;
+                        if (idx >= 0 && idx < list.Items.Count) { list.SelectedIndex = idx; dlg.DialogResult = DialogResult.OK; e.Handled = true; }
+                    }
+                };
+                dlg.Controls.Add(list);
+                dlg.Controls.Add(lbl);
+                return dlg.ShowDialog(this) == DialogResult.OK && list.SelectedIndex >= 0 ? (string)list.Items[list.SelectedIndex] : null;
+            }
+        }
+
+        public TerminalSessionState CreateNewTerminalSession(string explicitShellName, string explicitCmdLine, string workingDirOverride)
+        {
             if (bottomDockPanel != null && !bottomDockPanel.Visible)
                 bottomDockPanel.Visible = true;
             if (activeTerminalSessionIndex >= 0 && activeTerminalSessionIndex < terminalSessions.Count && terminalOutput != null)
@@ -8749,7 +8938,9 @@ if __name__ == '__main__':
             string shortSh = (sh.IndexOf("pwsh", StringComparison.OrdinalIgnoreCase) >= 0 || sh.IndexOf("Core", StringComparison.OrdinalIgnoreCase) >= 0)
                 ? "pwsh"
                 : (sh.IndexOf("PowerShell", StringComparison.OrdinalIgnoreCase) >= 0 ? "powershell" : sh.ToLowerInvariant());
-            string cwd = GetEffectiveTerminalWorkingDirectory();
+            string cwd = !string.IsNullOrEmpty(workingDirOverride) && Directory.Exists(workingDirOverride)
+                ? workingDirOverride
+                : GetEffectiveTerminalWorkingDirectory();
             terminalWorkingDir = cwd;
             ConPtyTerminalSession pty = new ConPtyTerminalSession(sh, explicitCmdLine, cwd, 100, 14, activeTheme != null && activeTheme.IsLight);
             TerminalSessionState session = new TerminalSessionState

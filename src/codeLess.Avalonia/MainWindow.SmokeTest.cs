@@ -49,6 +49,11 @@ namespace codeLess.AvaloniaApp
                 scratch.IsDirty = true;
                 UnsavedPromptOverride = dirty => UnsavedPromptResult.DontSave;
                 await Task.Delay(1500);
+                var gi = GC.GetGCMemoryInfo();
+                Log($"gc_before: live_mb={GC.GetTotalMemory(false) / 1048576} heap_mb={gi.HeapSizeBytes / 1048576} committed_mb={gi.TotalCommittedBytes / 1048576} frag_mb={gi.FragmentedBytes / 1048576}");
+                GC.Collect(2, GCCollectionMode.Forced, true, true);
+                gi = GC.GetGCMemoryInfo();
+                Log($"gc_after_full: live_mb={GC.GetTotalMemory(true) / 1048576} heap_mb={gi.HeapSizeBytes / 1048576} committed_mb={gi.TotalCommittedBytes / 1048576}");
                 Log("closing_at=" + DateTime.UtcNow.ToString("o"));
             }
             catch (Exception ex)

@@ -1217,6 +1217,12 @@ namespace codeLess.Studio
 
         public bool IsRootCollapsedByHeader { get { return rootCollapsedByHeader; } }
 
+        /// <summary>Drops references to detached nodes before a rebuild (else collapses don't stick and old trees leak).</summary>
+        public void ClearExpanded()
+        {
+            expandedSet.Clear();
+        }
+
         public TreeNode FindNodeByPath(string fullPath)
         {
             if (string.IsNullOrEmpty(fullPath)) return null;
