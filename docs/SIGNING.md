@@ -151,6 +151,13 @@ gpg --armor --export-secret-keys "Savatarr codeLess Releases"   # -> secret RELE
 ```
 Publish the key fingerprint on savatarr.com so users can check it. Verify with `gpg --verify codeLess-linux-x64.deb.asc`.
 
+**Current release key:** `Savatarr codeLess Releases <releases@savatarr.com>` (Ed25519, expires 2028-11) — fingerprint
+`0C91 94FC D89C 73F5 97E7 B667 C8FB 23A0 D960 FC0E`. Public key: [`docs/codeLess-release-signing-key.asc`](./codeLess-release-signing-key.asc).
+```bash
+gpg --import docs/codeLess-release-signing-key.asc
+gpg --verify codeLess-linux-x64.deb.asc codeLess-linux-x64.deb
+```
+
 ## 8. Status checklist
 
 | Platform | Mechanism | Needs | State |
