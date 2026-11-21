@@ -4,7 +4,7 @@
 Output/
 dist/
 scratch/
-bench/
+bench/results/
 
 # Compiled binaries & archives in root
 *.exe
