@@ -1339,11 +1339,29 @@ namespace codeLess.Studio
             }
             else
             {
-                int modCnt = Math.Min(oldLen, newLen);
-                for (int k = 0; k < modCnt; k++)
-                    GutterModifiedLines.Add(start + k);
-                for (int k = modCnt; k < newLen; k++)
-                    GutterAddedLines.Add(start + k);
+                // Large span between the first and last change (e.g. edits on line 10 and line 900): the O(n*m) table
+                // would be too big, and the old fallback painted EVERY line in between as modified. Myers O(ND) finds
+                // the real changes quickly when they are few, like VS Code's gutter.
+                string[] a = new string[oldLen];
+                Array.Copy(oldLines, start, a, 0, oldLen);
+                string[] b = Lines.GetRange(start, newLen).ToArray();
+                List<int[]> ops = LineDiff.ComputeEditScript(a, b);
+                int pendingRemoved = 0;
+                List<int> pendingAdded = new List<int>();
+                int lastNew = start - 1;
+                foreach (int[] op in ops)
+                {
+                    if (op[0] == 0)
+                    {
+                        FlushGutterChunk(pendingRemoved, pendingAdded, lastNew);
+                        pendingRemoved = 0;
+                        pendingAdded.Clear();
+                        lastNew = start + op[2];
+                    }
+                    else if (op[0] == 1) pendingRemoved++;
+                    else pendingAdded.Add(start + op[2]);
+                }
+                FlushGutterChunk(pendingRemoved, pendingAdded, pendingAdded.Count > 0 ? pendingAdded[0] - 1 : lastNew);
             }
 
             ChangedLineCount = GutterModifiedLines.Count + GutterAddedLines.Count;

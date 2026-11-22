@@ -23,6 +23,8 @@ namespace codeLess.Studio
         WindowsInstaller,
         /// <summary>Windows portable codeLess.exe.</summary>
         WindowsPortable,
+        /// <summary>Windows per-user MSI install (%LOCALAPPDATA%\codeLess, WiX MajorUpgrade): upgraded with msiexec /qn.</summary>
+        WindowsMsi,
         /// <summary>Linux portable .tar.gz extracted into a folder.</summary>
         LinuxTarball,
         /// <summary>Linux .deb (/usr/lib/codeless): needs `sudo apt install`, never run by codeLess.</summary>
@@ -85,7 +87,9 @@ namespace codeLess.Studio
             {
                 if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || name.Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase)) return e;
                 e.InstallPath = p;
-                e.Kind = fileExists != null && fileExists(dir + "\\unins000.exe") ? UpdateInstallKind.WindowsInstaller : UpdateInstallKind.WindowsPortable;
+                if (fileExists != null && fileExists(dir + "\\unins000.exe")) e.Kind = UpdateInstallKind.WindowsInstaller;
+                else if (IsMsiInstallFolder(dir)) e.Kind = UpdateInstallKind.WindowsMsi;
+                else e.Kind = UpdateInstallKind.WindowsPortable;
                 return e;
             }
             if (!name.Equals("codeLess", StringComparison.Ordinal)) return e; // "dotnet" (development run)
@@ -93,6 +97,16 @@ namespace codeLess.Studio
             // the .deb installs into /usr/lib/codeless (owned by root, managed by dpkg)
             e.Kind = dir.StartsWith("/usr/", StringComparison.Ordinal) ? UpdateInstallKind.LinuxDeb : UpdateInstallKind.LinuxTarball;
             return e;
+        }
+
+        /// <summary>
+        /// The MSI (Installer.wxs) installs per user into %LOCALAPPDATA%\codeLess; Inno Setup uses
+        /// %LOCALAPPDATA%\Programs\codeLess (and leaves unins000.exe), so the folder tells them apart.
+        /// </summary>
+        public static bool IsMsiInstallFolder(string dir)
+        {
+            string d = (dir ?? "").Replace('/', '\\').TrimEnd('\\');
+            return d.EndsWith("\\AppData\\Local\\codeLess", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string FileNameOf(string p, UpdateOs os)
@@ -112,7 +126,7 @@ namespace codeLess.Studio
         {
             get
             {
-                return Kind == UpdateInstallKind.MacAppBundle || Kind == UpdateInstallKind.WindowsInstaller ||
+                return Kind == UpdateInstallKind.MacAppBundle || Kind == UpdateInstallKind.WindowsInstaller || Kind == UpdateInstallKind.WindowsMsi ||
                        Kind == UpdateInstallKind.WindowsPortable || Kind == UpdateInstallKind.LinuxTarball;
             }
         }
@@ -132,7 +146,8 @@ namespace codeLess.Studio
                 case UpdateOs.Mac:
                     return "codeLess-mac-" + arch + ".zip";
                 case UpdateOs.Windows:
-                    return kind == UpdateInstallKind.WindowsPortable ? "codeLess.exe" : "codeLess-Setup.exe";
+                    if (kind == UpdateInstallKind.WindowsPortable) return "codeLess.exe";
+                    return kind == UpdateInstallKind.WindowsMsi ? "codeLess-Setup.msi" : "codeLess-Setup.exe";
                 default:
                     return kind == UpdateInstallKind.LinuxDeb ? "codeLess-linux-" + arch + ".deb" : "codeLess-linux-" + arch + ".tar.gz";
             }
@@ -391,7 +406,7 @@ namespace codeLess.Studio
         {
             try
             {
-                if (env == null || !env.SupportsAutomaticInstall || env.Kind == UpdateInstallKind.WindowsInstaller) return;
+                if (env == null || !env.SupportsAutomaticInstall || env.Kind == UpdateInstallKind.WindowsInstaller || env.Kind == UpdateInstallKind.WindowsMsi) return;
                 string backup = BackupPathFor(env);
                 if (env.Kind == UpdateInstallKind.WindowsPortable)
                 {
@@ -423,6 +438,7 @@ namespace codeLess.Studio
                     case UpdateInstallKind.MacAppBundle:
                         return PrepareMac(env, downloadedFile, expectedVersion, workDir, plan);
                     case UpdateInstallKind.WindowsInstaller:
+                    case UpdateInstallKind.WindowsMsi:
                     case UpdateInstallKind.WindowsPortable:
                         return PrepareWindows(env, downloadedFile, workDir, plan);
                     case UpdateInstallKind.LinuxTarball:
@@ -493,6 +509,8 @@ namespace codeLess.Studio
             a.RelaunchExe = exe;
             if (env.Kind == UpdateInstallKind.WindowsInstaller)
                 return Finish(plan, Path.Combine(workDir, "install-update.cmd"), BuildWindowsInstallerScript(a));
+            if (env.Kind == UpdateInstallKind.WindowsMsi)
+                return Finish(plan, Path.Combine(workDir, "install-update.cmd"), BuildWindowsMsiScript(a));
             if (!IsDirectoryWritable(dir))
                 return Manual(plan, "codeLess can't replace " + exe + " (the folder isn't writable). Quit codeLess and replace it with the verified download.", file);
             a.BackupPath = exe + ".old";
@@ -685,6 +703,30 @@ namespace codeLess.Studio
             sb.Append(CmdQuote(a.NewPath)).Append(" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=").Append(CmdQuote(a.LogPath)).Append("\r\n");
             sb.Append("start \"\" ").Append(CmdQuote(a.RelaunchExe)).Append("\r\n");
             sb.Append("exit /b 0\r\n");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Windows MSI helper: wait, per-user silent major upgrade with msiexec (no elevation: the package is perUser),
+        /// relaunch. msiexec's exit code 3010 means "succeeded, reboot suggested" and is treated as success.
+        /// </summary>
+        public static string BuildWindowsMsiScript(UpdateScriptArgs a)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("@echo off\r\n");
+            sb.Append("rem codeLess update helper (generated; runs once after codeLess quits)\r\n");
+            AppendCmdWait(sb, a);
+            sb.Append("msiexec.exe /i ").Append(CmdQuote(a.NewPath)).Append(" /qn /norestart /l*v ").Append(CmdQuote(a.LogPath)).Append("\r\n");
+            sb.Append("if errorlevel 3011 goto failed\r\n");
+            sb.Append("if errorlevel 3010 goto ok\r\n");
+            sb.Append("if errorlevel 1 goto failed\r\n");
+            sb.Append(":ok\r\n");
+            sb.Append("start \"\" ").Append(CmdQuote(a.RelaunchExe)).Append("\r\n");
+            sb.Append("exit /b 0\r\n");
+            sb.Append(":failed\r\n");
+            sb.Append("echo msiexec failed; starting the installed copy>>").Append(CmdQuote(a.LogPath)).Append("\r\n");
+            sb.Append("start \"\" ").Append(CmdQuote(a.RelaunchExe)).Append("\r\n");
+            sb.Append("exit /b 1\r\n");
             return sb.ToString();
         }
 

@@ -390,5 +390,27 @@ namespace codeLess.Avalonia.Tests
                 Assert.Contains(app.Items, e => e.Id == id);
             Assert.Contains(app.Items, e => e.IsSubmenu && e.Children.Any(c => c.Id == "pref.settings"));
         }
+            [Fact]
+        public void Msi_Install_Is_Detected_And_Upgraded_With_Msiexec()
+        {
+            var msi = UpdateEnvironment.Detect(UpdateOs.Windows, false, @"C:\Users\O'Brien\AppData\Local\codeLess\codeLess.exe", p => false);
+            Assert.Equal(UpdateInstallKind.WindowsMsi, msi.Kind);
+            Assert.True(msi.SupportsAutomaticInstall);
+            Assert.Equal("codeLess-Setup.msi", UpdateAssets.AssetNameFor(UpdateOs.Windows, false, UpdateInstallKind.WindowsMsi));
+            // Inno Setup's folder (with its uninstaller) stays an Inno install
+            Assert.Equal(UpdateInstallKind.WindowsInstaller, UpdateEnvironment.Detect(UpdateOs.Windows, false, @"C:\Users\me\AppData\Local\Programs\codeLess\codeLess.exe", p => p.EndsWith("unins000.exe")).Kind);
+
+            string script = UpdateInstaller.BuildWindowsMsiScript(new UpdateScriptArgs
+            {
+                ProcessId = 1234,
+                TargetPath = @"C:\Users\O'Brien\AppData\Local\codeLess\codeLess.exe",
+                NewPath = @"C:\Users\O'Brien\AppData\Local\Temp\codeLess update\codeLess-Setup.msi",
+                LogPath = @"C:\Users\O'Brien\AppData\Local\Temp\codeLess update\update.log",
+                RelaunchExe = @"C:\Users\O'Brien\AppData\Local\codeLess\codeLess.exe"
+            });
+            Assert.Contains("msiexec.exe /i \"C:\\Users\\O'Brien\\AppData\\Local\\Temp\\codeLess update\\codeLess-Setup.msi\" /qn /norestart", script);
+            Assert.Contains("if errorlevel 3010 goto ok", script);
+            Assert.Contains("start \"\" \"C:\\Users\\O'Brien\\AppData\\Local\\codeLess\\codeLess.exe\"", script);
+        }
     }
 }
