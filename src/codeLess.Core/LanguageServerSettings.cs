@@ -16,6 +16,18 @@ namespace codeLess.Studio
         /// <summary>Comma-separated language ids whose "install a language server" hint was dismissed for good.</summary>
         public string LanguageServerHintsDismissed { get; set; }
 
+        private bool autoInstallLanguageServers = true;
+
+        /// <summary>
+        /// "Install missing language servers automatically" (default on): a missing server is installed into the
+        /// codeLess-managed folder (never globally, never with sudo) when a sudo-free route exists.
+        /// </summary>
+        public bool AutoInstallLanguageServers
+        {
+            get { return autoInstallLanguageServers; }
+            set { autoInstallLanguageServers = value; }
+        }
+
         public LanguageServerUserSettings GetLanguageServerUserSettings()
         {
             return LanguageServerUserSettings.Parse(LanguageServerOverrides, DisableLanguageServers);
@@ -42,6 +54,7 @@ namespace codeLess.Studio
             DisableLanguageServers = other.DisableLanguageServers;
             LanguageServerOverrides = other.LanguageServerOverrides;
             LanguageServerHintsDismissed = other.LanguageServerHintsDismissed;
+            AutoInstallLanguageServers = other.AutoInstallLanguageServers;
         }
     }
 

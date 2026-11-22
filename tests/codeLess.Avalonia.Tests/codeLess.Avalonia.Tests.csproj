@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <None Include="Fixtures\fake_lsp_server.py" Link="fake_lsp_server.py" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\fake_npm.py" Link="fake_npm.py" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

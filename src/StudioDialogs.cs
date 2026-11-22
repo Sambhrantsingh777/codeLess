@@ -1319,6 +1319,10 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "lsp_log"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Language Server", "Language Server: Configure Language Servers...", "",
                 () => { SelectedCommandId = "lsp_config"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Language Server", "Language Servers: Install/Update...", "",
+                () => { SelectedCommandId = "lsp_install"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Language Server", "Language Servers: Show Installation Log", "",
+                () => { SelectedCommandId = "lsp_install_log"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Context", "Open Prompt, RepoMap & BM25 Context Inspector", "",
                 () => { SelectedCommandId = "open_context"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Extensions", "Install VS Code Extension from .VSIX File...", "Ctrl+Shift+X",
@@ -2443,6 +2447,7 @@ namespace codeLess.Studio
         /// <summary>update.mode (none / manual / start / default), replaces the old once-a-day checkbox.</summary>
         public CodeLessDropdown UpdateModeCombo;
         public CheckBox ActivatePythonEnvBox;
+        public CheckBox LspAutoInstallBox;
         public CheckBox OfflineModeBox;
         public List<CheckBox> EditorNicetyBoxes;
         public CodeLessDarkInputBox ExcludedFoldersInput;
@@ -2635,6 +2640,9 @@ namespace codeLess.Studio
             UpdateModeCombo.SelectedIndex = Math.Max(0, Array.IndexOf(UpdateModes.All, settings.GetEffectiveUpdateMode()));
             body.Controls.Add(UpdateModeCombo);
             AutoSaveBox.Visible = false; // superseded by the files.autoSave mode below
+            y += 24;
+            LspAutoInstallBox = addCheck("Install missing language servers automatically (codeLess folder; never global / admin)", settings.AutoInstallLanguageServers, 24, y);
+            LspAutoInstallBox.Width = 640;
             y += 24;
             EditorNicetyBoxes = EditorNicetiesSettingsWinForms.AddTo(settings, addCheck, ref y);
             y += 28;
@@ -3000,6 +3008,8 @@ namespace codeLess.Studio
                 settings.SetUpdateMode(UpdateModes.All[UpdateModeCombo.SelectedIndex]);
             if (ActivatePythonEnvBox != null)
                 settings.ActivatePythonEnvironmentInTerminal = ActivatePythonEnvBox.Checked;
+            if (LspAutoInstallBox != null)
+                settings.AutoInstallLanguageServers = LspAutoInstallBox.Checked;
             if (OfflineModeBox != null)
             {
                 settings.OfflineMode = OfflineModeBox.Checked;

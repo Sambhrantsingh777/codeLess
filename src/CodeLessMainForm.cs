@@ -3154,6 +3154,7 @@ if __name__ == '__main__':
             lspController.RefreshProblems = buf => RefreshOutlineAndProblems(buf);
             lspController.RefreshTabs = () => { RefreshTabStrip(); RefreshOpenEditorsSection(); UpdateWindowTitle(); };
             lspController.LayoutStatusBar = () => LayoutStatusBarItems();
+            lspController.AppendOutput = msg => AppendOutputLog(msg);
             lspController.TypeInTerminal = cmd =>
             {
                 SwitchBottomDockTab("terminal");

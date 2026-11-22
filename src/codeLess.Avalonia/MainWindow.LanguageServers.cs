@@ -60,6 +60,7 @@ namespace codeLess.AvaloniaApp
             lsp.StatusChanged += UpdateLspStatusItem;
             lsp.ServerMissing += ShowLanguageServerHint;
             lsp.ServerMessage += (sev, msg) => SetStatusMessage(msg);
+            InitLanguageServerInstalls(); // MainWindow.LanguageServerInstall.cs
             if (!string.IsNullOrEmpty(workspaceRoot)) lsp.SetWorkspaceRoot(workspaceRoot);
             lspBindings.Add(new LspEditorBinding(this, PrimaryEditor));
             lspBindings.Add(new LspEditorBinding(this, SplitEditor));
@@ -200,6 +201,7 @@ namespace codeLess.AvaloniaApp
                 items.Insert(0, new Separator());
                 items.Insert(0, MakeCtxItem("Install in Terminal: " + cmd, () => TypeInstallCommandInTerminal(cmd)));
             }
+            items.InsertRange(0, LanguageServerInstallMenuItems(st));
             var menu = new ContextMenu { ItemsSource = items };
             menu.Open(statusLspBtn);
         }
@@ -225,6 +227,7 @@ namespace codeLess.AvaloniaApp
         private void ShowLanguageServerHint(LanguageServerHint hint)
         {
             if (hint == null) return;
+            if (hint.InstallFailed) { ShowLanguageServerInstallFailure(hint); return; }
             var host = CommandPalette?.Parent as Panel;
             // The toast carries the message; repeating it in the status bar only duplicates it (VS Code shows one).
             if (host == null) { SetStatusMessage(hint.Message); return; }
@@ -308,6 +311,7 @@ namespace codeLess.AvaloniaApp
                 Height = 150
             };
             var disableAll = new CheckBox { Content = "Disable all language servers", IsChecked = settings.DisableLanguageServers };
+            var autoInstall = new CheckBox { Content = "Install missing language servers automatically (into " + LanguageServerInstaller.DefaultManagedRoot() + ")", IsChecked = settings.AutoInstallLanguageServers, Name = "LspAutoInstallCheck" };
             var detected = new TextBlock { Text = "Detecting installed language servers…", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Foreground = AvaloniaColorHelper.ToBrush(currentTheme.TextSecondary) };
             var save = new Button { Content = "Save", Padding = new Thickness(16, 4), Background = AvaloniaColorHelper.ToBrush(currentTheme.AccentPrimary), Foreground = Brushes.White };
             var cancel = new Button { Content = "Cancel", Padding = new Thickness(14, 4) };
@@ -317,6 +321,7 @@ namespace codeLess.AvaloniaApp
                 string text = overrides.Text ?? "";
                 settings.LanguageServerOverrides = text.Trim() == LanguageServerUserSettings.OverridesHelp.Trim() ? "" : text;
                 settings.DisableLanguageServers = disableAll.IsChecked == true;
+                settings.AutoInstallLanguageServers = autoInstall.IsChecked == true;
                 try { settings.Save(); } catch { }
                 ModalHost.CloseModal();
                 if (lsp != null)
@@ -334,6 +339,7 @@ namespace codeLess.AvaloniaApp
                     new TextBlock { Text = "Overrides (one per line: language = command args, or language = off):", FontSize = 12, Foreground = AvaloniaColorHelper.ToBrush(currentTheme.TextPrimary) },
                     overrides,
                     disableAll,
+                    autoInstall,
                     new TextBlock { Text = "Detected servers:", FontSize = 12, FontWeight = FontWeight.SemiBold, Foreground = AvaloniaColorHelper.ToBrush(currentTheme.TextPrimary) },
                     new ScrollViewer { Content = detected, MaxHeight = 200 },
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { save, cancel } }
@@ -341,6 +347,7 @@ namespace codeLess.AvaloniaApp
             };
             ModalHost.ShowModal("lsp-settings", "Language Servers", view, 720);
             string root = workspaceRoot;
+            string managedRoot = lsp?.ManagedServersRoot ?? LanguageServerInstaller.DefaultManagedRoot();
             var user = settings.GetLanguageServerUserSettings();
             var ui = UiPost.CaptureCurrent();
             _ = Task.Run(() =>
@@ -349,9 +356,9 @@ namespace codeLess.AvaloniaApp
                 foreach (var d in LanguageServerRegistry.Definitions)
                 {
                     LanguageServerResolution r;
-                    try { r = LanguageServerRegistry.Resolve(d.Id, string.IsNullOrEmpty(root) ? null : root, user); }
+                    try { r = LanguageServerRegistry.Resolve(d.LanguageIds[0], string.IsNullOrEmpty(root) ? null : root, user, managedRoot); }
                     catch (Exception ex) { lines.Add(d.DisplayName + ": error " + ex.Message); continue; }
-                    if (r.CanStart) lines.Add("✓ " + d.DisplayName + ": " + r.DisplayName + "  (" + r.Executable + ")");
+                    if (r.CanStart) lines.Add("✓ " + d.DisplayName + ": " + r.DisplayName + "  (" + r.Executable + ")" + (r.FromManagedFolder ? "  [installed by codeLess]" : ""));
                     else if (r.Disabled) lines.Add("– " + d.DisplayName + ": off");
                     else lines.Add("✗ " + d.DisplayName + ": not found" + (r.InstallCommand != null ? "  — install: " + r.InstallCommand : ""));
                 }
@@ -628,6 +635,8 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Language Server", Title = "Restart Language Server", Execute = RestartLanguageServerForActiveFile },
                 new PaletteEntryItem { Category = "Language Server", Title = "Show Language Server Log", Execute = ShowLanguageServerLog },
                 new PaletteEntryItem { Category = "Language Server", Title = "Configure Language Servers...", Execute = ShowLanguageServerSettingsModal },
+                new PaletteEntryItem { Category = "Language Servers", Title = "Install/Update…", Execute = ShowLanguageServerInstallPicker },
+                new PaletteEntryItem { Category = "Language Servers", Title = "Show Installation Log", Execute = ShowLanguageServerInstallLog },
             };
         }
 

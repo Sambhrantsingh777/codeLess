@@ -15,7 +15,7 @@ namespace codeLess.Studio
     /// status bar item, install hint, log and configuration dialogs. Protocol work lives in codeLess.Core
     /// (LanguageServerManager), shared with the Avalonia UI. STRICT C# 5.
     /// </summary>
-    public sealed class WinFormsLanguageServerController : IDisposable
+    public sealed partial class WinFormsLanguageServerController : IDisposable
     {
         private readonly Form form;
         private readonly IdePersistentSettings settings;
@@ -36,6 +36,8 @@ namespace codeLess.Studio
         public Action<string> TypeInTerminal;
         public Action RefreshTabs;
         public Action LayoutStatusBar;
+        /// <summary>Appends a line to the Output panel.</summary>
+        public Action<string> AppendOutput;
         /// <summary>Status bar item (created by the form with its status item factory).</summary>
         public Label StatusItem;
 
@@ -51,6 +53,7 @@ namespace codeLess.Studio
             mgr.StatusChanged += UpdateStatusItem;
             mgr.ServerMissing += ShowHint;
             mgr.ServerMessage += delegate (string sev, string msg) { Status(msg); };
+            InitInstalls(); // LanguageServerWinForms.Install.cs
         }
 
         public LanguageServerManager Manager { get { return mgr; } }
@@ -201,6 +204,7 @@ namespace codeLess.Studio
                 menu.Items.Add(info);
                 menu.Items.Add(new ToolStripSeparator());
             }
+            AddInstallMenuItems(menu, st);
             if (st != null && st.State == LanguageServerState.NotInstalled && !string.IsNullOrEmpty(st.InstallCommand))
             {
                 string cmd = st.InstallCommand;
@@ -238,6 +242,7 @@ namespace codeLess.Studio
         private void ShowHint(LanguageServerHint hint)
         {
             if (hint == null || form == null || form.IsDisposed) return;
+            if (hint.InstallFailed) { ShowInstallFailure(hint); return; }
             Status(hint.Message);
             StudioTheme t = Theme;
             if (toast != null) { form.Controls.Remove(toast); toast.Dispose(); toast = null; }
@@ -365,6 +370,7 @@ namespace codeLess.Studio
                 overrides.Text = (string.IsNullOrWhiteSpace(settings.LanguageServerOverrides) ? LanguageServerUserSettings.OverridesHelp : settings.LanguageServerOverrides).Replace("\r\n", "\n").Replace("\n", "\r\n");
                 Label head = new Label { Text = "Overrides (one per line: language = command args, or language = off):", Dock = DockStyle.Top, Height = 22, UseMnemonic = false };
                 CheckBox disable = new CheckBox { Text = "Disable all language servers", Checked = settings.DisableLanguageServers, Dock = DockStyle.Top, Height = 28 };
+                CheckBox autoInstall = new CheckBox { Text = "Install missing language servers automatically (into " + LanguageServerInstaller.DefaultManagedRoot() + ")", Checked = settings.AutoInstallLanguageServers, Dock = DockStyle.Top, Height = 28, UseMnemonic = false };
                 Label detHead = new Label { Text = "Detected servers:", Dock = DockStyle.Top, Height = 22, Font = new Font(d.Font, FontStyle.Bold) };
                 TextBox detected = NewMonoBox(true);
                 detected.Text = "Detecting installed language servers…";
@@ -378,6 +384,7 @@ namespace codeLess.Studio
                     string text = (overrides.Text ?? "").Replace("\r\n", "\n");
                     settings.LanguageServerOverrides = text.Trim() == LanguageServerUserSettings.OverridesHelp.Trim() ? "" : text;
                     settings.DisableLanguageServers = disable.Checked;
+                    settings.AutoInstallLanguageServers = autoInstall.Checked;
                     try { settings.Save(); } catch { }
                     if (mgr != null)
                     {
@@ -391,11 +398,13 @@ namespace codeLess.Studio
                 row.Controls.Add(save);
                 d.Controls.Add(detected);
                 d.Controls.Add(detHead);
+                d.Controls.Add(autoInstall);
                 d.Controls.Add(disable);
                 d.Controls.Add(overrides);
                 d.Controls.Add(head);
                 d.Controls.Add(row);
                 string root = Root;
+                string managedRoot = mgr != null ? mgr.ManagedServersRoot : LanguageServerInstaller.DefaultManagedRoot();
                 LanguageServerUserSettings user = settings.GetLanguageServerUserSettings();
                 Task.Factory.StartNew(delegate
                 {
@@ -404,8 +413,8 @@ namespace codeLess.Studio
                     {
                         try
                         {
-                            LanguageServerResolution r = LanguageServerRegistry.Resolve(def.Id, root, user);
-                            if (r.CanStart) lines.Add("OK   " + def.DisplayName + ": " + r.DisplayName + "  (" + r.Executable + ")");
+                            LanguageServerResolution r = LanguageServerRegistry.Resolve(def.LanguageIds[0], root, user, managedRoot);
+                            if (r.CanStart) lines.Add("OK   " + def.DisplayName + ": " + r.DisplayName + "  (" + r.Executable + ")" + (r.FromManagedFolder ? "  [installed by codeLess]" : ""));
                             else if (r.Disabled) lines.Add("off  " + def.DisplayName);
                             else lines.Add("--   " + def.DisplayName + ": not found" + (r.InstallCommand != null ? "  - install: " + r.InstallCommand : ""));
                         }
@@ -669,6 +678,8 @@ namespace codeLess.Studio
                 case "lsp_restart": RestartActive(); break;
                 case "lsp_log": ShowLog(); break;
                 case "lsp_config": ShowSettingsDialog(); break;
+                case "lsp_install": ShowInstallPicker(); break;
+                case "lsp_install_log": ShowInstallLog(); break;
                 case "lsp_typedef": if (buf != null) NavigateAsync(buf, buf.CursorLine, buf.CursorCol, "textDocument/typeDefinition", "type definitions", null); break;
                 case "lsp_impl": if (buf != null) NavigateAsync(buf, buf.CursorLine, buf.CursorCol, "textDocument/implementation", "implementations", null); break;
                 case "lsp_refs": if (buf != null) FindReferences(buf, delegate { Status("Find All References needs a language server for this file."); }); break;
@@ -736,6 +747,7 @@ namespace codeLess.Studio
             goMenu.DropDownItems.Add(create("Restart Language Server", "", delegate { ExecuteCommand("lsp_restart", null); }));
             goMenu.DropDownItems.Add(create("Show Language Server Log", "", delegate { ExecuteCommand("lsp_log", null); }));
             goMenu.DropDownItems.Add(create("Configure Language Servers...", "", delegate { ExecuteCommand("lsp_config", null); }));
+            goMenu.DropDownItems.Add(create("Language Servers: Install/Update...", "", delegate { ExecuteCommand("lsp_install", null); }));
         }
     }
 

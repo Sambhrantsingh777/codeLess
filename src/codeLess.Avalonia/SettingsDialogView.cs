@@ -221,6 +221,8 @@ namespace codeLess.AvaloniaApp
             // ---------------------------------------------------------------- Terminal, network
             BeginSection("Terminal");
             var venvChk = AddCheck("Activate the Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, "python.terminal.activateEnvironment");
+            BeginSection("Language Servers");
+            var lspAutoInstallChk = AddCheck("Install missing language servers automatically (into codeLess's own folder; never global, never sudo)", settings.AutoInstallLanguageServers, "codeless.languageServers.autoInstall");
             BeginSection("Network & Updates");
             var offlineChk = AddCheck("Offline mode: block all non-local network requests (local Ollama / LM Studio keep working)", NetworkLedger.OfflineMode, "codeless.offlineMode");
             var updateModeCombo = new ComboBox
@@ -343,6 +345,7 @@ namespace codeLess.AvaloniaApp
                 niceties.Apply(settings);
                 smoothness.Apply(settings);
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
+                settings.AutoInstallLanguageServers = lspAutoInstallChk.IsChecked == true;
                 settings.OfflineMode = offlineChk.IsChecked == true;
                 if (updateModeCombo.SelectedIndex >= 0 && updateModeCombo.SelectedIndex < UpdateModes.All.Length)
                     settings.SetUpdateMode(UpdateModes.All[updateModeCombo.SelectedIndex]);

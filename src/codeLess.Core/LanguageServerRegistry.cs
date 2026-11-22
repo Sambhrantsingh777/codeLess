@@ -72,6 +72,10 @@ namespace codeLess.Studio
         public bool WorkspaceTrusted = true;
         /// <summary>Extra initializationOptions (e.g. the TypeScript server pinned to a non-workspace tsserver in Restricted Mode).</summary>
         public Dictionary<string, object> InitializationOptions;
+        /// <summary>Found in the codeLess-managed servers folder (installed automatically).</summary>
+        public bool FromManagedFolder;
+        /// <summary>Why the missing server wasn't installed automatically (Offline Mode, toolchain missing, earlier failure...).</summary>
+        public string AutoInstallBlockedReason;
 
         public bool CanStart { get { return !Disabled && !Restricted && !string.IsNullOrEmpty(Executable); } }
     }
@@ -364,6 +368,15 @@ namespace codeLess.Studio
         /// <summary>Decides which server (if any) to run for <paramref name="languageId"/>. Performs file-system probing; call off the UI thread.</summary>
         public static LanguageServerResolution Resolve(string languageId, string workspaceRoot, LanguageServerUserSettings user)
         {
+            return Resolve(languageId, workspaceRoot, user, LanguageServerInstaller.DefaultManagedRoot());
+        }
+
+        /// <summary>
+        /// Resolution order: user override (Settings) → the codeLess-managed servers folder (<paramref name="managedRoot"/>,
+        /// where automatic installs go) → workspace-local (trusted folders only), PATH and the common tool folders.
+        /// </summary>
+        public static LanguageServerResolution Resolve(string languageId, string workspaceRoot, LanguageServerUserSettings user, string managedRoot)
+        {
             UserShellEnvironment.WaitForResolution(8000);
             LanguageServerResolution r = new LanguageServerResolution();
             r.LanguageId = languageId;
@@ -435,6 +448,19 @@ namespace codeLess.Studio
             if (d == null)
             {
                 r.Problem = "No built-in language server for " + languageId + ".";
+                return r;
+            }
+            List<string> managedDirs = LanguageServerInstaller.ManagedSearchDirectories(managedRoot, d);
+            foreach (LanguageServerCandidate c in d.Candidates)
+            {
+                string exe = managedDirs.Count > 0 ? FindInDirs(c.Command, managedDirs) : null;
+                if (exe == null) continue;
+                r.Executable = exe;
+                r.Args = (string[])c.Args.Clone();
+                r.DisplayName = c.DisplayName;
+                r.FromManagedFolder = true;
+                if (d.Id == "java") r.Args = new string[] { "-data", JdtlsDataDir(workspaceRoot) };
+                ApplyRestrictedMode(r, workspaceRoot, trusted);
                 return r;
             }
             foreach (LanguageServerCandidate c in d.Candidates)

@@ -21,7 +21,9 @@ namespace codeLess.Studio
         NotInstalled,
         Disabled,
         /// <summary>Not started: the workspace is in Restricted Mode and this server would run project code.</summary>
-        Restricted
+        Restricted,
+        /// <summary>Missing and being installed automatically into the codeLess-managed folder.</summary>
+        Installing
     }
 
     /// <summary>Snapshot of the server serving one file, for the status bar.</summary>
@@ -34,6 +36,8 @@ namespace codeLess.Studio
         public string Message;
         public string ProgressText;
         public string InstallCommand;
+        /// <summary>codeLess knows an automatic (sudo-free) install route for this server family.</summary>
+        public bool CanInstall;
 
         public string StatusBarText
         {
@@ -54,6 +58,11 @@ namespace codeLess.Studio
                         }
                     case LanguageServerState.Disabled: return "{ } " + name + " (off)";
                     case LanguageServerState.Restricted: return "{ } " + name + " (Restricted Mode)";
+                    case LanguageServerState.Installing:
+                        {
+                            LanguageServerDefinition d = LanguageServerRegistry.DefinitionForLanguage(LanguageId ?? "");
+                            return "⟳ Installing " + (d != null ? d.DisplayName : name) + " language server…";
+                        }
                     default: return "";
                 }
             }
@@ -65,8 +74,8 @@ namespace codeLess.Studio
             {
                 string s = (ServerName ?? LanguageId ?? "Language server") + " — " + State;
                 if (!string.IsNullOrEmpty(Message)) s += "\n" + Message;
-                if (!string.IsNullOrEmpty(InstallCommand)) s += "\nInstall: " + InstallCommand;
-                s += "\nClick for log and restart.";
+                if (!string.IsNullOrEmpty(InstallCommand) && State != LanguageServerState.Installing) s += "\nInstall: " + InstallCommand;
+                s += State == LanguageServerState.Installing ? "\nClick to see the log or cancel." : "\nClick for log and restart.";
                 return s;
             }
         }
@@ -81,6 +90,10 @@ namespace codeLess.Studio
         public string InstallCommand;
         public string InstallUrl;
         public string Message;
+        /// <summary>An automatic install was attempted and failed (the notification offers Show Log / Copy Command).</summary>
+        public bool InstallFailed;
+        /// <summary>Why it wasn't installed automatically / why the install failed.</summary>
+        public string Reason;
     }
 
     internal sealed class LspOpenDocument
@@ -287,6 +300,20 @@ namespace codeLess.Studio
         public Func<string, bool> IsHintSuppressed;
         /// <summary>Applies a WorkspaceEdit requested by the server (workspace/applyEdit). Called on the UI thread.</summary>
         public Func<LspWorkspaceEdit, bool> ApplyWorkspaceEditHandler;
+        /// <summary>Installs missing servers into the managed folder (null: no installs; the default managed folder is still searched).</summary>
+        public LanguageServerInstaller Installer;
+        /// <summary>"Install missing language servers automatically" (read whenever a server turns out to be missing).</summary>
+        public Func<bool> AutoInstallEnabled;
+        /// <summary>One line of install output (raised on the UI thread) for the Output panel.</summary>
+        public event Action<string> InstallOutput;
+        /// <summary>An install finished (raised on the UI thread).</summary>
+        public event Action<LanguageServerInstallResult> InstallFinished;
+
+        /// <summary>Folder searched before PATH (where automatic installs go).</summary>
+        public string ManagedServersRoot
+        {
+            get { LanguageServerInstaller i = Installer; return i != null ? i.ManagedRoot : LanguageServerInstaller.DefaultManagedRoot(); }
+        }
 
         public event Action<string> DiagnosticsChanged;
         public event Action StatusChanged;
@@ -641,9 +668,11 @@ namespace codeLess.Studio
             inst.ProgressText = null;
             LanguageServerUserSettings user = null;
             try { if (UserSettingsProvider != null) user = UserSettingsProvider(); } catch { }
-            LanguageServerResolution res = LanguageServerRegistry.Resolve(inst.LanguageId, inst.Root, user);
+            LanguageServerResolution res = LanguageServerRegistry.Resolve(inst.LanguageId, inst.Root, user, ManagedServersRoot);
             inst.Resolution = res;
             inst.LastResolveUtc = DateTime.UtcNow;
+            if (!res.CanStart && !res.Disabled && !res.Restricted && !res.FromUserOverride && res.Definition != null && TryAutoInstall(inst, res))
+                return;
             if (!res.CanStart)
             {
                 inst.State = res.Disabled ? LanguageServerState.Disabled : res.Restricted ? LanguageServerState.Restricted : LanguageServerState.NotInstalled;
@@ -1017,10 +1046,148 @@ namespace codeLess.Studio
             h.ServerName = res.DisplayName;
             h.InstallCommand = res.InstallCommand;
             h.InstallUrl = d != null ? d.InstallUrl : null;
-            h.Message = "No " + h.LanguageName + " language server found" +
+            h.Reason = res.AutoInstallBlockedReason;
+            string why = string.IsNullOrEmpty(h.Reason) ? "" : " — " + h.Reason.TrimEnd('.');
+            h.Message = "No " + h.LanguageName + " language server found" + why +
                         (h.InstallCommand != null ? " — install one with: " + h.InstallCommand : (h.InstallUrl != null ? " — see " + h.InstallUrl : "."));
             Post(delegate { Action<LanguageServerHint> e = ServerMissing; if (e != null) e(h); });
         }
+
+        // ================================================================ automatic installs
+
+        private readonly HashSet<LanguageServerInstallJob> ownJobs = new HashSet<LanguageServerInstallJob>();
+
+        /// <summary>Runs on the instance chain: starts (or joins) an automatic install when policy allows. True = installing.</summary>
+        private bool TryAutoInstall(LanguageServerInstance inst, LanguageServerResolution res)
+        {
+            LanguageServerInstaller installer = Installer;
+            if (installer == null || disposed) return false;
+            bool auto = false;
+            try { auto = AutoInstallEnabled != null && AutoInstallEnabled(); } catch { }
+            if (!auto) return false;
+            string why;
+            if (!installer.ShouldAutoInstall(res.Definition, out why))
+            {
+                res.AutoInstallBlockedReason = why;
+                inst.AppendLog("[client] Not installed automatically: " + why);
+                return false;
+            }
+            inst.State = LanguageServerState.Installing;
+            BeginInstall(res.Definition, false);
+            return true;
+        }
+
+        /// <summary>Installs (or updates) the server family serving <paramref name="path"/> now, ignoring the failure backoff.</summary>
+        public LanguageServerInstallJob InstallServerForPath(string path)
+        {
+            LanguageServerInstance inst = GetInstanceForPath(path);
+            LanguageServerDefinition d = inst != null ? inst.Definition : LanguageServerRegistry.DefinitionForLanguage(LanguageServerRegistry.LanguageIdForPath(path));
+            return d != null ? InstallServer(d.Id) : null;
+        }
+
+        /// <summary>Installs (or updates) a server family by id ("typescript", "python"...): the "Install/Update…" command.</summary>
+        public LanguageServerInstallJob InstallServer(string serverId)
+        {
+            LanguageServerDefinition d = LanguageServerRegistry.DefinitionById(serverId);
+            if (d == null || Installer == null || disposed) return null;
+            return BeginInstall(d, true);
+        }
+
+        /// <summary>Cancels the running install of a server family (no-op when none).</summary>
+        public void CancelInstall(string serverId)
+        {
+            LanguageServerDefinition d = LanguageServerRegistry.DefinitionById(serverId);
+            LanguageServerInstaller installer = Installer;
+            if (d == null || installer == null) return;
+            LanguageServerInstallJob j = installer.GetActiveJob(d);
+            if (j != null) j.Cancel();
+        }
+
+        public List<LanguageServerInstallJob> GetActiveInstallJobs()
+        {
+            LanguageServerInstaller installer = Installer;
+            return installer != null ? installer.GetActiveJobs() : new List<LanguageServerInstallJob>();
+        }
+
+        private List<LanguageServerInstance> InstancesOf(LanguageServerDefinition d)
+        {
+            lock (sync) { return instances.Values.Where(i => i.Definition != null && string.Equals(i.Definition.Id, d.Id, StringComparison.OrdinalIgnoreCase)).ToList(); }
+        }
+
+        private LanguageServerInstallJob BeginInstall(LanguageServerDefinition d, bool userInitiated)
+        {
+            LanguageServerInstaller installer = Installer;
+            if (installer == null) return null;
+            LanguageServerInstallJob job = installer.Start(d, userInitiated);
+            bool subscribe;
+            lock (sync)
+            {
+                subscribe = !ownJobs.Contains(job);
+                if (subscribe) ownJobs.Add(job);
+            }
+            foreach (LanguageServerInstance i in InstancesOf(d))
+            {
+                // an update keeps a running server until the new version is in place
+                if (i.State != LanguageServerState.NotInstalled && i.State != LanguageServerState.Installing && i.State != LanguageServerState.Error) continue;
+                i.State = LanguageServerState.Installing;
+                i.Message = job.StatusText;
+            }
+            RaiseStatusChanged();
+            if (!subscribe) return job;
+            Action<string> onOutput = delegate (string line)
+            {
+                foreach (LanguageServerInstance i in InstancesOf(d)) i.AppendLog("[install] " + line);
+                Post(delegate { Action<string> e = InstallOutput; if (e != null) e(line); });
+            };
+            job.Output += onOutput;
+            job.Task.ContinueWith(delegate (Task<LanguageServerInstallResult> t)
+            {
+                job.Output -= onOutput;
+                lock (sync) { ownJobs.Remove(job); }
+                if (disposed) return;
+                OnInstallFinished(d, t.Result, userInitiated);
+            }, TaskScheduler.Default);
+            return job;
+        }
+
+        private void OnInstallFinished(LanguageServerDefinition d, LanguageServerInstallResult r, bool userInitiated)
+        {
+            LanguageServerRegistry.ClearCache();
+            foreach (LanguageServerInstance inst in InstancesOf(d))
+            {
+                if (r.Success)
+                {
+                    if (inst.State == LanguageServerState.Running) { RestartInstance(inst); continue; } // updated: pick up the new version
+                    inst.State = LanguageServerState.NotInstalled;
+                    RetryResolve(inst); // starts the server and re-sends the open documents
+                }
+                else if (inst.State == LanguageServerState.Installing)
+                {
+                    inst.State = LanguageServerState.NotInstalled;
+                    inst.Message = r.Message;
+                    if (inst.Resolution != null && !string.IsNullOrEmpty(r.Command)) inst.Resolution.InstallCommand = r.Command;
+                }
+            }
+            RaiseStatusChanged();
+            Post(delegate { Action<LanguageServerInstallResult> e = InstallFinished; if (e != null) e(r); });
+            if (r.Success || r.Cancelled) return;
+            if (!userInitiated)
+            {
+                try { if (IsHintSuppressed != null && IsHintSuppressed(d.Id)) return; } catch { }
+            }
+            LanguageServerHint h = new LanguageServerHint();
+            h.LanguageId = d.Id;
+            h.LanguageName = d.DisplayName;
+            h.ServerName = d.Candidates.Count > 0 ? d.Candidates[0].DisplayName : d.DisplayName;
+            h.InstallCommand = !string.IsNullOrEmpty(r.Command) ? r.Command : LanguageServerRegistry.GetInstallCommand(d, WorkspaceRoot);
+            h.InstallUrl = d.InstallUrl;
+            h.InstallFailed = !r.BlockedOffline;
+            h.Reason = r.Message;
+            h.Message = r.Message ?? ("Couldn't install the " + d.DisplayName + " language server.");
+            lock (sync) { hintedLanguages.Add(d.Id); }
+            Post(delegate { Action<LanguageServerHint> e = ServerMissing; if (e != null) e(h); });
+        }
+
 
         // ================================================================ server -> client
 
@@ -1374,6 +1541,7 @@ namespace codeLess.Studio
             s.Message = i.Message;
             s.ProgressText = i.ProgressText;
             s.InstallCommand = i.Resolution != null ? i.Resolution.InstallCommand : null;
+            s.CanInstall = Installer != null && i.Definition != null && LanguageServerInstaller.RecipesFor(i.Definition.Id).Count > 0;
             return s;
         }
 

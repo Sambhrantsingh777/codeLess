@@ -150,6 +150,7 @@ $sourceFiles = @(
     "src\CodeLessMainForm.Debug.cs",
     "src\LanguageServerWinForms.cs",
     "src\LanguageServerWinForms.Imports.cs",
+    "src\LanguageServerWinForms.Install.cs",
     "src\CodeLessEditorCanvas.DevTools.cs",
     "src\CodeLessEditorCanvas.Niceties.cs",
     "src\DevToolsWinForms.cs",
