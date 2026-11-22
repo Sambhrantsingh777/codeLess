@@ -139,8 +139,8 @@ namespace codeLess.AvaloniaApp
             r["CheckBoxCheckBackgroundFillUnchecked"] = inputBg;
             r["CheckBoxCheckBackgroundFillUncheckedPointerOver"] = inputBg;
             r["CheckBoxCheckBackgroundFillUncheckedPressed"] = inputBg;
-            r["CheckBoxCheckBackgroundStrokeUnchecked"] = inputBorder;
-            r["CheckBoxCheckBackgroundStrokeUncheckedPointerOver"] = inputBorderHover;
+            r["CheckBoxCheckBackgroundStrokeUnchecked"] = B(UiTokens.CheckBoxBorder(t));
+            r["CheckBoxCheckBackgroundStrokeUncheckedPointerOver"] = B(UiTokens.Blend(UiTokens.CheckBoxBorder(t), t.FgPrimary, 0.25));
             r["CheckBoxCheckBackgroundStrokeUncheckedPressed"] = focus;
             r["CheckBoxCheckBackgroundFillChecked"] = accent;
             r["CheckBoxCheckBackgroundFillCheckedPointerOver"] = accent;

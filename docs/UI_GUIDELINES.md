@@ -138,9 +138,13 @@ replace, replace-all. Match count 12 px `FgSecondary`.
 0 8 24. 26 px input, hint row 11.5 px `FgMuted`, 22 px rows, category prefix in `FgSecondary` regular, keybinding
 chips = secondary-button fill, UI font 11 px, no border.
 
-**Panel (bottom).** 35 px header; tabs 11 px UPPERCASE regular, `FgSecondary` → `FgPrimary` when active, 1 px
-accent underline, no hover fill. Toolbar: borderless shell combo + 22 px icon buttons (plus, split, pencil, trash,
-chevron-up, close) with 2 px spacing. Output view: 12 px monospace, 12 px padding.
+**Panel (bottom).** 35 px header; tabs in VS Code order PROBLEMS, OUTPUT, DEBUG CONSOLE, TERMINAL (PORTS only when
+shown), 11 px UPPERCASE regular, `FgSecondary` → `FgPrimary` when active, 1 px accent underline spanning the label
+only, no hover fill. The view that is shown always has its tab visible and selected. Toolbar shows the active view's
+own actions: terminal = borderless shell combo + plus, split, pencil, trash; output / debug console = clear; always
+chevron-up, close; 22 px icon buttons with 2 px spacing. Choosing a tab (click, Ctrl+Shift+Y) focuses its content
+(REPL input, problems list, terminal); a debug session start reveals DEBUG CONSOLE without taking focus. Output view:
+12 px monospace, 12 px padding.
 
 **Terminal session list.** 22 px rows: terminal glyph (14 px) + `n: name` 12.5 px; active row = inactive
 selection (no accent border); hover fill; trash icon shown on the active/hovered row.
@@ -177,7 +181,12 @@ accent-tinted hover, separators 1 px.
 
 **Dialogs (modal host).** Scrim black 43 %; card = widget background/border, 8 px radius, shadow 0 10 32; 14 px
 semibold title, vector close button; section labels 11 px semibold UPPERCASE `FgSecondary`; primary + secondary
-26 px buttons right-aligned.
+26 px buttons right-aligned. The card never exceeds the window (24 px margin, at most 760 px high) and clips its
+content: bodies scroll inside it. **Settings** (VS Code-like): search box on top filtering every setting by label or
+VS Code setting id (empty sections hide, "No settings found."), titled sections (Appearance, Editor, Files, Source
+Control, Terminal, Network & Updates, AI Provider & BYOK) in a scrolling body, every label wraps (never clipped),
+24 px check box rows 8 px apart, labeled rows with a 170 px label column, fixed footer with Save & Apply / Cancel.
+WinForms: same footer, check boxes sized to their text and a minimum width that fits the widest row.
 
 **Welcome page.** 28 px semibold title, 14 px `FgSecondary` subtitle; 15 px regular section headings; Start links
 in link color with the shortcut beside them in `FgMuted` 12 px; Recent: name in link color, path `FgMuted` 12 px;
@@ -193,7 +202,10 @@ match highlight = accent at 33 % behind the text (no bold).
 breakpoint rows with a pencil icon button; selection = list active selection.
 
 **Commit graph.** 26 px filter box, "All branches" check box, refresh icon button; selected commit = list active
-selection; detail panel: copy-hash icon button, CHANGED FILES header 11 px semibold `FgSecondary`.
+selection; detail panel: short hash + copy-hash icon button, CHANGED FILES header 11 px semibold `FgSecondary`;
+author / date lines ellipsized (full text in tooltip). List and details are a draggable split (list ≥ 240 px,
+details ≥ 220 px, initial details 38 % clamped to 220–380 px); below 560 px pane width the details stack under the
+list (message left, files right). Ref badges use at most ~45 % of the message column.
 
 **Markdown preview / aux pane.** Aux tabs match editor tabs (34 px, 13 px, vector close). Preview content uses the
 existing renderer.
@@ -212,7 +224,8 @@ UPPERCASE 11 px column headers, 12 px rows; only the Status / Blocked cells use 
 | Unexpected closing bracket | dark `#FF1212`, light `#E51400` |
 | Active bracket pair guide | the pair's color blended 60 % (light 55 %) over the editor background, 1 px, at the shallower of the opener line's indent and the closer column |
 | Indent guides | the `IndentGuide` / `IndentGuideActive` tokens; guides at columns 0, t, 2t … below the line's indent (blank lines continue the deeper block) |
-| Word / selection highlight | editor background + 16 % `FgPrimary` (light 10 %) fill, 28 % (light 22 %) 1 px outline, 2 px radius; shown 250 ms after the caret settles |
+| Word highlight | VS Code `editor.wordHighlightBackground`: translucent neutral grey `#575757` at 72 % (light 25 %), no outline, 2 px radius; shown 250 ms after the caret settles; nothing is highlighted when the caret is on a keyword (TextMate `keyword.*` / `storage.type` / `storage.modifier` / `constant.language` scope, or the fallback tokenizer's keyword) or punctuation |
+| Selection highlight | other occurrences of a single-line selection: VS Code `editor.selectionHighlightBackground` `#ADD6FF` at 15 % (light 50 %) |
 | Matching bracket box | unchanged (accent box in Avalonia, accent-secondary in WinForms) |
 | Sticky scroll | at most 5 lines (and at most a quarter of the editor height); editor background, gutter with line numbers, hover = hover token, 4 px shadow (black 43 %, light 16 %) below; click reveals the line at the top and moves the caret there |
 

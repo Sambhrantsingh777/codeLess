@@ -245,7 +245,7 @@ namespace codeLess.Studio
             table.ShowItemToolTips = true;
             table.RetrieveVirtualItem += OnRetrieveVirtualItem;
             AddColumns(table, new string[] { "Time", "Feature", "Method", "Host", "Path", "Up", "Down", "Status", "Duration", "Blocked" },
-                new int[] { 70, 210, 56, 150, 170, 62, 70, 56, 66, 58 });
+                new int[] { 70, 210, 72, 150, 170, 62, 70, 64, 76, 76 }); // every UPPERCASE header fits (METHOD, BLOCKED)
 
             totalsView = MakeListView();
             totalsView.Dock = DockStyle.Bottom;

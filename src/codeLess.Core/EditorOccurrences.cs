@@ -125,5 +125,73 @@ namespace codeLess.Studio
             int s, e;
             return GetWordAt(lines[caretLine], caretCol, out s, out e);
         }
+
+        /// <summary>
+        /// Highlight target for a buffer (both editors): like <see cref="GetHighlightTarget"/>, but a caret on a language
+        /// keyword (if, return, public, using, int, true ...) highlights nothing — VS Code's providers skip keywords and
+        /// punctuation, and boxing every "using" / "if" in a file is noise. The token at the caret comes from the
+        /// buffer's TextMate tokenization when available, else from the shared fallback tokenizer. Explicit
+        /// selections are always highlighted.
+        /// </summary>
+        public static string GetHighlightTarget(EditorTabBuffer buf, out bool wholeWord)
+        {
+            wholeWord = true;
+            if (buf == null || buf.Lines == null) return null;
+            bool hasSel = buf.HasSelection();
+            int sL = 0, sC = 0, eL = 0, eC = 0;
+            if (hasSel) buf.GetNormalizedSelection(out sL, out sC, out eL, out eC);
+            string target = GetHighlightTarget(buf.Lines, buf.CursorLine, buf.CursorCol, hasSel, sL, sC, eL, eC, out wholeWord);
+            if (target == null || hasSel || !wholeWord) return target;
+            int ws, we;
+            string line = buf.Lines[buf.CursorLine] ?? "";
+            if (GetWordAt(line, buf.CursorCol, out ws, out we) == null) return target;
+            if (IsKeywordAt(buf, buf.CursorLine, ws, we)) return null;
+            return target;
+        }
+
+        /// <summary>True when the word [start, end) on <paramref name="line"/> is a language keyword token.</summary>
+        public static bool IsKeywordAt(EditorTabBuffer buf, int line, int start, int end)
+        {
+            if (buf == null || buf.Lines == null || line < 0 || line >= buf.Lines.Count) return false;
+            string text = buf.Lines[line] ?? "";
+            if (start < 0 || start >= text.Length) return false;
+            EditorSyntaxSession session = EditorSyntaxSession.For(buf);
+            TextMateDocument tm = session != null ? session.TextMate : null;
+            if (tm != null && line < tm.LineCount && text.Length <= MaxLineLengthForHighlight)
+            {
+                bool guess;
+                TmLineTokens toks = null;
+                try { toks = tm.GetTokens(buf.Lines, line, line, EditorSyntaxSession.DeadlineFromNow(4), out guess); }
+                catch (Exception) { toks = null; }
+                if (toks != null && toks.Count > 0)
+                {
+                    for (int i = 0; i < toks.Count; i++)
+                    {
+                        if (toks.Starts[i] > start) break;
+                        if (toks.EndOf(i) <= start) continue;
+                        TmScopeStack st = toks.Scopes[i];
+                        return st != null && IsKeywordScope(st.Scope);
+                    }
+                    return false;
+                }
+            }
+            List<CodeToken> fallback = FallbackTokenizer.Tokenize(text, buf.Language);
+            foreach (CodeToken t in fallback)
+            {
+                if (t.Start > start) break;
+                if (t.Start + t.Length <= start) continue;
+                return t.Kind == CodeTokenKind.Keyword || t.Kind == CodeTokenKind.Control;
+            }
+            return false;
+        }
+
+        /// <summary>TextMate scopes that mark keywords: keyword.*, storage.type / storage.modifier, constant.language.</summary>
+        public static bool IsKeywordScope(string scope)
+        {
+            if (string.IsNullOrEmpty(scope)) return false;
+            return scope == "keyword" || scope.StartsWith("keyword.", StringComparison.Ordinal)
+                || scope.StartsWith("storage.type", StringComparison.Ordinal) || scope.StartsWith("storage.modifier", StringComparison.Ordinal)
+                || scope.StartsWith("constant.language", StringComparison.Ordinal);
+        }
     }
 }

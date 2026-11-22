@@ -404,8 +404,8 @@ namespace codeLess.AvaloniaApp
                     case Key.M: SwitchBottomTab("problems"); return true;
                     case Key.U: SwitchBottomTab("output"); return true;
                     case Key.Y:
-                        btmDebugConsoleTabBtn.IsVisible = true;
                         SwitchBottomTab("debug");
+                        FocusBottomTabContent("debug");
                         return true;
                     case Key.T: ReopenClosedTab(); return true;
                     case Key.N: CreateNewWindowInstance(); return true;
@@ -576,6 +576,7 @@ namespace codeLess.AvaloniaApp
 
             outputChannelCombo.IsVisible = activeBottomTab == "output";
             shellProfileSelector.IsVisible = activeBottomTab == "terminal";
+            UpdatePanelToolbarForActiveTab();
             RefreshBottomTabStyles();
 
             if (activeBottomTab == "terminal")
@@ -2622,7 +2623,7 @@ namespace codeLess.AvaloniaApp
                     UpdateStatusBar();
                 },
                 () => ModalHost.CloseModal());
-            ModalHost.ShowModal("settings", "Preferences: Settings — codeLess", view, 600);
+            ModalHost.ShowModal("settings", "Preferences: Settings — codeLess", view, 680);
         }
 
         public void ShowKeyboardShortcutsModal()

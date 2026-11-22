@@ -39,16 +39,31 @@ namespace codeLess.Studio
             return Blend(t.BgEditor, BracketPairColor(t, level), IsLight(t) ? 0.55 : 0.60);
         }
 
-        /// <summary>Background behind other occurrences of the word under the caret (neutral, like VS Code).</summary>
+        // VS Code editor.wordHighlightBackground: dark #575757B8, light #57575740 (a neutral grey at 72 % / 25 %).
+        private static readonly Color WordHighlightGrey = Color.FromArgb(0x57, 0x57, 0x57);
+        // VS Code editor.selectionHighlightBackground: dark #ADD6FF26, light #ADD6FF80.
+        private static readonly Color SelectionHighlightBlue = Color.FromArgb(0xAD, 0xD6, 0xFF);
+
+        /// <summary>
+        /// Background behind occurrences of the word under the caret: VS Code's neutral translucent grey, so it never
+        /// picks up the theme's foreground tint (light themes looked reddish) and selection / find highlights painted
+        /// underneath stay visible.
+        /// </summary>
         public static Color WordHighlightBackground(StudioTheme t)
         {
-            return Blend(t.BgEditor, t.FgPrimary, IsLight(t) ? 0.10 : 0.16);
+            return WithAlpha(WordHighlightGrey, IsLight(t) ? 0x40 : 0xB8);
         }
 
-        /// <summary>Thin outline of a word highlight (keeps it visible on the current-line highlight).</summary>
+        /// <summary>Word highlights have no outline by default in VS Code (high-contrast themes only): transparent.</summary>
         public static Color WordHighlightBorder(StudioTheme t)
         {
-            return Blend(t.BgEditor, t.FgPrimary, IsLight(t) ? 0.22 : 0.28);
+            return Color.FromArgb(0, 0, 0, 0);
+        }
+
+        /// <summary>Background behind other occurrences of a single-line selection (VS Code selection highlight, light blue).</summary>
+        public static Color SelectionHighlightBackground(StudioTheme t)
+        {
+            return WithAlpha(SelectionHighlightBlue, IsLight(t) ? 0x80 : 0x26);
         }
 
         /// <summary>Sticky scroll widget background (the editor background, as in VS Code).</summary>

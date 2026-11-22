@@ -578,9 +578,45 @@ namespace codeLess.AvaloniaApp
                     ctx.DrawGeometry(null, pen, geo);
                     break;
                 }
+                case "go-to-file":
+                {
+                    // page with a folded corner and an outgoing arrow (Open File)
+                    var page = new StreamGeometry();
+                    using (var g = page.Open())
+                    {
+                        g.BeginFigure(new Point(cx - s * 0.70, cy - s * 0.90), false);
+                        g.LineTo(new Point(cx + s * 0.20, cy - s * 0.90));
+                        g.LineTo(new Point(cx + s * 0.70, cy - s * 0.40));
+                        g.LineTo(new Point(cx + s * 0.70, cy - s * 0.05));
+                        g.EndFigure(false);
+                        g.BeginFigure(new Point(cx + s * 0.05, cy + s * 0.90), false);
+                        g.LineTo(new Point(cx - s * 0.70, cy + s * 0.90));
+                        g.LineTo(new Point(cx - s * 0.70, cy - s * 0.90));
+                        g.EndFigure(false);
+                    }
+                    ctx.DrawGeometry(null, pen, page);
+                    ctx.DrawLine(pen, new Point(cx - s * 0.10, cy + s * 0.55), new Point(cx + s * 0.85, cy + s * 0.55));
+                    ctx.DrawLine(pen, new Point(cx + s * 0.55, cy + s * 0.25), new Point(cx + s * 0.85, cy + s * 0.55));
+                    ctx.DrawLine(pen, new Point(cx + s * 0.55, cy + s * 0.85), new Point(cx + s * 0.85, cy + s * 0.55));
+                    break;
+                }
+                case "regex":
+                {
+                    // Vector ".*" (a text ".*" rendered as two specks at toggle size): square dot + six-spoke asterisk.
+                    double d = s * 0.42;
+                    ctx.FillRectangle(fill, new Rect(cx - s * 0.80, cy + s * 0.78 - d, d, d));
+                    var ap = new Pen(fill, Math.Max(1.2, strokeWidth), lineCap: PenLineCap.Round);
+                    double ax = cx + s * 0.30, ay = cy - s * 0.22, ar = s * 0.58;
+                    for (int k = 0; k < 3; k++)
+                    {
+                        double ang = Math.PI / 2 + k * Math.PI / 3;
+                        double dx = Math.Cos(ang) * ar, dy = Math.Sin(ang) * ar;
+                        ctx.DrawLine(ap, new Point(ax - dx, ay - dy), new Point(ax + dx, ay + dy));
+                    }
+                    break;
+                }
                 case "case-sensitive":
                 case "whole-word":
-                case "regex":
                 {
                     string lower = iconName.ToLowerInvariant();
                     string txt = lower == "case-sensitive" ? "Aa" : (lower == "whole-word" ? "ab" : ".*");

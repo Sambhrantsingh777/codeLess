@@ -65,7 +65,7 @@ namespace codeLess.AvaloniaApp
     public class NetworkActivityView : Border
     {
         private static readonly string[] ColumnNames = { "Time", "Feature", "Method", "Host", "Path", "Up", "Down", "Status", "Duration", "Blocked" };
-        private const string ColumnWidths = "70,220,58,160,*,64,70,60,70,58";
+        private const string ColumnWidths = "70,220,72,160,*,64,70,64,76,76"; // wide enough for every UPPERCASE header (METHOD, DURATION, BLOCKED)
 
         private StudioTheme theme;
         private readonly TextBlock summaryText;
@@ -132,6 +132,8 @@ namespace codeLess.AvaloniaApp
             headerBorder = new Border { Child = headerGrid, BorderThickness = new Thickness(0, 0, 0, 1) };
 
             table = new ListBox { Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0) };
+            // rows get the viewport width (a long path used to widen its row and shift every later column)
+            ScrollViewer.SetHorizontalScrollBarVisibility(table, global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
             table.ItemTemplate = new FuncDataTemplate<NetworkLedgerEntry>((entry, _) => BuildRow(entry), supportsRecycling: false);
             emptyText = new TextBlock { Text = "No requests yet. Entries appear here as codeLess contacts the network.", FontSize = 12, Margin = new Thickness(8, 12), IsVisible = false };
 
@@ -149,7 +151,7 @@ namespace codeLess.AvaloniaApp
             var totalsOuter = new StackPanel { Spacing = 4 };
             totalsOuter.Children.Add(new TextBlock { Text = "Totals per feature", FontSize = 11.5, FontWeight = FontWeight.SemiBold, Tag = "secondary" });
             totalsOuter.Children.Add(totalsScroll);
-            totalsBorder = new Border { Child = totalsOuter, BorderThickness = new Thickness(0, 1, 0, 0), CornerRadius = new CornerRadius(0), Padding = new Thickness(2, 8, 2, 0), Margin = new Thickness(0, 10, 0, 0) };
+            totalsBorder = new Border { Child = totalsOuter, BorderThickness = new Thickness(0, 1, 0, 0), CornerRadius = new CornerRadius(0), Padding = new Thickness(7, 8, 7, 0), Margin = new Thickness(0, 10, 0, 0) }; // text aligns with the table cells
 
             var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto") };
             root.Children.Add(summaryText);
@@ -279,7 +281,7 @@ namespace codeLess.AvaloniaApp
 
         private static Control TotalsRow(string feature, string detail, IBrush primary, IBrush secondary, bool bold)
         {
-            var g = new Grid { ColumnDefinitions = new ColumnDefinitions("240,*") };
+            var g = new Grid { ColumnDefinitions = new ColumnDefinitions("290,*") }; // detail column lines up with the METHOD column
             g.Children.Add(new TextBlock { Text = feature, FontSize = 11.5, Foreground = primary, FontWeight = bold ? FontWeight.Bold : FontWeight.Normal, TextTrimming = TextTrimming.CharacterEllipsis });
             var d = new TextBlock { Text = detail, FontSize = 11.5, Foreground = bold ? primary : secondary, FontWeight = bold ? FontWeight.Bold : FontWeight.Normal, TextTrimming = TextTrimming.CharacterEllipsis };
             Grid.SetColumn(d, 1);

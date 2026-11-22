@@ -444,4 +444,40 @@ namespace codeLess.Studio
             }
         }
     }
+
+    /// <summary>
+    /// Commit graph split (both UIs): commit list and details side by side with a draggable splitter, or the details
+    /// stacked below the list when the pane is narrow, so the graph is never squeezed to a sliver. STRICT C# 5.
+    /// </summary>
+    public static class GitGraphSplitLayout
+    {
+        /// <summary>Below this pane width (px) the details stack under the commit list.</summary>
+        public const int StackBelowWidth = 560;
+        public const int ListMinWidth = 240;
+        public const int DetailsMinWidth = 220;
+        public const int DetailsMaxInitialWidth = 380;
+        public const int ListMinHeight = 96;
+        public const int DetailsMinHeight = 140;
+
+        public static bool ShouldStack(double paneWidth)
+        {
+            return paneWidth < StackBelowWidth;
+        }
+
+        /// <summary>Initial details column width for a side-by-side layout (38 % of the pane, clamped).</summary>
+        public static int InitialDetailsWidth(double paneWidth)
+        {
+            int w = (int)Math.Round(paneWidth * 0.38);
+            if (w > DetailsMaxInitialWidth) w = DetailsMaxInitialWidth;
+            if (w < DetailsMinWidth) w = DetailsMinWidth;
+            return w;
+        }
+
+        /// <summary>Initial details height when stacked (45 % of the content height, at least the minimum).</summary>
+        public static int InitialDetailsHeight(double contentHeight)
+        {
+            int h = (int)Math.Round(contentHeight * 0.45);
+            return h < DetailsMinHeight ? DetailsMinHeight : h;
+        }
+    }
 }

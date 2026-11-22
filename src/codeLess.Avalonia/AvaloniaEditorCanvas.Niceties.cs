@@ -285,10 +285,7 @@ namespace codeLess.AvaloniaApp
 
         private static string ComputeOccurrenceTarget(EditorTabBuffer buf, out bool wholeWord)
         {
-            bool hasSel = buf.HasSelection();
-            int sL = 0, sC = 0, eL = 0, eC = 0;
-            if (hasSel) buf.GetNormalizedSelection(out sL, out sC, out eL, out eC);
-            return EditorOccurrences.GetHighlightTarget(buf.Lines, buf.CursorLine, buf.CursorCol, hasSel, sL, sC, eL, eC, out wholeWord);
+            return EditorOccurrences.GetHighlightTarget(buf, out wholeWord);
         }
 
         /// <summary>Applies the debounced highlight now (tests).</summary>
@@ -310,8 +307,9 @@ namespace codeLess.AvaloniaApp
             var matches = new List<OccurrenceMatch>();
             EditorOccurrences.FindInLine(lineText, docLine, occurrenceTarget, occurrenceWholeWord, true, matches);
             if (matches.Count == 0) return;
-            var fill = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WordHighlightBackground(Theme)));
-            var border = new Pen(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WordHighlightBorder(Theme))), 1);
+            var fill = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(occurrenceWholeWord ? UiTokens.WordHighlightBackground(Theme) : UiTokens.SelectionHighlightBackground(Theme)));
+            var borderColor = UiTokens.WordHighlightBorder(Theme);
+            Pen border = borderColor.A == 0 ? null : new Pen(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(borderColor)), 1);
             foreach (var m in matches)
             {
                 int s0 = Math.Max(m.Col, vr.Start), e0 = vr.IsLastRow ? m.Col + m.Length : Math.Min(m.Col + m.Length, vr.End);

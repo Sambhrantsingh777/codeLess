@@ -1537,7 +1537,8 @@ namespace codeLess.AvaloniaApp
                     Content = label,
                     FontSize = UiTokens.FontHeader,
                     FontWeight = FontWeight.Normal,
-                    Padding = new Thickness(8, 0),
+                    Padding = new Thickness(0),
+                    Margin = new Thickness(8, 0), // VS Code: the 1 px active underline spans the label only
                     MinHeight = 0,
                     VerticalAlignment = VerticalAlignment.Stretch,
                     VerticalContentAlignment = VerticalAlignment.Center,
@@ -1548,21 +1549,22 @@ namespace codeLess.AvaloniaApp
                     Focusable = false
                 };
                 b.Classes.Add("paneltab");
-                b.Click += (s, e) => SwitchBottomTab(id);
+                b.Name = "PanelTab_" + id;
+                b.Click += (s, e) => { SwitchBottomTab(id); FocusBottomTabContent(id); };
                 return b;
             }
 
+            // VS Code order: PROBLEMS, OUTPUT, DEBUG CONSOLE, TERMINAL (PORTS only when shown explicitly).
             btmProblemsTabBtn = MakePanelTab("PROBLEMS (0)", "problems");
             btmOutputTabBtn = MakePanelTab("OUTPUT", "output");
+            btmDebugConsoleTabBtn = MakePanelTab("DEBUG CONSOLE", "debug");
             btmTerminalTabBtn = MakePanelTab("TERMINAL", "terminal");
-            // Secondary bottom tabs hidden by default
-            btmDebugConsoleTabBtn = MakePanelTab("DEBUG CONSOLE", "debug", visibleByDefault: false);
             btmPortsTabBtn = MakePanelTab("PORTS", "ports", visibleByDefault: false);
 
             tabsRow.Children.Add(btmProblemsTabBtn);
             tabsRow.Children.Add(btmOutputTabBtn);
-            tabsRow.Children.Add(btmTerminalTabBtn);
             tabsRow.Children.Add(btmDebugConsoleTabBtn);
+            tabsRow.Children.Add(btmTerminalTabBtn);
             tabsRow.Children.Add(btmPortsTabBtn);
             headerGrid.Children.Add(tabsRow);
 
@@ -1606,9 +1608,14 @@ namespace codeLess.AvaloniaApp
             renameTermBtn.Name = "RenameTerminalBtn";
             var killTermBtn = WorkbenchStyles.IconButton("trash", "Kill Active Terminal Session", () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); }, currentTheme);
             killTermBtn.Name = "KillTerminalBtn";
+            var clearPanelBtn = WorkbenchStyles.IconButton("clear-all", "Clear", ClearActiveBottomTabContent, currentTheme);
+            clearPanelBtn.Name = "ClearPanelBtn";
+            clearPanelBtn.IsVisible = false;
             var maxPanelBtn = WorkbenchStyles.IconButton("chevron-up", "Maximize Panel Size", ToggleMaximizeBottomPanel, currentTheme);
             var closePanelBtn = WorkbenchStyles.IconButton("close", "Close Panel (Ctrl+J)", ToggleBottomPanel, currentTheme);
-            panelToolbarIconButtons = new[] { newTermBtn, splitTermBtn, renameTermBtn, killTermBtn, maxPanelBtn, closePanelBtn };
+            panelToolbarIconButtons = new[] { newTermBtn, splitTermBtn, renameTermBtn, killTermBtn, maxPanelBtn, closePanelBtn, clearPanelBtn };
+            terminalOnlyPanelButtons = new[] { newTermBtn, splitTermBtn, renameTermBtn, killTermBtn };
+            panelClearButton = clearPanelBtn;
 
             outputChannelCombo = new ComboBox
             {
@@ -1628,6 +1635,7 @@ namespace codeLess.AvaloniaApp
             terminalToolbarActions.Children.Add(splitTermBtn);
             terminalToolbarActions.Children.Add(renameTermBtn);
             terminalToolbarActions.Children.Add(killTermBtn);
+            terminalToolbarActions.Children.Add(clearPanelBtn);
             terminalToolbarActions.Children.Add(maxPanelBtn);
             terminalToolbarActions.Children.Add(closePanelBtn);
 

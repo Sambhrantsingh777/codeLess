@@ -988,7 +988,8 @@ namespace codeLess.Studio
         {
             if (activeTab != null && activeTab.IsDirty && !activeTab.IsUntitled && !string.IsNullOrEmpty(activeTab.FilePath)) SaveTabBuffer(activeTab);
             string console = DapJson.Str(cfg.Properties, "console") ?? (cfg.AdapterFamily == "python" ? "integratedTerminal" : "internalConsole");
-            if (console != "integratedTerminal") ShowDebugConsole();
+            // Reveal the DEBUG CONSOLE without stealing focus from the editor (VS Code openOnSessionStart).
+            if (console != "integratedTerminal") { bottomDockPanel.Visible = true; SwitchBottomDockTab("debug"); }
             if (leftSidebar.Visible && activeSidebarView != "run") SwitchSidebarView("run");
             debugController.StartAsync(cfg, activeTab != null ? activeTab.FilePath : null);
         }

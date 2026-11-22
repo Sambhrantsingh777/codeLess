@@ -133,6 +133,12 @@ namespace codeLess.Studio
             return IsLight(t) ? Blend(t.BgEditor, t.FgPrimary, 0.20) : Blend(t.BgSidebar, t.FgPrimary, 0.13);
         }
 
+        /// <summary>Unchecked check box outline: stronger than the input border so a 16 px box stays visible on widget surfaces.</summary>
+        public static Color CheckBoxBorder(StudioTheme t)
+        {
+            return IsLight(t) ? Blend(t.BgEditor, t.FgPrimary, 0.34) : Blend(t.BgSidebar, t.FgPrimary, 0.30);
+        }
+
         public static Color FocusBorder(StudioTheme t)
         {
             return t.AccentPrimary;

@@ -111,12 +111,34 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
+        /// <summary>
+        /// Single-folder workspace: the folder is the section header (VS Code, and WinForms' HideRootFolderRow), so its
+        /// row is not repeated inside the tree and its children start at the first indent level.
+        /// </summary>
+        public bool HideSingleRoot { get; set; } = true;
+        private bool RootRowHidden => HideSingleRoot && Nodes.Count == 1;
+
+        /// <summary>Indent depth of a row as drawn (the hidden root does not count).</summary>
+        public int DisplayDepth(ExplorerTreeNode node) => node == null ? 0 : Math.Max(0, node.Level - (RootRowHidden ? 1 : 0));
+
         public void RebuildTreeLayout(bool preserveScroll = true)
         {
             VisibleFlatRows.Clear();
-            foreach (var root in Nodes)
+            if (RootRowHidden)
             {
-                AddVisibleRecursive(root);
+                var root = Nodes[0];
+                root.IsExpanded = true;
+                foreach (var child in root.Nodes)
+                {
+                    if ((child.Tag ?? "") == "__LAZY_DIR__") continue;
+                    child.Parent = root;
+                    AddVisibleRecursive(child);
+                }
+            }
+            else
+            {
+                foreach (var root in Nodes)
+                    AddVisibleRecursive(root);
             }
             if (!preserveScroll)
                 ScrollOffsetY = 0;
@@ -509,7 +531,7 @@ namespace codeLess.AvaloniaApp
                     context.FillRectangle(new SolidColorBrush(HoverFill), rowRect);
                 }
 
-                int depth = node.Level;
+                int depth = DisplayDepth(node);
                 for (int d = 1; d <= depth; d++)
                 {
                     // Indent guide sits under the parent folder's twistie (VS Code).
@@ -603,7 +625,7 @@ namespace codeLess.AvaloniaApp
                     node.Text ?? "",
                     CultureInfo.InvariantCulture,
                     FlowDirection.LeftToRight,
-                    (isFolder && depth == 0) ? fontBold : fontRegular,
+                    (isFolder && node.Parent == null) ? fontBold : fontRegular,
                     12.0,
                     new SolidColorBrush(labelColor))
                 {
