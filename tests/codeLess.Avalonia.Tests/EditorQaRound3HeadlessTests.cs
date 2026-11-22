@@ -53,6 +53,7 @@ namespace codeLess.Avalonia.Tests
         {
             string file = Path.Combine(dir, name);
             File.WriteAllText(file, content);
+            TestTrust.Trust(dir); // a Restricted Mode banner would change the editor height these layout tests assert on
             var w = new MainWindow(dir);
             w.Show();
             var tab = w.OpenFileInTab(file, preview: false);
