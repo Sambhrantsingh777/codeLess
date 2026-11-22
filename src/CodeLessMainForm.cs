@@ -10153,7 +10153,12 @@ if __name__ == '__main__':
 
         public async Task SubmitAgentPromptAsync()
         {
-            if (isAgentStreaming) return;
+            if (isAgentStreaming)
+            {
+                // One request at a time per chat (the prompt stays in the composer); Stop is next to it.
+                statusLeftLabel.Text = LlmHarnessAndAgentEngine.BusyReply;
+                return;
+            }
             string prompt = (promptInputBox.Text ?? "").Trim();
             if (string.IsNullOrEmpty(prompt)) return;
             promptInputBox.Clear();

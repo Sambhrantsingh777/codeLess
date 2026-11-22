@@ -1845,22 +1845,28 @@ namespace codeLess.AvaloniaApp
             {
                 Name = "ChatPromptInput",
                 Watermark = "Plan, @context, ask questions, or request multi-file edits (Enter to send)...",
-                AcceptsReturn = false,
-                Height = 52,
+                // VS Code chat input: grows with the prompt (and the wrapped placeholder) from two lines up to a cap,
+                // then scrolls. The fixed 52 px height clipped the two-line placeholder (QA #4).
+                AcceptsReturn = true,
+                MinHeight = Math.Ceiling(UiTokens.FontUi * 1.45 * 2 + 8),
+                MaxHeight = Math.Ceiling(UiTokens.FontUi * 1.45 * 12 + 8),
                 FontSize = UiTokens.FontUi,
                 TextWrapping = TextWrapping.Wrap,
+                VerticalContentAlignment = VerticalAlignment.Top,
                 Padding = new Thickness(2, 4),
                 BorderThickness = new Thickness(0),
                 Background = Brushes.Transparent
             };
-            chatPromptInput.KeyDown += (s, e) =>
+            ScrollViewer.SetVerticalScrollBarVisibility(chatPromptInput, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+            // Enter sends, Shift+Enter inserts a newline (handled before the TextBox inserts one itself).
+            chatPromptInput.AddHandler(KeyDownEvent, (s, e) =>
             {
                 if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
                 {
                     SubmitChatMessage();
                     e.Handled = true;
                 }
-            };
+            }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
             composerStack.Children.Add(chatPromptInput);
 
             // Mode pills row: ✦ Agent | Ask | Edit | Auto-Fix
