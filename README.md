@@ -100,6 +100,8 @@ Everything below is built in — no extensions to find, install or configure —
 
 ### Direct Pre-Built Downloads ([Latest Release](https://github.com/Sambhrantsingh777/codeLess/releases/latest))
 
+> **Code signing:** Windows releases use free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) *(application under review — until it is approved, Windows binaries are unsigned)*. Every release also ships GitHub build-provenance attestations and a Sigstore-signed `SHA256SUMS.txt`; Linux packages are OpenPGP-signed. See the [code signing policy](./docs/CODE_SIGNING_POLICY.md).
+
 | Platform | Package | Direct Download |
 | :--- | :--- | :--- |
 | **Windows 10 / 11 (x64)** | Setup Installer (`.exe`, ~2.9 MB) | [`codeLess-Setup.exe`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-Setup.exe) |
