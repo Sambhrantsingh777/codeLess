@@ -299,8 +299,9 @@ namespace codeLess.Studio
                 C("help.byok", "AI Provider & Harness Setup...", null),
                 Sep(),
                 C("help.reportIssue", "Report Issue", null),
-                Only(Sep(), MenuPlatform.NonMac),
-                Only(C("app.checkUpdates", "Check for Updates...", null), MenuPlatform.NonMac),
+                // users look for updates in Help on macOS too (it also stays in the codeLess app menu, like VS Code)
+                Sep(),
+                C("app.checkUpdates", "Check for Updates...", null),
                 Only(C("app.about", "About", null), MenuPlatform.NonMac)));
             return r;
         }

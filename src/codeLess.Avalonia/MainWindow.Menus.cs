@@ -415,6 +415,7 @@ namespace codeLess.AvaloniaApp
                     mi.IsChecked = MenuCheckState(e.Id) ?? false;
                 }
                 mi.Click += (s, a) => InvokeMenuCommand(entry.Id);
+                if (e.Id == UpdateMenuId) { updateMenuItems.Add(mi); ApplyUpdateMenuState(); }
                 items.Add(mi);
             }
             while (items.Count > 0 && items[items.Count - 1] is Separator) items.RemoveAt(items.Count - 1);
@@ -468,15 +469,9 @@ namespace codeLess.AvaloniaApp
                 if (!menu.VisibleOn(mac)) continue;
                 var sub = new NativeMenu();
                 FillNativeMenu(sub, menu.Items);
-                if (menu.Title == "codeLess")
-                {
-                    if (Application.Current != null)
-                    {
-                        Application.Current.Name = "codeLess";
-                        NativeMenu.SetMenu(Application.Current, sub);
-                    }
-                    if (!includeAppMenu) continue;
-                }
+                // The live macOS app menu is built once in App.Initialize (AppNativeMenu): a later
+                // NativeMenu.SetMenu(Application) is never exported by Avalonia 11.1 (v3.3.3: Quit-only app menu).
+                if (menu.Title == "codeLess" && !includeAppMenu) continue;
                 rootMenu.Add(new NativeMenuItem(menu.Title) { Menu = sub });
             }
         }
@@ -517,6 +512,7 @@ namespace codeLess.AvaloniaApp
                     nativeCheckItems.Add((item, e.Id));
                 }
                 item.Click += (s, a) => InvokeNativeMenuCommand(entry);
+                if (e.Id == UpdateMenuId) { updateNativeMenuItems.Add(item); ApplyUpdateMenuState(); }
                 target.Add(item);
             }
             target.NeedsUpdate += (s, a) => RefreshNativeCheckStates();

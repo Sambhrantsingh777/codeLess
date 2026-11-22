@@ -383,6 +383,16 @@ namespace codeLess.Studio
         /// <summary>Downloads <paramref name="url"/> to <paramref name="filePath"/> (streamed, counted, redirects checked per hop). Body is not kept in memory.</summary>
         public static LedgerHttpResponse DownloadToFile(string feature, string url, string filePath, string userAgent, int timeoutMs)
         {
+            return DownloadToFile(feature, url, filePath, userAgent, timeoutMs, null, null);
+        }
+
+        /// <summary>
+        /// <see cref="DownloadToFile(string,string,string,string,int)"/> with progress (bytes written, Content-Length or -1)
+        /// and cooperative cancellation (checked between chunks; a cancelled download returns Error "Cancelled").
+        /// </summary>
+        public static LedgerHttpResponse DownloadToFile(string feature, string url, string filePath, string userAgent, int timeoutMs,
+            Action<long, long> progress, Func<bool> cancelled)
+        {
             LedgerHttpResponse result = new LedgerHttpResponse();
             LedgerHttpRequest hop = new LedgerHttpRequest();
             hop.Feature = feature;
@@ -424,10 +434,21 @@ namespace codeLess.Studio
                             scope.Complete();
                             return Finish(result, scope, sentBefore, receivedBefore, msBefore);
                         }
+                        long total = res.ContentLength;
                         using (Stream input = scope.WrapResponseStream(res.GetResponseStream()))
                         using (FileStream output = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None))
                         {
-                            input.CopyTo(output, 81920);
+                            byte[] buf = new byte[81920];
+                            long written = 0;
+                            int n;
+                            if (progress != null) progress(0, total);
+                            while ((n = input.Read(buf, 0, buf.Length)) > 0)
+                            {
+                                if (cancelled != null && cancelled()) throw new OperationCanceledException("Cancelled");
+                                output.Write(buf, 0, n);
+                                written += n;
+                                if (progress != null) progress(written, total);
+                            }
                         }
                     }
                     scope.Complete();
@@ -439,8 +460,8 @@ namespace codeLess.Studio
                 }
                 catch (Exception ex)
                 {
-                    result.Status = NetworkLedger.StatusFromException(ex);
-                    result.Error = result.Status > 0 ? ("HTTP " + result.Status) : ex.Message;
+                    result.Status = ex is OperationCanceledException ? 0 : NetworkLedger.StatusFromException(ex);
+                    result.Error = ex is OperationCanceledException ? "Cancelled" : (result.Status > 0 ? ("HTTP " + result.Status) : ex.Message);
                     scope.Fail(ex);
                     return Finish(result, scope, sentBefore, receivedBefore, msBefore);
                 }

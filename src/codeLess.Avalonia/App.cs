@@ -46,6 +46,7 @@ namespace codeLess.AvaloniaApp
         public static string ScreenshotOutputPath { get; set; }
         public static string ScreenshotSuiteDir { get; set; }
         public static string SmokeQuitReportPath { get; set; }
+        public static string NativeSelfTestReportPath { get; set; }
         public static string BenchmarkReportPath { get; set; }
         public static string IdleProbeReportPath { get; set; }
         public static string BenchReadyPath { get; set; }
@@ -65,23 +66,21 @@ namespace codeLess.AvaloniaApp
             RequestedThemeVariant = ThemeVariant.Dark;
             Styles.Add(new FluentTheme());
 
-            // Seed default macOS application menu so the top menu bar always displays "codeLess" instead of "Avalonia Application"
-            var appMenu = new NativeMenu();
-            var quitItem = new NativeMenuItem("Quit codeLess")
-            {
-                Gesture = new KeyGesture(Key.Q, KeyModifiers.Meta)
-            };
-            quitItem.Click += (s, e) =>
-            {
-                // Close via the window so the unsaved-changes prompt in MainWindow.OnClosing can run.
-                if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime dt)
-                {
-                    if (dt.MainWindow != null) dt.MainWindow.Close();
-                    else dt.TryShutdown(0);
-                }
-            };
-            appMenu.Add(quitItem);
-            NativeMenu.SetMenu(this, appMenu);
+            // The complete macOS application menu (About, Check for Updates..., Settings, Hide, Quit). It must exist now:
+            // Avalonia's macOS exporter reads the Application menu once, right after Initialize (see AppNativeMenu).
+            // Quit closes via the window so the unsaved-changes prompt in MainWindow.OnClosing can run.
+            NativeMenu.SetMenu(this, AppNativeMenu.Build(
+                ActiveWorkbenchWindow,
+                () => (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.TryShutdown(0)));
+        }
+
+        /// <summary>The focused workbench window (New Window opens more), else the main one.</summary>
+        private MainWindow ActiveWorkbenchWindow()
+        {
+            if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime dt) return null;
+            foreach (var w in dt.Windows)
+                if (w is MainWindow m && m.IsActive) return m;
+            return dt.MainWindow as MainWindow;
         }
 
         public override void OnFrameworkInitializationCompleted()
@@ -128,14 +127,26 @@ namespace codeLess.AvaloniaApp
                     };
                 }
 
-                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(IdleProbeReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath) || MainWindow.IsMonorepoBenchRequested || !string.IsNullOrWhiteSpace(BenchReadyPath) || !string.IsNullOrWhiteSpace(BenchOpenReportPath);
+                bool automatedRun = !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(IdleProbeReportPath) || !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath) || MainWindow.IsMonorepoBenchRequested || !string.IsNullOrWhiteSpace(BenchReadyPath) || !string.IsNullOrWhiteSpace(BenchOpenReportPath) || !string.IsNullOrWhiteSpace(NativeSelfTestReportPath);
                 MainWindow.AttachMonorepoBenchIfRequested(mainWindow);
                 if (!string.IsNullOrWhiteSpace(BenchReadyPath) || !string.IsNullOrWhiteSpace(BenchOpenFilePath))
                     mainWindow.StartBenchProbes(BenchReadyPath, BenchOpenFilePath, BenchOpenReportPath, BenchOpenDelayMs);
                 if (!automatedRun)
                     mainWindow.Opened += (s, e) => Dispatcher.UIThread.Post(mainWindow.MaybeAutoCheckForUpdates, DispatcherPriority.Background);
 
-                if (!string.IsNullOrWhiteSpace(IdleProbeReportPath))
+                if (!string.IsNullOrWhiteSpace(NativeSelfTestReportPath))
+                {
+                    string report = NativeSelfTestReportPath;
+                    mainWindow.Opened += async (s, e) => await mainWindow.RunNativeSelfTestAsync(report);
+                    var selfTestWatchdog = new System.Threading.Thread(() =>
+                    {
+                        System.Threading.Thread.Sleep(15000);
+                        try { if (!File.Exists(report)) File.WriteAllText(report, "{\"result\":\"watchdog-timeout\"}"); } catch { }
+                        Environment.Exit(3);
+                    }) { IsBackground = true, Name = "NativeSelfTestWatchdog" };
+                    selfTestWatchdog.Start();
+                }
+                else if (!string.IsNullOrWhiteSpace(IdleProbeReportPath))
                 {
                     mainWindow.Opened += async (s, e) => await mainWindow.RunIdleProbeAsync(IdleProbeReportPath);
                 }

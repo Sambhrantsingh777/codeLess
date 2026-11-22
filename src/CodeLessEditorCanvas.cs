@@ -2917,30 +2917,17 @@ namespace codeLess.Studio
                 virtualCanvas.ToggleBlockCommentOnSelection();
         }
 
+        // one path for every undo / redo source; reveals the change (CodeLessEditorCanvas.UndoReveal.cs)
         public void PerformUndo()
         {
             if (CurrentBuffer == null || virtualCanvas == null) return;
-            // the snapshot restores the carets / selections recorded with the step (VS Code, QA #29)
-            if (CurrentBuffer.Undo())
-            {
-                NotifyBufferContentChanged();
-                virtualCanvas.EnsureCursorVisible();
-                UpdateCursorStatusLabel();
-                virtualCanvas.Invalidate();
-            }
+            virtualCanvas.ApplyUndoRedo(false);
         }
 
         public void PerformRedo()
         {
             if (CurrentBuffer == null || virtualCanvas == null) return;
-            // the snapshot restores the carets / selections recorded with the step (VS Code, QA #29)
-            if (CurrentBuffer.Redo())
-            {
-                NotifyBufferContentChanged();
-                virtualCanvas.EnsureCursorVisible();
-                UpdateCursorStatusLabel();
-                virtualCanvas.Invalidate();
-            }
+            virtualCanvas.ApplyUndoRedo(true);
         }
 
         public void PerformCut() { if (virtualCanvas != null) virtualCanvas.TriggerCut(); }
@@ -6169,29 +6156,14 @@ namespace codeLess.Studio
             if (e.Control && !e.Shift && e.KeyCode == Keys.Z)
             {
                 e.SuppressKeyPress = true;
-                // the undo step restores its carets and selections (VS Code, QA #29); clearing them first lost them
-                if (buf.Undo())
-                {
-                    owner.NotifyBufferContentChanged();
-                    owner.DismissAutocomplete();
-                    EnsureCursorVisible();
-                    owner.UpdateCursorStatusLabel();
-                    this.Invalidate();
-                }
+                // the undo step restores its carets and selections (VS Code, QA #29) and reveals the change
+                ApplyUndoRedo(false);
                 return;
             }
             if (e.Control && (e.KeyCode == Keys.Y || (e.Shift && e.KeyCode == Keys.Z)))
             {
                 e.SuppressKeyPress = true;
-                // the undo step restores its carets and selections (VS Code, QA #29); clearing them first lost them
-                if (buf.Redo())
-                {
-                    owner.NotifyBufferContentChanged();
-                    owner.DismissAutocomplete();
-                    EnsureCursorVisible();
-                    owner.UpdateCursorStatusLabel();
-                    this.Invalidate();
-                }
+                ApplyUndoRedo(true);
                 return;
             }
 

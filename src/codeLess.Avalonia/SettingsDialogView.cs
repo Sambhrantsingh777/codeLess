@@ -223,7 +223,14 @@ namespace codeLess.AvaloniaApp
             var venvChk = AddCheck("Activate the Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, "python.terminal.activateEnvironment");
             BeginSection("Network & Updates");
             var offlineChk = AddCheck("Offline mode: block all non-local network requests (local Ollama / LM Studio keep working)", NetworkLedger.OfflineMode, "codeless.offlineMode");
-            var updateChk = AddCheck("Check for updates automatically (once a day)", settings.AutoCheckForUpdates, "update.mode");
+            var updateModeCombo = new ComboBox
+            {
+                ItemsSource = UpdateModes.All.Select(UpdateModes.Label).ToList(),
+                SelectedIndex = Math.Max(0, Array.IndexOf(UpdateModes.All, settings.GetEffectiveUpdateMode())),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                MinWidth = 300
+            };
+            AddLabeled("Update mode", updateModeCombo, "update.mode", "check for updates automatically download restart none manual start default");
 
             // ---------------------------------------------------------------- Workspace Trust (changes apply immediately)
             if (workspaceTrustSection != null)
@@ -337,7 +344,8 @@ namespace codeLess.AvaloniaApp
                 smoothness.Apply(settings);
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
                 settings.OfflineMode = offlineChk.IsChecked == true;
-                settings.AutoCheckForUpdates = updateChk.IsChecked == true;
+                if (updateModeCombo.SelectedIndex >= 0 && updateModeCombo.SelectedIndex < UpdateModes.All.Length)
+                    settings.SetUpdateMode(UpdateModes.All[updateModeCombo.SelectedIndex]);
                 NetworkLedger.SetOfflineMode(settings.OfflineMode);
                 settings.ExcludedFolders = (excludedBox.Text ?? "").Trim();
                 if (providerCombo.SelectedIndex >= 0 && providerCombo.SelectedIndex < providers.Count)

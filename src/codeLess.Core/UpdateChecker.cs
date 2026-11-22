@@ -22,6 +22,25 @@ namespace codeLess.Studio
         public string Error = "";
         /// <summary>True when Offline Mode refused the request (nothing was sent).</summary>
         public bool Blocked;
+        /// <summary>Every asset of the release (name, download URL, size).</summary>
+        public List<UpdateReleaseAsset> Assets = new List<UpdateReleaseAsset>();
+
+        /// <summary>Asset by exact file name (case-insensitive), or null.</summary>
+        public UpdateReleaseAsset FindAsset(string name)
+        {
+            if (string.IsNullOrEmpty(name) || Assets == null) return null;
+            foreach (UpdateReleaseAsset a in Assets)
+                if (string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase)) return a;
+            return null;
+        }
+    }
+
+    /// <summary>One downloadable file of a GitHub release.</summary>
+    public class UpdateReleaseAsset
+    {
+        public string Name = "";
+        public string Url = "";
+        public long Size;
     }
 
     /// <summary>
@@ -33,6 +52,10 @@ namespace codeLess.Studio
     {
         public const string Repository = "Sambhrantsingh777/codeLess";
         public const string LatestReleasePage = "https://github.com/" + Repository + "/releases/latest";
+        public const string LatestReleaseApi = "https://api.github.com/repos/" + Repository + "/releases/latest";
+
+        /// <summary>Tests only: points the check at a local fake release API (null = GitHub).</summary>
+        public static string ApiUrlOverride;
 
         /// <summary>Release asset the user should download for this OS / CPU (names produced by CI).</summary>
         public static string GetPlatformAssetName()
@@ -80,7 +103,7 @@ namespace codeLess.Studio
             {
                 LedgerHttpRequest req = new LedgerHttpRequest();
                 req.Feature = "Update check";
-                req.Url = "https://api.github.com/repos/" + Repository + "/releases/latest";
+                req.Url = string.IsNullOrEmpty(ApiUrlOverride) ? LatestReleaseApi : ApiUrlOverride;
                 req.UserAgent = "codeLess-update-check";
                 req.Accept = "application/vnd.github+json";
                 req.TimeoutMs = timeoutMs;
@@ -89,32 +112,7 @@ namespace codeLess.Studio
                 if (!res.IsSuccess) { r.Error = "GitHub returned HTTP " + res.Status + "."; return r; }
                 string json = res.Body;
 
-                JavaScriptSerializer ser = new JavaScriptSerializer();
-                Dictionary<string, object> root = ser.Deserialize<Dictionary<string, object>>(json);
-                if (root == null) { r.Error = "Unexpected response from GitHub."; return r; }
-                r.LatestVersion = root.ContainsKey("tag_name") ? Convert.ToString(root["tag_name"]).TrimStart('v', 'V') : "";
-                if (root.ContainsKey("html_url") && root["html_url"] != null) r.ReleasePageUrl = Convert.ToString(root["html_url"]);
-                if (root.ContainsKey("body") && root["body"] != null) r.ReleaseNotes = Convert.ToString(root["body"]);
-
-                string wanted = GetPlatformAssetName();
-                if (root.ContainsKey("assets") && root["assets"] is IEnumerable)
-                {
-                    foreach (object a in (IEnumerable)root["assets"])
-                    {
-                        Dictionary<string, object> asset = a as Dictionary<string, object>;
-                        if (asset == null || !asset.ContainsKey("name")) continue;
-                        if (string.Equals(Convert.ToString(asset["name"]), wanted, StringComparison.OrdinalIgnoreCase) &&
-                            asset.ContainsKey("browser_download_url"))
-                        {
-                            r.DownloadUrl = Convert.ToString(asset["browser_download_url"]);
-                            break;
-                        }
-                    }
-                }
-                if (string.IsNullOrEmpty(r.DownloadUrl)) r.DownloadUrl = r.ReleasePageUrl;
-                r.IsNewer = IsNewerVersion(r.LatestVersion, r.CurrentVersion);
-                r.Success = !string.IsNullOrEmpty(r.LatestVersion);
-                if (!r.Success) r.Error = "No release information found.";
+                ParseRelease(json, r);
             }
             catch (NetworkBlockedException bex)
             {
@@ -127,6 +125,42 @@ namespace codeLess.Studio
                 r.Error = ex.Message;
             }
             return r;
+        }
+
+        /// <summary>Fills <paramref name="r"/> from a GitHub "latest release" JSON document (tag, notes, assets).</summary>
+        public static void ParseRelease(string json, UpdateCheckResult r)
+        {
+            JavaScriptSerializer ser = new JavaScriptSerializer();
+            ser.MaxJsonLength = 16 * 1024 * 1024;
+            Dictionary<string, object> root = ser.Deserialize<Dictionary<string, object>>(json);
+            if (root == null) { r.Error = "Unexpected response from GitHub."; return; }
+            r.LatestVersion = root.ContainsKey("tag_name") && root["tag_name"] != null ? Convert.ToString(root["tag_name"]).TrimStart('v', 'V') : "";
+            if (root.ContainsKey("html_url") && root["html_url"] != null) r.ReleasePageUrl = Convert.ToString(root["html_url"]);
+            if (root.ContainsKey("body") && root["body"] != null) r.ReleaseNotes = Convert.ToString(root["body"]);
+
+            r.Assets.Clear();
+            if (root.ContainsKey("assets") && root["assets"] is IEnumerable)
+            {
+                foreach (object a in (IEnumerable)root["assets"])
+                {
+                    Dictionary<string, object> asset = a as Dictionary<string, object>;
+                    if (asset == null || !asset.ContainsKey("name") || !asset.ContainsKey("browser_download_url")) continue;
+                    UpdateReleaseAsset ra = new UpdateReleaseAsset();
+                    ra.Name = Convert.ToString(asset["name"]);
+                    ra.Url = Convert.ToString(asset["browser_download_url"]);
+                    if (asset.ContainsKey("size") && asset["size"] != null)
+                    {
+                        long size;
+                        if (long.TryParse(Convert.ToString(asset["size"], System.Globalization.CultureInfo.InvariantCulture), out size)) ra.Size = size;
+                    }
+                    r.Assets.Add(ra);
+                }
+            }
+            UpdateReleaseAsset wanted = r.FindAsset(GetPlatformAssetName());
+            r.DownloadUrl = wanted != null ? wanted.Url : r.ReleasePageUrl;
+            r.IsNewer = IsNewerVersion(r.LatestVersion, r.CurrentVersion);
+            r.Success = !string.IsNullOrEmpty(r.LatestVersion);
+            if (!r.Success) r.Error = "No release information found.";
         }
 
         /// <summary>Opens a URL in the default browser (https only).</summary>

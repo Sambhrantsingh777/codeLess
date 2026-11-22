@@ -54,6 +54,16 @@ namespace codeLess.AvaloniaApp
                         int.TryParse(args[++i], out int benchDelay);
                         App.BenchOpenDelayMs = benchDelay;
                     }
+                    else if (a == "--native-self-test" && i + 1 < args.Length)
+                    {
+                        App.NativeSelfTestReportPath = Path.GetFullPath(args[++i]);
+                        // temp workspace with two files (Ctrl+Tab check); nothing of the user's is opened
+                        string ws = Path.Combine(Path.GetTempPath(), "codeless-native-self-test-" + Environment.ProcessId);
+                        Directory.CreateDirectory(ws);
+                        File.WriteAllText(Path.Combine(ws, "a.txt"), "alpha\n");
+                        File.WriteAllText(Path.Combine(ws, "b.txt"), "beta\n");
+                        App.StartupWorkspacePath = ws;
+                    }
                     else if (a == "--smoke-quit" && i + 1 < args.Length)
                     {
                         App.SmokeQuitReportPath = args[++i];
@@ -214,6 +224,9 @@ namespace codeLess.AvaloniaApp
                 // Skia evicts LRU textures beyond the limit.
                 .With(new SkiaOptions { MaxGpuResourceSizeBytes = ResolveGpuCacheBytes() })
                 .With(new AvaloniaNativePlatformOptions { RenderingMode = ResolveMacRenderingModes() })
+                // the app menu comes from the shared model (Hide / Hide Others / Show All / Quit included); Avalonia's
+                // defaults duplicated them (and showed "Hide Others" as Cmd+Option+Q)
+                .With(new MacOSPlatformOptions { DisableDefaultApplicationMenuItems = true })
                 .LogToTrace();
         }
 
