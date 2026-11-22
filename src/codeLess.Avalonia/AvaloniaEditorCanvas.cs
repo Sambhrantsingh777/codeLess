@@ -70,6 +70,13 @@ namespace codeLess.AvaloniaApp
         private readonly Border inlineAiBar;
         private readonly TextBox inlineAiInputBox;
         private readonly Border welcomeHost;
+        /// <summary>VS Code's empty editor group (faded logo + key shortcuts), shown when Welcome is closed and no file is open.</summary>
+        private readonly Border emptyHost;
+        private readonly StackPanel emptyShortcuts;
+        /// <summary>False once the Welcome tab was closed: an empty editor area then shows the watermark instead of Welcome.</summary>
+        public bool WelcomeEnabled { get; set; } = true;
+        public bool IsEmptyWatermarkVisible => emptyHost.IsVisible;
+        public bool IsWelcomePageVisible => welcomeHost.IsVisible;
         private readonly StackPanel recentFoldersPanel;
 
         private bool findMatchCase = false;
@@ -203,6 +210,23 @@ namespace codeLess.AvaloniaApp
             recentFoldersPanel = new StackPanel { Spacing = 4 };
             welcomeHost = BuildWelcomePage();
             bodyOverlayGrid.Children.Add(welcomeHost);
+            emptyShortcuts = new StackPanel { Spacing = 10, HorizontalAlignment = HorizontalAlignment.Center };
+            emptyHost = new Border
+            {
+                IsVisible = false,
+                Child = new StackPanel
+                {
+                    Spacing = 28,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Children =
+                    {
+                        new VectorIconControl { IconName = "logo", Width = 96, Height = 96, Opacity = 0.12, HorizontalAlignment = HorizontalAlignment.Center },
+                        emptyShortcuts
+                    }
+                }
+            };
+            bodyOverlayGrid.Children.Add(emptyHost);
 
             // Floating Find/Replace Widget (top-right)
             findReplaceOverlay = BuildFindReplaceOverlay(
@@ -245,7 +269,8 @@ namespace codeLess.AvaloniaApp
             if (tab == null)
             {
                 ShowWelcomeView = true;
-                welcomeHost.IsVisible = true;
+                welcomeHost.IsVisible = WelcomeEnabled;
+                emptyHost.IsVisible = !WelcomeEnabled;
                 Canvas.IsVisible = false;
                 breadcrumbBar.IsVisible = false;
                 diffReviewBanner.IsVisible = false;
@@ -255,6 +280,7 @@ namespace codeLess.AvaloniaApp
 
             ShowWelcomeView = false;
             welcomeHost.IsVisible = false;
+            emptyHost.IsVisible = false;
             Canvas.IsVisible = true;
             breadcrumbBar.IsVisible = true;
             Canvas.ResetExtraCursors();
@@ -272,7 +298,8 @@ namespace codeLess.AvaloniaApp
             CurrentBuffer = null;
             SyncLargeFileViewer(null);
             ShowWelcomeView = true;
-            welcomeHost.IsVisible = true;
+            welcomeHost.IsVisible = WelcomeEnabled;
+            emptyHost.IsVisible = !WelcomeEnabled;
             Canvas.IsVisible = false;
             breadcrumbBar.IsVisible = false;
             diffReviewBanner.IsVisible = false;
@@ -306,6 +333,8 @@ namespace codeLess.AvaloniaApp
             inlineAiBar.BorderBrush = AvaloniaColorHelper.ToBrush(theme.AccentPrimary);
 
             welcomeHost.Background = AvaloniaColorHelper.ToBrush(theme.EditorBg);
+            emptyHost.Background = AvaloniaColorHelper.ToBrush(theme.EditorBg);
+            RebuildEmptyWatermark(theme);
             RebuildWelcomeThemeColors();
             RefreshBreadcrumbs();
             Canvas.ApplyTheme(theme);
@@ -1073,6 +1102,31 @@ namespace codeLess.AvaloniaApp
                 var clone = new List<string>(CurrentBuffer.Lines);
                 clone.Insert(line, $"{indent}// ✦ AI ({p})");
                 StageProposedDiffContent(string.Join("\n", clone));
+            }
+        }
+
+        /// <summary>VS Code's empty-editor watermark: a few key commands with their platform shortcuts.</summary>
+        private void RebuildEmptyWatermark(StudioTheme theme)
+        {
+            emptyShortcuts.Children.Clear();
+            var label = AvaloniaColorHelper.ToBrush(theme.TextSecondary);
+            var rows = new[]
+            {
+                ("Show All Commands", "Ctrl+Shift+P"),
+                ("Go to File", "Ctrl+P"),
+                ("Find in Files", "Ctrl+Shift+F"),
+                ("Toggle Terminal", "Ctrl+`"),
+                ("Open Folder", "Ctrl+O"),
+            };
+            foreach (var (name, sc) in rows)
+            {
+                var g = new Grid { ColumnDefinitions = new ColumnDefinitions("200,Auto"), Opacity = 0.75 };
+                var n = new TextBlock { Text = name, FontSize = UiTokens.FontUi, Foreground = label, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 0, 14, 0) };
+                var k = new TextBlock { Text = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform(sc), FontSize = UiTokens.FontUi, Foreground = label };
+                Grid.SetColumn(k, 1);
+                g.Children.Add(n);
+                g.Children.Add(k);
+                emptyShortcuts.Children.Add(g);
             }
         }
 

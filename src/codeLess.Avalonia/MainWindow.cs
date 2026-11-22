@@ -264,6 +264,9 @@ namespace codeLess.AvaloniaApp
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
+            // Preferences: "Show Welcome page on startup" (both UIs); off -> the empty-editor watermark like VS Code.
+            showWelcomeTab = settings == null || settings.ShowWelcomeOnStartup;
+            PrimaryEditor.WelcomeEnabled = showWelcomeTab;
             PrimaryEditor.Canvas.SnippetKeyHandler = e => OnSnippetKey(PrimaryEditor, e);
             SplitEditor.Canvas.SnippetKeyHandler = e => OnSnippetKey(SplitEditor, e);
             InitializeDevTools();
@@ -2487,16 +2490,23 @@ namespace codeLess.AvaloniaApp
         public void OpenWelcomeTab()
         {
             showWelcomeTab = true;
+            PrimaryEditor.WelcomeEnabled = true;
             ActivateTab(null);
         }
+
+        public bool IsWelcomeTabOpen => showWelcomeTab;
 
         public void CloseWelcomeTab()
         {
             showWelcomeTab = false;
+            PrimaryEditor.WelcomeEnabled = false;
             if (activeTab == null && openTabs.Count > 0)
-                ActivateTab(openTabs[openTabs.Count - 1]);
+                ActivateTab(editorMru.MostRecentOther(openTabs, null) ?? openTabs[openTabs.Count - 1]);
             else
+            {
+                if (activeTab == null) PrimaryEditor.ShowWelcomeScreen(); // now the empty-editor watermark
                 RefreshTabStrip();
+            }
             UpdateWindowTitle();
         }
 
@@ -2729,7 +2739,7 @@ namespace codeLess.AvaloniaApp
             lastRenderedTabDirty = activeTab?.IsDirty ?? false;
             lastRenderedTabPreview = activeTab?.IsPreviewTab ?? false;
             lastRenderedOpenTabCount = openTabs.Count;
-            if (showWelcomeTab || (openTabs.Count == 0 && activeTab == null))
+            if (showWelcomeTab) // closable like VS Code: with no files open the editor area then shows the empty watermark
             {
                 bool isWelcomeActive = (activeTab == null);
                 var wRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
@@ -2972,7 +2982,7 @@ namespace codeLess.AvaloniaApp
             }
             else if (!string.IsNullOrEmpty(folderName))
             {
-                Title = $"Welcome — {folderName} — codeLess";
+                Title = showWelcomeTab ? $"Welcome — {folderName} — codeLess" : $"{folderName} — codeLess";
             }
             else
             {

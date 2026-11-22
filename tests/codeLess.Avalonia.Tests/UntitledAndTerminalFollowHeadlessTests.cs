@@ -128,5 +128,42 @@ namespace codeLess.Avalonia.Tests
             }
             finally { MacKeymap.ForceMacKeymapOverride = null; w.SuppressUnsavedPrompts = true; w.Close(); }
         }
+            [AvaloniaFact]
+        public void Welcome_Tab_Closes_Even_With_No_Files_And_Leaves_The_Empty_Editor_Watermark()
+        {
+            string ws = Sub("welcome");
+            string f = Path.Combine(ws, "a.txt");
+            File.WriteAllText(f, "a\n");
+            var w = new MainWindow(ws) { Width = 1200, Height = 800 };
+            w.Show();
+            try
+            {
+                Dispatcher.UIThread.RunJobs();
+                foreach (var t in w.OpenTabs.ToList()) w.CloseTab(t, forceWithoutPrompt: true); // startup may restore / open a file
+                w.OpenWelcomeTab();
+                Assert.True(w.IsWelcomeTabOpen);
+                Assert.True(w.PrimaryEditor.IsWelcomePageVisible);
+
+                w.CloseWelcomeTab(); // no files open: it used to stay forever
+                Dispatcher.UIThread.RunJobs();
+                Assert.False(w.IsWelcomeTabOpen);
+                Assert.False(w.PrimaryEditor.IsWelcomePageVisible);
+                Assert.True(w.PrimaryEditor.IsEmptyWatermarkVisible);
+                Assert.DoesNotContain("Welcome", w.Title);
+
+                var tab = w.OpenFileInTab(f, preview: false);
+                Assert.False(w.PrimaryEditor.IsEmptyWatermarkVisible);
+                w.CloseTab(tab);
+                Dispatcher.UIThread.RunJobs();
+                Assert.False(w.IsWelcomeTabOpen); // closing the last file doesn't bring Welcome back
+                Assert.True(w.PrimaryEditor.IsEmptyWatermarkVisible);
+
+                w.OpenWelcomeTab(); // Help > Welcome
+                Assert.True(w.IsWelcomeTabOpen);
+                Assert.True(w.PrimaryEditor.IsWelcomePageVisible);
+                Assert.False(w.PrimaryEditor.IsEmptyWatermarkVisible);
+            }
+            finally { w.SuppressUnsavedPrompts = true; w.Close(); }
+        }
     }
 }
