@@ -3268,6 +3268,7 @@ namespace codeLess.AvaloniaApp
             if (IsImeComposing) return;
             // Language-server popups (completion list, signature help) get first look at navigation keys.
             if (PreviewKeyHandler != null && PreviewKeyHandler(e)) { e.Handled = true; return; }
+            if (SnippetKeyHandler != null && SnippetKeyHandler(e)) { e.Handled = true; return; }
             bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
             bool meta = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
             // Cmd on macOS, Ctrl on Windows/Linux (plain Ctrl on macOS is reserved for Cocoa/emacs editing keys).
@@ -3934,6 +3935,8 @@ namespace codeLess.AvaloniaApp
 
         /// <summary>Called before the editor handles a key; return true to swallow it (LSP completion / signature popups).</summary>
         public Func<KeyEventArgs, bool> PreviewKeyHandler;
+        /// <summary>Snippet tab-expansion hook (MainWindow.Extensions.cs), consulted after the language-server popups.</summary>
+        public Func<KeyEventArgs, bool> SnippetKeyHandler;
         /// <summary>Raised after typed text was inserted at the caret (as-you-type completion, signature help triggers).</summary>
         public event Action<string> TextTyped;
         /// <summary>Raised on every pointer move over the canvas (canvas coordinates); used for LSP hover.</summary>

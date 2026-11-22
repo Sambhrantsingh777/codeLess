@@ -243,6 +243,7 @@ namespace codeLess.AvaloniaApp
             TryLoadWindowIcon();
 
             settings = StudioSettings.Load();
+            InitExtensionHost(); // VSIX themes must be registered before the persisted theme is resolved
             if (string.IsNullOrWhiteSpace(settings.ThemeId))
                 settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
@@ -255,6 +256,8 @@ namespace codeLess.AvaloniaApp
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
+            PrimaryEditor.Canvas.SnippetKeyHandler = e => OnSnippetKey(PrimaryEditor, e);
+            SplitEditor.Canvas.SnippetKeyHandler = e => OnSnippetKey(SplitEditor, e);
             InitializeDevTools();
             InitializeWorkbenchParity();
             InitAgentTrust();
@@ -1352,49 +1355,7 @@ namespace codeLess.AvaloniaApp
             return grid;
         }
 
-        private Grid BuildExtensionsSidebarView()
-        {
-            var grid = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,*"),
-                Margin = new Thickness(8, 6),
-                IsVisible = false
-            };
-
-            var topStack = new StackPanel { Spacing = 6 };
-            extensionsSearchInput = new TextBox { Watermark = "Search Extensions in OpenVSX Marketplace...", FontSize = 12, Padding = new Thickness(7, 4) };
-            topStack.Children.Add(extensionsSearchInput);
-            Grid.SetRow(topStack, 0);
-            grid.Children.Add(topStack);
-
-            extensionsCardsStack = new StackPanel { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
-            var builtInExts = new (string Name, string Pub, string Desc)[]
-            {
-                ("C# & .NET Polyglot Kit", "savatarr", "AST symbols, diagnostics, and Roslyn syntax navigation."),
-                ("Python & FastAPI Tools", "savatarr", "Indentation folding, symbol outline, and pytest integration."),
-                ("TypeScript & React ESNext", "savatarr", "TS/JS tokenizer, bracket matching, and npm task runner."),
-                ("Rust Analyzer Lite", "savatarr", "Cargo diagnostics and crate symbol indexer."),
-                ("GitLens Diff & Gutter", "savatarr", "Line-accurate HEAD gutter diff bars and stage/unstage workflow.")
-            };
-            foreach (var ext in builtInExts)
-            {
-                var card = new StackPanel { Spacing = 2 };
-                card.Children.Add(new TextBlock { Text = ext.Name + "  ✓ Installed", FontWeight = FontWeight.Bold, FontSize = 12 });
-                card.Children.Add(new TextBlock { Text = ext.Desc, FontSize = 11, TextWrapping = TextWrapping.Wrap });
-                extensionsCardsStack.Children.Add(new Border
-                {
-                    Child = card,
-                    CornerRadius = new CornerRadius(5),
-                    BorderThickness = new Thickness(1),
-                    Padding = new Thickness(8, 6)
-                });
-            }
-
-            var scroll = new ScrollViewer { Content = extensionsCardsStack };
-            Grid.SetRow(scroll, 1);
-            grid.Children.Add(scroll);
-            return grid;
-        }
+        private Grid BuildExtensionsSidebarView() => BuildExtensionsSidebarViewReal(); // MainWindow.Extensions.cs
 
         private Grid BuildHarnessSidebarView()
         {
@@ -2211,6 +2172,7 @@ namespace codeLess.AvaloniaApp
         {
             if (theme == null) return;
             currentTheme = theme;
+            RefreshExtensionsView();
             if (persistSetting && settings != null)
             {
                 settings.ThemeId = theme.Id;

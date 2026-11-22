@@ -2486,7 +2486,7 @@ namespace codeLess.Studio
             var candidates = BuiltInKeywords
                 .Concat(AutocompleteSymbols)
                 .Concat(CurrentBuffer.Symbols.Select(s => s.Name))
-                .Concat(LoadedSnippets.Select(s => s.Prefix + " (snippet)"))
+                .Concat(SnippetEngine.ForLanguage(LoadedSnippets, CurrentBuffer.Language).Select(s => s.Prefix + " (snippet)"))
                 .Distinct()
                 .Where(w => string.IsNullOrEmpty(currentWordPrefix) || (w.StartsWith(currentWordPrefix, StringComparison.OrdinalIgnoreCase) && !string.Equals(w, currentWordPrefix, StringComparison.OrdinalIgnoreCase)))
                 .Take(10)
@@ -2536,9 +2536,18 @@ namespace codeLess.Studio
             string chosen = autocompleteList.SelectedItem.ToString();
             if (chosen.EndsWith(" (snippet)"))
             {
-                string pref = chosen.Replace(" (snippet)", "");
-                var snip = LoadedSnippets.FirstOrDefault(s => s.Prefix == pref);
-                if (snip != null) chosen = snip.Body;
+                // Snippets expand with VS Code syntax ($1 / ${1:default} / $0, variables, indentation), shared engine.
+                string pref = chosen.Substring(0, chosen.Length - " (snippet)".Length);
+                var snip = SnippetEngine.ForLanguage(LoadedSnippets, CurrentBuffer.Language).FirstOrDefault(s => s.Prefix == pref);
+                if (snip != null)
+                {
+                    SnippetEngine.InsertAtCaret(CurrentBuffer, snip, currentWordPrefix.Length, EffectiveSnippetTabSize(), EffectiveSnippetInsertSpaces());
+                    autocompleteFrame.Visible = false;
+                    NotifyBufferContentChanged();
+                    virtualCanvas.Invalidate();
+                    virtualCanvas.Focus();
+                    return;
+                }
             }
 
             CurrentBuffer.PushUndoSnapshot();
@@ -2570,6 +2579,32 @@ namespace codeLess.Studio
             NotifyBufferContentChanged();
             virtualCanvas.Invalidate();
             virtualCanvas.Focus();
+        }
+
+        public int EffectiveSnippetTabSize()
+        {
+            EditorTabBuffer b = CurrentBuffer;
+            return b != null && b.CustomTabSize.HasValue && b.CustomTabSize.Value > 0 ? b.CustomTabSize.Value : Math.Max(1, TabSize);
+        }
+
+        public bool EffectiveSnippetInsertSpaces()
+        {
+            EditorTabBuffer b = CurrentBuffer;
+            return b != null && b.CustomInsertSpaces.HasValue ? b.CustomInsertSpaces.Value : InsertSpaces;
+        }
+
+        /// <summary>Tab on an exact snippet prefix (no popup, ghost text or multi-cursor): expands the snippet.</summary>
+        public bool TryExpandSnippetOnTab(KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Tab || e.Modifiers != Keys.None || CurrentBuffer == null) return false;
+            EditorTabBuffer b = CurrentBuffer;
+            if (IsAutocompleteVisible || !string.IsNullOrEmpty(b.GhostText) || b.HasMultiCursors || b.IsLargeFileViewer) return false;
+            if (b.DiffHunks != null && b.DiffHunks.Any(h => h.IsPending)) return false;
+            if (!SnippetEngine.TryExpandPrefixAtCaret(b, LoadedSnippets, EffectiveSnippetTabSize(), EffectiveSnippetInsertSpaces())) return false;
+            NotifyBufferContentChanged();
+            virtualCanvas.EnsureCursorVisible();
+            virtualCanvas.Invalidate();
+            return true;
         }
 
         public void TriggerSaveShortcut()
@@ -5897,6 +5932,12 @@ namespace codeLess.Studio
             caretBlinkOn = true;
             // Language-server popups / shortcuts get the first look (only when a server serves this file).
             if (PreviewKeyHandler != null && PreviewKeyHandler(e))
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
+            if (owner.TryExpandSnippetOnTab(e))
             {
                 e.Handled = true;
                 e.SuppressKeyPress = true;

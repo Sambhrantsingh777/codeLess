@@ -2543,6 +2543,7 @@ namespace codeLess.AvaloniaApp
             all.AddRange(BuildParityPaletteCommands());
             all.AddRange(BuildTaskPaletteCommands());
             all.AddRange(BuildAgentTrustPaletteCommands());
+            all.AddRange(BuildExtensionPaletteCommands());
             return all;
         }
 

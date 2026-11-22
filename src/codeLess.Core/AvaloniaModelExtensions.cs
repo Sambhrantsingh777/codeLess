@@ -40,8 +40,20 @@ namespace codeLess.Studio
         public Color DiagnosticWarning => WarnAmber;
 
         public static StudioTheme DarkObsidian() => GetById("codeless-obsidian");
-        public static List<StudioTheme> GetAllBuiltInThemes() => GetBuiltInThemes();
-        public static StudioTheme GetById(string idOrName) => ResolveTheme(GetBuiltInThemes(), idOrName);
+        /// <summary>Color themes contributed by installed VSIX extensions (registered by the extension host).</summary>
+        public static readonly List<StudioTheme> ExtensionThemes = new List<StudioTheme>();
+
+        /// <summary>Built-in themes followed by extension themes (theme picker, settings, startup restore).</summary>
+        public static List<StudioTheme> GetAllBuiltInThemes()
+        {
+            var all = GetBuiltInThemes();
+            lock (ExtensionThemes)
+                foreach (var t in ExtensionThemes)
+                    if (!all.Any(x => string.Equals(x.Id, t.Id, StringComparison.OrdinalIgnoreCase))) all.Add(t);
+            return all;
+        }
+
+        public static StudioTheme GetById(string idOrName) => ResolveTheme(GetAllBuiltInThemes(), idOrName);
     }
 
     public partial class DiagnosticItem

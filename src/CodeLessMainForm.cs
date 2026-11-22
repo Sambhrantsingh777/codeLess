@@ -169,6 +169,7 @@ namespace codeLess.Studio
         private Button extActionBtn;
         private Button extInstallVsixFileBtn;
         private Button extRunCmdBtn;
+        private Button extUninstallBtn;
 
         // Sidebar View 5: LLM Harness Studio
         private Panel harnessStudioPanel;
@@ -5478,6 +5479,11 @@ if __name__ == '__main__':
             extRunCmdBtn.Height = 27;
             extRunCmdBtn.Click += (s, e) => RunBuiltInComplexityAnalysis();
 
+            extUninstallBtn = CreateHeaderButton("Uninstall Selected", new Point(0, 0), 240, false);
+            extUninstallBtn.Dock = DockStyle.Bottom;
+            extUninstallBtn.Height = 27;
+            extUninstallBtn.Click += (s, e) => UninstallSelectedExtensionWin();
+
             extensionsPanel.Controls.Add(extList);
             extensionsPanel.Controls.Add(CreateVerticalSpacer(6));
             extensionsPanel.Controls.Add(extBtnRow);
@@ -5486,6 +5492,7 @@ if __name__ == '__main__':
             extensionsPanel.Controls.Add(extDetailLabel);
             extensionsPanel.Controls.Add(new Panel { Dock = DockStyle.Bottom, Height = 5 });
             extensionsPanel.Controls.Add(extRunCmdBtn);
+            extensionsPanel.Controls.Add(extUninstallBtn);
             extensionsPanel.Controls.Add(new Panel { Dock = DockStyle.Bottom, Height = 5 });
             extensionsPanel.Controls.Add(extActionBtn);
         }
@@ -10525,6 +10532,22 @@ if __name__ == '__main__':
             }
         }
 
+        private void UninstallSelectedExtensionWin()
+        {
+            int idx = extList != null ? extList.SelectedIndex : -1;
+            if (idx < 0 || idx >= vsixEngine.Extensions.Count) return;
+            VsixExtensionPackage ext = vsixEngine.Extensions[idx];
+            bool activeThemeGone = ext.ContributedThemes.Any(t => activeTheme != null && t.Id == activeTheme.Id);
+            string status;
+            if (vsixEngine.Uninstall(ext, themes, out status))
+            {
+                if (activeThemeGone) ApplyThemeToWorkbench(StudioTheme.ResolveTheme(themes, StudioTheme.DefaultThemeId));
+                RefreshExtensionsListUi();
+                RefreshThemeComboItems();
+            }
+            statusLeftLabel.Text = status;
+        }
+
         private async Task SearchOpenVsxAsync(string query)
         {
             if (string.IsNullOrWhiteSpace(query) || query.StartsWith("Search OpenVSX"))
@@ -10559,6 +10582,9 @@ if __name__ == '__main__':
                 if (!ok && !string.IsNullOrEmpty(vsixEngine.LastNetworkNotice))
                     MessageBox.Show(this, vsixEngine.LastNetworkNotice, "Extension download", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 if (!ok) return;
+                // The marketplace entry is replaced by the installed package (with its themes / snippets).
+                string installedId = ext.Id;
+                ext = vsixEngine.Extensions.FirstOrDefault(x => x.IsInstalled && string.Equals(x.Id, installedId, StringComparison.OrdinalIgnoreCase)) ?? ext;
             }
 
             if (ext.ContributedThemes.Count > 0)
