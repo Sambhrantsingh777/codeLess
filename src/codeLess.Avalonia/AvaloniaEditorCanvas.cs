@@ -1690,6 +1690,7 @@ namespace codeLess.AvaloniaApp
                 buf.ScrollTopLine = Math.Max(0, buf.CursorLine);
             else if (buf.CursorLine >= buf.ScrollTopLine + visRows)
                 buf.ScrollTopLine = Math.Max(0, buf.CursorLine - visRows + 1);
+            KeepCaretOutOfStickyScroll(buf);
             // Horizontal: keep the caret inside the viewport when typing past the right edge (was never scrolled).
             if (!buf.WordWrap && Bounds.Width > GutterWidth + 40)
             {
@@ -1998,6 +1999,7 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerExited(e);
             ClearLinkHover();
+            if (stickyHoverIndex >= 0) { stickyHoverIndex = -1; InvalidateVisual(); }
             PointerLeftCanvas?.Invoke();
             if (hoveredAnnotation != null) { hoveredAnnotation = null; owner.NotifyAnnotationHovered(null, -1, default); InvalidateVisual(); }
         }
@@ -2063,6 +2065,7 @@ namespace codeLess.AvaloniaApp
             lastHoverPt = pt;
             var props = e.GetCurrentPoint(this).Properties;
             var mods = e.KeyModifiers;
+            if (props.IsLeftButtonPressed && TryHandleStickyPointerPressed(pt)) { e.Handled = true; return; }
 
             // End-of-line annotation click (Send Request lens / blame details)
             if (props.IsLeftButtonPressed && annotationHitBoxes.Count > 0)
@@ -2259,6 +2262,7 @@ namespace codeLess.AvaloniaApp
             lastHoverPt = pt;
             if (buf == null) { SetPointerCursor(StandardCursorType.Arrow); return; }
             PointerMovedOverCanvas?.Invoke(pt);
+            if ((stickyHitBoxes.Count > 0 || stickyHoverIndex >= 0) && !isMouseSelecting && UpdateStickyHover(pt)) { SetPointerCursor(StandardCursorType.Hand); return; }
 
             if (isMinimapDragging)
             {
@@ -2576,52 +2580,8 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        public void SelectAllFindOccurrences()
-        {
-            var buf = Buffer;
-            if (buf == null) return;
-            string needle = buf.HasSelection() ? buf.GetSelectedText() : "";
-            if (string.IsNullOrEmpty(needle))
-            {
-                SelectWordAt(buf.CursorLine, buf.CursorCol);
-                needle = buf.GetSelectedText();
-            }
-            if (string.IsNullOrEmpty(needle) || needle.Contains("\n")) return;
-
-            ExtraCursors.Clear();
-            bool firstSet = false;
-            for (int l = 0; l < buf.Lines.Count; l++)
-            {
-                string line = buf.Lines[l];
-                int pos = 0;
-                while (pos <= line.Length - needle.Length)
-                {
-                    int idx = line.IndexOf(needle, pos, StringComparison.Ordinal);
-                    if (idx < 0) break;
-                    if (!firstSet)
-                    {
-                        buf.SelectionStartLine = l;
-                        buf.SelectionStartCol = idx;
-                        buf.CursorLine = l;
-                        buf.CursorCol = idx + needle.Length;
-                        firstSet = true;
-                    }
-                    else
-                    {
-                        ExtraCursors.Add(new ExtraCursorCaret
-                        {
-                            AnchorLine = l,
-                            AnchorCol = idx,
-                            Line = l,
-                            Col = idx + needle.Length
-                        });
-                    }
-                    pos = idx + needle.Length;
-                }
-            }
-            owner.NotifyCaretMoved();
-            InvalidateVisual();
-        }
+        /// <summary>Cmd/Ctrl+Shift+L and Cmd/Ctrl+F2 (see <see cref="ChangeAllOccurrences"/>).</summary>
+        public void SelectAllFindOccurrences() => ChangeAllOccurrences();
 
         public void AddCursorsToLineEnds()
         {
@@ -3303,7 +3263,9 @@ namespace codeLess.AvaloniaApp
             bool coalesce = ExtraCursors.Count == 0 && !buf.HasSelection() && buf.CursorCol > 0;
             buf.PushUndoSnapshot(coalesceTyping: coalesce);
             ClampExtraCursors(buf);
+            var linked = MaybeBeginLinkedTagEdit(buf);
             ApplyEditToAllCarets(buf, (b, k) => b.PerformBackspace());
+            CompleteLinkedTagEdit(buf, linked);
             FinalizeBufferEdit(buf);
         }
 
@@ -3313,7 +3275,9 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
             buf.PushUndoSnapshot();
             ClampExtraCursors(buf);
+            var linked = MaybeBeginLinkedTagEdit(buf);
             ApplyEditToAllCarets(buf, (b, k) => b.PerformDelete());
+            CompleteLinkedTagEdit(buf, linked);
             FinalizeBufferEdit(buf);
         }
 
@@ -3777,6 +3741,7 @@ namespace codeLess.AvaloniaApp
                     }
                     break;
                 case Key.Tab:
+                    if (!shift && !ctrlOrCmd && !alt && TryHandleNicetyTab(buf)) { e.Handled = true; break; } // Emmet
                     if (shift || buf.HasSelection())
                         IndentOrOutdentLines(outdent: shift);
                     else
@@ -4005,6 +3970,7 @@ namespace codeLess.AvaloniaApp
             char ch = e.Text[0];
             if (ch < 32 && ch != '\t') return;
             HidePointerWhileTyping();
+            if (TryHandleNicetyTextInput(e.Text)) { e.Handled = true; return; } // tag auto-close / linked rename
             InsertTextAcrossCursors(e.Text);
             e.Handled = true;
             TextTyped?.Invoke(e.Text);
@@ -4179,10 +4145,6 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
-            // Bracket match calculation (bounded to ±1500 lines)
-            int matchBLine = -1, matchBCol = -1;
-            TryFindMatchingBracket(buf, buf.CursorLine, buf.CursorCol, out matchBLine, out matchBCol);
-
             bool hasFolds = buf.FoldedBlockRanges != null && buf.FoldedBlockRanges.Count > 0;
             List<int> visLines = hasFolds ? GetVisibleDocumentLines() : null;
             int totalVisCount = hasFolds ? visLines.Count : buf.Lines.Count;
@@ -4198,6 +4160,18 @@ namespace codeLess.AvaloniaApp
             }
 
             int maxRows = (int)(h / LineHeight) + 2;
+            Func<int, int> rowToDoc = row =>
+            {
+                int idx = startVisIdx + row;
+                if (row < 0 || idx >= totalVisCount) return -1;
+                return hasFolds ? visLines[idx] : idx;
+            };
+            BeginNicetiesFrame(buf, rowToDoc, maxRows);
+
+            // Matching bracket (string / comment aware when the language profile is known; naive scan otherwise)
+            int matchBLine = -1, matchBCol = -1;
+            if (frameSession != null && frameSession.Brackets.Profile.Enabled) TryNicetyBracketMatch(buf, out matchBLine, out matchBCol);
+            else TryFindMatchingBracket(buf, buf.CursorLine, buf.CursorCol, out matchBLine, out matchBCol);
             double codeBaseX = GutterWidth + 8 - buf.ScrollLeftPx;
             int firstHorizCol = Math.Max(0, (int)(buf.ScrollLeftPx / CharWidth) - 8);
             int maxHorizCols = Math.Max(120, (int)((codeAreaRight - GutterWidth) / CharWidth) + 24);
@@ -4258,6 +4232,9 @@ namespace codeLess.AvaloniaApp
                     }
                 }
 
+                DrawOccurrenceHighlights(context, buf, docLine, lineText, y, codeBaseX, codeAreaRight);
+                DrawNicetyGuides(context, buf, docLine, y, codeBaseX, codeAreaRight);
+
                 // Gutter line number
                 var lnFt = new FormattedText(
                     (docLine + 1).ToString(CultureInfo.InvariantCulture),
@@ -4299,9 +4276,11 @@ namespace codeLess.AvaloniaApp
                 double curX = codeBaseX;
                 string renderLineText = lineText;
                 int renderVcol = 0;
+                int renderSliceStart = 0;
                 if (lineText.Length > 360)
                 {
                     int sliceStart = Math.Min(lineText.Length, firstHorizCol);
+                    renderSliceStart = sliceStart;
                     int sliceLen = Math.Min(lineText.Length - sliceStart, maxHorizCols);
                     renderLineText = sliceLen > 0 ? lineText.Substring(sliceStart, sliceLen) : "";
                     renderVcol = VisualColumn(lineText, sliceStart);
@@ -4310,7 +4289,7 @@ namespace codeLess.AvaloniaApp
 
                 if (renderLineText.Length > 0)
                 {
-                    var tokens = TokenizeLineForTheme(renderLineText, Theme);
+                    var tokens = GetNicetyTokens(buf, docLine, lineText, renderSliceStart, renderLineText);
                     int tabStop = Math.Max(1, DisplayTabSize);
                     foreach (var tk in tokens)
                     {
@@ -4508,6 +4487,9 @@ namespace codeLess.AvaloniaApp
                     }
                 }
             }
+
+            RenderStickyScroll(context, buf, rowToDoc, codeBaseX, codeAreaRight);
+            EndNicetiesFrame(buf);
 
             // Diagnostic Hover Tooltip Card
             if (hoveredLine >= 0 && buf.Diagnostics != null)

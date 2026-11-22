@@ -788,6 +788,8 @@ namespace codeLess.AvaloniaApp
             togglesRow.Children.Add(wrapChk);
             togglesRow.Children.Add(minimapChk);
             stack.Children.Add(togglesRow);
+            var niceties = EditorNicetiesSettingsPanel.Build(settings, theme, textPrimary);
+            stack.Children.Add(niceties.Panel);
             stack.Children.Add(venvChk);
             stack.Children.Add(offlineChk);
             stack.Children.Add(updateChk);
@@ -834,6 +836,7 @@ namespace codeLess.AvaloniaApp
                     settings.TabSize = ts;
                 settings.WordWrap = wrapChk.IsChecked == true;
                 settings.ShowMinimap = minimapChk.IsChecked == true;
+                niceties.Apply(settings);
                 settings.AutoSave = autoSaveChk.IsChecked == true;
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
                 settings.OfflineMode = offlineChk.IsChecked == true;

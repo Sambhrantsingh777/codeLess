@@ -247,6 +247,7 @@ namespace codeLess.AvaloniaApp
                 settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
             AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(8, settings.TabSize));
+            EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
             InitNetworkPrivacy();
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).

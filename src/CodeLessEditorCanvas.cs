@@ -3288,6 +3288,7 @@ namespace codeLess.Studio
                 buf.ScrollTopLine = buf.CursorLine;
             else if (buf.CursorLine >= buf.ScrollTopLine + visLines - 1)
                 buf.ScrollTopLine = Math.Max(0, buf.CursorLine - visLines + 2);
+            KeepCaretOutOfStickyScrollWF(buf);
 
             if (buf.WordWrap)
             {
@@ -3342,10 +3343,14 @@ namespace codeLess.Studio
 
             bool showGutterDiff = !buf.IsLargeFile && totalLines <= 15000 && buf.ChangedLineCount > 0;
 
-            // Compute bracket match pair around primary cursor
+            BeginNicetiesFrameWF(buf, visLines);
+
+            // Compute bracket match pair around primary cursor (string / comment aware when the language is known)
             int brLineA = -1, brColA = -1, brLineB = -1, brColB = -1;
-            bool hasBracketMatch = (!buf.IsLargeFile && totalLines <= 10000) &&
-                FindMatchingBracket(buf.Lines, buf.CursorLine, buf.CursorCol, out brLineA, out brColA, out brLineB, out brColB);
+            bool hasBracketMatch = NicetyBracketsActiveWF
+                ? TryNicetyBracketMatchWF(buf, out brLineA, out brColA, out brLineB, out brColB)
+                : ((!buf.IsLargeFile && totalLines <= 10000) &&
+                   FindMatchingBracket(buf.Lines, buf.CursorLine, buf.CursorCol, out brLineA, out brColA, out brLineB, out brColB));
 
             int sLine, sCol, eLine, eCol;
             buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
@@ -3528,22 +3533,8 @@ namespace codeLess.Studio
                         }
                     }
 
-                    // Indentation Guides
-                    if (!seg.IsContinuation)
-                    {
-                        int leadingSpaces = 0;
-                        while (leadingSpaces < lineSlice.Length && (lineSlice[leadingSpaces] == ' ' || lineSlice[leadingSpaces] == '\t')) leadingSpaces++;
-                        int leadingVisCols = CharColToVisualCol(fullLineText, seg.ColStart, seg.ColStart + leadingSpaces);
-                        using (Pen guidePen = new Pen(Color.FromArgb(42, th.FgMuted)))
-                        {
-                            for (int sp = 4; sp <= leadingVisCols; sp += 4)
-                            {
-                                int gx = GutterWidth + 8 + (sp - effScrollLeft) * CharWidth;
-                                if (gx > GutterWidth && gx < codeAreaRight)
-                                    g.DrawLine(guidePen, gx, y, gx, y + LineHeight);
-                            }
-                        }
-                    }
+                    // Indent guides (active block highlighted) + active bracket pair guide
+                    DrawNicetyGuidesWF(g, buf, docLine, y, effScrollLeft, codeAreaRight, th);
 
                     // Bracket Pair Match Highlight
                     if (hasBracketMatch)
@@ -3569,28 +3560,11 @@ namespace codeLess.Studio
                     string expandedSlice = lineSlice.IndexOf('\t') >= 0 ? lineSlice.Replace("\t", "    ") : lineSlice;
                     int sliceVisLen = expandedSlice.Length;
 
-                    // Multi-Occurrence Word Outline
-                    if (!buf.HasMultiCursors && buf.HasSelection())
-                    {
-                        string selWord = buf.GetSelectedText();
-                        if (!string.IsNullOrEmpty(selWord) && selWord.Length >= 2 && selWord.Length <= 40 && !selWord.Contains("\n") && !selWord.Contains(" "))
-                        {
-                            int mIdx = 0;
-                            while ((mIdx = expandedSlice.IndexOf(selWord, mIdx, StringComparison.Ordinal)) >= 0)
-                            {
-                                int hlX = GutterWidth + 8 + (mIdx - effScrollLeft) * CharWidth;
-                                int hlW = selWord.Length * CharWidth;
-                                using (SolidBrush occBrush = new SolidBrush(Color.FromArgb(36, th.AccentPrimary)))
-                                    g.FillRectangle(occBrush, hlX, y + 1, hlW, LineHeight - 2);
-                                using (Pen occPen = new Pen(Color.FromArgb(105, th.AccentPrimary)))
-                                    g.DrawRectangle(occPen, hlX, y + 1, hlW, LineHeight - 3);
-                                mIdx += selWord.Length;
-                            }
-                        }
-                    }
+                    // Occurrences of the word under the caret / the selection (debounced)
+                    DrawOccurrencesWF(g, fullLineText, docLine, seg.ColStart, seg.ColEnd, y, effScrollLeft, codeAreaRight, th);
 
                     // Syntax Highlighted Code Slice
-                    DrawSyntaxHighlightedLine(g, expandedSlice, GutterWidth + 8 - effScrollLeft * CharWidth, y + 2, GutterWidth, codeAreaRight, th);
+                    DrawNicetyLineWF(g, buf, docLine, fullLineText, seg.ColStart, seg.ColEnd, y + 2, effScrollLeft, codeAreaRight, th);
 
                     // Inline annotations & diff pills only on final segment of the line
                     bool isLastSegOfLine = (seg.ColEnd == fullLineText.Length);
@@ -3816,6 +3790,7 @@ namespace codeLess.Studio
             }
 
             DrawLinkHoverUnderline(g, th, buf);
+            EndNicetiesFrameWF(g, buf, codeAreaRight); // sticky scroll overlay, background tokenization
 
             // 4. Interactive Pixel Minimap
             if (EffectiveShowMinimap)
@@ -3911,96 +3886,6 @@ namespace codeLess.Studio
                 TextRenderer.DrawText(g, tipHeader, boldFont, new Point(tipRect.X + 10, tipRect.Y + 6), sevCol, TextFormatFlags.NoPadding);
                 TextRenderer.DrawText(g, tipBody, gutterFont, new Rectangle(tipRect.X + 10, tipRect.Y + 24, tipW - 16, 20), th.FgPrimary,
                     TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-            }
-        }
-
-        private void DrawSyntaxHighlightedLine(Graphics g, string line, int startX, int y, int clipLeft, int clipRight, StudioTheme th)
-        {
-            if (string.IsNullOrEmpty(line)) return;
-
-            int i = 0;
-            int n = line.Length;
-            while (i < n)
-            {
-                int tokenX = startX + i * CharWidth;
-                if (tokenX > clipRight) break;
-
-                // 1. Whitespace
-                if (char.IsWhiteSpace(line[i]))
-                {
-                    i++;
-                    continue;
-                }
-
-                // 2. Single-line Comment (// or #)
-                if ((line[i] == '/' && i + 1 < n && line[i + 1] == '/') || line[i] == '#')
-                {
-                    string comment = line.Substring(i);
-                    if (tokenX + comment.Length * CharWidth >= clipLeft)
-                        TextRenderer.DrawText(g, comment, italicFont, new Point(tokenX, y), th.TokenComment, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-                    break;
-                }
-
-                // 3. String Literal ("...", '...', `...`)
-                if (line[i] == '"' || line[i] == '\'' || line[i] == '`')
-                {
-                    char quote = line[i];
-                    int start = i++;
-                    while (i < n)
-                    {
-                        if (line[i] == '\\') { i += 2; continue; }
-                        if (line[i] == quote) { i++; break; }
-                        i++;
-                    }
-                    string strTok = line.Substring(start, Math.Min(n - start, i - start));
-                    if (tokenX + strTok.Length * CharWidth >= clipLeft)
-                        TextRenderer.DrawText(g, strTok, regularFont, new Point(tokenX, y), th.TokenString, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-                    continue;
-                }
-
-                // 4. Numbers
-                if (char.IsDigit(line[i]))
-                {
-                    int start = i;
-                    while (i < n && (char.IsLetterOrDigit(line[i]) || line[i] == '.')) i++;
-                    string numTok = line.Substring(start, i - start);
-                    if (tokenX >= clipLeft - 40)
-                        TextRenderer.DrawText(g, numTok, regularFont, new Point(tokenX, y), th.TokenNumber, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-                    continue;
-                }
-
-                // 5. Identifiers / Keywords / Types / Function Calls
-                if (char.IsLetter(line[i]) || line[i] == '_' || line[i] == '@')
-                {
-                    int start = i;
-                    i++;
-                    while (i < n && (char.IsLetterOrDigit(line[i]) || line[i] == '_')) i++;
-                    string word = line.Substring(start, i - start);
-
-                    Color c = th.FgPrimary;
-                    Font f = regularFont;
-                    if (word.StartsWith("@")) { c = th.TokenKeyword; }
-                    else if (ControlKeywords.Contains(word)) { c = th.TokenControl; f = boldFont; }
-                    else if (StorageKeywords.Contains(word)) { c = th.TokenKeyword; f = boldFont; }
-                    else if (TypeKeywords.Contains(word) || (word.Length > 1 && char.IsUpper(word[0]) && !word.All(char.IsUpper))) { c = th.TokenType; }
-                    else if (i < n && line[i] == '(') { c = th.TokenFunction; }
-
-                    if (tokenX + word.Length * CharWidth >= clipLeft)
-                        TextRenderer.DrawText(g, word, f, new Point(tokenX, y), c, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-                    continue;
-                }
-
-                // 6. Operators & Punctuation
-                int opStart = i;
-                while (i < n && !char.IsWhiteSpace(line[i]) && !char.IsLetterOrDigit(line[i]) &&
-                       line[i] != '_' && line[i] != '"' && line[i] != '\'' && line[i] != '`' && line[i] != '#')
-                {
-                    if (line[i] == '/' && i + 1 < n && line[i + 1] == '/') break;
-                    i++;
-                }
-                string opTok = line.Substring(opStart, i - opStart);
-                if (tokenX >= clipLeft - 30)
-                    TextRenderer.DrawText(g, opTok, regularFont, new Point(tokenX, y), th.TokenOperator, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
             }
         }
 
@@ -4386,6 +4271,7 @@ namespace codeLess.Studio
             if (buf == null) return;
 
             if (TryClickLineAnnotation(e)) return;
+            if (e.Button == MouseButtons.Left && ClickStickyLineAt(e.Location)) return;
 
             // 0. Check Per-Hunk Inline [Accept] / [Reject] Diff Pills First
             if (e.Button == MouseButtons.Left && diffPillHits.Count > 0)
@@ -4638,6 +4524,7 @@ namespace codeLess.Studio
             lastMouseClientPt = e.Location;
             bool anyDrag = isDraggingHScroll || isDraggingVScroll || isDraggingMinimap || isDraggingGutterLineSelection ||
                            isDraggingBoxSelection || isPendingTextDrag || isDraggingSelectedText || isDraggingSelection;
+            if (!anyDrag && (wfStickyHits.Count > 0 || wfStickyHover >= 0) && UpdateStickyHoverWF(e.Location)) { this.Cursor = Cursors.Hand; return; }
             if (!anyDrag) UpdateLinkHover(e.Location);
             else ClearLinkHover();
             bool overAnnotation = !anyDrag && UpdateLineAnnotationHover(e.Location);
@@ -4835,6 +4722,7 @@ namespace codeLess.Studio
         {
             base.OnMouseLeave(e);
             ClearLinkHover();
+            if (wfStickyHover >= 0) { wfStickyHover = -1; Invalidate(); }
             if (MouseLeftCanvas != null) MouseLeftCanvas();
             ClearLineAnnotationHover();
             if (hoveredDiagnostic != null)
@@ -6446,6 +6334,13 @@ namespace codeLess.Studio
             if (e.KeyCode == Keys.Tab && !e.Control)
             {
                 e.SuppressKeyPress = true;
+                if (!e.Shift && TryHandleNicetyTabWF(buf)) // Emmet abbreviation
+                {
+                    owner.NotifyBufferContentChanged();
+                    EnsureCursorVisible();
+                    this.Invalidate();
+                    return;
+                }
                 buf.PushUndoSnapshot();
                 int sLine, sCol, eLine, eCol;
                 buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
@@ -6496,6 +6391,7 @@ namespace codeLess.Studio
             {
                 e.SuppressKeyPress = true;
                 buf.PushUndoSnapshot();
+                EditorTagEditing.LinkedEdit linkedTag = MaybeBeginLinkedTagEditWF(buf);
                 if (buf.HasMultiCursors)
                 {
                     BackspaceAllCarets();
@@ -6527,6 +6423,7 @@ namespace codeLess.Studio
                     buf.CursorLine--;
                     buf.CursorCol = prevLen;
                 }
+                CompleteLinkedTagEditWF(buf, linkedTag);
                 owner.NotifyBufferContentChanged();
                 EnsureCursorVisible();
                 this.Invalidate();
@@ -6536,6 +6433,7 @@ namespace codeLess.Studio
             {
                 e.SuppressKeyPress = true;
                 buf.PushUndoSnapshot();
+                EditorTagEditing.LinkedEdit linkedTag = MaybeBeginLinkedTagEditWF(buf);
                 if (buf.HasMultiCursors)
                 {
                     DeleteAllCarets();
@@ -6566,6 +6464,7 @@ namespace codeLess.Studio
                         buf.Lines.RemoveAt(buf.CursorLine + 1);
                     }
                 }
+                CompleteLinkedTagEditWF(buf, linkedTag);
                 owner.NotifyBufferContentChanged();
                 this.Invalidate();
                 return;
@@ -6615,6 +6514,14 @@ namespace codeLess.Studio
             if (buf == null) return;
 
             e.Handled = true;
+
+            if (TryHandleNicetyKeyPressWF(e.KeyChar)) // tag auto-close / close-tag completion / linked rename
+            {
+                owner.NotifyBufferContentChanged();
+                EnsureCursorVisible();
+                this.Invalidate();
+                return;
+            }
 
             if (buf.HasMultiCursors)
             {
@@ -7172,38 +7079,10 @@ namespace codeLess.Studio
             this.Invalidate();
         }
 
+        /// <summary>Ctrl+F2 "Change All Occurrences" (whole word, keeps the primary caret; see ChangeAllOccurrences).</summary>
         public void SelectAllOccurrencesOfWord()
         {
-            EditorTabBuffer buf = owner.CurrentBuffer;
-            if (buf == null) return;
-            if (!buf.HasSelection())
-                SelectWordAt(buf.CursorLine, buf.CursorCol);
-            string word = buf.GetSelectedText();
-            if (string.IsNullOrEmpty(word) || word.Contains("\n")) return;
-            buf.ClearExtraCarets();
-            int psLine, psCol, peLine, peCol;
-            buf.GetNormalizedSelection(out psLine, out psCol, out peLine, out peCol);
-            for (int l = 0; l < buf.Lines.Count; l++)
-            {
-                string ln = buf.Lines[l] ?? "";
-                int idx = ln.IndexOf(word, 0, StringComparison.Ordinal);
-                while (idx >= 0)
-                {
-                    if (!(l == psLine && idx == psCol))
-                    {
-                        buf.ExtraCarets.Add(new EditorCaret
-                        {
-                            AnchorLine = l,
-                            AnchorCol = idx,
-                            CursorLine = l,
-                            CursorCol = idx + word.Length
-                        });
-                    }
-                    idx = ln.IndexOf(word, idx + word.Length, StringComparison.Ordinal);
-                }
-            }
-            owner.UpdateCursorStatusLabel();
-            this.Invalidate();
+            ChangeAllOccurrences();
         }
 
         public void ToggleBlockCommentOnSelection()

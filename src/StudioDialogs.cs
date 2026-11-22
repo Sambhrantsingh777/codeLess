@@ -1147,6 +1147,11 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "toggle_right"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("View", "View: Toggle Minimap", "",
                 () => { SelectedCommandId = "toggle_minimap"; this.DialogResult = DialogResult.OK; this.Close(); });
+            foreach (string[] nc in EditorNicetiesPaletteWinForms.Commands)
+            {
+                string ncId = nc[3];
+                addCmd(nc[0], nc[1], nc[2], () => { SelectedCommandId = ncId; this.DialogResult = DialogResult.OK; this.Close(); });
+            }
             addCmd("View", "View: Toggle Breadcrumbs", "",
                 () => { SelectedCommandId = "toggle_breadcrumbs"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("View", "View: Toggle Status Bar", "",
@@ -2746,6 +2751,7 @@ namespace codeLess.Studio
         public CheckBox AutoUpdateCheckBox;
         public CheckBox ActivatePythonEnvBox;
         public CheckBox OfflineModeBox;
+        public List<CheckBox> EditorNicetyBoxes;
         public CodeLessDarkInputBox ExcludedFoldersInput;
         public ParitySettingsBlockWin ParityBlock;
 
@@ -2929,6 +2935,8 @@ namespace codeLess.Studio
             OfflineModeBox = addCheck("Offline Mode (block all non-local network requests)", settings.OfflineMode, 24, y);
             AutoUpdateCheckBox = addCheck("Check for updates automatically (once a day)", settings.AutoCheckForUpdates, 380, y);
             AutoSaveBox.Visible = false; // superseded by the files.autoSave mode below
+            y += 24;
+            EditorNicetyBoxes = EditorNicetiesSettingsWinForms.AddTo(settings, addCheck, ref y);
             y += 28;
             ParityBlock = ParitySettingsBlockWin.Build(body, settings, activeTheme, ref y);
             addLabel("Excluded Folders (files.exclude):", y);
@@ -3231,6 +3239,7 @@ namespace codeLess.Studio
             settings.InsertSpaces = InsertSpacesBox.Checked;
             settings.WordWrap = WordWrapBox.Checked;
             settings.ShowMinimap = MinimapBox.Checked;
+            EditorNicetiesSettingsWinForms.Apply(EditorNicetyBoxes, settings);
             settings.EnableInlineGhostText = GhostTextBox.Checked;
             settings.AutoSave = AutoSaveBox.Checked;
             if (ParityBlock != null) ParityBlock.Apply(settings);

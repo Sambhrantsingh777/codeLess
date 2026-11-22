@@ -2531,6 +2531,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Help", Title = "About codeLess", Execute = ShowAboutModal }
             };
             all.AddRange(BuildLanguageServerPaletteCommands());
+            all.AddRange(BuildEditorNicetiesPaletteCommands());
             all.AddRange(BuildDevToolsPaletteCommands());
             all.AddRange(BuildParityPaletteCommands());
             all.AddRange(BuildTaskPaletteCommands());
@@ -2606,6 +2607,7 @@ namespace codeLess.AvaloniaApp
                     PrimaryEditor.ShowMinimap = updated.ShowMinimap;
                     PrimaryEditor.Canvas.FontSizePx = updated.FontSize;
                     ApplyGitParitySettings();
+                    ApplyEditorNicetySettings();
                     UpdateStatusBar();
                 },
                 () => ModalHost.CloseModal());

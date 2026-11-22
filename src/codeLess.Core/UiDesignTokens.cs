@@ -11,7 +11,7 @@ namespace codeLess.Studio
     /// stay consistent; nothing here is theme-specific.
     /// STRICT C# 5 (compiled by the .NET Framework 4.8 build).
     /// </summary>
-    public static class UiTokens
+    public static partial class UiTokens
     {
         // ------------------------------------------------------------------ typography (px)
         /// <summary>Default UI text: tree/list rows, tabs, inputs, menus, buttons.</summary>

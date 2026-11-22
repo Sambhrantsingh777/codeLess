@@ -1,0 +1,277 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Runtime.CompilerServices;
+
+namespace codeLess.Studio
+{
+    /// <summary>Runtime switches for the editor niceties (mirrors the persisted settings; read by both editors).</summary>
+    public static class EditorNicetyOptions
+    {
+        public static bool BracketPairColorization = true;
+        public static bool BracketPairGuides = true;
+        public static bool IndentGuides = true;
+        public static bool StickyScroll = true;
+        public static bool HighlightOccurrences = true;
+        public static bool AutoCloseTags = true;
+        public static bool LinkedTagEditing = true;
+        public static bool EmmetOnTab = true;
+        public static bool TextMateHighlighting = true;
+
+        public static void ApplyFrom(IdePersistentSettings s)
+        {
+            if (s == null) return;
+            BracketPairColorization = s.EditorBracketPairColorization;
+            BracketPairGuides = s.EditorBracketPairGuides;
+            IndentGuides = s.EditorIndentGuides;
+            StickyScroll = s.EditorStickyScroll;
+            HighlightOccurrences = s.EditorHighlightOccurrences;
+            AutoCloseTags = s.EditorAutoCloseTags;
+            LinkedTagEditing = s.EditorLinkedTagEditing;
+            EmmetOnTab = s.EditorEmmetOnTab;
+            TextMateHighlighting = s.EditorTextMateHighlighting;
+        }
+
+        public static void CopyTo(IdePersistentSettings s)
+        {
+            if (s == null) return;
+            s.EditorBracketPairColorization = BracketPairColorization;
+            s.EditorBracketPairGuides = BracketPairGuides;
+            s.EditorIndentGuides = IndentGuides;
+            s.EditorStickyScroll = StickyScroll;
+            s.EditorHighlightOccurrences = HighlightOccurrences;
+            s.EditorAutoCloseTags = AutoCloseTags;
+            s.EditorLinkedTagEditing = LinkedTagEditing;
+            s.EditorEmmetOnTab = EmmetOnTab;
+            s.EditorTextMateHighlighting = TextMateHighlighting;
+        }
+    }
+
+    /// <summary>Persisted editor nicety switches (defaults on; absent keys keep the defaults when loading old files).</summary>
+    public partial class IdePersistentSettings
+    {
+        private bool editorBracketPairColorization = true;
+        private bool editorBracketPairGuides = true;
+        private bool editorIndentGuides = true;
+        private bool editorStickyScroll = true;
+        private bool editorHighlightOccurrences = true;
+        private bool editorAutoCloseTags = true;
+        private bool editorLinkedTagEditing = true;
+        private bool editorEmmetOnTab = true;
+        private bool editorTextMateHighlighting = true;
+
+        public bool EditorBracketPairColorization { get { return editorBracketPairColorization; } set { editorBracketPairColorization = value; } }
+        public bool EditorBracketPairGuides { get { return editorBracketPairGuides; } set { editorBracketPairGuides = value; } }
+        public bool EditorIndentGuides { get { return editorIndentGuides; } set { editorIndentGuides = value; } }
+        public bool EditorStickyScroll { get { return editorStickyScroll; } set { editorStickyScroll = value; } }
+        public bool EditorHighlightOccurrences { get { return editorHighlightOccurrences; } set { editorHighlightOccurrences = value; } }
+        public bool EditorAutoCloseTags { get { return editorAutoCloseTags; } set { editorAutoCloseTags = value; } }
+        public bool EditorLinkedTagEditing { get { return editorLinkedTagEditing; } set { editorLinkedTagEditing = value; } }
+        public bool EditorEmmetOnTab { get { return editorEmmetOnTab; } set { editorEmmetOnTab = value; } }
+        public bool EditorTextMateHighlighting { get { return editorTextMateHighlighting; } set { editorTextMateHighlighting = value; } }
+    }
+
+    /// <summary>A colored run of a line: [Start, Start + Length) in character indices.</summary>
+    public struct StyledSpan
+    {
+        public int Start;
+        public int Length;
+        public Color Color;
+        public bool Bold;
+        public bool Italic;
+
+        public StyledSpan(int start, int length, Color color, bool bold, bool italic)
+        {
+            Start = start;
+            Length = length;
+            Color = color;
+            Bold = bold;
+            Italic = italic;
+        }
+    }
+
+    /// <summary>
+    /// Per-buffer syntax state shared by both editors: the incremental bracket analysis and, when a TextMate grammar
+    /// exists for the file, the incremental TextMate tokenization. Call <see cref="Prepare"/> once per paint.
+    /// </summary>
+    public sealed class EditorSyntaxSession
+    {
+        private static readonly ConditionalWeakTable<EditorTabBuffer, EditorSyntaxSession> table = new ConditionalWeakTable<EditorTabBuffer, EditorSyntaxSession>();
+
+        public static EditorSyntaxSession For(EditorTabBuffer buf)
+        {
+            if (buf == null) return null;
+            return table.GetValue(buf, delegate (EditorTabBuffer b) { return new EditorSyntaxSession(); });
+        }
+
+        private string path;
+        private bool pathInitialized;
+        private EditorBracketCache brackets;
+        private TextMateDocument textMate;
+        private string scope;
+        private int registryGeneration = -1;
+        private bool grammarPending;
+
+        /// <summary>Lines whose start state the paint pass may compute synchronously before falling back to a guess.</summary>
+        public static int SyncTokenizeBudgetMs = 12;
+
+        public EditorBracketCache Brackets { get { return brackets; } }
+        public TextMateDocument TextMate { get { return textMate; } }
+        public string GrammarScope { get { return scope; } }
+        public bool GrammarPending { get { return grammarPending; } }
+
+        /// <summary>Resolves the grammar / profile for the buffer's file and syncs the caches with its lines.</summary>
+        public void Prepare(EditorTabBuffer buf)
+        {
+            if (buf == null) return;
+            string p = buf.FilePath ?? buf.FileName ?? "";
+            if (!pathInitialized || !string.Equals(p, path, StringComparison.Ordinal))
+            {
+                pathInitialized = true;
+                path = p;
+                brackets = new EditorBracketCache(BracketLexProfile.ForFile(p));
+                textMate = null;
+                scope = null;
+                registryGeneration = -1;
+            }
+            ResolveGrammar();
+            List<string> lines = buf.Lines;
+            if (lines == null) return;
+            brackets.Sync(lines);
+            if (textMate != null) textMate.Sync(lines);
+        }
+
+        private void ResolveGrammar()
+        {
+            if (!EditorNicetyOptions.TextMateHighlighting)
+            {
+                textMate = null;
+                grammarPending = false;
+                registryGeneration = -1;
+                return;
+            }
+            TextMateGrammarRegistry reg = TextMateGrammarRegistry.Shared;
+            if (registryGeneration == reg.Generation) return;
+            registryGeneration = reg.Generation;
+            string sc = reg.GetScopeForFile(path);
+            if (sc == null) { textMate = null; scope = null; grammarPending = false; return; }
+            TmCompiledGrammar g = reg.GetCompiled(sc, false);
+            if (g == null)
+            {
+                grammarPending = reg.IsLoading(sc);
+                if (!grammarPending) { textMate = null; scope = null; }
+                return;
+            }
+            grammarPending = false;
+            if (textMate == null || !ReferenceEquals(textMate.Grammar, g) || scope != sc)
+            {
+                scope = sc;
+                textMate = new TextMateDocument(g);
+            }
+        }
+
+        public static long DeadlineFromNow(int ms)
+        {
+            if (ms <= 0) return 0;
+            return Stopwatch.GetTimestamp() + (long)(ms * (double)Stopwatch.Frequency / 1000.0);
+        }
+
+        /// <summary>True while a grammar is loading or lines still need a background tokenization pass.</summary>
+        public bool NeedsBackgroundWork
+        {
+            get
+            {
+                if (grammarPending) return true;
+                if (textMate != null && textMate.ValidCount < textMate.LineCount) return true;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Advances background tokenization within <paramref name="budgetMs"/>. Returns true when the result can change
+        /// what is on screen (grammar became ready, or lines up to <paramref name="visibleBottom"/> became exact).
+        /// </summary>
+        public bool AdvanceBackground(EditorTabBuffer buf, int visibleTop, int visibleBottom, int budgetMs)
+        {
+            if (buf == null || buf.Lines == null) return false;
+            bool hadGrammar = textMate != null;
+            if (grammarPending)
+            {
+                registryGeneration = -1;
+                ResolveGrammar();
+                if (textMate != null) { textMate.Sync(buf.Lines); return true; }
+                if (grammarPending) return false;
+                return hadGrammar != (textMate != null);
+            }
+            if (textMate == null) return false;
+            textMate.Sync(buf.Lines);
+            int before = textMate.ValidCount;
+            textMate.EnsureValid(buf.Lines, buf.Lines.Count - 1, DeadlineFromNow(budgetMs));
+            int after = textMate.ValidCount;
+            if (after >= textMate.LineCount && textMate.LineCount > 6000)
+                textMate.EvictDataOutside(Math.Max(0, visibleTop - 1500), visibleBottom + 1500);
+            return before <= visibleBottom && after > before && after > visibleTop;
+        }
+
+        /// <summary>
+        /// TextMate-colored spans for a line, or null when no grammar applies (caller uses its built-in tokenizer).
+        /// <paramref name="isGuess"/> is true when the line's real start state is not known yet.
+        /// </summary>
+        public List<StyledSpan> GetTextMateSpans(IList<string> lines, int line, int firstVisibleLine, StudioTheme theme, long deadlineTicks, out bool isGuess)
+        {
+            isGuess = false;
+            if (textMate == null || lines == null || line < 0 || line >= lines.Count) return null;
+            TmLineTokens toks = textMate.GetTokens(lines, line, firstVisibleLine, deadlineTicks, out isGuess);
+            if (toks == null) return null;
+            TextMateTheme tm = TextMateTheme.For(theme);
+            List<StyledSpan> spans = new List<StyledSpan>(toks.Count);
+            int len = (lines[line] ?? "").Length;
+            for (int i = 0; i < toks.Count; i++)
+            {
+                int s = toks.Starts[i];
+                int e = Math.Min(len, toks.EndOf(i));
+                if (e <= s) continue;
+                TmTokenStyle st = tm.Resolve(toks.Scopes[i]);
+                if (spans.Count > 0)
+                {
+                    StyledSpan prev = spans[spans.Count - 1];
+                    if (prev.Color == st.Foreground && prev.Bold == st.Bold && prev.Italic == st.Italic && prev.Start + prev.Length == s)
+                    {
+                        prev.Length = e - prev.Start;
+                        spans[spans.Count - 1] = prev;
+                        continue;
+                    }
+                }
+                spans.Add(new StyledSpan(s, e - s, st.Foreground, st.Bold, st.Italic));
+            }
+            return spans;
+        }
+
+        /// <summary>Recolors bracket characters with their rotating pair color (spans must cover the line in order).</summary>
+        public static List<StyledSpan> ApplyBracketColors(List<StyledSpan> spans, BracketLineData brackets, StudioTheme theme)
+        {
+            if (spans == null || brackets == null || brackets.Count == 0) return spans;
+            List<StyledSpan> res = new List<StyledSpan>(spans.Count + brackets.Count * 2);
+            int b = 0;
+            foreach (StyledSpan sp in spans)
+            {
+                int s = sp.Start, e = sp.Start + sp.Length;
+                while (b < brackets.Count && brackets.Cols[b] < s) b++;
+                int cur = s;
+                while (b < brackets.Count && brackets.Cols[b] < e)
+                {
+                    int c = brackets.Cols[b];
+                    if (c > cur) res.Add(new StyledSpan(cur, c - cur, sp.Color, sp.Bold, sp.Italic));
+                    int lvl = brackets.Levels[b];
+                    Color bc = lvl < 0 ? UiTokens.BracketUnexpected(theme) : UiTokens.BracketPairColor(theme, lvl);
+                    res.Add(new StyledSpan(c, 1, bc, sp.Bold, sp.Italic));
+                    cur = c + 1;
+                    b++;
+                }
+                if (cur < e) res.Add(new StyledSpan(cur, e - cur, sp.Color, sp.Bold, sp.Italic));
+            }
+            return res;
+        }
+    }
+}
