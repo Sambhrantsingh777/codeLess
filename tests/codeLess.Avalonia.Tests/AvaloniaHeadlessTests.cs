@@ -160,7 +160,7 @@ namespace codeLess.Avalonia.Tests
                 var nativeMenu = NativeMenu.GetMenu(window);
                 Assert.NotNull(nativeMenu);
                 var nativeHeaders = nativeMenu.Items.OfType<NativeMenuItem>().Select(i => i.Header).ToList();
-                Assert.Equal(new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }, nativeHeaders);
+                Assert.Equal(new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }, nativeHeaders);
 
                 window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();

@@ -120,16 +120,21 @@ namespace codeLess.AvaloniaApp
             UpdateStatusBar();
         }
 
+        private bool? lastAppliedWordWrapSetting;
+
         /// <summary>Applies the editor.tabSize / insertSpaces / wordWrap settings to the canvases and open editors.</summary>
         internal void ApplyEditorIndentAndWrapSettings(StudioSettings s)
         {
             if (s == null) return;
             AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(16, s.TabSize <= 0 ? 4 : s.TabSize));
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = s.InsertSpaces;
-            // editor.wordWrap is an editor setting: every open editor follows it (Alt+Z still toggles one editor)
+            // editor.wordWrap is an editor setting: every open editor follows it when the setting changes (Alt+Z still
+            // toggles one editor). Saving the Settings dialog for another option no longer resets those per-editor toggles.
+            bool wrapChanged = lastAppliedWordWrapSetting != s.WordWrap;
+            lastAppliedWordWrapSetting = s.WordWrap;
             foreach (var t in openTabs)
             {
-                if (t.WordWrap == s.WordWrap) continue;
+                if (!wrapChanged || t.WordWrap == s.WordWrap) continue;
                 t.WordWrap = s.WordWrap;
                 t.ScrollLeftPx = 0;
                 t.ScrollTopWrapRow = 0;

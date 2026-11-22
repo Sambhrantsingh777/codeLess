@@ -523,6 +523,20 @@ namespace codeLess.AvaloniaApp
             return true;
         }
 
+        /// <summary>Edit → Emmet: Expand Abbreviation (works even when "Emmet on Tab" is off, like VS Code's command).</summary>
+        public bool ExpandEmmetAbbreviation()
+        {
+            bool prev = EditorNicetyOptions.EmmetOnTab;
+            EditorNicetyOptions.EmmetOnTab = true;
+            try
+            {
+                bool ok = TryHandleNicetyTab(Buffer);
+                if (ok) InvalidateVisual();
+                return ok;
+            }
+            finally { EditorNicetyOptions.EmmetOnTab = prev; }
+        }
+
         /// <summary>Emmet expansion on Tab. Returns false (Tab behaves as usual) when nothing expands.</summary>
         private bool TryHandleNicetyTab(EditorTabBuffer buf)
         {

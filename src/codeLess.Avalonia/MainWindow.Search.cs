@@ -104,12 +104,12 @@ namespace codeLess.AvaloniaApp
 
             // VS Code: the option toggles sit inside the right edge of the query box.
             var toggleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1, Margin = new Thickness(0, 0, 2, 0), VerticalAlignment = VerticalAlignment.Center };
-            wsMatchCaseBtn = MakeSearchToggle("Aa", "Match Case");
-            wsWholeWordBtn = MakeSearchToggle("ab", "Match Whole Word");
-            wsRegexBtn = MakeSearchToggle(".*", "Use Regular Expression");
-            wsMatchCaseBtn.Click += (s, e) => { wsSearchMatchCase = !wsSearchMatchCase; UpdateSearchToggleVisuals(); ExecuteWorkspaceSearch(); };
-            wsWholeWordBtn.Click += (s, e) => { wsSearchWholeWord = !wsSearchWholeWord; UpdateSearchToggleVisuals(); ExecuteWorkspaceSearch(); };
-            wsRegexBtn.Click += (s, e) => { wsSearchRegex = !wsSearchRegex; UpdateSearchToggleVisuals(); ExecuteWorkspaceSearch(); };
+            wsMatchCaseBtn = FindOptionToggles.Create(FindOptionToggles.MatchCase, currentTheme);
+            wsWholeWordBtn = FindOptionToggles.Create(FindOptionToggles.WholeWord, currentTheme);
+            wsRegexBtn = FindOptionToggles.Create(FindOptionToggles.Regex, currentTheme);
+            wsMatchCaseBtn.Click += (s, e) => ToggleWorkspaceSearchOption(FindOptionToggles.MatchCase);
+            wsWholeWordBtn.Click += (s, e) => ToggleWorkspaceSearchOption(FindOptionToggles.WholeWord);
+            wsRegexBtn.Click += (s, e) => ToggleWorkspaceSearchOption(FindOptionToggles.Regex);
             toggleRow.Children.Add(wsMatchCaseBtn);
             toggleRow.Children.Add(wsWholeWordBtn);
             toggleRow.Children.Add(wsRegexBtn);
@@ -197,11 +197,13 @@ namespace codeLess.AvaloniaApp
 
             workspaceSearchInput.KeyDown += (s, e) =>
             {
-                if (e.Key == Key.Enter) { ExecuteWorkspaceSearch(); e.Handled = true; }
+                if (TryHandleWorkspaceSearchOptionKey(e)) { }
+                else if (e.Key == Key.Enter) { ExecuteWorkspaceSearch(); e.Handled = true; }
                 else if (e.Key == Key.Down && searchRows.Count > 0) { FocusSearchResults(); e.Handled = true; }
             };
             workspaceReplaceInput.KeyDown += (s, e) =>
             {
+                if (TryHandleWorkspaceSearchOptionKey(e)) return;
                 if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(MacKeymap.PrimaryModifier)) { ConfirmAndReplaceAll(); e.Handled = true; }
             };
             EventHandler<KeyEventArgs> runOnEnter = (s, e) => { if (e.Key == Key.Enter) { ExecuteWorkspaceSearch(); e.Handled = true; } };
@@ -224,16 +226,31 @@ namespace codeLess.AvaloniaApp
             return grid;
         }
 
-        private static Button MakeSearchToggle(string label, string tip)
+        /// <summary>Search view option toggles (click, Alt+C/W/R, Cmd+Option+C/W/R on macOS) re-run the search.</summary>
+        public void ToggleWorkspaceSearchOption(string option)
         {
-            string icon = label == "Aa" ? "case-sensitive" : (label == "ab" ? "whole-word" : "regex");
-            var b = WorkbenchStyles.IconButton(icon, tip, null, null, 20, 14);
-            b.Classes.Remove("icon");
-            b.Classes.Add("toggle");
-            b.BorderThickness = new Thickness(1);
-            b.BorderBrush = Brushes.Transparent;
-            b.CornerRadius = new CornerRadius(3);
-            return b;
+            if (option == FindOptionToggles.MatchCase) wsSearchMatchCase = !wsSearchMatchCase;
+            else if (option == FindOptionToggles.WholeWord) wsSearchWholeWord = !wsSearchWholeWord;
+            else if (option == FindOptionToggles.Regex) wsSearchRegex = !wsSearchRegex;
+            else return;
+            UpdateSearchToggleVisuals();
+            ExecuteWorkspaceSearch();
+        }
+
+        public bool IsWorkspaceSearchOptionOn(string option) =>
+            option == FindOptionToggles.MatchCase ? wsSearchMatchCase : option == FindOptionToggles.WholeWord ? wsSearchWholeWord : option == FindOptionToggles.Regex && wsSearchRegex;
+
+        public Button WorkspaceSearchOptionButton(string option) =>
+            option == FindOptionToggles.MatchCase ? wsMatchCaseBtn : option == FindOptionToggles.WholeWord ? wsWholeWordBtn : option == FindOptionToggles.Regex ? wsRegexBtn : null;
+
+        private bool TryHandleWorkspaceSearchOptionKey(KeyEventArgs e)
+        {
+            string opt = FindOptionToggles.OptionForKey(e.Key, e.PhysicalKey, e.KeyModifiers);
+            if (opt != FindOptionToggles.MatchCase && opt != FindOptionToggles.WholeWord && opt != FindOptionToggles.Regex) return false;
+            ToggleWorkspaceSearchOption(opt);
+            suppressNextWindowTextInput = true;
+            e.Handled = true;
+            return true;
         }
 
         private static Button MakeSearchActionButton(string icon, string tip, Action onClick)
@@ -244,15 +261,9 @@ namespace codeLess.AvaloniaApp
         private void UpdateSearchToggleVisuals()
         {
             if (currentTheme == null || wsMatchCaseBtn == null) return;
-            void style(Button b, bool on)
-            {
-                b.Background = on ? WorkbenchStyles.B(UiTokens.ListActiveSelection(currentTheme, UiTokens.InputBackground(currentTheme))) : Brushes.Transparent;
-                b.BorderBrush = on ? AvaloniaColorHelper.ToBrush(currentTheme.AccentPrimary) : Brushes.Transparent;
-                b.Foreground = AvaloniaColorHelper.ToBrush(on ? currentTheme.TextPrimary : currentTheme.TextSecondary);
-            }
-            style(wsMatchCaseBtn, wsSearchMatchCase);
-            style(wsWholeWordBtn, wsSearchWholeWord);
-            style(wsRegexBtn, wsSearchRegex);
+            FindOptionToggles.Style(wsMatchCaseBtn, wsSearchMatchCase, currentTheme);
+            FindOptionToggles.Style(wsWholeWordBtn, wsSearchWholeWord, currentTheme);
+            FindOptionToggles.Style(wsRegexBtn, wsSearchRegex, currentTheme);
         }
 
         /// <summary>Re-themes the Search view (called from ApplyTheme).</summary>

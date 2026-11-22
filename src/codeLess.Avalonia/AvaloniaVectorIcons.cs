@@ -618,11 +618,11 @@ namespace codeLess.AvaloniaApp
                 }
                 case "regex":
                 {
-                    // Vector ".*" (a text ".*" rendered as two specks at toggle size): square dot + six-spoke asterisk.
-                    double d = s * 0.42;
-                    ctx.FillRectangle(fill, new Rect(cx - s * 0.80, cy + s * 0.78 - d, d, d));
-                    var ap = new Pen(fill, Math.Max(1.2, strokeWidth), lineCap: PenLineCap.Round);
-                    double ax = cx + s * 0.30, ay = cy - s * 0.22, ar = s * 0.58;
+                    // codicon-like ".*": square dot bottom-left + six-spoke asterisk top-right, sized to fill the glyph box
+                    double d = Math.Max(2.5, s * 0.52);
+                    ctx.FillRectangle(fill, new Rect(cx - s * 0.92, cy + s * 0.92 - d, d, d));
+                    var ap = new Pen(fill, Math.Max(1.3, strokeWidth), lineCap: PenLineCap.Round);
+                    double ax = cx + s * 0.32, ay = cy - s * 0.25, ar = s * 0.66;
                     for (int k = 0; k < 3; k++)
                     {
                         double ang = Math.PI / 2 + k * Math.PI / 3;
@@ -633,14 +633,41 @@ namespace codeLess.AvaloniaApp
                 }
                 case "case-sensitive":
                 case "whole-word":
+                case "preserve-case":
                 {
                     string lower = iconName.ToLowerInvariant();
-                    string txt = lower == "case-sensitive" ? "Aa" : (lower == "whole-word" ? "ab" : ".*");
+                    bool word = lower == "whole-word";
+                    string txt = lower == "case-sensitive" ? "Aa" : (word ? "ab" : "AB");
+                    double size = Math.Max(8, bounds.Height * (word ? 0.70 : lower == "preserve-case" ? 0.62 : 0.80));
                     var ft = new FormattedText(txt, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                        new Typeface("Inter, Segoe UI, sans-serif", FontStyle.Normal, FontWeight.SemiBold), Math.Max(8, bounds.Height * 0.66), fill);
-                    ctx.DrawText(ft, new Point(cx - ft.Width / 2.0, cy - ft.Height / 2.0));
-                    if (lower == "whole-word")
-                        ctx.DrawLine(new Pen(fill, 1), new Point(cx - ft.Width / 2.0 - 1, cy + ft.Height * 0.40), new Point(cx + ft.Width / 2.0 + 1, cy + ft.Height * 0.40));
+                        new Typeface("Inter, Segoe UI, sans-serif", FontStyle.Normal, lower == "preserve-case" ? FontWeight.Bold : FontWeight.SemiBold), size, fill);
+                    double ty = word ? cy - ft.Height / 2.0 - bounds.Height * 0.10 : cy - ft.Height / 2.0;
+                    ctx.DrawText(ft, new Point(cx - ft.Width / 2.0, ty));
+                    var lp = new Pen(fill, Math.Max(1.1, strokeWidth * 0.9), lineCap: PenLineCap.Square);
+                    if (word)
+                    {
+                        // codicon whole-word: the letters sit on a bracket "|_____|"
+                        double by = bounds.Bottom - bounds.Height * 0.12, bx0 = bounds.X + bounds.Width * 0.08, bx1 = bounds.Right - bounds.Width * 0.08;
+                        ctx.DrawLine(lp, new Point(bx0, by), new Point(bx1, by));
+                        ctx.DrawLine(lp, new Point(bx0, by), new Point(bx0, by - bounds.Height * 0.22));
+                        ctx.DrawLine(lp, new Point(bx1, by), new Point(bx1, by - bounds.Height * 0.22));
+                    }
+                    else if (lower == "preserve-case")
+                    {
+                        double by = cy + ft.Height * 0.42;
+                        ctx.DrawLine(lp, new Point(cx - ft.Width / 2.0, by), new Point(cx + ft.Width / 2.0, by));
+                    }
+                    break;
+                }
+                case "find-selection":
+                {
+                    // codicon selection: three text lines, the middle one framed (search only inside the selection)
+                    var lp = new Pen(fill, Math.Max(1.2, strokeWidth), lineCap: PenLineCap.Round);
+                    double x0 = cx - s * 0.95, x1 = cx + s * 0.95;
+                    ctx.DrawLine(lp, new Point(x0, cy - s * 0.80), new Point(x1, cy - s * 0.80));
+                    ctx.DrawRectangle(null, new Pen(fill, 1), new Rect(x0 - 0.5, cy - s * 0.38, (x1 - x0) + 1, s * 0.76), 1, 1);
+                    ctx.DrawLine(lp, new Point(x0 + s * 0.30, cy), new Point(x1 - s * 0.30, cy));
+                    ctx.DrawLine(lp, new Point(x0, cy + s * 0.80), new Point(cx + s * 0.20, cy + s * 0.80));
                     break;
                 }
                 case "check":

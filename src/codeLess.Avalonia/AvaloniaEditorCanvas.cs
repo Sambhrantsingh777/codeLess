@@ -75,6 +75,12 @@ namespace codeLess.AvaloniaApp
         private bool findMatchCase = false;
         private bool findWholeWord = false;
         private bool findUseRegex = false;
+        private bool findPreserveCase = false;
+        private bool findInSelection = false;
+        private EditorFindScope findScope;
+        private Button preserveCaseBtn;
+        private Button inSelectionBtn;
+        private string findError;
         private int activeFindMatchIndex = -1;
         public List<FindMatchSpan> FindMatches { get; } = new List<FindMatchSpan>();
 
@@ -605,66 +611,123 @@ namespace codeLess.AvaloniaApp
         {
             FindMatches.Clear();
             activeFindMatchIndex = -1;
+            findError = null;
             string q = findInputBox.Text ?? "";
             if (CurrentBuffer == null || string.IsNullOrEmpty(q))
             {
-                findCountLabel.Text = "No results";
+                SetFindCount("No results", false, null);
                 Canvas.InvalidateVisual();
                 return;
             }
-
-            Regex rx = null;
-            if (findUseRegex || findWholeWord)
+            // shared VS Code semantics (Core): case / whole word (also with regex) / regex with timeout / in selection
+            var found = EditorFindEngine.FindAll(CurrentBuffer.Lines, q, findMatchCase, findWholeWord, findUseRegex, findInSelection ? findScope : null, out string err);
+            if (err != null)
             {
-                try
-                {
-                    string pat = findUseRegex ? q : $@"\b{Regex.Escape(q)}\b";
-                    var opts = findMatchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
-                    rx = new Regex(pat, opts);
-                }
-                catch
-                {
-                    findCountLabel.Text = "Invalid regex";
-                    Canvas.InvalidateVisual();
-                    return;
-                }
+                findError = err;
+                SetFindCount(EditorFindEngine.ShortError(err), true, err);
+                Canvas.InvalidateVisual();
+                return;
             }
-
-            var cmp = findMatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-            for (int i = 0; i < CurrentBuffer.Lines.Count; i++)
-            {
-                string line = CurrentBuffer.Lines[i] ?? "";
-                if (rx != null)
-                {
-                    foreach (Match m in rx.Matches(line))
-                    {
-                        if (m.Length > 0)
-                            FindMatches.Add(new FindMatchSpan { Line = i, StartCol = m.Index, Length = m.Length });
-                    }
-                }
-                else
-                {
-                    int pos = 0;
-                    while (pos <= line.Length - q.Length)
-                    {
-                        int idx = line.IndexOf(q, pos, cmp);
-                        if (idx < 0) break;
-                        FindMatches.Add(new FindMatchSpan { Line = i, StartCol = idx, Length = q.Length });
-                        pos = idx + Math.Max(1, q.Length);
-                    }
-                }
-            }
+            foreach (var m in found) FindMatches.Add(new FindMatchSpan { Line = m.Line, StartCol = m.Col, Length = m.Length });
 
             if (FindMatches.Count > 0)
             {
                 activeFindMatchIndex = 0;
-                findCountLabel.Text = $"1 of {FindMatches.Count}";
+                SetFindCount(EditorFindEngine.CountLabel(0, FindMatches.Count), false, null);
             }
             else
             {
-                findCountLabel.Text = "No results";
+                SetFindCount("No results", false, null);
             }
             Canvas.InvalidateVisual();
+        }
+
+        /// <summary>Find widget count / status text (tests).</summary>
+        public string FindCountText => findCountLabel.Text;
+        /// <summary>Full regex error of the last search (null when the pattern is valid).</summary>
+        public string FindErrorText => findError;
+
+        private void SetFindCount(string text, bool error, string tip)
+        {
+            findCountLabel.Text = text;
+            if (currentTheme != null)
+                findCountLabel.Foreground = WorkbenchStyles.B(error ? UiTokens.FindErrorForeground(currentTheme) : currentTheme.TextSecondary);
+            ToolTip.SetTip(findCountLabel, tip);
+            if (findInputBox != null && currentTheme != null)
+                findInputBox.BorderBrush = error ? WorkbenchStyles.B(UiTokens.FindErrorForeground(currentTheme)) : null;
+        }
+
+        /// <summary>Current state of a find option (FindOptionToggles.MatchCase / WholeWord / Regex / PreserveCase / InSelection).</summary>
+        public bool IsFindOptionOn(string option)
+        {
+            switch (option)
+            {
+                case FindOptionToggles.MatchCase: return findMatchCase;
+                case FindOptionToggles.WholeWord: return findWholeWord;
+                case FindOptionToggles.Regex: return findUseRegex;
+                case FindOptionToggles.PreserveCase: return findPreserveCase;
+                case FindOptionToggles.InSelection: return findInSelection;
+            }
+            return false;
+        }
+
+        /// <summary>The toggle button of an option (tests / screenshot suite).</summary>
+        public Button FindOptionButton(string option)
+        {
+            switch (option)
+            {
+                case FindOptionToggles.MatchCase: return matchCaseBtn;
+                case FindOptionToggles.WholeWord: return wholeWordBtn;
+                case FindOptionToggles.Regex: return regexBtn;
+                case FindOptionToggles.PreserveCase: return preserveCaseBtn;
+                case FindOptionToggles.InSelection: return inSelectionBtn;
+            }
+            return null;
+        }
+
+        public bool IsFindBarVisible => findReplaceOverlay.IsVisible;
+        /// <summary>Find / replace inputs of the widget (tests).</summary>
+        public TextBox FindInputBox => findInputBox;
+        public TextBox ReplaceInputBox => replaceInputBox;
+
+        /// <summary>Flips a find option (button click, Alt+C/W/R/P/L, Cmd+Option+C/W/R/P/L on macOS) and re-searches.</summary>
+        public void ToggleFindOption(string option)
+        {
+            switch (option)
+            {
+                case FindOptionToggles.MatchCase: findMatchCase = !findMatchCase; break;
+                case FindOptionToggles.WholeWord: findWholeWord = !findWholeWord; break;
+                case FindOptionToggles.Regex: findUseRegex = !findUseRegex; break;
+                case FindOptionToggles.PreserveCase: findPreserveCase = !findPreserveCase; break;
+                case FindOptionToggles.InSelection:
+                    findInSelection = !findInSelection;
+                    findScope = null;
+                    if (findInSelection && CurrentBuffer != null)
+                    {
+                        // VS Code: the scope is the selection when the toggle is turned on (the caret line without one)
+                        CurrentBuffer.GetNormalizedSelection(out int sl, out int sc, out int el, out int ec);
+                        if (!CurrentBuffer.HasSelection()) { sl = el = CurrentBuffer.CursorLine; sc = 0; ec = CurrentBuffer.Lines[sl].Length; }
+                        else if (ec == 0 && el > sl) { el--; ec = CurrentBuffer.Lines[el].Length; }
+                        findScope = new EditorFindScope(sl, sc, el, ec);
+                    }
+                    break;
+                default: return;
+            }
+            UpdateFindToggleButtonStyles();
+            if (option != FindOptionToggles.PreserveCase) RecomputeFindMatches();
+            StatusMessagePublished?.Invoke(FindOptionToggles.TitleOf(option) + ": " + (IsFindOptionOn(option) ? "On" : "Off"));
+        }
+
+        /// <summary>Handles the find option shortcuts while the find widget or the editor has focus.</summary>
+        public bool TryHandleFindOptionKey(KeyEventArgs e)
+        {
+            if (e == null || IsShowingLargeFile) return false;
+            string opt = FindOptionToggles.OptionForKey(e.Key, e.PhysicalKey, e.KeyModifiers);
+            if (opt == null) return false;
+            ToggleFindOption(opt);
+            Canvas.SuppressNextTextInput();
+            e.Handled = true;
+            return true;
         }
 
         /// <summary>The find regex (same pattern/options as <see cref="RecomputeFindMatches"/>) used to expand $1 in replacements.</summary>
@@ -672,8 +735,7 @@ namespace codeLess.AvaloniaApp
         {
             string q = findInputBox.Text ?? "";
             if (q.Length == 0 || !findUseRegex) return null;
-            try { return new Regex(q, findMatchCase ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)); }
-            catch { return null; }
+            return EditorFindEngine.Compile(q, findMatchCase, findWholeWord, true, out _);
         }
 
         public void FindNext(int step = 1)
@@ -687,7 +749,7 @@ namespace codeLess.AvaloniaApp
             CurrentBuffer.SelectionStartCol = m.StartCol;
             CurrentBuffer.CursorLine = m.Line;
             CurrentBuffer.CursorCol = m.StartCol + m.Length;
-            findCountLabel.Text = $"{activeFindMatchIndex + 1} of {FindMatches.Count}";
+            SetFindCount(EditorFindEngine.CountLabel(activeFindMatchIndex, FindMatches.Count), false, null);
             Canvas.EnsureCursorVisible();
             CaretMoved?.Invoke(CurrentBuffer);
             Canvas.InvalidateVisual();
@@ -707,6 +769,7 @@ namespace codeLess.AvaloniaApp
             CurrentBuffer.PushUndoSnapshot();
             string line = CurrentBuffer.Lines[m.Line];
             string expanded = WorkspaceSearchEngine.ExpandReplacementAt(line, BuildFindRegexForReplace(), m.StartCol, m.Length, rep, findUseRegex);
+            if (findPreserveCase) expanded = EditorFindEngine.ApplyPreserveCase(line.Substring(m.StartCol, m.Length), expanded);
             CurrentBuffer.Lines[m.Line] = line.Substring(0, m.StartCol) + expanded + line.Substring(m.StartCol + m.Length);
             CurrentBuffer.CursorLine = m.Line;
             CurrentBuffer.CursorCol = m.StartCol + expanded.Length;
@@ -741,6 +804,7 @@ namespace codeLess.AvaloniaApp
                 {
                     // Expand $1 / $& against the original line (matches are applied right-to-left, so earlier columns are untouched).
                     string expanded = WorkspaceSearchEngine.ExpandReplacementAt(line, repRx, m.StartCol, m.Length, rep, findUseRegex);
+                    if (findPreserveCase) expanded = EditorFindEngine.ApplyPreserveCase(line.Substring(m.StartCol, m.Length), expanded);
                     CurrentBuffer.Lines[m.Line] = line.Substring(0, m.StartCol) + expanded + line.Substring(m.StartCol + m.Length);
                 }
             }
@@ -773,11 +837,18 @@ namespace codeLess.AvaloniaApp
                 Margin = new Thickness(8, 0, 4, 0)
             };
 
-            mcBtn = WorkbenchStyles.IconButton("case-sensitive", "Match Case (Alt+C)", null, currentTheme, 20, 14);
-            wwBtn = WorkbenchStyles.IconButton("whole-word", "Match Whole Word (Alt+W)", null, currentTheme, 20, 14);
-            rxBtn = WorkbenchStyles.IconButton("regex", "Use Regular Expression (Alt+R)", null, currentTheme, 20, 14);
-            foreach (var tb in new[] { mcBtn, wwBtn, rxBtn }) { tb.Classes.Remove("icon"); tb.Classes.Add("toggle"); tb.BorderThickness = new Thickness(1); tb.BorderBrush = Brushes.Transparent; tb.CornerRadius = new CornerRadius(3); }
-            fBox.InnerRightContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1, Margin = new Thickness(0, 0, 2, 0), VerticalAlignment = VerticalAlignment.Center, Children = { mcBtn, wwBtn, rxBtn } };
+            // VS Code input option toggles: 20 px, 16 px glyphs, hover fill, accent fill + border when on (QA: "there is no
+            // case-sensitive / whole-word option": they were three faint 14 px glyphs with no visible state)
+            mcBtn = FindOptionToggles.Create(FindOptionToggles.MatchCase, currentTheme);
+            wwBtn = FindOptionToggles.Create(FindOptionToggles.WholeWord, currentTheme);
+            rxBtn = FindOptionToggles.Create(FindOptionToggles.Regex, currentTheme);
+            preserveCaseBtn = FindOptionToggles.Create(FindOptionToggles.PreserveCase, currentTheme);
+            inSelectionBtn = FindOptionToggles.Create(FindOptionToggles.InSelection, currentTheme);
+            inSelectionBtn.Width = inSelectionBtn.Height = 22;
+            fBox.MinHeight = 26;
+            rBox.MinHeight = 26;
+            fBox.InnerRightContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(0, 0, 3, 0), VerticalAlignment = VerticalAlignment.Center, Children = { mcBtn, wwBtn, rxBtn } };
+            rBox.InnerRightContent = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 3, 0), VerticalAlignment = VerticalAlignment.Center, Children = { preserveCaseBtn } };
             var prevBtn = WorkbenchStyles.IconButton("arrow-up", "Previous Match (Shift+Enter)", null, currentTheme);
             var nextBtn = WorkbenchStyles.IconButton("arrow-down", "Next Match (Enter)", null, currentTheme);
             var toggleRepBtn = WorkbenchStyles.IconButton("chevron-right", "Toggle Replace", null, currentTheme, 18, 12);
@@ -793,10 +864,11 @@ namespace codeLess.AvaloniaApp
             findRow.Children.Add(cntLbl);
             findRow.Children.Add(prevBtn);
             findRow.Children.Add(nextBtn);
+            findRow.Children.Add(inSelectionBtn);
             findRow.Children.Add(closeBtn);
 
             var repOneBtn = WorkbenchStyles.IconButton("replace", "Replace (Enter)", null, currentTheme);
-            var repAllBtn = WorkbenchStyles.IconButton("replace-all", "Replace All (Ctrl+Alt+Enter)", null, currentTheme);
+            var repAllBtn = WorkbenchStyles.IconButton("replace-all", MacKeymap.IsMacOS ? "Replace All (⌥⌘Enter)" : "Replace All (Ctrl+Alt+Enter)", null, currentTheme);
             findWidgetReplaceButtons = new[] { repOneBtn, repAllBtn };
             rRow = new StackPanel
             {
@@ -822,27 +894,7 @@ namespace codeLess.AvaloniaApp
             myFBox.KeyDown += (s, e) =>
             {
                 bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-                if (alt && e.Key == Key.C)
-                {
-                    findMatchCase = !findMatchCase;
-                    UpdateFindToggleButtonStyles();
-                    RecomputeFindMatches();
-                    e.Handled = true;
-                }
-                else if (alt && e.Key == Key.W)
-                {
-                    findWholeWord = !findWholeWord;
-                    UpdateFindToggleButtonStyles();
-                    RecomputeFindMatches();
-                    e.Handled = true;
-                }
-                else if (alt && e.Key == Key.R)
-                {
-                    findUseRegex = !findUseRegex;
-                    UpdateFindToggleButtonStyles();
-                    RecomputeFindMatches();
-                    e.Handled = true;
-                }
+                if (TryHandleFindOptionKey(e)) { }
                 else if (e.Key == Key.Enter)
                 {
                     if (alt)
@@ -863,13 +915,17 @@ namespace codeLess.AvaloniaApp
             };
             myRBox.KeyDown += (s, e) =>
             {
-                if (e.Key == Key.Enter) { ReplaceCurrentMatch(); e.Handled = true; }
+                if (TryHandleFindOptionKey(e)) { }
+                else if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(MacKeymap.PrimaryModifier) && e.KeyModifiers.HasFlag(KeyModifiers.Alt)) { ReplaceAllMatches(); e.Handled = true; }
+                else if (e.Key == Key.Enter) { ReplaceCurrentMatch(); e.Handled = true; }
                 else if (e.Key == Key.Escape) { HideFindBar(); e.Handled = true; }
             };
 
-            mcBtn.Click += (s, e) => { findMatchCase = !findMatchCase; UpdateFindToggleButtonStyles(); RecomputeFindMatches(); };
-            wwBtn.Click += (s, e) => { findWholeWord = !findWholeWord; UpdateFindToggleButtonStyles(); RecomputeFindMatches(); };
-            rxBtn.Click += (s, e) => { findUseRegex = !findUseRegex; UpdateFindToggleButtonStyles(); RecomputeFindMatches(); };
+            mcBtn.Click += (s, e) => ToggleFindOption(FindOptionToggles.MatchCase);
+            wwBtn.Click += (s, e) => ToggleFindOption(FindOptionToggles.WholeWord);
+            rxBtn.Click += (s, e) => ToggleFindOption(FindOptionToggles.Regex);
+            preserveCaseBtn.Click += (s, e) => ToggleFindOption(FindOptionToggles.PreserveCase);
+            inSelectionBtn.Click += (s, e) => ToggleFindOption(FindOptionToggles.InSelection);
             prevBtn.Click += (s, e) => FindNext(-1);
             nextBtn.Click += (s, e) => FindNext(1);
             toggleRepBtn.Click += (s, e) => { myRRow.IsVisible = !myRRow.IsVisible; UpdateFindToggleButtonStyles(); };
@@ -901,16 +957,11 @@ namespace codeLess.AvaloniaApp
         {
             if (currentTheme == null) return;
             var t = currentTheme;
-            void Style(Button b, bool on)
-            {
-                if (b == null) return;
-                b.Background = on ? WorkbenchStyles.B(UiTokens.ListActiveSelection(t, UiTokens.InputBackground(t))) : Brushes.Transparent;
-                b.BorderBrush = on ? WorkbenchStyles.B(t.AccentPrimary) : Brushes.Transparent;
-                WorkbenchStyles.ThemeIconButton(b, t, on);
-            }
-            Style(matchCaseBtn, findMatchCase);
-            Style(wholeWordBtn, findWholeWord);
-            Style(regexBtn, findUseRegex);
+            FindOptionToggles.Style(matchCaseBtn, findMatchCase, t);
+            FindOptionToggles.Style(wholeWordBtn, findWholeWord, t);
+            FindOptionToggles.Style(regexBtn, findUseRegex, t);
+            FindOptionToggles.Style(preserveCaseBtn, findPreserveCase, t);
+            FindOptionToggles.Style(inSelectionBtn, findInSelection, t);
             foreach (var b in findWidgetIconButtons) WorkbenchStyles.ThemeIconButton(b, t);
             foreach (var b in findWidgetReplaceButtons) WorkbenchStyles.ThemeIconButton(b, t);
             if (findToggleReplaceButton?.Content is VectorIconControl chev && replaceRowPanel != null)
@@ -3368,6 +3419,9 @@ namespace codeLess.AvaloniaApp
                 return;
             }
             if (linkHover != null) ClearLinkHover();
+            suppressTextInputAfterShortcut = false;
+            // find option toggles work while the editor has focus too (VS Code: Alt+C/W/R/P/L, Cmd+Option+... on macOS)
+            if (owner.TryHandleFindOptionKey(e)) return;
             if (!ctrlOrCmd && (e.Key == Key.Back || e.Key == Key.Delete || e.Key == Key.Enter || e.Key == Key.Tab))
                 HidePointerWhileTyping();
             ClampExtraCursors(buf);
@@ -3670,9 +3724,11 @@ namespace codeLess.AvaloniaApp
                 e.Handled = true;
                 return;
             }
-            if (alt && !ctrlOrCmd && !shift && e.Key == Key.Z)
+            if (IsToggleWordWrapKey(e.Key, e.PhysicalKey, e.KeyModifiers))
             {
+                // ⌥Z on macOS: matched by physical key and the "Ω" text input that follows is swallowed (VS Code does both)
                 ToggleWordWrap();
+                SuppressNextTextInput();
                 e.Handled = true;
                 return;
             }
@@ -4007,9 +4063,31 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
+        private bool suppressTextInputAfterShortcut;
+
+        /// <summary>
+        /// Swallows the text input that macOS sends after an Option shortcut the editor handled (⌥Z = "Ω", ⌥⌘C = "ç"):
+        /// the next text input is dropped unless another key goes down first.
+        /// </summary>
+        public void SuppressNextTextInput() { suppressTextInputAfterShortcut = true; }
+
+        /// <summary>View: Toggle Word Wrap = Alt+Z (⌥Z on macOS), by key or by physical key (layouts / Option symbols).</summary>
+        public static bool IsToggleWordWrapKey(Key key, PhysicalKey physical, KeyModifiers mods)
+        {
+            bool alt = (mods & KeyModifiers.Alt) != 0;
+            bool other = (mods & (KeyModifiers.Control | KeyModifiers.Meta | KeyModifiers.Shift)) != 0;
+            return alt && !other && (key == Key.Z || physical == PhysicalKey.Z);
+        }
+
         protected override void OnTextInput(TextInputEventArgs e)
         {
             base.OnTextInput(e);
+            if (suppressTextInputAfterShortcut)
+            {
+                suppressTextInputAfterShortcut = false;
+                e.Handled = true;
+                return;
+            }
             if (string.IsNullOrEmpty(e.Text)) return;
             char ch = e.Text[0];
             if (ch < 32 && ch != '\t') return;

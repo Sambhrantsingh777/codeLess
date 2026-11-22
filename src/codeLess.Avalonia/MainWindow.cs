@@ -277,6 +277,7 @@ namespace codeLess.AvaloniaApp
 
             // Register tunnel & bubble key handlers so workbench shortcuts work anywhere
             AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+            InstallMenuKeyHooks(); // MainWindow.Menus.cs: Alt+Z / ⌥Z word wrap from anywhere, Option text-input suppression
 
             string startPath = initialPath;
             if (string.IsNullOrWhiteSpace(startPath))
@@ -625,211 +626,10 @@ namespace codeLess.AvaloniaApp
             };
         }
 
+        /// <summary>In-window menu bar (Windows / Linux; hidden on the live macOS desktop): the shared VS Code menu model.</summary>
         private Menu BuildTopMenuControl()
         {
-            string Sc(string winKey) => AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform(winKey);
-
-            MenuItem Mi(string header, string shortcut, Action action)
-            {
-                string text = string.IsNullOrEmpty(shortcut) ? header : $"{header}    ({Sc(shortcut)})";
-                var item = new MenuItem
-                {
-                    Header = new LiteralTextBlock(text)
-                };
-                if (action != null)
-                    item.Click += (s, e) => action();
-                return item;
-            }
-
-            var fileMenu = new MenuItem
-            {
-                Header = "_File",
-                ItemsSource = new object[]
-                {
-                    Mi("New Text File", "Ctrl+N", () => CreateNewUntitledTab()),
-                    Mi("New File in Workspace...", "Ctrl+Alt+N", PromptCreateNewFileInWorkspace),
-                    Mi("New Folder in Workspace...", "", PromptCreateNewFolderInWorkspace),
-                    new Separator(),
-                    Mi("Open File...", "Ctrl+O", () => _ = PromptOpenFileDialogAsync()),
-                    Mi("Open Folder...", "Ctrl+K Ctrl+O", () => _ = PromptOpenFolderDialogAsync()),
-                    Mi("Add Folder to Workspace...", "", () => _ = PromptAddFolderToWorkspaceAsync()),
-                    new Separator(),
-                    Mi("Save", "Ctrl+S", () => SaveActiveTab()),
-                    Mi("Save As...", "Ctrl+Shift+S", () => _ = PromptSaveAsAsync()),
-                    Mi("Save All", "Ctrl+K S", SaveAllTabs),
-                    new Separator(),
-                    Mi("Auto Save", "", () => { settings.SetAutoSaveMode(settings.AutoSave ? IdePersistentSettings.AutoSaveOff : IdePersistentSettings.AutoSaveAfterDelay); SetStatusMessage("Auto Save: " + (settings.AutoSave ? "On" : "Off")); }),
-                    Mi("Preferences: Settings", "Ctrl+,", ShowSettingsModal),
-                    Mi("Preferences: Keyboard Shortcuts", "Ctrl+K Ctrl+S", ShowKeyboardShortcutsModal),
-                    Mi("Preferences: Color Theme", "Ctrl+K Ctrl+T", OpenThemePickerPalette),
-                    new Separator(),
-                    Mi("Revert File", "", RevertActiveTab),
-                    Mi("Close Editor", "Ctrl+W", () => { if (activeTab != null) CloseTab(activeTab); else if (showWelcomeTab) CloseWelcomeTab(); }),
-                    Mi("Close Folder", "Ctrl+K F", CloseWorkspaceFolder),
-                    Mi("Exit", "Alt+F4", Close)
-                }
-            };
-
-            var editMenu = new MenuItem
-            {
-                Header = "_Edit",
-                ItemsSource = new object[]
-                {
-                    Mi("Undo", "Ctrl+Z", () => PrimaryEditor.Canvas.PerformUndoRedo(redo: false)),
-                    Mi("Redo", "Ctrl+Y", () => PrimaryEditor.Canvas.PerformUndoRedo(redo: true)),
-                    new Separator(),
-                    // These used to only focus the editor (no-op). This menu is the only menu bar on Linux.
-                    Mi("Cut", "Ctrl+X", () => { PrimaryEditor.Canvas.Focus(); SimulateShortcut(Key.X, MacKeymap.PrimaryModifier); }),
-                    Mi("Copy", "Ctrl+C", () => { PrimaryEditor.Canvas.Focus(); SimulateShortcut(Key.C, MacKeymap.PrimaryModifier); }),
-                    Mi("Paste", "Ctrl+V", () => { PrimaryEditor.Canvas.Focus(); SimulateShortcut(Key.V, MacKeymap.PrimaryModifier); }),
-                    new Separator(),
-                    Mi("Find", "Ctrl+F", () => PrimaryEditor.ShowFindBar(false)),
-                    Mi("Replace", "Ctrl+H", () => PrimaryEditor.ShowFindBar(true)),
-                    Mi("Find in Files", "Ctrl+Shift+F", () => ShowSearchView(false)),
-                    Mi("Replace in Files", "Ctrl+Shift+H", () => ShowSearchView(true)),
-                    new Separator(),
-                    Mi("Toggle Line Comment", "Ctrl+/", () => PrimaryEditor.Canvas.ToggleLineComment()),
-                    Mi("Toggle Block Comment", "Shift+Alt+A", () => PrimaryEditor.Canvas.ToggleBlockComment())
-                }
-            };
-
-            var selectionMenu = new MenuItem
-            {
-                Header = "_Selection",
-                ItemsSource = new object[]
-                {
-                    Mi("Select All", "Ctrl+A", () => { if (activeTab != null) { activeTab.SelectAll(); PrimaryEditor.Canvas.InvalidateVisual(); } }),
-                    new Separator(),
-                    Mi("Copy Line Up", "Shift+Alt+Up", () => PrimaryEditor.Canvas.CopyActiveLine(-1)),
-                    Mi("Copy Line Down", "Shift+Alt+Down", () => PrimaryEditor.Canvas.CopyActiveLine(1)),
-                    Mi("Move Line Up", "Alt+Up", () => PrimaryEditor.Canvas.MoveActiveLine(-1)),
-                    Mi("Move Line Down", "Alt+Down", () => PrimaryEditor.Canvas.MoveActiveLine(1)),
-                    Mi("Duplicate Selection / Line", "Ctrl+Shift+D", () => PrimaryEditor.Canvas.CopyActiveLine(1)),
-                    new Separator(),
-                    Mi("Add Cursor Above", "Ctrl+Alt+Up", () => PrimaryEditor.Canvas.AddCursorVertical(-1)),
-                    Mi("Add Cursor Below", "Ctrl+Alt+Down", () => PrimaryEditor.Canvas.AddCursorVertical(1)),
-                    Mi("Add Cursors to Line Ends", "Shift+Alt+I", () => PrimaryEditor.Canvas.AddCursorsToLineEnds()),
-                    Mi("Add Next Occurrence", "Ctrl+D", () => PrimaryEditor.Canvas.AddNextOccurrenceOrSelectWord()),
-                    Mi("Select All Occurrences", "Ctrl+Shift+L", () => PrimaryEditor.Canvas.SelectAllFindOccurrences()),
-                    Mi("Column Selection Mode", "", () => { PrimaryEditor.ColumnSelectionMode = !PrimaryEditor.ColumnSelectionMode; SetStatusMessage("Column Selection Mode: " + (PrimaryEditor.ColumnSelectionMode ? "On" : "Off")); })
-                }
-            };
-
-            var viewMenu = new MenuItem
-            {
-                Header = "_View",
-                ItemsSource = new object[]
-                {
-                    Mi("Command Palette...", "Ctrl+Shift+P", () => OpenCommandPalette(">")),
-                    new Separator(),
-                    Mi("Explorer", "Ctrl+Shift+E", () => SwitchSidebarView("explorer")),
-                    Mi("Search", "Ctrl+Shift+F", () => SwitchSidebarView("search")),
-                    Mi("Source Control", "Ctrl+Shift+G", () => SwitchSidebarView("git")),
-                    Mi("Run and Debug", "Ctrl+Shift+D", () => SwitchSidebarView("run")),
-                    Mi("Extensions", "Ctrl+Shift+X", () => SwitchSidebarView("extensions")),
-                    Mi("AI Chat & Composer", "Ctrl+Alt+I", ToggleRightChatDock),
-                    new Separator(),
-                    Mi("Problems", "Ctrl+Shift+M", () => SwitchBottomTab("problems")),
-                    Mi("Network Activity", "", ShowNetworkActivity),
-                    Mi("Output", "Ctrl+Shift+U", () => SwitchBottomTab("output")),
-                    Mi("Terminal", "Ctrl+`", () => SwitchBottomTab("terminal")),
-                    new Separator(),
-                    Mi("Split Editor Right", "Ctrl+\\", ToggleSplitEditor),
-                    Mi("Toggle Primary Side Bar", "Ctrl+B", TogglePrimarySidebar),
-                    Mi("Toggle Panel", "Ctrl+J", ToggleBottomPanel),
-                    Mi("Zen Mode", "Ctrl+K Z", ToggleZenMode),
-                    Mi("Full Screen", "F11", ToggleFullScreenMode),
-                    new Separator(),
-                    Mi("Toggle Word Wrap", "Alt+Z", () => PrimaryEditor.Canvas.ToggleWordWrap()),
-                    Mi("Toggle Minimap", "", () => { PrimaryEditor.ShowMinimap = !PrimaryEditor.ShowMinimap; settings.ShowMinimap = PrimaryEditor.ShowMinimap; }),
-                    Mi("Toggle Breadcrumbs", "", () => PrimaryEditor.ShowBreadcrumbs = !PrimaryEditor.ShowBreadcrumbs),
-                    Mi("Zoom In", "Ctrl+=", () => AdjustZoom(1)),
-                    Mi("Zoom Out", "Ctrl+-", () => AdjustZoom(-1)),
-                    Mi("Reset Zoom", "Ctrl+0", () => AdjustZoom(0))
-                }
-            };
-
-            var goMenu = new MenuItem
-            {
-                Header = "_Go",
-                ItemsSource = new object[]
-                {
-                    Mi("Back", "Alt+Left", NavigateBack),
-                    Mi("Forward", "Alt+Right", NavigateForward),
-                    new Separator(),
-                    Mi("Go to File...", "Ctrl+P", OpenQuickOpen),
-                    Mi("Go to Symbol in Editor...", "Ctrl+Shift+O", () => OpenCommandPalette("@")),
-                    Mi("Go to Symbol in Workspace...", "Ctrl+T", () => OpenCommandPalette("#")),
-                    Mi("Go to Definition", "F12", GoToDefinitionAtCursor),
-                    Mi("Go to Line/Column...", "Ctrl+G", PromptGoToLineModal),
-                    Mi("Go to Bracket", "Ctrl+Shift+\\", () => PrimaryEditor.Canvas.JumpToMatchingBracket()),
-                    new Separator(),
-                    Mi("Next Problem", "F8", () => JumpDiagnostic(1)),
-                    Mi("Previous Problem", "Shift+F8", () => JumpDiagnostic(-1))
-                }
-            };
-
-            var runMenu = new MenuItem
-            {
-                Header = "_Run",
-                ItemsSource = new object[]
-                {
-                    Mi("Start Debugging", "F5", StartOrContinueDebugging),
-                    Mi("Run Without Debugging", "Ctrl+F5", RunActiveFileInTerminal),
-                    Mi("Stop Debugging", "Shift+F5", () => _ = debugController.StopAsync()),
-                    Mi("Restart Debugging", "Ctrl+Shift+F5", () => debugController.Restart()),
-                    new Separator(),
-                    Mi("Step Over", "F10", () => debugController.StepOver()),
-                    Mi("Step Into", "F11", () => debugController.StepInto()),
-                    Mi("Step Out", "Shift+F11", () => debugController.StepOut()),
-                    Mi("Continue", "F5", () => debugController.Continue()),
-                    new Separator(),
-                    Mi("Toggle Breakpoint", "F9", ToggleBreakpointAtCursor),
-                    Mi("Add Configuration (launch.json)...", "", CreateLaunchJson),
-                    new Separator(),
-                    Mi("Run Build Task", "Ctrl+Shift+B", RunWorkspaceBuildInTerminal),
-                    Mi("Open Run & Debug View", "Ctrl+Shift+D", () => SwitchSidebarView("run"))
-                }
-            };
-
-            var terminalMenu = new MenuItem
-            {
-                Header = "_Terminal",
-                ItemsSource = new object[]
-                {
-                    Mi("New Terminal", "Ctrl+Shift+`", () => RequestNewTerminal()),
-                    Mi("Split Terminal", "Ctrl+Shift+5", ToggleSplitTerminal),
-                    new Separator(),
-                    Mi("Inline Terminal AI Assistant...", "Ctrl+K", () => activeTerminalSession?.Control?.ShowInlineAiBar()),
-                    Mi("Run Active File in Active Terminal", "", RunActiveFileInTerminal),
-                    Mi("Clear Terminal", "", () => activeTerminalSession?.Control?.ClearTerminal()),
-                    Mi("Kill Active Terminal", "", () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); })
-                }
-            };
-
-            var helpMenu = new MenuItem
-            {
-                Header = "_Help",
-                ItemsSource = new object[]
-                {
-                    Mi("Welcome", "", OpenWelcomeTab),
-                    Mi("Show All Commands", "Ctrl+Shift+P", () => OpenCommandPalette(">")),
-                    Mi("Keyboard Shortcuts Reference", "Ctrl+K Ctrl+S", ShowKeyboardShortcutsModal),
-                    Mi("BYOK AI Provider & Harness Setup", "", ShowByokAndHarnessModal),
-                    new Separator(),
-                    Mi("Check for Updates...", "", CheckForUpdatesInteractive),
-                    Mi("About codeLess", "", ShowAboutModal)
-                }
-            };
-
-            return new Menu
-            {
-                VerticalAlignment = VerticalAlignment.Center,
-                ItemsSource = new object[]
-                {
-                    fileMenu, editMenu, selectionMenu, viewMenu, goMenu, runMenu, terminalMenu, helpMenu
-                }
-            };
+            return BuildModelTopMenu(false);
         }
 
         private void BuildNativeMacMenu()
@@ -837,151 +637,19 @@ namespace codeLess.AvaloniaApp
             try
             {
                 var rootMenu = new NativeMenu();
-
-                NativeMenuItem Nmi(string header, Action onClick, Key key = Key.None, KeyModifiers mods = KeyModifiers.None)
-                {
-                    var item = new NativeMenuItem(header);
-                    if (key != Key.None)
-                        item.Gesture = new KeyGesture(key, mods);
-                    if (onClick != null)
-                        item.Click += (s, e) => onClick();
-                    return item;
-                }
-
-                var meta = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? KeyModifiers.Meta : KeyModifiers.Control;
-
-                var appSub = new NativeMenu
-                {
-                    Nmi("About codeLess", ShowAboutModal),
-                    Nmi("Check for Updates...", CheckForUpdatesInteractive),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Settings...", ShowSettingsModal, Key.OemComma, meta),
-                    Nmi("Keyboard Shortcuts...", ShowKeyboardShortcutsModal),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Quit codeLess", Close, Key.Q, meta)
-                };
-
                 bool isLiveMacDesktop = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
                                         Application.Current?.ApplicationLifetime is global::Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
-                if (Application.Current != null)
-                {
-                    Application.Current.Name = "codeLess";
-                    NativeMenu.SetMenu(Application.Current, appSub);
-                }
-
-                if (!isLiveMacDesktop)
-                {
-                    rootMenu.Add(new NativeMenuItem("codeLess") { Menu = appSub });
-                }
-                else if (mainTopMenu != null)
+                // app menu (About, Check for Updates, Settings ▸, Hide / Hide Others / Show All, Quit), File ... Window, Help
+                BuildModelNativeMenu(rootMenu, includeAppMenu: !isLiveMacDesktop);
+                if (isLiveMacDesktop && mainTopMenu != null)
                 {
                     // On macOS desktop, menus live in the native top system menu bar; hide redundant in-window menu strip
                     mainTopMenu.IsVisible = false;
                 }
-
-                var fileSub = new NativeMenu
-                {
-                    Nmi("New File", () => CreateNewUntitledTab(), Key.N, meta),
-                    Nmi("Open File...", () => _ = PromptOpenFileDialogAsync(), Key.O, meta),
-                    Nmi("Open Folder...", () => _ = PromptOpenFolderDialogAsync()),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Save", () => SaveActiveTab(), Key.S, meta),
-                    Nmi("Save As...", () => _ = PromptSaveAsAsync(), Key.S, meta | KeyModifiers.Shift),
-                    Nmi("Save All", SaveAllTabs),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Close Editor", () => { if (activeTab != null) CloseTab(activeTab); }, Key.W, meta),
-                    Nmi("Close Folder", CloseWorkspaceFolder)
-                };
-                rootMenu.Add(new NativeMenuItem("File") { Menu = fileSub });
-
-                var editSub = new NativeMenu
-                {
-                    Nmi("Undo", () => RouteNativeEditCommand("undo"), Key.Z, meta),
-                    Nmi("Redo", () => RouteNativeEditCommand("redo"), Key.Z, meta | KeyModifiers.Shift),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Find", () => PrimaryEditor.ShowFindBar(false), Key.F, meta),
-                    Nmi("Replace", () => PrimaryEditor.ShowFindBar(true), Key.F, meta | KeyModifiers.Alt),
-                    Nmi("Toggle Line Comment", () => PrimaryEditor.Canvas.ToggleLineComment(), Key.OemQuestion, meta)
-                };
-                rootMenu.Add(new NativeMenuItem("Edit") { Menu = editSub });
-
-                var selSub = new NativeMenu
-                {
-                    Nmi("Select All", () => RouteNativeEditCommand("selectall"), Key.A, meta),
-                    Nmi("Add Next Occurrence", () => PrimaryEditor.Canvas.AddNextOccurrenceOrSelectWord(), Key.D, meta),
-                    Nmi("Select All Occurrences", () => PrimaryEditor.Canvas.SelectAllFindOccurrences(), Key.L, meta | KeyModifiers.Shift),
-                    Nmi("Add Cursor Above", () => PrimaryEditor.Canvas.AddCursorVertical(-1), Key.Up, meta | KeyModifiers.Alt),
-                    Nmi("Add Cursor Below", () => PrimaryEditor.Canvas.AddCursorVertical(1), Key.Down, meta | KeyModifiers.Alt)
-                };
-                rootMenu.Add(new NativeMenuItem("Selection") { Menu = selSub });
-
-                var viewSub = new NativeMenu
-                {
-                    Nmi("Command Palette...", () => OpenCommandPalette(">"), Key.P, meta | KeyModifiers.Shift),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Explorer", () => SwitchSidebarView("explorer"), Key.E, meta | KeyModifiers.Shift),
-                    Nmi("Search", () => SwitchSidebarView("search"), Key.F, meta | KeyModifiers.Shift),
-                    Nmi("Source Control", () => SwitchSidebarView("git"), Key.G, meta | KeyModifiers.Shift),
-                    Nmi("Run and Debug", () => SwitchSidebarView("run"), Key.D, meta | KeyModifiers.Shift),
-                    Nmi("Extensions", () => SwitchSidebarView("extensions"), Key.X, meta | KeyModifiers.Shift),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Toggle Primary Side Bar", TogglePrimarySidebar, Key.B, meta),
-                    Nmi("Toggle Panel", ToggleBottomPanel, Key.J, meta),
-                    Nmi("Toggle AI Chat", ToggleRightChatDock, Key.I, meta | KeyModifiers.Alt),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Network Activity", ShowNetworkActivity),
-                    Nmi("Offline Mode (toggle)", ToggleOfflineMode)
-                };
-                rootMenu.Add(new NativeMenuItem("View") { Menu = viewSub });
-
-                var goSub = new NativeMenu
-                {
-                    Nmi("Go to File...", OpenQuickOpen, Key.P, meta),
-                    Nmi("Go to Symbol in Editor...", () => OpenCommandPalette("@"), Key.O, meta | KeyModifiers.Shift),
-                    Nmi("Go to Symbol in Workspace...", () => OpenCommandPalette("#"), Key.T, meta),
-                    Nmi("Go to Line/Column...", PromptGoToLineModal, Key.G, meta)
-                };
-                rootMenu.Add(new NativeMenuItem("Go") { Menu = goSub });
-
-                var runSub = new NativeMenu
-                {
-                    Nmi("Start Debugging", StartOrContinueDebugging, Key.F5, KeyModifiers.None),
-                    Nmi("Run Without Debugging", RunActiveFileInTerminal, Key.F5, KeyModifiers.Control),
-                    Nmi("Stop Debugging", () => _ = debugController.StopAsync(), Key.F5, KeyModifiers.Shift),
-                    Nmi("Restart Debugging", () => debugController.Restart(), Key.F5, meta | KeyModifiers.Shift),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Step Over", () => debugController.StepOver(), Key.F10, KeyModifiers.None),
-                    Nmi("Step Into", () => debugController.StepInto(), Key.F11, KeyModifiers.None),
-                    Nmi("Step Out", () => debugController.StepOut(), Key.F11, KeyModifiers.Shift),
-                    new NativeMenuItemSeparator(),
-                    Nmi("Toggle Breakpoint", ToggleBreakpointAtCursor, Key.F9, KeyModifiers.None),
-                    Nmi("Add Configuration (launch.json)...", CreateLaunchJson)
-                };
-                rootMenu.Add(new NativeMenuItem("Run") { Menu = runSub });
-
-                var termSub = new NativeMenu
-                {
-                    Nmi("New Terminal", () => RequestNewTerminal()),
-                    Nmi("Split Terminal", ToggleSplitTerminal),
-                    Nmi("Clear Terminal", () => activeTerminalSession?.Control?.ClearTerminal())
-                };
-                rootMenu.Add(new NativeMenuItem("Terminal") { Menu = termSub });
-
-                var helpSub = new NativeMenu
-                {
-                    Nmi("Welcome", OpenWelcomeTab),
-                    Nmi("Show All Commands", () => OpenCommandPalette(">")),
-                    Nmi("Keyboard Shortcuts Reference", ShowKeyboardShortcutsModal),
-                    Nmi("Check for Updates...", CheckForUpdatesInteractive),
-                    Nmi("About codeLess", ShowAboutModal)
-                };
-                rootMenu.Add(new NativeMenuItem("Help") { Menu = helpSub });
-
                 NativeMenu.SetMenu(this, rootMenu);
             }
             catch { }
         }
-
         private Border BuildActivityBar()
         {
             var outerGrid = new Grid
