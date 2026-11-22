@@ -553,6 +553,12 @@ namespace codeLess.AvaloniaApp
                     ctx.DrawLine(pen, new Point(cx - r, cy - s * 0.05), new Point(cx - r + s * 0.30, cy - s * 0.25));
                     break;
                 }
+                case "stop":
+                {
+                    double h = s * 0.62;
+                    ctx.DrawRectangle(fill, null, new Rect(cx - h, cy - h, h * 2, h * 2), 2, 2);
+                    break;
+                }
                 case "minus":
                 {
                     ctx.DrawLine(pen, new Point(cx - s * 0.62, cy), new Point(cx + s * 0.62, cy));

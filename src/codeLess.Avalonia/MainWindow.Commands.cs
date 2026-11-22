@@ -1383,6 +1383,7 @@ namespace codeLess.AvaloniaApp
         {
             currentGitEntries = entries ?? new List<GitStatusEntry>();
             bool noGit = string.IsNullOrEmpty(branch) || branch == "no-git";
+            if (!noGit) RefreshGutterBaselines(); // staging / commits change the index the gutter compares with
             scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
             SetStatusBranch(noGit ? "no-git" : branch);
 
@@ -1738,7 +1739,7 @@ namespace codeLess.AvaloniaApp
             var tab = OpenFileInTab(fullPath, preview: false);
             if (tab != null && !string.IsNullOrEmpty(workspaceRoot))
             {
-                tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, fullPath);
+                tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, fullPath);
                 tab.RefreshGutterDiff();
                 PrimaryEditor.Canvas.InvalidateVisual();
             }
@@ -2166,6 +2167,12 @@ namespace codeLess.AvaloniaApp
         {
             string prompt = (overridePrompt ?? chatPromptInput.Text ?? "").Trim();
             if (string.IsNullOrEmpty(prompt)) return;
+            if (aiEngine.IsTurnRunning)
+            {
+                // Keep the prompt in the composer: one request at a time per chat (VS Code), Stop is on the send button.
+                SetStatusMessage(LlmHarnessAndAgentEngine.BusyReply);
+                return;
+            }
             chatPromptInput.Text = "";
 
             chatProgressBar.StartProgress();
@@ -2537,6 +2544,7 @@ namespace codeLess.AvaloniaApp
             all.AddRange(BuildParityPaletteCommands());
             all.AddRange(BuildTaskPaletteCommands());
             all.AddRange(BuildAgentTrustPaletteCommands());
+            all.AddRange(BuildExtensionPaletteCommands());
             return all;
         }
 
@@ -3112,9 +3120,35 @@ namespace codeLess.AvaloniaApp
             return tcs.Task.Wait(TimeSpan.FromMinutes(10)) && tcs.Task.Result;
         }
 
+        /// <summary>True while a chat turn runs; the send button is a Stop button meanwhile.</summary>
+        public bool IsChatTurnRunning => aiEngine.IsTurnRunning;
+
+        /// <summary>Stop: cancels the running chat turn (its provider stream and remaining agent steps).</summary>
+        public void StopChatTurn()
+        {
+            if (!aiEngine.IsTurnRunning) return;
+            aiEngine.CancelStreamingRequested = true;
+            SetStatusMessage("Stopping the agent…");
+        }
+
+        private void SetChatTurnBusy(bool busy)
+        {
+            if (chatSendBtn?.Content is VectorIconControl glyph)
+            {
+                glyph.IconName = busy ? "stop" : "send";
+                glyph.InvalidateVisual();
+            }
+            if (chatSendBtn != null) ToolTip.SetTip(chatSendBtn, busy ? "Stop" : "Send (Enter)");
+        }
+
         public async Task<string> SendChatMessageAsync(string prompt)
         {
             if (string.IsNullOrWhiteSpace(prompt)) return "";
+            if (aiEngine.IsTurnRunning)
+            {
+                AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = LlmHarnessAndAgentEngine.BusyReply });
+                return LlmHarnessAndAgentEngine.BusyReply;
+            }
 
             var userItem = new AvaloniaAgentFeedItem
             {
@@ -3138,7 +3172,7 @@ namespace codeLess.AvaloniaApp
             // thread; previously it ran on the UI thread and froze the window for each tool call.
             string mode = currentAgentMode;
             string harnessId = settings.ActiveHarnessId;
-            var tabSnapshot = activeTab;
+            var tabSnapshot = AgentTurnInputs.SnapshotTab(activeTab); // detached: the turn runs on a worker thread
             string wsSnapshot = workspaceRoot;
             var filesSnapshot = workspaceFiles.ToList();
             string termText = activeTerminalSession?.Control?.GetVisibleScreenText() ?? "";
@@ -3159,9 +3193,20 @@ namespace codeLess.AvaloniaApp
                     terminalChanges = agentTrust.EndTurn(aiEngine, tracker);
                 }
             });
-            var turnResult = AvaloniaTerminalEmulatorControl.IsDesktopRuntime
-                ? await loopTask
-                : loopTask.GetAwaiter().GetResult();
+            SetChatTurnBusy(true);
+            AgentExecutionTurnResult turnResult;
+            try
+            {
+                turnResult = AvaloniaTerminalEmulatorControl.IsDesktopRuntime
+                    ? await loopTask
+                    : loopTask.GetAwaiter().GetResult();
+            }
+            finally { SetChatTurnBusy(false); }
+            if (LlmHarnessAndAgentEngine.IsBusyResult(turnResult))
+            {
+                AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = turnResult.AssistantReply });
+                return turnResult.AssistantReply;
+            }
 
             if (turnResult.ToolCalls != null)
             {

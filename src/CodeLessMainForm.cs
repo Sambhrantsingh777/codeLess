@@ -169,6 +169,7 @@ namespace codeLess.Studio
         private Button extActionBtn;
         private Button extInstallVsixFileBtn;
         private Button extRunCmdBtn;
+        private Button extUninstallBtn;
 
         // Sidebar View 5: LLM Harness Studio
         private Panel harnessStudioPanel;
@@ -369,19 +370,9 @@ namespace codeLess.Studio
                 return approved;
             };
 
-            this.aiEngine.OnExecuteTerminalCommandInConPty = (cmd) =>
-            {
-                string cwd = !string.IsNullOrEmpty(terminalWorkingDir) && Directory.Exists(terminalWorkingDir) ? terminalWorkingDir : workspaceRoot;
-                try
-                {
-                    if (conPtyTerminalControl != null && conPtyTerminalControl.ActiveSession != null && conPtyTerminalControl.ActiveSession.IsRunning)
-                    {
-                        conPtyTerminalControl.ActiveSession.WriteCommand(cmd);
-                    }
-                }
-                catch { }
-                return LlmHarnessAndAgentEngine.RunProcessCapture("powershell.exe", "-NoProfile -NonInteractive -Command \"" + cmd.Replace("\"", "\\\"") + "\"", cwd, 10000);
-            };
+            // Agent run_terminal commands run once, captured by the engine (proper quoting, the agent timeout, and a
+            // temporary workspace copy when edits are staged). The old hook also typed every command into the visible
+            // terminal, so each command ran twice.
 
             this.Text = "Welcome — codeLess";
             this.AllowDrop = true;
@@ -505,8 +496,9 @@ namespace codeLess.Studio
             autoSaveTimer = new Timer { Interval = 3000 };
             autoSaveTimer.Tick += (s, e) =>
             {
+                autoSaveTimer.Stop();
                 RunAutoSaveTick();
-                if (!HasPendingAutoSave()) autoSaveTimer.Stop();
+                if (HasPendingAutoSave()) RestartAutoSaveTimer(NextAutoSaveDelayMs());
             };
 
             UpdateTelemetryBadges();
@@ -1538,12 +1530,16 @@ namespace codeLess.Studio
             }
         }
 
+        // files.autoSave = afterDelay (VS Code): a file is saved autoSaveDelay ms after its LAST edit; every edit restarts
+        // the delay (AutoSaveDebouncer). Buffers with an inline proposal under review are never auto-saved (AutoSavePolicy).
+        private readonly AutoSaveDebouncer autoSaveDebouncerWin = new AutoSaveDebouncer();
+
         private bool HasPendingAutoSave()
         {
-            if (settings == null || !settings.AutoSave) return false;
+            if (!AutoSavePolicy.SavesAfterDelay(settings)) return false;
             foreach (var t in openTabs)
             {
-                if (t.IsDirty && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath)) return true;
+                if (AutoSavePolicy.IsEligible(t)) return true;
             }
             return false;
         }
@@ -1551,17 +1547,44 @@ namespace codeLess.Studio
         /// <summary>Starts the autosave timer when there is something to save (called whenever buffers / tabs change).</summary>
         private void ArmAutoSaveTimer()
         {
-            if (autoSaveTimer != null && !autoSaveTimer.Enabled && HasPendingAutoSave()) autoSaveTimer.Start();
+            if (autoSaveTimer != null && !autoSaveTimer.Enabled && HasPendingAutoSave()) RestartAutoSaveTimer(NextAutoSaveDelayMs());
+        }
+
+        /// <summary>An edit restarts that buffer's delay (and the timer).</summary>
+        private void NoteAutoSaveEditWin(EditorTabBuffer buf)
+        {
+            if (buf == null || autoSaveTimer == null || !AutoSavePolicy.SavesAfterDelay(settings)) return;
+            autoSaveDebouncerWin.NoteEdit(buf, AutoSaveDebouncer.NowMs());
+            RestartAutoSaveTimer(settings.EffectiveAutoSaveDelayMs);
+        }
+
+        private void RestartAutoSaveTimer(long delayMs)
+        {
+            if (autoSaveTimer == null) return;
+            autoSaveTimer.Stop();
+            autoSaveTimer.Interval = (int)Math.Max(50, Math.Min(int.MaxValue, delayMs));
+            autoSaveTimer.Start();
+        }
+
+        private long NextAutoSaveDelayMs()
+        {
+            long now = AutoSaveDebouncer.NowMs();
+            long best = long.MaxValue;
+            foreach (var t in openTabs)
+                if (AutoSavePolicy.IsEligible(t)) best = Math.Min(best, autoSaveDebouncerWin.RemainingMs(t, now, settings.EffectiveAutoSaveDelayMs));
+            return best == long.MaxValue ? settings.EffectiveAutoSaveDelayMs : best;
         }
 
         public void RunAutoSaveTick()
         {
-            if (settings != null && settings.AutoSave)
+            if (!AutoSavePolicy.SavesAfterDelay(settings)) return;
+            long now = AutoSaveDebouncer.NowMs();
+            foreach (var t in openTabs.ToList())
             {
-                foreach (var t in openTabs.ToList())
+                if (AutoSavePolicy.IsEligible(t) && autoSaveDebouncerWin.IsDue(t, now, settings.EffectiveAutoSaveDelayMs))
                 {
-                    if (t.IsDirty && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath))
-                        SaveTabBuffer(t, true);
+                    autoSaveDebouncerWin.Forget(t);
+                    SaveTabBuffer(t, true);
                 }
             }
         }
@@ -1824,7 +1847,7 @@ namespace codeLess.Studio
             arenaTopBtn = CreateHeaderButton("Arena", new Point(790, 5), 68, false);
             arenaTopBtn.FlatAppearance.BorderSize = 0;
             arenaTopBtn.Visible = false;
-            arenaTopBtn.Click += (s, e) => OpenMultiHarnessArenaDialog();
+            arenaTopBtn.Click += (s, e) => OpenBestOfNDialogWin();
 
             archMapTopBtn = CreateHeaderButton("Map", new Point(862, 5), 62, false);
             archMapTopBtn.FlatAppearance.BorderSize = 0;
@@ -2235,7 +2258,7 @@ namespace codeLess.Studio
             actGitBtn.Click += (s, e) => { handleSidebarIconClick("git"); if (leftSidebar.Visible) RefreshGitSidebarStatus(); };
             actExtBtn.Click += (s, e) => handleSidebarIconClick("extensions");
             actHarnessBtn.Click += (s, e) => handleSidebarIconClick("harness");
-            actArenaBtn.Click += (s, e) => OpenMultiHarnessArenaDialog();
+            actArenaBtn.Click += (s, e) => OpenBestOfNDialogWin();
             actTermBtn.Click += (s, e) => ToggleBottomDockVisibility();
             actHomeBtn.Click += (s, e) => OpenWelcomeTab();
             actAccountBtn.Click += (s, e) => OpenByokConfigurationDialog();
@@ -2441,29 +2464,6 @@ namespace codeLess.Studio
             this.Controls.Add(activityBar);
             this.Controls.Add(statusBar);
             this.Controls.Add(topBar);
-        }
-
-        private Label CreateStatusBarItem(string text, string tooltip, Action<Control> onClick)
-        {
-            Label lbl = new Label
-            {
-                Text = text,
-                AutoSize = true,
-                Height = 22,
-                Padding = new Padding(5, 3, 5, 3),
-                Font = StatusItemFont,
-                ForeColor = Color.White,
-                BackColor = Color.Transparent,
-                Cursor = Cursors.Hand,
-                UseMnemonic = false
-            };
-            lbl.MouseEnter += (s, e) => { lbl.BackColor = StatusItemHoverColor(); };
-            lbl.MouseLeave += (s, e) => { lbl.BackColor = Color.Transparent; };
-            if (onClick != null)
-                lbl.Click += (s, e) => onClick(lbl);
-            if (!string.IsNullOrEmpty(tooltip) && statusBarToolTip != null)
-                statusBarToolTip.SetToolTip(lbl, tooltip);
-            return lbl;
         }
 
         private void LayoutStatusBarItems()
@@ -3050,7 +3050,7 @@ namespace codeLess.Studio
                 catch { }
             }));
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
-            helpMenu.DropDownItems.Add(CreateMenuItem("Best-of-N Arena (Compare Providers)...", "", () => OpenMultiHarnessArenaDialog()));
+            helpMenu.DropDownItems.Add(CreateMenuItem("Best-of-N Arena (Compare Providers)...", "", () => OpenBestOfNDialogWin()));
             AddAgentTrustMenuItems(helpMenu);
             helpMenu.DropDownItems.Add(CreateMenuItem("Architecture & Dependency Map...", "", () => OpenArchitectureGraphDialog()));
             helpMenu.DropDownItems.Add(CreateMenuItem("Zero-RAM Time-Travel Checkpoints...", "", () => OpenTimeTravelCheckpointsDialog()));
@@ -3173,6 +3173,11 @@ if __name__ == '__main__':
         {
             if (lspController != null) lspController.Attach(ctrl);
             ctrl.OnSaveRequested += (buf) => SaveTabBufferUser(buf);
+            // The editor's own Accept All / Reject All on an agent proposal = accept / reject that file (same as Avalonia).
+            ctrl.OnDiffAllDecision += OnEditorDiffAllDecisionWin;
+            // Merge-conflict / staging entries in the editor context menu (QA #10, same entries as Avalonia).
+            ctrl.ContextEntriesProvider = b => ReferenceEquals(b, activeTab) ? EditorScmContextItems.Build(b) : new List<EditorContextEntry>(); // parity commands act on the active tab
+            ctrl.ContextCommandHandler = id => ExecuteParityCommand(id);
             ctrl.OnRunFileRequested += async (buf) => await ExecuteActiveFileInTerminalAsync(buf);
             ctrl.OnCtrlKRequested += async (inst, buf) => await HandleCtrlKInlineEditAsync(inst, buf);
             ctrl.OnPinContextRequested += (buf) => AddContextPill("@" + buf.FileName);
@@ -3219,8 +3224,11 @@ if __name__ == '__main__':
                 }
                 RefreshChangesetReviewBar();
                 UpdateStatusBarCursorAndLanguage(buf);
+                NoteAutoSaveEditWin(buf);
                 ArmAutoSaveTimer();
             };
+            // files.autoSave = onFocusChange: focus leaving the editor for any other part of the workbench saves it.
+            ctrl.Leave += (s, e) => OnEditorControlLeaveWin(ctrl);
             ctrl.OnCursorOrSelectionChanged += (buf) =>
             {
                 UpdateStatusBarCursorAndLanguage(buf);
@@ -5198,7 +5206,7 @@ if __name__ == '__main__':
                     tab.HasFinalNewline = fFinalNl;
                     tab.Content = disk;
                     tab.SavedContent = disk;
-                    tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, item.FilePath);
+                    tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, item.FilePath);
                     tab.SyncLinesFromContent();
                     tab.IsDirty = false;
                     tab.RefreshGutterDiff();
@@ -5325,7 +5333,7 @@ if __name__ == '__main__':
                 {
                     foreach (string fp in openTabPaths)
                     {
-                        headMap[fp] = LlmHarnessAndAgentEngine.GetGitHeadFileContent(snapRoot, fp);
+                        headMap[fp] = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(snapRoot, fp); // gutter = working tree vs index
                     }
                 }
                 Action applyGit = () =>
@@ -5454,6 +5462,11 @@ if __name__ == '__main__':
             extRunCmdBtn.Height = 27;
             extRunCmdBtn.Click += (s, e) => RunBuiltInComplexityAnalysis();
 
+            extUninstallBtn = CreateHeaderButton("Uninstall Selected", new Point(0, 0), 240, false);
+            extUninstallBtn.Dock = DockStyle.Bottom;
+            extUninstallBtn.Height = 27;
+            extUninstallBtn.Click += (s, e) => UninstallSelectedExtensionWin();
+
             extensionsPanel.Controls.Add(extList);
             extensionsPanel.Controls.Add(CreateVerticalSpacer(6));
             extensionsPanel.Controls.Add(extBtnRow);
@@ -5462,6 +5475,7 @@ if __name__ == '__main__':
             extensionsPanel.Controls.Add(extDetailLabel);
             extensionsPanel.Controls.Add(new Panel { Dock = DockStyle.Bottom, Height = 5 });
             extensionsPanel.Controls.Add(extRunCmdBtn);
+            extensionsPanel.Controls.Add(extUninstallBtn);
             extensionsPanel.Controls.Add(new Panel { Dock = DockStyle.Bottom, Height = 5 });
             extensionsPanel.Controls.Add(extActionBtn);
         }
@@ -6661,10 +6675,7 @@ if __name__ == '__main__':
                 if (agentCs != null) AcceptAgentChangeSetWin(agentCs, false); // writes + records the turn checkpoint
                 foreach (var t in openTabs)
                 {
-                    t.DiffHunks.Clear();
-                    t.PreDiffContent = null;
-                    t.IsDirty = (t.GetNormalizedContentRespectingFinalNewline() != (t.SavedContent ?? ""));
-                    t.RefreshGutterDiff();
+                    if (t != editorControl.CurrentBuffer && t != splitEditorControl.CurrentBuffer) InlineDiffReview.AcceptAll(t);
                 }
                 editorControl.AcceptAllHunks();
                 splitEditorControl.AcceptAllHunks();
@@ -6683,11 +6694,7 @@ if __name__ == '__main__':
                     {
                         if (t.PreDiffContent != null)
                         {
-                            t.Content = t.PreDiffContent;
-                            t.SyncLinesFromContent();
-                            t.PreDiffContent = null;
-                            t.IsDirty = (t.GetNormalizedContentRespectingFinalNewline() != (t.SavedContent ?? ""));
-                            t.RefreshGutterDiff();
+                            InlineDiffReview.RejectAll(t);
                             LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(t);
                         }
                         t.DiffHunks.Clear();
@@ -8680,7 +8687,7 @@ if __name__ == '__main__':
                     ? EditorTabBuffer.ReadFilePreservingMetadata(filePath, out fileEnc, out hasBom, out eol, out hasFinalNl)
                     : "";
                 string gitHeadContent = (!isLarge && File.Exists(filePath))
-                    ? LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, filePath)
+                    ? LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, filePath)
                     : null;
                 EditorTabBuffer tab = new EditorTabBuffer
                 {
@@ -9402,7 +9409,7 @@ if __name__ == '__main__':
                 buf.IsDeletedOnDisk = false;
                 buf.IsPreview = false;
                 if (!buf.IsLargeFile && buf.GitHeadContent == null && !string.IsNullOrEmpty(workspaceRoot))
-                    buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, buf.FilePath);
+                    buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, buf.FilePath);
                 buf.RefreshGutterDiff();
                 if (buf == activeTab)
                 {
@@ -10095,17 +10102,32 @@ if __name__ == '__main__':
                 ? conPtyTerminalControl.Session.GetRecentOutputText(100)
                 : (terminalOutput != null ? terminalOutput.Text : "");
 
-            AgentExecutionTurnResult turn = await aiEngine.RunAutonomousAgentLoopAsync(
+            // Off the UI thread (QA #25) on detached inputs. While a chat turn is running on the main engine, the
+            // inline edit runs on an isolated engine copy (own Stop flag / trace, no terminal) instead of sharing it (QA #24).
+            LlmHarnessAndAgentEngine engine = aiEngine.IsTurnRunning ? aiEngine.CreateIsolatedCopy() : aiEngine;
+            EditorTabBuffer bufSnapshot = AgentTurnInputs.SnapshotTab(buf);
+            List<string> filesSnapshot = AgentTurnInputs.SnapshotList(workspaceFiles);
+            List<string> pillsSnapshot = AgentTurnInputs.SnapshotList(attachedContextPills);
+            string harnessId = settings.ActiveHarnessId;
+            string wsRoot = workspaceRoot;
+            statusLeftLabel.Text = "Inline edit: asking " + GetActiveModelDisplayName() + "…";
+            AgentExecutionTurnResult turn = await Task.Run(() => engine.RunAutonomousAgentLoopAsync(
                 "ctrl_k",
                 instruction,
                 vendor,
-                settings.ActiveHarnessId,
-                buf,
-                workspaceRoot,
-                workspaceFiles,
-                attachedContextPills,
+                harnessId,
+                bufSnapshot,
+                wsRoot,
+                filesSnapshot,
+                pillsSnapshot,
                 termLog
-            );
+            ));
+            if (IsDisposed) return;
+            if (LlmHarnessAndAgentEngine.IsBusyResult(turn))
+            {
+                statusLeftLabel.Text = turn.AssistantReply;
+                return;
+            }
 
             ApplyStagedTurnEdits(turn, instruction);
             AppendTurnToChatAndTrace(turn, GetActiveModelDisplayName());
@@ -10114,7 +10136,12 @@ if __name__ == '__main__':
 
         public async Task SubmitAgentPromptAsync()
         {
-            if (isAgentStreaming) return;
+            if (isAgentStreaming)
+            {
+                // One request at a time per chat (the prompt stays in the composer); Stop is next to it.
+                statusLeftLabel.Text = LlmHarnessAndAgentEngine.BusyReply;
+                return;
+            }
             string prompt = (promptInputBox.Text ?? "").Trim();
             if (string.IsNullOrEmpty(prompt)) return;
             promptInputBox.Clear();
@@ -10177,17 +10204,25 @@ if __name__ == '__main__':
                     ? conPtyTerminalControl.Session.GetRecentOutputText(120)
                     : (terminalOutput != null ? terminalOutput.Text : "");
 
-                AgentExecutionTurnResult turn = await aiEngine.RunAutonomousAgentLoopAsync(
-                    currentAgentMode,
+                // The whole loop (LLM calls, tools, shell commands) runs on a worker thread with detached inputs so
+                // the window stays responsive (QA #25); tool approvals marshal to the UI thread (OnRequestToolApproval).
+                string loopMode = currentAgentMode;
+                string harnessId = settings.ActiveHarnessId;
+                EditorTabBuffer tabSnapshot = AgentTurnInputs.SnapshotTab(activeTab);
+                string wsRoot = workspaceRoot;
+                List<string> filesSnapshot = AgentTurnInputs.SnapshotList(workspaceFiles);
+                List<string> pillsSnapshot = AgentTurnInputs.SnapshotList(attachedContextPills);
+                AgentExecutionTurnResult turn = await Task.Run(() => aiEngine.RunAutonomousAgentLoopAsync(
+                    loopMode,
                     prompt,
                     vendor,
-                    settings.ActiveHarnessId,
-                    activeTab,
-                    workspaceRoot,
-                    workspaceFiles,
-                    attachedContextPills,
+                    harnessId,
+                    tabSnapshot,
+                    wsRoot,
+                    filesSnapshot,
+                    pillsSnapshot,
                     termLog
-                );
+                ));
                 List<TurnFileChange> terminalChanges = await EndAgentTurnWin(turnTracker);
 
                 Action completeOnUi = () =>
@@ -10488,6 +10523,22 @@ if __name__ == '__main__':
             }
         }
 
+        private void UninstallSelectedExtensionWin()
+        {
+            int idx = extList != null ? extList.SelectedIndex : -1;
+            if (idx < 0 || idx >= vsixEngine.Extensions.Count) return;
+            VsixExtensionPackage ext = vsixEngine.Extensions[idx];
+            bool activeThemeGone = ext.ContributedThemes.Any(t => activeTheme != null && t.Id == activeTheme.Id);
+            string status;
+            if (vsixEngine.Uninstall(ext, themes, out status))
+            {
+                if (activeThemeGone) ApplyThemeToWorkbench(StudioTheme.ResolveTheme(themes, StudioTheme.DefaultThemeId));
+                RefreshExtensionsListUi();
+                RefreshThemeComboItems();
+            }
+            statusLeftLabel.Text = status;
+        }
+
         private async Task SearchOpenVsxAsync(string query)
         {
             if (string.IsNullOrWhiteSpace(query) || query.StartsWith("Search OpenVSX"))
@@ -10522,6 +10573,9 @@ if __name__ == '__main__':
                 if (!ok && !string.IsNullOrEmpty(vsixEngine.LastNetworkNotice))
                     MessageBox.Show(this, vsixEngine.LastNetworkNotice, "Extension download", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 if (!ok) return;
+                // The marketplace entry is replaced by the installed package (with its themes / snippets).
+                string installedId = ext.Id;
+                ext = vsixEngine.Extensions.FirstOrDefault(x => x.IsInstalled && string.Equals(x.Id, installedId, StringComparison.OrdinalIgnoreCase)) ?? ext;
             }
 
             if (ext.ContributedThemes.Count > 0)
@@ -10560,12 +10614,6 @@ if __name__ == '__main__':
             );
 
             AppendChatMessage("VSIX HOST • AST METRICS", report);
-        }
-
-        private void OpenMultiHarnessArenaDialog()
-        {
-            // Best-of-N across providers/models with verification (replaces the single-provider harness race).
-            OpenBestOfNDialogWin();
         }
 
         private void OpenArchitectureGraphDialog()
@@ -10631,7 +10679,7 @@ if __name__ == '__main__':
             if (ExecuteParityCommand(cmdId)) return;
             if (ExecuteEditorNicetyCommand(cmdId)) return;
             if (ExecuteAgentTrustCommandWin(cmdId)) return;
-            if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
+            if (cmdId == "open_arena") OpenBestOfNDialogWin();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
             else if (cmdId == "open_rest_client") OpenRestApiPlaygroundDialog();
@@ -10983,11 +11031,6 @@ if __name__ == '__main__':
             {
                 dlg.ShowDialog(this);
             }
-        }
-
-        private void PromptGoToLineDialog()
-        {
-            OpenCommandPalette(":");
         }
 
         private string GetSelectedNodePath()

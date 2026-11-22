@@ -2350,6 +2350,17 @@ namespace codeLess.Studio
         public Color AccentColor;
     }
 
+    /// <summary>Callbacks attached to a <see cref="ConPtyTerminalSession"/> before its process starts.</summary>
+    public sealed class PtyStartHooks
+    {
+        /// <summary>Raw output bytes (reader thread), e.g. a task's problem matcher.</summary>
+        public Action<byte[], int> RawOutputTap;
+        /// <summary>Exit code (reader thread).</summary>
+        public Action<int> ProcessExited;
+        /// <summary>Written into the terminal buffer before any process output (e.g. "> Executing task: ...").</summary>
+        public string InitialText;
+    }
+
     public class ConPtyTerminalSession : IDisposable
     {
         public string Id = Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -2392,6 +2403,26 @@ namespace codeLess.Studio
         private Process fallbackProcess;
         private volatile bool isDisposed = false;
         private volatile int sessionGeneration = 0;
+        // Output drain before the exit notification: the exit is detected on its own thread (waitpid /
+        // WaitForSingleObject) and could be raised while the reader still had the process's last output to read,
+        // so task problem matchers missed the final errors of a failing command (QA #7).
+        private Thread outputReaderThread;
+        private volatile int lastOutputTick;
+
+        private void WaitForOutputDrain()
+        {
+            Thread reader = outputReaderThread;
+            if (reader == null || reader == Thread.CurrentThread) return;
+            int start = Environment.TickCount;
+            while (reader.IsAlive)
+            {
+                int now = Environment.TickCount;
+                int sinceStart = unchecked(now - start);
+                int idle = unchecked(now - lastOutputTick);
+                if ((sinceStart >= 150 && idle >= 150) || sinceStart > 2000) break;
+                Thread.Sleep(15);
+            }
+        }
 
         public event Action OutputReceived;
         public event Action<int> ProcessExited;
@@ -2411,6 +2442,15 @@ namespace codeLess.Studio
         }
 
         public ConPtyTerminalSession(string shellName, string commandLine, string workingDir, int cols, int rows, bool isLightTheme = false)
+            : this(shellName, commandLine, workingDir, cols, rows, isLightTheme, null)
+        {
+        }
+
+        /// <summary>
+        /// <paramref name="hooks"/> are attached before the process starts, so nothing it prints or its exit can be
+        /// missed (task problem matchers on a command that fails immediately).
+        /// </summary>
+        public ConPtyTerminalSession(string shellName, string commandLine, string workingDir, int cols, int rows, bool isLightTheme, PtyStartHooks hooks)
         {
             if (string.IsNullOrEmpty(shellName))
                 shellName = ConPtyNative.IsWindowsPlatform() ? "PowerShell" : Path.GetFileName(GetUserUnixShell());
@@ -2422,6 +2462,12 @@ namespace codeLess.Studio
 
             Buffer = new Vt100TerminalBuffer(Math.Max(20, cols), Math.Max(6, rows), isLightTheme);
             Buffer.WriteBackCallback = s => WriteReply(s);
+            if (hooks != null)
+            {
+                if (!string.IsNullOrEmpty(hooks.InitialText)) { try { Buffer.ProcessText(hooks.InitialText); } catch { } }
+                RawOutputTap = hooks.RawOutputTap;
+                if (hooks.ProcessExited != null) ProcessExited += hooks.ProcessExited;
+            }
 
             if (string.IsNullOrEmpty(commandLine))
                 commandLine = ResolveDefaultCommandLine(ShellName);
@@ -2881,6 +2927,8 @@ namespace codeLess.Studio
                 int gen = ++sessionGeneration;
 
                 Thread readerThread = new Thread(() => UnixPtyReadLoop(gen, masterFd));
+                outputReaderThread = readerThread;
+                lastOutputTick = Environment.TickCount;
                 readerThread.IsBackground = true;
                 readerThread.Name = "UnixPtyReader_" + Id + "_" + gen;
                 readerThread.Start();
@@ -2946,6 +2994,7 @@ namespace codeLess.Studio
                         break;
 
                     int readCount = (int)rawCount;
+                    lastOutputTick = Environment.TickCount;
                     Buffer.ProcessBytes(buf, readCount);
                     Action<byte[], int> tap = RawOutputTap;
                     if (tap != null) { try { tap(buf, readCount); } catch { } }
@@ -2993,6 +3042,8 @@ namespace codeLess.Studio
 
                 if (isDisposed || gen != sessionGeneration) return;
 
+                WaitForOutputDrain();
+                if (isDisposed || gen != sessionGeneration) return;
                 ExitCode = rc > 0 ? ((status >> 8) & 0xFF) : 0;
                 HasExited = true;
 
@@ -3092,6 +3143,8 @@ namespace codeLess.Studio
                 conPtyReadStream = new FileStream(new SafeFileHandle(hPipeOutRead, false), FileAccess.Read, 4096, false);
 
                 Thread readerThread = new Thread(() => ConPtyReadLoop(gen, conPtyReadStream));
+                outputReaderThread = readerThread;
+                lastOutputTick = Environment.TickCount;
                 readerThread.IsBackground = true;
                 readerThread.Name = "ConPtyReader_" + Id + "_" + gen;
                 readerThread.Start();
@@ -3138,6 +3191,7 @@ namespace codeLess.Studio
                     int read = readStream.Read(buf, 0, buf.Length);
                     if (read <= 0 || gen != sessionGeneration || isDisposed) break;
 
+                    lastOutputTick = Environment.TickCount;
                     Buffer.ProcessBytes(buf, read);
                     Action<byte[], int> tap = RawOutputTap;
                     if (tap != null) { try { tap(buf, read); } catch { } }
@@ -3171,6 +3225,8 @@ namespace codeLess.Studio
 
                 uint code = 0;
                 ConPtyNative.GetExitCodeProcess(procHandle, out code);
+                WaitForOutputDrain();
+                if (isDisposed || gen != sessionGeneration) return;
                 ExitCode = (int)code;
                 HasExited = true;
 
@@ -4310,11 +4366,6 @@ namespace codeLess.Studio
         public bool IsInlineCtrlKVisible
         {
             get { return ctrlKOverlay != null && ctrlKOverlay.Visible; }
-        }
-
-        private static string SynthesizeLocalShellCommand(string naturalPrompt)
-        {
-            return "";
         }
 
         protected override void OnGotFocus(EventArgs e)

@@ -1133,6 +1133,23 @@ namespace codeLess.Studio
 
         public static string GetGitHeadFileContent(string workspaceRoot, string filePath)
         {
+            return GetGitBlobFileContent(workspaceRoot, filePath, "HEAD:");
+        }
+
+        /// <summary>
+        /// Baseline of the editor's git gutter (VS Code quick diff): the file as staged in the index, so staged hunks
+        /// disappear from the gutter and only show as staged in Source Control. Falls back to HEAD when the index has
+        /// no stage-0 entry (merge conflict); null for untracked files and outside a repository.
+        /// </summary>
+        public static string GetGitQuickDiffBaseline(string workspaceRoot, string filePath)
+        {
+            string index = GetGitBlobFileContent(workspaceRoot, filePath, ":");
+            return index ?? GetGitBlobFileContent(workspaceRoot, filePath, "HEAD:");
+        }
+
+        /// <summary>Text of a blob via "git show &lt;revPrefix&gt;&lt;path&gt;" ("HEAD:" or ":" for the index).</summary>
+        private static string GetGitBlobFileContent(string workspaceRoot, string filePath, string revPrefix)
+        {
             if (string.IsNullOrEmpty(workspaceRoot) || string.IsNullOrEmpty(filePath) || !Directory.Exists(workspaceRoot))
                 return null;
             try
@@ -1164,7 +1181,7 @@ namespace codeLess.Studio
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = "git",
-                    Arguments = "show \"HEAD:" + rel + "\"",
+                    Arguments = "show \"" + revPrefix + rel + "\"",
                     WorkingDirectory = repoRoot,
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
@@ -1182,13 +1199,16 @@ namespace codeLess.Studio
                             try { p.StandardOutput.BaseStream.CopyTo(ms); } catch { }
                         });
                         Task<string> errTask = p.StandardError.ReadToEndAsync();
-                        if (!p.WaitForExit(2500))
+                        if (!p.WaitForExit(10000))
                         {
                             try { p.Kill(); } catch { }
                             return null;
                         }
-                        try { copyTask.Wait(1000); } catch { }
-                        if (p.ExitCode != 0)
+                        // The stdout copy must be complete: reading the buffer while it was still being filled
+                        // (busy machine) returned "" or a truncated file, and the gutter then marked every line as changed.
+                        bool copied = false;
+                        try { copied = copyTask.Wait(10000); } catch { copied = false; }
+                        if (!copied || p.ExitCode != 0)
                             return null;
                         byte[] bytes = ms.ToArray();
                         if (bytes.Length == 0)
@@ -1419,6 +1439,12 @@ namespace codeLess.Studio
 
         public static string RunProcessCaptureWithExitCode(string fileName, string args, string workingDir, int timeoutMs, out int exitCode, out bool timedOut)
         {
+            return RunProcessCaptureWithExitCode(fileName, args, workingDir, timeoutMs, null, out exitCode, out timedOut);
+        }
+
+        /// <summary>Same, with extra environment variables for the child process (null = inherit only).</summary>
+        public static string RunProcessCaptureWithExitCode(string fileName, string args, string workingDir, int timeoutMs, IDictionary<string, string> extraEnv, out int exitCode, out bool timedOut)
+        {
             exitCode = -1;
             timedOut = false;
             try
@@ -1436,6 +1462,8 @@ namespace codeLess.Studio
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+                if (extraEnv != null)
+                    foreach (KeyValuePair<string, string> kv in extraEnv) psi.EnvironmentVariables[kv.Key] = kv.Value;
                 // Incremental, binary-clean capture (raw chars, no line splitting, so NUL-separated "git -z" output
                 // survives): with ReadToEndAsync a surviving grandchild (or "cmd &") that keeps the pipe open meant
                 // the read never completed and all output was lost on timeout. Huge output keeps its TAIL, where
@@ -1485,6 +1513,19 @@ namespace codeLess.Studio
             {
                 return "Error: " + ex.Message;
             }
+        }
+
+        /// <summary>
+        /// Caps tool output for the model, keeping the start (notes, the command's first lines) and the TAIL, where build
+        /// and test errors are (the old cap kept only the first 1600 characters, so the errors were cut off).
+        /// </summary>
+        public static string TrimToolOutputKeepingTail(string output, int maxChars)
+        {
+            if (output == null) return "";
+            if (output.Length <= maxChars || maxChars < 200) return output;
+            int head = maxChars / 4;
+            int tail = maxChars - head;
+            return output.Substring(0, head) + "\n…[" + (output.Length - head - tail) + " characters omitted]…\n" + output.Substring(output.Length - tail);
         }
 
         public static string StripAnsiCodes(string input)
@@ -2178,6 +2219,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             }
 
             LastStreamingChunkCount = 0;
+            // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
+            bool partOfTurn = InTurnOfThisEngine;
 
             return await Task.Run(() =>
             {
@@ -2255,7 +2298,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         string line;
                         while ((line = sr.ReadLine()) != null)
                         {
-                            if (CancelStreamingRequested) { ledger.Note = "Cancelled by user"; break; }
+                            if (partOfTurn && CancelStreamingRequested) { ledger.Note = "Cancelled by user"; break; }
                             rawBuilder.AppendLine(line);
                             string trimmed = line.Trim();
                             if (trimmed.StartsWith("data:"))
@@ -2309,7 +2352,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                         {
                                             streamedText.Append(deltaChunk);
                                             LastStreamingChunkCount++;
-                                            if (OnStreamingChunk != null)
+                                            if (partOfTurn && OnStreamingChunk != null)
                                             {
                                                 try { OnStreamingChunk(deltaChunk); } catch { }
                                             }
@@ -2448,7 +2491,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             }
         }
 
-        public async Task<AgentExecutionTurnResult> RunAutonomousAgentLoopAsync(
+        // Public entry point (one turn per engine): LlmAgentEngine.Turns.cs.
+        private async Task<AgentExecutionTurnResult> RunAutonomousAgentLoopCoreAsync(
             string mode,
             string userInstruction,
             ByokVendor preferredVendor,
@@ -2457,11 +2501,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             string workspaceRoot,
             List<string> workspaceFiles,
             List<string> contextPills,
-            string recentTerminalOutput = "",
-            Dictionary<string, string> baseStagedFiles = null
+            string recentTerminalOutput,
+            Dictionary<string, string> baseStagedFiles
         )
         {
-            CancelStreamingRequested = false;
             Stopwatch sw = Stopwatch.StartNew();
             AgentExecutionTurnResult result = new AgentExecutionTurnResult();
             // Repair turns patch on top of the previous proposal (staged, never written) instead of the disk text.
@@ -2667,7 +2710,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         break;
 
                     result.Iterations++;
-                    string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp);
+                    // ConfigureAwait(false): tools (shell commands, file reads) never run on a UI thread, whoever calls.
+                    string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp).ConfigureAwait(false);
                     finalReply = llmOutput;
 
                     // Extract <think> or <thinking> block if present
@@ -2788,9 +2832,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ToolSummaries = res.ToolCalls.Select(t => "[" + t.ToolName + "] " + t.Summary).ToList()
             };
             res.Trace = trace;
-            TraceHistory.Insert(0, trace);
-            if (TraceHistory.Count > 50)
-                TraceHistory.RemoveAt(TraceHistory.Count - 1);
+            lock (TraceHistory)
+            {
+                TraceHistory.Insert(0, trace);
+                if (TraceHistory.Count > 50)
+                    TraceHistory.RemoveAt(TraceHistory.Count - 1);
+            }
         }
 
         private List<Dictionary<string, object>> ParseToolCalls(string text)
@@ -3119,63 +3166,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         try { OnBeforeRunTerminal(cmd); } catch { }
                     }
 
-                    // Back up raw bytes (not decoded text) so the restore is byte-exact: re-encoding via
-                    // ReadAllText/WriteAllText would drop BOMs and corrupt UTF-16 / ANSI files.
-                    Dictionary<string, byte[]> diskBackups = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-                    List<string> newlyCreatedOnDisk = new List<string>();
-                    if (stagedFiles != null && stagedFiles.Count > 0)
-                    {
-                        foreach (var kv in stagedFiles)
-                        {
-                            try
-                            {
-                                if (!IsPathInsideWorkspace(workspaceRoot, kv.Key))
-                                    continue;
-                                if (File.Exists(kv.Key))
-                                    diskBackups[kv.Key] = File.ReadAllBytes(kv.Key);
-                                else
-                                    newlyCreatedOnDisk.Add(kv.Key);
-                                string dir = Path.GetDirectoryName(kv.Key);
-                                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                                    Directory.CreateDirectory(dir);
-                                File.WriteAllText(kv.Key, kv.Value, new UTF8Encoding(false));
-                            }
-                            catch { }
-                        }
-                    }
-
-                    string output;
-                    int exitCode = 0;
-                    bool timedOut = false;
-                    try
-                    {
-                        if (OnExecuteTerminalCommandInConPty != null)
-                        {
-                            output = OnExecuteTerminalCommandInConPty(cmd) ?? "";
-                        }
-                        else if (ConPtyNative.IsWindowsPlatform())
-                        {
-                            output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command " + QuoteProcessArgument(cmd), workspaceRoot, AgentTerminalTimeoutMs, out exitCode, out timedOut);
-                        }
-                        else
-                        {
-                            // Proper argv quoting: the old "-c \"...\"" with naive escaping mangled commands containing
-                            // backslash-quote sequences (sed/curl JSON) or a trailing backslash.
-                            string sh = ConPtyTerminalSession.GetUserUnixShell();
-                            output = RunProcessCaptureWithExitCode(sh, "-c " + QuoteProcessArgument(cmd), workspaceRoot, AgentTerminalTimeoutMs, out exitCode, out timedOut);
-                        }
-                    }
-                    finally
-                    {
-                        foreach (var kv in diskBackups)
-                        {
-                            try { File.WriteAllBytes(kv.Key, kv.Value); } catch { }
-                        }
-                        foreach (string created in newlyCreatedOnDisk)
-                        {
-                            try { if (File.Exists(created)) File.Delete(created); } catch { }
-                        }
-                    }
+                    // Staged edits are never written into the user's files: with staged edits the command runs in a
+                    // temporary copy of the workspace (LlmAgentEngine.Terminal.cs).
+                    int exitCode;
+                    bool timedOut;
+                    string output = RunAgentTerminalCommand(cmd, workspaceRoot, stagedFiles, out exitCode, out timedOut);
 
                     if (exitCode != 0 && !output.Contains("[EXIT_CODE:"))
                     {
@@ -3188,7 +3183,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         ToolName = "run_terminal",
                         Success = ok,
                         Summary = "Ran command: " + cmd + (exitCode != 0 ? " (exit " + exitCode + ")" : ""),
-                        Output = output.Length > 1600 ? output.Substring(0, 1600) : output
+                        Output = TrimToolOutputKeepingTail(output, 1600)
                     };
                 }
             }
@@ -3533,40 +3528,6 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 Summary = "Path outside workspace: " + relPath,
                 Output = "Access denied: '" + relPath + "' resolves outside the workspace root."
             };
-        }
-
-        private string BuildArchitectureOrSearchResponse(string prompt, List<Bm25CodeChunk> topChunks, string workspaceRoot)
-        {
-            StringBuilder sb = new StringBuilder();
-            sb.AppendLine("### Workspace Architecture & Semantic Analysis");
-            sb.AppendLine("Query: `" + prompt + "`");
-            sb.AppendLine();
-            sb.AppendLine("#### Relevant Semantic Codebase Chunks (BM25 + Symbol Boost):");
-            if (topChunks.Count == 0)
-            {
-                sb.AppendLine("- Open any project folder (`Ctrl+O`) or scaffold a new project (`New Project...`) to index symbols.");
-            }
-            else
-            {
-                foreach (Bm25CodeChunk c in topChunks)
-                {
-                    sb.AppendLine(string.Format("- **`{0}`** (Lines {1}–{2}, Score: `{3}`, Symbol: `{4}`)",
-                        c.RelativePath, c.StartLine, c.EndLine, c.Score,
-                        string.IsNullOrEmpty(c.SymbolName) ? "module" : c.SymbolName));
-                }
-                Bm25CodeChunk top = topChunks[0];
-                string previewSnippet = string.Join("\n", (top.Snippet ?? "").Replace("\r\n", "\n").Split('\n').Take(12));
-                if (!string.IsNullOrWhiteSpace(previewSnippet))
-                {
-                    string ext = Path.GetExtension(top.RelativePath ?? "").TrimStart('.').ToLowerInvariant();
-                    sb.AppendLine("```" + (string.IsNullOrEmpty(ext) ? "code" : ext));
-                    sb.AppendLine(previewSnippet.TrimEnd());
-                    sb.AppendLine("```");
-                }
-            }
-            sb.AppendLine();
-            sb.AppendLine("Tip: Open a source file in the editor and use **Agent**, **Composer**, **Auto-Fix**, or **`Ctrl+K`** to generate surgical code diffs.");
-            return sb.ToString();
         }
 
         public static string TransformCodeWithAstRules(

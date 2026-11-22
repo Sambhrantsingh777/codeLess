@@ -421,6 +421,7 @@ namespace codeLess.AvaloniaApp
         {
             var tab = openTabs.FirstOrDefault(t => !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison));
             if (tab == null || tab.IsDirty || !File.Exists(fullPath)) return;
+            if (AutoSavePolicy.IsUnderReview(tab)) return; // an inline proposal is being reviewed against this text
             if (tab.IsLargeFileViewer) return; // the viewer pages from disk; Follow mode handles growth
             try
             {

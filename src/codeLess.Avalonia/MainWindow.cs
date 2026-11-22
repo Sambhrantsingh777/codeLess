@@ -243,6 +243,7 @@ namespace codeLess.AvaloniaApp
             TryLoadWindowIcon();
 
             settings = StudioSettings.Load();
+            InitExtensionHost(); // VSIX themes must be registered before the persisted theme is resolved
             if (string.IsNullOrWhiteSpace(settings.ThemeId))
                 settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
@@ -256,6 +257,8 @@ namespace codeLess.AvaloniaApp
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
+            PrimaryEditor.Canvas.SnippetKeyHandler = e => OnSnippetKey(PrimaryEditor, e);
+            SplitEditor.Canvas.SnippetKeyHandler = e => OnSnippetKey(SplitEditor, e);
             InitializeDevTools();
             InitializeWorkbenchParity();
             InitAgentTrust();
@@ -1353,111 +1356,7 @@ namespace codeLess.AvaloniaApp
             return grid;
         }
 
-        private Grid BuildRunDebugSidebarView()
-        {
-            var grid = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,*"),
-                Margin = new Thickness(10, 8),
-                IsVisible = false
-            };
-
-            var stack = new StackPanel { Spacing = 8 };
-            runConfigCombo = new ComboBox
-            {
-                ItemsSource = new[]
-                {
-                    "Polyglot Runner (Active File)",
-                    ".NET Build & Run (dotnet run)",
-                    "Verification Suite (dotnet test)"
-                },
-                SelectedIndex = 0,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-
-            var startRunBtn = new Button
-            {
-                Content = "▶  Start Debugging / Run (F5)",
-                FontWeight = FontWeight.SemiBold,
-                FontSize = 12,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                Padding = new Thickness(10, 6),
-                Background = new SolidColorBrush(Color.FromRgb(22, 163, 74)),
-                Foreground = Brushes.White
-            };
-            startRunBtn.Click += (s, e) => RunActiveFileInTerminal();
-
-            var buildBtn = new Button
-            {
-                Content = "▶  Run Workspace Build Task (Ctrl+Shift+B)",
-                FontSize = 11.5,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(10, 5)
-            };
-            buildBtn.Click += (s, e) => RunWorkspaceBuildInTerminal();
-
-            runStatusSummary = new TextBlock
-            {
-                Text = "Ready. Press F5 or click Start to execute in the integrated VT100 terminal.",
-                FontSize = 11.5,
-                TextWrapping = TextWrapping.Wrap
-            };
-
-            stack.Children.Add(new TextBlock { Text = "LAUNCH CONFIGURATION", FontSize = 10.5, FontWeight = FontWeight.Bold });
-            stack.Children.Add(runConfigCombo);
-            stack.Children.Add(startRunBtn);
-            stack.Children.Add(buildBtn);
-            stack.Children.Add(runStatusSummary);
-
-            Grid.SetRow(stack, 0);
-            grid.Children.Add(stack);
-            return grid;
-        }
-
-        private Grid BuildExtensionsSidebarView()
-        {
-            var grid = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,*"),
-                Margin = new Thickness(8, 6),
-                IsVisible = false
-            };
-
-            var topStack = new StackPanel { Spacing = 6 };
-            extensionsSearchInput = new TextBox { Watermark = "Search Extensions in OpenVSX Marketplace...", FontSize = 12, Padding = new Thickness(7, 4) };
-            topStack.Children.Add(extensionsSearchInput);
-            Grid.SetRow(topStack, 0);
-            grid.Children.Add(topStack);
-
-            extensionsCardsStack = new StackPanel { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
-            var builtInExts = new (string Name, string Pub, string Desc)[]
-            {
-                ("C# & .NET Polyglot Kit", "savatarr", "AST symbols, diagnostics, and Roslyn syntax navigation."),
-                ("Python & FastAPI Tools", "savatarr", "Indentation folding, symbol outline, and pytest integration."),
-                ("TypeScript & React ESNext", "savatarr", "TS/JS tokenizer, bracket matching, and npm task runner."),
-                ("Rust Analyzer Lite", "savatarr", "Cargo diagnostics and crate symbol indexer."),
-                ("GitLens Diff & Gutter", "savatarr", "Line-accurate HEAD gutter diff bars and stage/unstage workflow.")
-            };
-            foreach (var ext in builtInExts)
-            {
-                var card = new StackPanel { Spacing = 2 };
-                card.Children.Add(new TextBlock { Text = ext.Name + "  ✓ Installed", FontWeight = FontWeight.Bold, FontSize = 12 });
-                card.Children.Add(new TextBlock { Text = ext.Desc, FontSize = 11, TextWrapping = TextWrapping.Wrap });
-                extensionsCardsStack.Children.Add(new Border
-                {
-                    Child = card,
-                    CornerRadius = new CornerRadius(5),
-                    BorderThickness = new Thickness(1),
-                    Padding = new Thickness(8, 6)
-                });
-            }
-
-            var scroll = new ScrollViewer { Content = extensionsCardsStack };
-            Grid.SetRow(scroll, 1);
-            grid.Children.Add(scroll);
-            return grid;
-        }
+        private Grid BuildExtensionsSidebarView() => BuildExtensionsSidebarViewReal(); // MainWindow.Extensions.cs
 
         private Grid BuildHarnessSidebarView()
         {
@@ -1947,22 +1846,28 @@ namespace codeLess.AvaloniaApp
             {
                 Name = "ChatPromptInput",
                 Watermark = "Plan, @context, ask questions, or request multi-file edits (Enter to send)...",
-                AcceptsReturn = false,
-                Height = 52,
+                // VS Code chat input: grows with the prompt (and the wrapped placeholder) from two lines up to a cap,
+                // then scrolls. The fixed 52 px height clipped the two-line placeholder (QA #4).
+                AcceptsReturn = true,
+                MinHeight = Math.Ceiling(UiTokens.FontUi * 1.45 * 2 + 8),
+                MaxHeight = Math.Ceiling(UiTokens.FontUi * 1.45 * 12 + 8),
                 FontSize = UiTokens.FontUi,
                 TextWrapping = TextWrapping.Wrap,
+                VerticalContentAlignment = VerticalAlignment.Top,
                 Padding = new Thickness(2, 4),
                 BorderThickness = new Thickness(0),
                 Background = Brushes.Transparent
             };
-            chatPromptInput.KeyDown += (s, e) =>
+            ScrollViewer.SetVerticalScrollBarVisibility(chatPromptInput, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+            // Enter sends, Shift+Enter inserts a newline (handled before the TextBox inserts one itself).
+            chatPromptInput.AddHandler(KeyDownEvent, (s, e) =>
             {
                 if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
                 {
                     SubmitChatMessage();
                     e.Handled = true;
                 }
-            };
+            }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
             composerStack.Children.Add(chatPromptInput);
 
             // Mode pills row: ✦ Agent | Ask | Edit | Auto-Fix
@@ -2040,7 +1945,7 @@ namespace codeLess.AvaloniaApp
 
             chatSendBtn = WorkbenchStyles.IconButton("send", "Send (Enter)", null, currentTheme, 28, 16);
             chatSendBtn.Name = "ChatSendBtn";
-            chatSendBtn.Click += (s, e) => SubmitChatMessage();
+            chatSendBtn.Click += (s, e) => { if (IsChatTurnRunning) StopChatTurn(); else SubmitChatMessage(); };
 
             Grid.SetColumn(chatProviderCombo, 0); bottomRow.Children.Add(chatProviderCombo);
             Grid.SetColumn(chatModelCombo, 1); bottomRow.Children.Add(chatModelCombo);
@@ -2267,6 +2172,7 @@ namespace codeLess.AvaloniaApp
         {
             if (theme == null) return;
             currentTheme = theme;
+            RefreshExtensionsView();
             if (persistSetting && settings != null)
             {
                 settings.ThemeId = theme.Id;
@@ -2776,7 +2682,7 @@ namespace codeLess.AvaloniaApp
 
             bool isLiveDesktop = AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
             string gitHead = (!isLiveDesktop && File.Exists(fullPath) && !string.IsNullOrEmpty(workspaceRoot))
-                ? LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, fullPath)
+                ? LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, fullPath)
                 : null;
 
             var tab = new EditorTabBuffer
@@ -2814,7 +2720,7 @@ namespace codeLess.AvaloniaApp
                 string capturedWs = workspaceRoot;
                 _ = Task.Run(() =>
                 {
-                    string head = LlmHarnessAndAgentEngine.GetGitHeadFileContent(capturedWs, fullPath);
+                    string head = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(capturedWs, fullPath); // gutter = working tree vs index
                     if (head != null)
                     {
                         Dispatcher.UIThread.Post(() =>

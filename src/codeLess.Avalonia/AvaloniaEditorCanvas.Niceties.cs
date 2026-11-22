@@ -133,7 +133,7 @@ namespace codeLess.AvaloniaApp
         private List<SyntaxTokenSpan> GetNicetyTokens(EditorTabBuffer buf, int docLine, string lineText, int sliceStart, string renderLineText)
         {
             var session = frameSession;
-            if (session == null) return TokenizeLineForTheme(renderLineText, Theme);
+            if (session == null) return TokenizeLineForTheme(renderLineText, Theme, buf.Language);
             List<StyledSpan> spans = null;
             if (EditorNicetyOptions.TextMateHighlighting && session.TextMate != null)
             {
@@ -143,7 +143,7 @@ namespace codeLess.AvaloniaApp
             int sliceLen = renderLineText.Length;
             if (spans == null)
             {
-                var builtin = TokenizeLineForTheme(renderLineText, Theme);
+                var builtin = TokenizeLineForTheme(renderLineText, Theme, buf.Language);
                 if (!EditorNicetyOptions.BracketPairColorization || !session.Brackets.Profile.Enabled) return builtin;
                 spans = new List<StyledSpan>(builtin.Count);
                 int pos = sliceStart;

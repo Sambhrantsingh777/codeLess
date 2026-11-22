@@ -110,6 +110,9 @@ namespace codeLess.Studio
 
         // Events
         public event Action<EditorTabBuffer> OnSaveRequested;
+        /// <summary>Extra editor context-menu entries (merge conflicts, staging) and their command handler.</summary>
+        public Func<EditorTabBuffer, List<EditorContextEntry>> ContextEntriesProvider;
+        public Action<string> ContextCommandHandler;
         public event Action<EditorTabBuffer> OnRunFileRequested;
         public event Action<string, EditorTabBuffer> OnCtrlKRequested;
         public event Action<EditorTabBuffer> OnPinContextRequested;
@@ -1947,12 +1950,13 @@ namespace codeLess.Studio
             }
         }
 
+        // Per-hunk / all decisions use the shared engine (codeLess.Core/InlineDiffReview.cs, same as Avalonia): hunks are
+        // re-derived from (PreDiffContent, buffer) so a reject always restores every removed line, even after edits.
         public void AcceptSingleHunk(EditorDiffHunk hunk)
         {
             if (CurrentBuffer == null || hunk == null) return;
-            hunk.IsPending = false;
-            CurrentBuffer.DiffHunks.Remove(hunk);
-            if (!CurrentBuffer.DiffHunks.Any(h => h.IsPending))
+            InlineDiffReview.AcceptHunk(CurrentBuffer, hunk);
+            if (!InlineDiffReview.HasPending(CurrentBuffer))
             {
                 AcceptAllHunks();
             }
@@ -1967,29 +1971,9 @@ namespace codeLess.Studio
         public void RejectSingleHunk(EditorDiffHunk hunk)
         {
             if (CurrentBuffer == null || hunk == null) return;
-            CurrentBuffer.PushUndoSnapshot();
-            int start = Math.Max(0, Math.Min(CurrentBuffer.Lines.Count, hunk.StartLine));
-            int removeCnt = Math.Min(CurrentBuffer.Lines.Count - start, hunk.AddedLines.Count);
-            if (removeCnt > 0)
-                CurrentBuffer.Lines.RemoveRange(start, removeCnt);
-            for (int r = 0; r < hunk.RemovedLines.Count; r++)
-                CurrentBuffer.Lines.Insert(start + r, hunk.RemovedLines[r]);
-
-            int lineShift = hunk.RemovedLines.Count - hunk.AddedLines.Count;
-            foreach (EditorDiffHunk other in CurrentBuffer.DiffHunks)
-            {
-                if (other != hunk && other.StartLine > hunk.StartLine)
-                    other.StartLine = Math.Max(0, other.StartLine + lineShift);
-            }
-            hunk.IsPending = false;
-            CurrentBuffer.DiffHunks.Remove(hunk);
-            CurrentBuffer.SyncContentFromLines();
-            if (!CurrentBuffer.DiffHunks.Any(h => h.IsPending))
-            {
-                CurrentBuffer.DiffHunks.Clear();
-                CurrentBuffer.PreDiffContent = null;
-                CurrentBuffer.IsDirty = !string.Equals(CurrentBuffer.Content ?? "", CurrentBuffer.SavedContent ?? "", StringComparison.Ordinal);
-            }
+            if (!InlineDiffReview.RejectHunk(CurrentBuffer, hunk)) return;
+            if (!InlineDiffReview.HasPending(CurrentBuffer) && StagedChangedFiles != null && CurrentBuffer.FileName != null)
+                StagedChangedFiles.Remove(CurrentBuffer.FileName);
             LoadBuffer(CurrentBuffer);
             if (OnBufferModified != null) OnBufferModified(CurrentBuffer);
         }
@@ -2067,6 +2051,7 @@ namespace codeLess.Studio
             if (CurrentBuffer == null) return;
             bool deferLargeAnalysis = CurrentBuffer.Lines != null && CurrentBuffer.Lines.Count > 350;
             CurrentBuffer.SyncContentFromLines(recomputeGutterDiff: !deferLargeAnalysis);
+            if (CurrentBuffer.PreDiffContent != null) { InlineDiffReview.Refresh(CurrentBuffer); UpdateDiffBannerState(); }
             if (!deferLargeAnalysis && !CurrentBuffer.IsLargeFile)
             {
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
@@ -2130,58 +2115,40 @@ namespace codeLess.Studio
         public void StageProposedContent(string newContent, string summaryLabel)
         {
             if (CurrentBuffer == null) return;
-            if (string.IsNullOrEmpty(CurrentBuffer.PreDiffContent))
-                CurrentBuffer.PreDiffContent = CurrentBuffer.Content;
-
-            string normNew = (newContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
-            if (!CurrentBuffer.IsReadOnlyDiffPreview && !string.IsNullOrEmpty(CurrentBuffer.SavedContent) && normNew.Length > 0)
-            {
-                if (CurrentBuffer.HasFinalNewline && !normNew.EndsWith("\n"))
-                    normNew += "\n";
-                else if (!CurrentBuffer.HasFinalNewline && normNew.EndsWith("\n"))
-                    normNew = normNew.Substring(0, normNew.Length - 1);
-            }
-
-            CurrentBuffer.DiffHunks = LlmHarnessAndAgentEngine.ComputeLineDiffHunks(CurrentBuffer.PreDiffContent, normNew);
-            CurrentBuffer.Content = normNew;
-            CurrentBuffer.SyncLinesFromContent();
-            CurrentBuffer.IsDirty = !string.Equals(CurrentBuffer.Content ?? "", (CurrentBuffer.SavedContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n"), StringComparison.Ordinal);
-
+            InlineDiffReview.Stage(CurrentBuffer, newContent ?? "");
             LoadBuffer(CurrentBuffer);
             if (CurrentBuffer.DiffHunks != null && CurrentBuffer.DiffHunks.Count > 0)
             {
-                JumpToLine(CurrentBuffer.DiffHunks[0].StartLine + 1);
+                JumpToLine(InlineDiffReview.AnchorLine(CurrentBuffer, CurrentBuffer.DiffHunks[0]) + 1);
             }
             if (OnBufferModified != null) OnBufferModified(CurrentBuffer);
         }
 
+        /// <summary>Raised by the editor's own Accept All / Reject All (banner, Ctrl+Enter, Ctrl+Backspace): (buffer, accepted).</summary>
+        public event Action<EditorTabBuffer, bool> OnDiffAllDecision;
+
         public void AcceptAllHunks()
         {
             if (CurrentBuffer == null) return;
-            CurrentBuffer.DiffHunks.Clear();
-            CurrentBuffer.PreDiffContent = null;
+            bool hadReview = CurrentBuffer.PreDiffContent != null || (CurrentBuffer.DiffHunks != null && CurrentBuffer.DiffHunks.Count > 0);
+            InlineDiffReview.AcceptAll(CurrentBuffer);
             if (StagedChangedFiles != null && CurrentBuffer.FileName != null)
                 StagedChangedFiles.Remove(CurrentBuffer.FileName);
-            CurrentBuffer.RefreshGutterDiff();
             diffBanner.Visible = false;
             virtualCanvas.Invalidate();
+            if (hadReview && OnDiffAllDecision != null) OnDiffAllDecision(CurrentBuffer, true);
             if (OnBufferModified != null) OnBufferModified(CurrentBuffer);
         }
 
         public void RejectAllHunks()
         {
             if (CurrentBuffer == null) return;
-            if (CurrentBuffer.PreDiffContent != null)
-            {
-                CurrentBuffer.Content = CurrentBuffer.PreDiffContent;
-                CurrentBuffer.SyncLinesFromContent();
-            }
-            CurrentBuffer.DiffHunks.Clear();
-            CurrentBuffer.PreDiffContent = null;
+            bool hadReview = CurrentBuffer.PreDiffContent != null || (CurrentBuffer.DiffHunks != null && CurrentBuffer.DiffHunks.Count > 0);
+            InlineDiffReview.RejectAll(CurrentBuffer);
             if (StagedChangedFiles != null && CurrentBuffer.FileName != null)
                 StagedChangedFiles.Remove(CurrentBuffer.FileName);
-            CurrentBuffer.IsDirty = !string.Equals(CurrentBuffer.Content ?? "", CurrentBuffer.SavedContent ?? "", StringComparison.Ordinal);
             LoadBuffer(CurrentBuffer);
+            if (hadReview && OnDiffAllDecision != null) OnDiffAllDecision(CurrentBuffer, false);
             if (OnBufferModified != null) OnBufferModified(CurrentBuffer);
         }
 
@@ -2523,7 +2490,7 @@ namespace codeLess.Studio
             var candidates = BuiltInKeywords
                 .Concat(AutocompleteSymbols)
                 .Concat(CurrentBuffer.Symbols.Select(s => s.Name))
-                .Concat(LoadedSnippets.Select(s => s.Prefix + " (snippet)"))
+                .Concat(SnippetEngine.ForLanguage(LoadedSnippets, CurrentBuffer.Language).Select(s => s.Prefix + " (snippet)"))
                 .Distinct()
                 .Where(w => string.IsNullOrEmpty(currentWordPrefix) || (w.StartsWith(currentWordPrefix, StringComparison.OrdinalIgnoreCase) && !string.Equals(w, currentWordPrefix, StringComparison.OrdinalIgnoreCase)))
                 .Take(10)
@@ -2573,9 +2540,18 @@ namespace codeLess.Studio
             string chosen = autocompleteList.SelectedItem.ToString();
             if (chosen.EndsWith(" (snippet)"))
             {
-                string pref = chosen.Replace(" (snippet)", "");
-                var snip = LoadedSnippets.FirstOrDefault(s => s.Prefix == pref);
-                if (snip != null) chosen = snip.Body;
+                // Snippets expand with VS Code syntax ($1 / ${1:default} / $0, variables, indentation), shared engine.
+                string pref = chosen.Substring(0, chosen.Length - " (snippet)".Length);
+                var snip = SnippetEngine.ForLanguage(LoadedSnippets, CurrentBuffer.Language).FirstOrDefault(s => s.Prefix == pref);
+                if (snip != null)
+                {
+                    SnippetEngine.InsertAtCaret(CurrentBuffer, snip, currentWordPrefix.Length, EffectiveSnippetTabSize(), EffectiveSnippetInsertSpaces());
+                    autocompleteFrame.Visible = false;
+                    NotifyBufferContentChanged();
+                    virtualCanvas.Invalidate();
+                    virtualCanvas.Focus();
+                    return;
+                }
             }
 
             CurrentBuffer.PushUndoSnapshot();
@@ -2607,6 +2583,32 @@ namespace codeLess.Studio
             NotifyBufferContentChanged();
             virtualCanvas.Invalidate();
             virtualCanvas.Focus();
+        }
+
+        public int EffectiveSnippetTabSize()
+        {
+            EditorTabBuffer b = CurrentBuffer;
+            return b != null && b.CustomTabSize.HasValue && b.CustomTabSize.Value > 0 ? b.CustomTabSize.Value : Math.Max(1, TabSize);
+        }
+
+        public bool EffectiveSnippetInsertSpaces()
+        {
+            EditorTabBuffer b = CurrentBuffer;
+            return b != null && b.CustomInsertSpaces.HasValue ? b.CustomInsertSpaces.Value : InsertSpaces;
+        }
+
+        /// <summary>Tab on an exact snippet prefix (no popup, ghost text or multi-cursor): expands the snippet.</summary>
+        public bool TryExpandSnippetOnTab(KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Tab || e.Modifiers != Keys.None || CurrentBuffer == null) return false;
+            EditorTabBuffer b = CurrentBuffer;
+            if (IsAutocompleteVisible || !string.IsNullOrEmpty(b.GhostText) || b.HasMultiCursors || b.IsLargeFileViewer) return false;
+            if (b.DiffHunks != null && b.DiffHunks.Any(h => h.IsPending)) return false;
+            if (!SnippetEngine.TryExpandPrefixAtCaret(b, LoadedSnippets, EffectiveSnippetTabSize(), EffectiveSnippetInsertSpaces())) return false;
+            NotifyBufferContentChanged();
+            virtualCanvas.EnsureCursorVisible();
+            virtualCanvas.Invalidate();
+            return true;
         }
 
         public void TriggerSaveShortcut()
@@ -3061,6 +3063,25 @@ namespace codeLess.Studio
             editorCtx.Opening += (s, e) =>
             {
                 EditorTabBuffer b = owner != null ? owner.CurrentBuffer : null;
+                // Merge-conflict / staging entries (shared EditorScmContextItems), rebuilt on every open.
+                for (int i = editorCtx.Items.Count - 1; i >= 0; i--)
+                    if (Equals(editorCtx.Items[i].Tag, "scm")) editorCtx.Items.RemoveAt(i);
+                if (owner != null && owner.ContextEntriesProvider != null && b != null)
+                {
+                    int at = 0;
+                    foreach (EditorContextEntry entry in owner.ContextEntriesProvider(b))
+                    {
+                        ToolStripItem item;
+                        if (entry.IsSeparator) item = new ToolStripSeparator();
+                        else
+                        {
+                            string id = entry.CommandId;
+                            item = CreateCanvasMenuItem(entry.Label, "", () => { if (owner.ContextCommandHandler != null) owner.ContextCommandHandler(id); });
+                        }
+                        item.Tag = "scm";
+                        editorCtx.Items.Insert(at++, item);
+                    }
+                }
                 bool hasSel = b != null && (b.HasSelection() || b.HasMultiCursors);
                 cutItem.Enabled = hasSel;
                 copyItem.Enabled = hasSel;
@@ -3383,7 +3404,7 @@ namespace codeLess.Studio
                 if (fullLineText.Length > maxVisibleLineLen) maxVisibleLineLen = fullLineText.Length;
 
                 EditorDiffHunk hunk = buf.DiffHunks != null
-                    ? buf.DiffHunks.FirstOrDefault(h => h.IsPending && docLine >= h.StartLine && docLine < h.StartLine + Math.Max(1, h.AddedLines.Count))
+                    ? InlineDiffReview.FindHunkAtLine(buf, docLine)
                     : null;
 
                 string trimmedRight = fullLineText.TrimEnd();
@@ -3417,7 +3438,14 @@ namespace codeLess.Studio
                     DrawConflictLineBackground(g, buf, docLine, y, codeAreaRight);
 
                     // Staged AI Diff Line Tint
-                    if (hunk != null)
+                    if (hunk != null && hunk.AddedLines.Count == 0)
+                    {
+                        // Pure deletion: the line itself is unchanged; a red rule marks where the lines were removed.
+                        if (!seg.IsContinuation)
+                            using (SolidBrush delRule = new SolidBrush(Color.FromArgb(251, 113, 133)))
+                                g.FillRectangle(delRule, GutterWidth, y, Math.Max(0, codeAreaRight - GutterWidth), 2);
+                    }
+                    else if (hunk != null)
                     {
                         using (SolidBrush diffAddBrush = new SolidBrush(Color.FromArgb(40, 16, 185, 129)))
                             g.FillRectangle(diffAddBrush, GutterWidth, y, Math.Max(0, codeAreaRight - GutterWidth), LineHeight);
@@ -3580,7 +3608,7 @@ namespace codeLess.Studio
                     bool isLastSegOfLine = (seg.ColEnd == fullLineText.Length);
                     if (isLastSegOfLine && hunk == null && !isFolded && !buf.WordWrap) DrawLineAnnotation(g, buf, docLine, sliceVisLen, effScrollLeft, y, codeAreaRight);
 
-                    if (isLastSegOfLine && hunk != null && docLine == hunk.StartLine)
+                    if (isLastSegOfLine && hunk != null && docLine == InlineDiffReview.AnchorLine(buf, hunk))
                     {
                         // Render sleek inline [✓ Accept] [✕ Reject] interactive pills for this hunk!
                         int pillRight = codeAreaRight - 8;
@@ -3829,7 +3857,7 @@ namespace codeLess.Studio
 
                     Color barColor = th.FgMuted;
                     string tr = ln.TrimStart();
-                    if (tr.StartsWith("//") || tr.StartsWith("#")) barColor = th.TokenComment;
+                    if (FallbackTokenizer.StartsWithLineComment(tr, buf.Language)) barColor = th.TokenComment;
                     else if (tr.StartsWith("public ") || tr.StartsWith("class ") || tr.StartsWith("def ") || tr.StartsWith("export ") || tr.StartsWith("fn ")) barColor = th.TokenKeyword;
                     else if (tr.Contains("(")) barColor = th.TokenFunction;
 
@@ -5805,6 +5833,12 @@ namespace codeLess.Studio
                 e.SuppressKeyPress = true;
                 return;
             }
+            if (owner.TryExpandSnippetOnTab(e))
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
 
             // 0. Check armed Ctrl+K chord second key
             if (IsCtrlKChordArmed)
@@ -5850,7 +5884,7 @@ namespace codeLess.Studio
             if (e.Control && e.KeyCode == Keys.Back && buf.DiffHunks != null && buf.DiffHunks.Any(h => h.IsPending))
             {
                 e.SuppressKeyPress = true;
-                EditorDiffHunk curHunk = buf.DiffHunks.FirstOrDefault(h => h.IsPending && buf.CursorLine >= h.StartLine && buf.CursorLine <= h.StartLine + Math.Max(1, h.AddedLines.Count));
+                EditorDiffHunk curHunk = InlineDiffReview.FindHunkAtLine(buf, buf.CursorLine);
                 if (curHunk != null) owner.RejectSingleHunk(curHunk);
                 else owner.RejectAllHunks();
                 return;

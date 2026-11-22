@@ -252,7 +252,7 @@ namespace codeLess.Studio
             req.Prompt = prompt;
             req.Vendor = vendor;
             req.HarnessId = settings.ActiveHarnessId;
-            req.ActiveTab = activeTab;
+            req.ActiveTab = AgentTurnInputs.SnapshotTab(activeTab); // repair / Best-of-N turns run on worker threads
             req.WorkspaceRoot = workspaceRoot;
             req.WorkspaceFiles = workspaceFiles != null ? workspaceFiles.ToList() : new List<string>();
             req.Pills = attachedContextPills != null ? attachedContextPills.ToList() : new List<string>();
@@ -338,6 +338,7 @@ namespace codeLess.Studio
         private void ReloadTabFromDiskWin(EditorTabBuffer tab)
         {
             if (tab == null || tab.IsDirty || string.IsNullOrEmpty(tab.FilePath)) return;
+            if (AutoSavePolicy.IsUnderReview(tab)) return; // an inline proposal is being reviewed against this text
             if (!File.Exists(tab.FilePath)) { tab.IsDeletedOnDisk = true; RefreshTabStrip(); return; }
             try
             {
@@ -420,10 +421,7 @@ namespace codeLess.Studio
                     editorControl.StageProposedContent(f.ProposedText, cs.Label);
                 else
                 {
-                    tab.DiffHunks = LlmHarnessAndAgentEngine.ComputeLineDiffHunks(tab.PreDiffContent ?? tab.SavedContent ?? "", AgentChangeSet.Normalize(f.ProposedText));
-                    tab.Content = AgentChangeSet.Normalize(f.ProposedText);
-                    tab.SyncLinesFromContent();
-                    tab.IsDirty = true;
+                    InlineDiffReview.Stage(tab, AgentChangeSet.Normalize(f.ProposedText));
                 }
             }
             RefreshChangesetReviewBar();
@@ -471,8 +469,13 @@ namespace codeLess.Studio
                     if (!overwriteConflicts && nowHash != f.DiskHashAtStage) { total.Conflicts.Add(f.RelativePath + " changed on disk since the proposal"); continue; }
                     byte[] pre = File.Exists(f.FullPath) ? File.ReadAllBytes(f.FullPath) : null;
                     // Per-hunk decisions made in the editor are kept: the buffer is what gets saved.
-                    if (ReferenceEquals(editorControl.CurrentBuffer, tab)) editorControl.AcceptAllHunks();
-                    else { tab.DiffHunks.Clear(); tab.PreDiffContent = null; }
+                    agentDecisionInProgress = true;
+                    try
+                    {
+                        if (ReferenceEquals(editorControl.CurrentBuffer, tab)) editorControl.AcceptAllHunks();
+                        else InlineDiffReview.AcceptAll(tab);
+                    }
+                    finally { agentDecisionInProgress = false; }
                     bool saved;
                     agentSaveInProgress = true;
                     try { saved = SaveTabBuffer(tab); }
@@ -514,15 +517,13 @@ namespace codeLess.Studio
                 EditorTabBuffer tab = FindOpenTabWin(f.FullPath);
                 if (tab != null && IsInlineStagedWin(tab))
                 {
-                    if (ReferenceEquals(editorControl.CurrentBuffer, tab)) editorControl.RejectAllHunks();
-                    else
+                    agentDecisionInProgress = true;
+                    try
                     {
-                        if (tab.PreDiffContent != null) { tab.Content = tab.PreDiffContent; tab.SyncLinesFromContent(); }
-                        tab.PreDiffContent = null;
-                        tab.DiffHunks.Clear();
-                        tab.IsDirty = tab.GetNormalizedContentRespectingFinalNewline() != (tab.SavedContent ?? "");
-                        tab.RefreshGutterDiff();
+                        if (ReferenceEquals(editorControl.CurrentBuffer, tab)) editorControl.RejectAllHunks();
+                        else InlineDiffReview.RejectAll(tab);
                     }
+                    finally { agentDecisionInProgress = false; }
                 }
                 f.Status = "Rejected";
             }
@@ -549,6 +550,59 @@ namespace codeLess.Studio
                 editorControl.StageProposedContent(f.ProposedText, "Agent proposal");
                 RefreshChangesetReviewBar();
             }
+        }
+
+        private bool agentDecisionInProgress;
+
+        /// <summary>
+        /// Accept All / Reject All in the editor banner (or Ctrl+Enter / Ctrl+Backspace) on a file with a pending agent
+        /// proposal: accepting writes the reviewed buffer and records it in the turn checkpoint, rejecting marks the file
+        /// rejected. Non-agent inline proposals (Ctrl+K, code-block apply) stay in the buffer, dirty, like VS Code.
+        /// </summary>
+        private void OnEditorDiffAllDecisionWin(EditorTabBuffer buf, bool accepted)
+        {
+            if (agentDecisionInProgress || agentSaveInProgress || agentTrustWin == null || buf == null || string.IsNullOrEmpty(buf.FilePath)) return;
+            AgentChangeSet cs = null;
+            AgentChangeSetFile f = null;
+            foreach (AgentChangeSet c in agentTrustWin.ChangeSets.ToList())
+            {
+                AgentChangeSetFile hit = c.Find(buf.FilePath);
+                if (hit != null && hit.IsPending) { cs = c; f = hit; }
+            }
+            if (cs == null) return;
+            if (!accepted)
+            {
+                f.Status = "Rejected";
+            }
+            else
+            {
+                string nowHash = File.Exists(f.FullPath) ? AgentHash.FileSha1(f.FullPath) : null;
+                if (nowHash != f.DiskHashAtStage)
+                {
+                    string msg = f.RelativePath + " changed on disk since the proposal: the accepted text is in the editor, unsaved. Review it and save (Ctrl+S) to keep it.";
+                    if (agentFeedControl != null) agentFeedControl.AddMessage(false, "Review", "", msg);
+                    statusLeftLabel.Text = msg;
+                }
+                else
+                {
+                    byte[] pre = File.Exists(f.FullPath) ? File.ReadAllBytes(f.FullPath) : null;
+                    bool saved;
+                    agentSaveInProgress = true;
+                    try { saved = SaveTabBuffer(buf); }
+                    finally { agentSaveInProgress = false; }
+                    if (saved)
+                    {
+                        byte[] post = File.Exists(f.FullPath) ? File.ReadAllBytes(f.FullPath) : null;
+                        AgentTurnCheckpointStore store = agentTrustWin.GetStore(cs.WorkspaceRoot);
+                        if (store != null) store.RecordFileWrite(cs.TurnId, cs.Label, f.FullPath, pre, post);
+                        f.Status = "Accepted";
+                        statusLeftLabel.Text = "Accepted " + f.RelativePath + " — undo from the Agent Timeline.";
+                    }
+                }
+            }
+            RefreshChangesetReviewBar();
+            RefreshTabStrip();
+            RefreshAgentReviewPanel();
         }
 
         private sealed class AgentTrackedSaveWin
