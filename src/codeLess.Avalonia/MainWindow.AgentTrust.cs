@@ -83,7 +83,7 @@ namespace codeLess.AvaloniaApp
         private void AddAgentTrustComposerControls()
         {
             if (!agentModeButtons.TryGetValue("agent", out var anyMode) || anyMode.Parent is not StackPanel modeRow) return;
-            verifyModeButton = new Button { FontSize = UiTokens.FontSmall, Padding = new Thickness(8, 2), MinHeight = 22, BorderThickness = new Thickness(0), Margin = new Thickness(10, 0, 0, 0) };
+            verifyModeButton = new Button { FontSize = UiTokens.FontSmall, Padding = new Thickness(8, 2), MinHeight = 22, BorderThickness = new Thickness(0) };
             verifyModeButton.Classes.Add("flat");
             verifyModeButton.Name = "AgentVerifyModeButton";
             verifyModeButton.Click += (s, e) => ShowVerifyModeMenu(verifyModeButton);
@@ -91,8 +91,19 @@ namespace codeLess.AvaloniaApp
             bestOfNButton.Classes.Add("flat");
             bestOfNButton.Name = "AgentBestOfNButton";
             bestOfNButton.Click += (s, e) => RunBestOfNFromComposer();
-            modeRow.Children.Add(verifyModeButton);
-            modeRow.Children.Add(bestOfNButton);
+            // Own row under the mode pills: on one line they overflowed (and clipped) the dock at its default width.
+            var trustRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Name = "AgentTrustComposerRow" };
+            trustRow.Children.Add(verifyModeButton);
+            trustRow.Children.Add(bestOfNButton);
+            if (modeRow.Parent is Panel composerPanel)
+            {
+                int idx = composerPanel.Children.IndexOf(modeRow);
+                composerPanel.Children.Insert(idx + 1, trustRow);
+            }
+            else
+            {
+                modeRow.Children.Add(trustRow);
+            }
             UpdateAgentTrustComposer();
         }
 

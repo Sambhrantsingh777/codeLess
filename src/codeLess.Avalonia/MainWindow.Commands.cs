@@ -2865,25 +2865,29 @@ namespace codeLess.AvaloniaApp
 
             // 4. r10b_avalonia_terminal.png (Terminal panel with 2 active sessions in session list + side-by-side split + ANSI colors)
             SwitchBottomTab("terminal");
+            // Platform-true staging (website screenshots): zsh/bash on macOS/Linux, PowerShell on Windows.
+            bool winHost = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            string sh1 = winHost ? "pwsh" : (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "zsh" : "bash");
+            string sh2 = winHost ? "powershell" : sh1;
             while (terminalSessions.Count < 2)
             {
-                CreateNewTerminalSession("powershell");
+                CreateNewTerminalSession(winHost ? "powershell" : null);
             }
             if (!isTerminalSplit)
                 ToggleSplitTerminal();
             if (terminalSessions.Count >= 1)
             {
-                terminalSessions[0].Title = "pwsh";
+                terminalSessions[0].Title = sh1;
                 terminalSessions[0].Control.FeedAnsiPreview(
                     "\r\n\x1b[1;32m✓ Build succeeded:\x1b[0m \x1b[36mcodeLess.Core -> bin/Release/net8.0/codeLess.Core.dll\x1b[0m\r\n" +
-                    "\x1b[1;34mpwsh\x1b[0m \x1b[32m➜\x1b[0m \x1b[1;36mcodeLess\x1b[0m \x1b[33mgit:(main)\x1b[0m $ dotnet test --nologo\r\n" +
+                    "\x1b[1;34m" + sh1 + "\x1b[0m \x1b[32m➜\x1b[0m \x1b[1;36mcodeLess\x1b[0m \x1b[33mgit:(main)\x1b[0m $ dotnet test --nologo\r\n" +
                     "\x1b[32mPassed!  - Failed:     0, Passed:    42, Skipped:     0\x1b[0m\r\n");
             }
             if (terminalSessions.Count >= 2)
             {
-                terminalSessions[1].Title = "powershell";
+                terminalSessions[1].Title = sh2;
                 terminalSessions[1].Control.FeedAnsiPreview(
-                    "\r\n\x1b[1;35mpowershell\x1b[0m \x1b[32m➜\x1b[0m \x1b[1;36mcodeLess\x1b[0m $ git status -sb\r\n" +
+                    "\r\n\x1b[1;35m" + sh2 + "\x1b[0m \x1b[32m➜\x1b[0m \x1b[1;36mcodeLess\x1b[0m $ git status -sb\r\n" +
                     "\x1b[32m## main...origin/main\x1b[0m\r\n" +
                     "\x1b[33m M src/codeLess.Avalonia/MainWindow.cs\x1b[0m\r\n");
             }

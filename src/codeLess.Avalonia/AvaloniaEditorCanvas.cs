@@ -4265,6 +4265,11 @@ namespace codeLess.AvaloniaApp
                         var rejectRect = new Rect(pillRight - 58, y + 2, 54, LineHeight - 4);
                         var acceptRect = new Rect(rejectRect.X - 62, y + 2, 58, LineHeight - 4);
                         // the removed lines themselves are shown as the read-only red zone above (QA #30), like VS Code
+                        // VS Code-style overlay widget: an opaque bordered backdrop so code under the actions never bleeds through.
+                        var backdrop = new Rect(acceptRect.X - 4, y + 0.5, rejectRect.Right - acceptRect.X + 8, LineHeight - 1);
+                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetShadow(Theme))), null, backdrop.Translate(new Vector(0, 1)), UiTokens.ControlRadius + 1, UiTokens.ControlRadius + 1);
+                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBackground(Theme))),
+                            new Pen(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBorder(Theme))), 1), backdrop, UiTokens.ControlRadius + 1, UiTokens.ControlRadius + 1);
                         // Calm per-hunk actions: primary (accent) Accept, secondary (neutral) Reject.
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonPrimaryBackground(Theme))), null, acceptRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonSecondaryBackground(Theme))), null, rejectRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
