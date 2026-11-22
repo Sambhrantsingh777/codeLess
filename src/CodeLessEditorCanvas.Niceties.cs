@@ -503,6 +503,20 @@ namespace codeLess.Studio
             return true;
         }
 
+        /// <summary>Edit → Emmet: Expand Abbreviation (works even when "Emmet on Tab" is off, like VS Code's command).</summary>
+        public bool ExpandEmmetAbbreviation(EditorTabBuffer buf)
+        {
+            bool prev = EditorNicetyOptions.EmmetOnTab;
+            EditorNicetyOptions.EmmetOnTab = true;
+            try
+            {
+                bool ok = TryHandleNicetyTabWF(buf);
+                if (ok) Invalidate();
+                return ok;
+            }
+            finally { EditorNicetyOptions.EmmetOnTab = prev; }
+        }
+
         /// <summary>Emmet on Tab; false = Tab keeps its normal behaviour.</summary>
         private bool TryHandleNicetyTabWF(EditorTabBuffer buf)
         {

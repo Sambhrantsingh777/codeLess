@@ -145,7 +145,13 @@ namespace codeLess.AvaloniaApp
                 ["view.problems"] = () => SwitchBottomTab("problems"),
                 ["view.output"] = () => SwitchBottomTab("output"),
                 ["view.debugConsole"] = () => { btmDebugConsoleTabBtn.IsVisible = true; SwitchBottomTab("debug"); FocusBottomTabContent("debug"); },
-                ["view.terminal"] = () => SwitchBottomTab("terminal"),
+                ["view.terminal"] = () =>
+                {
+                    // same as Ctrl+` (VS Code: View → Terminal toggles the terminal panel)
+                    if (!bottomPanelBorder.IsVisible) { ToggleBottomPanel(); SwitchBottomTab("terminal"); }
+                    else if (activeBottomTab != "terminal") SwitchBottomTab("terminal");
+                    else ToggleBottomPanel();
+                },
                 ["view.networkActivity"] = ShowNetworkActivity,
                 ["view.offlineMode"] = ToggleOfflineMode,
                 ["view.wordWrap"] = ToggleWordWrapCommand,

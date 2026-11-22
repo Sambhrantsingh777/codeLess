@@ -19,9 +19,15 @@ namespace codeLess.Avalonia.Tests
     public class TokenizationSliceHeadlessTests : IDisposable
     {
         private readonly string dir;
+        private readonly string settingsPath;
+        private readonly string settingsBackup;
+        private readonly bool hadSettings;
 
         public TokenizationSliceHeadlessTests()
         {
+            settingsPath = IdePersistentSettings.GetSettingsFilePath();
+            hadSettings = File.Exists(settingsPath);
+            settingsBackup = hadSettings ? File.ReadAllText(settingsPath) : null;
             dir = Path.Combine(Path.GetTempPath(), "codeLess_Slice_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
         }
@@ -29,6 +35,13 @@ namespace codeLess.Avalonia.Tests
         public void Dispose()
         {
             EditorNicetyOptions.TextMateHighlighting = true;
+            try
+            {
+                // opening files records recent folders / files: never leave test temp paths in the real settings
+                if (hadSettings) File.WriteAllText(settingsPath, settingsBackup);
+                else if (File.Exists(settingsPath)) File.Delete(settingsPath);
+            }
+            catch { }
             try { Directory.Delete(dir, true); } catch { }
         }
 

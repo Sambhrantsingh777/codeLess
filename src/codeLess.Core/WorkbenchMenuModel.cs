@@ -271,7 +271,7 @@ namespace codeLess.Studio
                 C("run.removeAllBreakpoints", "Remove All Breakpoints", null)));
 
             r.Add(M("Terminal", MenuPlatform.All,
-                C("term.new", "New Terminal", "Ctrl+Shift+`"),
+                C("term.new", "New Terminal", "Ctrl+Shift+`", "Ctrl+Shift+`"),
                 C("term.split", "Split Terminal", null),
                 Sep(),
                 C("term.runTask", "Run Task...", null),

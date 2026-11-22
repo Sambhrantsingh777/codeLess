@@ -127,9 +127,13 @@ tab and on hover; dirty dot in accent.
 text (no accent, no `▾`).
 
 **Find widget.** Docked to the editor's top-right edge, widget background, 1 px widget border on three sides,
-6 px bottom radius, shadow. 24 px input, 230 px wide, with the Aa / ab / .* toggles *inside* the input (20 px,
-accent-tinted + accent border when on). Vector buttons: toggle-replace chevron, previous/next arrows, close,
-replace, replace-all. Match count 12 px `FgSecondary`.
+6 px bottom radius, shadow. 26 px input, 230 px wide, with the Aa / ab / .* toggles *inside* the input and
+Preserve Case (AB) inside the replace input: `UiTokens.InputOptionSize` 20 px buttons, 16 px glyphs in the input
+foreground, hover = `InputOptionHoverBackground`, ON = `InputOptionActiveBackground` (accent ~40 %) + 1 px
+`InputOptionActiveBorder`, kept while hovered (`FindOptionToggles`). Tooltips name the option and the platform
+shortcut (Alt+C/W/R/P/L; ⌥⌘C/W/R/P/L on macOS). Vector buttons: toggle-replace chevron, previous/next arrows,
+Find in Selection toggle, close, replace, replace-all. Match count 12 px `FgSecondary`; an invalid regex shows
+"Invalid regex" in `FindErrorForeground` with the parser message as tooltip. The Search view uses the same toggles.
 
 **Suggest & hover.** Widget background/border/shadow, 4 px radius, 22 px rows (21 in code), 13 px labels,
 12 px details in `FgSecondary`, kind glyphs tinted from the theme's syntax roles, selection = list active selection.

@@ -395,9 +395,14 @@ namespace codeLess.Studio
             string pattern = options.UseRegex ? query : Regex.Escape(query);
             // VS Code whole-word rule: a match edge is valid when the neighbouring character is not a word character OR
             // the match itself starts / ends with a separator ("foo(" matches in "foo(x)", "->x" in "a->x")
-            if (options.WholeWord)
-                pattern = @"(?:(?<!\w)|(?=\W))(?:" + pattern + @")(?:(?!\w)|(?<=\W))";
+            if (options.WholeWord) pattern = WholeWordPattern(pattern);
             return pattern;
+        }
+
+        /// <summary>Wraps a regex so it only matches whole words (VS Code rule, see <see cref="BuildPattern"/>).</summary>
+        public static string WholeWordPattern(string inner)
+        {
+            return @"(?:(?<!\w)|(?=\W))(?:" + inner + @")(?:(?!\w)|(?<=\W))";
         }
 
         private static RegexOptions BuildRegexOptions(WorkspaceSearchOptions options)

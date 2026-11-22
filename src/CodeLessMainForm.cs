@@ -1185,17 +1185,11 @@ namespace codeLess.Studio
                 e.SuppressKeyPress = true;
                 NavigateSearchResultWin(e.Shift ? -1 : 1);
             }
-            else if (e.Alt && e.KeyCode == Keys.Z) // Alt+Z Toggle Word Wrap
+            else if (TryHandleEditorFindOptionKey(e)) { } // Alt+C/W/R/L/P: find options while an editor has focus
+            else if (e.Alt && !e.Control && !e.Shift && e.KeyCode == Keys.Z) // Alt+Z Toggle Word Wrap
             {
                 e.SuppressKeyPress = true;
-                editorControl.ToggleWordWrap();
-                if (splitEditorControl != null)
-                {
-                    if (splitEditorControl.CurrentBuffer != null && activeTab != null)
-                        splitEditorControl.CurrentBuffer.WordWrap = activeTab.WordWrap;
-                    splitEditorControl.Invalidate(true);
-                }
-                UpdateTelemetryBadges();
+                ToggleWordWrapCommand(); // per editor, like VS Code (CodeLessMainForm.Menus.cs)
             }
             else if (e.Control && e.Shift && e.KeyCode == Keys.E) // VS Code Explorer
             {
@@ -2369,14 +2363,7 @@ namespace codeLess.Studio
             wordWrapTabBtn.Visible = false;
             wordWrapTabBtn.Click += (s, e) =>
             {
-                editorControl.ToggleWordWrap();
-                if (splitEditorControl != null)
-                {
-                    if (splitEditorControl.CurrentBuffer != null && activeTab != null)
-                        splitEditorControl.CurrentBuffer.WordWrap = activeTab.WordWrap;
-                    splitEditorControl.Invalidate(true);
-                }
-                UpdateTelemetryBadges();
+                ToggleWordWrapCommand(); // per editor, like VS Code (CodeLessMainForm.Menus.cs)
             };
 
             tabActionsBar.Controls.AddRange(new Control[] { runTabActionBtn, splitEditorTabBtn, tabOverflowBtn, wordWrapTabBtn });
@@ -2921,14 +2908,7 @@ namespace codeLess.Studio
             viewMenu.DropDownItems.Add(new ToolStripSeparator());
             wordWrapMenuItem = CreateMenuItem("Word Wrap", "Alt+Z", () =>
             {
-                editorControl.ToggleWordWrap();
-                if (splitEditorControl != null)
-                {
-                    if (splitEditorControl.CurrentBuffer != null && activeTab != null)
-                        splitEditorControl.CurrentBuffer.WordWrap = activeTab.WordWrap;
-                    splitEditorControl.Invalidate(true);
-                }
-                UpdateTelemetryBadges();
+                ToggleWordWrapCommand(); // per editor, like VS Code (CodeLessMainForm.Menus.cs)
             });
             viewMenu.DropDownItems.Add(wordWrapMenuItem);
             viewMenu.DropDownOpening += (s, e) =>
@@ -3074,6 +3054,7 @@ namespace codeLess.Studio
                     a.ShowDialog(this);
             }));
 
+            AddMenuParityItems(editMenu, viewMenu, goMenu, runMenu, terminalMenu, helpMenu); // CodeLessMainForm.Menus.cs
             mainMenuStrip.Items.AddRange(new ToolStripItem[]
             {
                 fileMenu, editMenu, selectionMenu, viewMenu, goMenu, runMenu, terminalMenu, helpMenu
@@ -3316,16 +3297,15 @@ if __name__ == '__main__':
             };
             ctrl.OnWordWrapChanged += (wrap) =>
             {
-                foreach (EditorTabBuffer t in openTabs) t.WordWrap = wrap;
+                // View: Toggle Word Wrap is per editor (VS Code); it used to force every open tab, so a newly opened file
+                // (which follows the Settings value) disagreed with the others
                 if (editorControl != null)
                 {
-                    if (editorControl.CurrentBuffer != null) editorControl.CurrentBuffer.WordWrap = wrap;
                     editorControl.UpdateCursorStatusLabel();
                     editorControl.Invalidate(true);
                 }
                 if (splitEditorControl != null)
                 {
-                    if (splitEditorControl.CurrentBuffer != null) splitEditorControl.CurrentBuffer.WordWrap = wrap;
                     splitEditorControl.UpdateCursorStatusLabel();
                     splitEditorControl.Invalidate(true);
                 }

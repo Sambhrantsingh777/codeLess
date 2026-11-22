@@ -103,6 +103,7 @@ namespace codeLess.AvaloniaApp
                     await CaptureScreenshotAsync(outputDir, "r12_niceties_tsx.png");
                 }
                 await RunWrapAndFoldScreensAsync(outputDir, cs); // word wrap (QA #11) and Allman folding (QA #13)
+                await RunFindAndLongLineScreensAsync(outputDir); // v3.3.1: find toggles, long-line JSON in .py
             }
             catch (Exception ex) { LogSuiteError(outputDir, ex); }
         }

@@ -65,6 +65,12 @@ namespace codeLess.Studio
         private Button regexToggleBtn;
         private Button caseToggleBtn;
         private Button wordToggleBtn;
+        private Button selectionToggleBtn;
+        private Button preserveCaseToggleBtn;
+        private bool isFindInSelection;
+        private bool isPreserveCase;
+        private EditorFindScope findScope;
+        private readonly ToolTip findToolTip = new ToolTip();
         private bool isRegexSearch = false;
         private bool isCaseSearch = false;
         private bool isWholeWordSearch = false;
@@ -387,6 +393,20 @@ namespace codeLess.Studio
                 UpdateSearchMatches(true);
             };
 
+            // VS Code toggles: tooltips name the option and its shortcut; ON = accent fill (QA: "no case-sensitive /
+            // whole-word option" on macOS; Windows gets the same Find in Selection / Preserve Case parity)
+            findToolTip.SetToolTip(caseToggleBtn, "Match Case (Alt+C)");
+            findToolTip.SetToolTip(wordToggleBtn, "Match Whole Word (Alt+W)");
+            findToolTip.SetToolTip(regexToggleBtn, "Use Regular Expression (Alt+R)");
+            selectionToggleBtn = CreateStudioButton("\u2261", 30, false);
+            selectionToggleBtn.Height = 24;
+            selectionToggleBtn.Click += (s, e) => ToggleFindOption("selection");
+            findToolTip.SetToolTip(selectionToggleBtn, "Find in Selection (Alt+L)");
+            preserveCaseToggleBtn = CreateStudioButton("AB", 30, false);
+            preserveCaseToggleBtn.Height = 24;
+            preserveCaseToggleBtn.Click += (s, e) => ToggleFindOption("preserve");
+            findToolTip.SetToolTip(preserveCaseToggleBtn, "Preserve Case (Alt+P)");
+
             Button findPrevBtn = CreateStudioButton("", 28, false);
             findPrevBtn.Location = new Point(540, 8);
             findPrevBtn.Height = 24;
@@ -438,21 +458,7 @@ namespace codeLess.Studio
 
             findInput.KeyDown += (s, e) =>
             {
-                if (e.Alt && e.KeyCode == Keys.C)
-                {
-                    e.SuppressKeyPress = true;
-                    IsCaseSearch = !IsCaseSearch;
-                }
-                else if (e.Alt && e.KeyCode == Keys.W)
-                {
-                    e.SuppressKeyPress = true;
-                    IsWholeWordSearch = !IsWholeWordSearch;
-                }
-                else if (e.Alt && e.KeyCode == Keys.R)
-                {
-                    e.SuppressKeyPress = true;
-                    IsRegexSearch = !IsRegexSearch;
-                }
+                if (TryHandleFindOptionKey(e)) { }
                 else if (e.Alt && e.KeyCode == Keys.Enter)
                 {
                     e.SuppressKeyPress = true;
@@ -477,21 +483,7 @@ namespace codeLess.Studio
 
             replaceInput.KeyDown += (s, e) =>
             {
-                if (e.Alt && e.KeyCode == Keys.C)
-                {
-                    e.SuppressKeyPress = true;
-                    IsCaseSearch = !IsCaseSearch;
-                }
-                else if (e.Alt && e.KeyCode == Keys.W)
-                {
-                    e.SuppressKeyPress = true;
-                    IsWholeWordSearch = !IsWholeWordSearch;
-                }
-                else if (e.Alt && e.KeyCode == Keys.R)
-                {
-                    e.SuppressKeyPress = true;
-                    IsRegexSearch = !IsRegexSearch;
-                }
+                if (TryHandleFindOptionKey(e)) { }
                 else if (e.Alt && e.KeyCode == Keys.Enter)
                 {
                     e.SuppressKeyPress = true;
@@ -522,13 +514,13 @@ namespace codeLess.Studio
 
             findBar.Controls.AddRange(new Control[]
             {
-                findLbl, findInput, repLbl, replaceInput, regexToggleBtn, caseToggleBtn, wordToggleBtn,
+                findLbl, findInput, repLbl, replaceInput, regexToggleBtn, caseToggleBtn, wordToggleBtn, selectionToggleBtn, preserveCaseToggleBtn,
                 findPrevBtn, findNextBtn, replaceOneBtn, replaceAllBtn, closeFindBtn, findStatusLabel
             });
             Action layoutFindBar = () =>
             {
                 int fw = findBar.Width;
-                if (fw >= 820)
+                if (fw >= 900)
                 {
                     if (findBar.Height != 40) findBar.Height = 40;
                     int flex = Math.Max(0, Math.Min(110, (fw - 820) / 2));
@@ -539,15 +531,18 @@ namespace codeLess.Studio
                     replaceInput.Location = new Point(repLbl.Left + 52, 7);
                     replaceInput.Width = 135 + flex;
                     int rx = replaceInput.Right + 6;
-                    regexToggleBtn.Location = new Point(rx, 8);
-                    caseToggleBtn.Location = new Point(rx + 33, 8);
-                    wordToggleBtn.Location = new Point(rx + 66, 8);
-                    findPrevBtn.Location = new Point(rx + 99, 8);
-                    findNextBtn.Location = new Point(rx + 132, 8);
-                    replaceOneBtn.Location = new Point(rx + 192, 8);
-                    replaceAllBtn.Location = new Point(rx + 260, 8);
+                    preserveCaseToggleBtn.Location = new Point(rx, 8);
+                    rx += 39;
+                    caseToggleBtn.Location = new Point(rx, 8);
+                    wordToggleBtn.Location = new Point(rx + 33, 8);
+                    regexToggleBtn.Location = new Point(rx + 66, 8);
+                    selectionToggleBtn.Location = new Point(rx + 99, 8);
+                    findPrevBtn.Location = new Point(rx + 132, 8);
+                    findNextBtn.Location = new Point(rx + 165, 8);
+                    replaceOneBtn.Location = new Point(rx + 225, 8);
+                    replaceAllBtn.Location = new Point(rx + 293, 8);
                     closeFindBtn.Location = new Point(fw - 36, 8);
-                    findStatusLabel.Location = new Point(rx + 345, 12);
+                    findStatusLabel.Location = new Point(rx + 378, 12);
                 }
                 else
                 {
@@ -557,17 +552,19 @@ namespace codeLess.Studio
                     closeFindBtn.Location = new Point(rw - 34, 6);
                     findNextBtn.Location = new Point(closeFindBtn.Left - 60, 6);
                     findPrevBtn.Location = new Point(findNextBtn.Left - 33, 6);
-                    wordToggleBtn.Location = new Point(findPrevBtn.Left - 33, 6);
+                    selectionToggleBtn.Location = new Point(findPrevBtn.Left - 33, 6);
+                    regexToggleBtn.Location = new Point(selectionToggleBtn.Left - 33, 6);
+                    wordToggleBtn.Location = new Point(regexToggleBtn.Left - 33, 6);
                     caseToggleBtn.Location = new Point(wordToggleBtn.Left - 33, 6);
-                    regexToggleBtn.Location = new Point(caseToggleBtn.Left - 33, 6);
                     findInput.Location = new Point(42, 5);
-                    findInput.Width = Math.Max(68, regexToggleBtn.Left - 48);
+                    findInput.Width = Math.Max(68, caseToggleBtn.Left - 48);
 
                     repLbl.Location = new Point(8, 40);
                     replaceAllBtn.Location = new Point(rw - 86, 36);
                     replaceOneBtn.Location = new Point(replaceAllBtn.Left - 68, 36);
+                    preserveCaseToggleBtn.Location = new Point(replaceOneBtn.Left - 36, 36);
                     replaceInput.Location = new Point(58, 35);
-                    replaceInput.Width = Math.Max(68, replaceOneBtn.Left - 64);
+                    replaceInput.Width = Math.Max(68, preserveCaseToggleBtn.Left - 64);
                     findStatusLabel.Location = new Point(replaceAllBtn.Right + 4, 40);
                 }
             };
@@ -2220,7 +2217,7 @@ namespace codeLess.Studio
         {
             string pat = isRegexSearch ? q : Regex.Escape(q);
             if (isWholeWordSearch)
-                pat = @"\b(?:" + pat + @")\b";
+                pat = WorkspaceSearchEngine.WholeWordPattern(pat); // same rule as Find in Files and the Avalonia editor
             return pat;
         }
 
@@ -2236,45 +2233,20 @@ namespace codeLess.Studio
                 return;
             }
 
-            StringComparison cmp = isCaseSearch ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-            bool useRegex = isRegexSearch || isWholeWordSearch;
-            Regex rx = null;
-            if (useRegex)
+            // shared VS Code semantics (Core): case / whole word (also with regex) / regex timeout / find in selection
+            string findErr;
+            List<EditorFindMatch> found = EditorFindEngine.FindAll(CurrentBuffer.Lines, q, isCaseSearch, isWholeWordSearch, isRegexSearch, isFindInSelection ? findScope : null, out findErr);
+            if (findErr != null)
             {
-                try { rx = new Regex(BuildEffectiveSearchRegexPattern(q), isCaseSearch ? RegexOptions.None : RegexOptions.IgnoreCase); }
-                catch
-                {
-                    findStatusLabel.Text = "Invalid regex";
-                    virtualCanvas.Invalidate();
-                    return;
-                }
+                findStatusLabel.Text = EditorFindEngine.ShortError(findErr);
+                if (Theme != null) findStatusLabel.ForeColor = UiTokens.FindErrorForeground(Theme);
+                findToolTip.SetToolTip(findStatusLabel, findErr);
+                virtualCanvas.Invalidate();
+                return;
             }
-
-            for (int l = 0; l < CurrentBuffer.Lines.Count; l++)
-            {
-                string line = CurrentBuffer.Lines[l] ?? "";
-                if (line.Length == 0) continue;
-                if (useRegex && rx != null)
-                {
-                    MatchCollection mc = rx.Matches(line);
-                    foreach (Match m in mc)
-                    {
-                        if (m.Success && m.Length > 0)
-                            ActiveSearchMatches.Add(new SearchMatch { Line = l, Col = m.Index, Length = m.Length });
-                    }
-                }
-                else
-                {
-                    int c = 0;
-                    while (c <= line.Length - q.Length)
-                    {
-                        int idx = line.IndexOf(q, c, cmp);
-                        if (idx < 0) break;
-                        ActiveSearchMatches.Add(new SearchMatch { Line = l, Col = idx, Length = q.Length });
-                        c = idx + Math.Max(1, q.Length);
-                    }
-                }
-            }
+            if (Theme != null) findStatusLabel.ForeColor = Theme.FgSecondary;
+            findToolTip.SetToolTip(findStatusLabel, "");
+            foreach (EditorFindMatch fm in found) ActiveSearchMatches.Add(new SearchMatch { Line = fm.Line, Col = fm.Col, Length = fm.Length });
 
             if (ActiveSearchMatches.Count == 0)
             {
@@ -2427,6 +2399,7 @@ namespace codeLess.Studio
                 catch { }
             }
 
+            if (isPreserveCase) repText = EditorFindEngine.ApplyPreserveCase(selectedText, repText);
             CurrentBuffer.PushUndoSnapshot();
             virtualCanvas.ReplaceSelectionWithText(repText);
             NotifyBufferContentChanged();
@@ -2446,6 +2419,11 @@ namespace codeLess.Studio
             }
             RegexOptions opts = isCaseSearch ? RegexOptions.None : RegexOptions.IgnoreCase;
             string pattern = BuildEffectiveSearchRegexPattern(q);
+            if (isPreserveCase || isFindInSelection)
+            {
+                ReplaceMatchListRightToLeft(pattern, opts);
+                return;
+            }
             try
             {
                 // Line by line with the same semantics as UpdateSearchMatches: \s / [^x] / $ never join lines, and in
@@ -2470,6 +2448,100 @@ namespace codeLess.Studio
             {
                 findStatusLabel.Text = "Regex error: " + ex.Message;
             }
+        }
+
+        /// <summary>Replace All over the current match list (Preserve Case / Find in Selection), right to left per line.</summary>
+        private void ReplaceMatchListRightToLeft(string pattern, RegexOptions opts)
+        {
+            Regex rx = null;
+            if (isRegexSearch) { try { rx = new Regex(pattern, opts, TimeSpan.FromSeconds(2)); } catch { rx = null; } }
+            string rep = replaceInput.Text ?? "";
+            int count = 0;
+            CurrentBuffer.PushUndoSnapshot();
+            for (int i = ActiveSearchMatches.Count - 1; i >= 0; i--)
+            {
+                SearchMatch m = ActiveSearchMatches[i];
+                string line = CurrentBuffer.Lines[m.Line] ?? "";
+                if (m.Col < 0 || m.Col + m.Length > line.Length) continue;
+                string expanded = WorkspaceSearchEngine.ExpandReplacementAt(line, rx, m.Col, m.Length, rep, isRegexSearch);
+                if (isPreserveCase) expanded = EditorFindEngine.ApplyPreserveCase(line.Substring(m.Col, m.Length), expanded);
+                CurrentBuffer.Lines[m.Line] = line.Substring(0, m.Col) + expanded + line.Substring(m.Col + m.Length);
+                count++;
+            }
+            NotifyBufferContentChanged();
+            UpdateSearchMatches(false);
+            virtualCanvas.Invalidate();
+            findStatusLabel.Text = string.Format("Replaced {0}", count);
+        }
+
+        /// <summary>Find option state ("case", "word", "regex", "selection", "preserve").</summary>
+        public bool IsFindOptionOn(string option)
+        {
+            switch (option)
+            {
+                case "case": return isCaseSearch;
+                case "word": return isWholeWordSearch;
+                case "regex": return isRegexSearch;
+                case "selection": return isFindInSelection;
+                case "preserve": return isPreserveCase;
+            }
+            return false;
+        }
+
+        /// <summary>Flips a find option (toggle button, Alt+C/W/R/L/P in the find widget or the editor).</summary>
+        public void ToggleFindOption(string option)
+        {
+            switch (option)
+            {
+                case "case": IsCaseSearch = !IsCaseSearch; return;
+                case "word": IsWholeWordSearch = !IsWholeWordSearch; return;
+                case "regex": IsRegexSearch = !IsRegexSearch; return;
+                case "preserve":
+                    isPreserveCase = !isPreserveCase;
+                    StyleToggle(preserveCaseToggleBtn, isPreserveCase);
+                    return;
+                case "selection":
+                    isFindInSelection = !isFindInSelection;
+                    findScope = null;
+                    if (isFindInSelection && CurrentBuffer != null)
+                    {
+                        int sl, sc, el, ec;
+                        CurrentBuffer.GetNormalizedSelection(out sl, out sc, out el, out ec);
+                        if (!CurrentBuffer.HasSelection()) { sl = el = CurrentBuffer.CursorLine; sc = 0; ec = CurrentBuffer.Lines[sl].Length; }
+                        else if (ec == 0 && el > sl) { el--; ec = CurrentBuffer.Lines[el].Length; }
+                        findScope = new EditorFindScope(sl, sc, el, ec);
+                    }
+                    StyleToggle(selectionToggleBtn, isFindInSelection);
+                    UpdateSearchMatches(false);
+                    return;
+            }
+        }
+
+        private void StyleToggle(Button b, bool on)
+        {
+            if (b == null) return;
+            b.Tag = on ? "primary" : "subtle";
+            if (Theme != null) StyleButton(b, Theme);
+        }
+
+        /// <summary>Alt+C / W / R / L / P (VS Code Windows / Linux) while the find widget or the editor has focus.</summary>
+        public bool TryHandleFindOptionKey(KeyEventArgs e)
+        {
+            if (e == null || !e.Alt || e.Control || e.Shift) return false;
+            string opt = null;
+            switch (e.KeyCode)
+            {
+                case Keys.C: opt = "case"; break;
+                case Keys.W: opt = "word"; break;
+                case Keys.R: opt = "regex"; break;
+                case Keys.L: opt = "selection"; break;
+                case Keys.P: opt = "preserve"; break;
+            }
+            if (opt == null) return false;
+            e.SuppressKeyPress = true;
+            e.Handled = true;
+            ToggleFindOption(opt);
+            return true;
         }
 
         private void SubmitCtrlK()
