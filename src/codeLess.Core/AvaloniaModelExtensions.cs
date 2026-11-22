@@ -114,9 +114,30 @@ namespace codeLess.Studio
         public Dictionary<int, int> FoldedBlockRanges { get; } = new Dictionary<int, int>();
         public HashSet<int> GutterDeletedAfterLine { get; } = new HashSet<int>();
 
-        public bool HasPendingDiff =>
-            (ProposedNewLines != null && ProposedNewLines.Count > 0) ||
-            (DiffHunks != null && DiffHunks.Any(h => h.IsPending));
+        /// <summary>Buffer lines where a pending hunk starts (its Accept / Reject actions are drawn there).</summary>
+        public HashSet<int> ProposedHunkStarts { get; } = new HashSet<int>();
+
+        public bool HasPendingDiff => DiffHunks != null && DiffHunks.Any(h => h.IsPending);
+
+        /// <summary>
+        /// Rebuilds the per-line view of the pending hunks (<see cref="DiffHunks"/> is the source of truth, see
+        /// <see cref="InlineDiffReview"/>): added lines, hunk start lines, removed lines keyed by the hunk's anchor line.
+        /// </summary>
+        public void SyncProposedDiffProjection()
+        {
+            ProposedNewLines.Clear();
+            ProposedHunkStarts.Clear();
+            RemovedLineHistory.Clear();
+            if (DiffHunks == null) return;
+            foreach (var h in DiffHunks)
+            {
+                if (!h.IsPending) continue;
+                int anchor = InlineDiffReview.AnchorLine(this, h);
+                for (int i = 0; i < h.AddedLines.Count; i++) ProposedNewLines.Add(h.StartLine + i);
+                ProposedHunkStarts.Add(anchor);
+                if (h.RemovedLines.Count > 0) RemovedLineHistory[anchor] = new List<string>(h.RemovedLines);
+            }
+        }
 
         private int _cachedGutterMapVersion = -1;
         private Dictionary<int, int> _cachedGutterDiffMap;

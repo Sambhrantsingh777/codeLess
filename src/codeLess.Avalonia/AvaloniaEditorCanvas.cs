@@ -437,7 +437,7 @@ namespace codeLess.AvaloniaApp
         {
             if (CurrentBuffer != null && CurrentBuffer.HasPendingDiff)
             {
-                int count = CurrentBuffer.ProposedNewLines != null ? CurrentBuffer.ProposedNewLines.Count : 0;
+                int count = CurrentBuffer.DiffHunks != null ? CurrentBuffer.DiffHunks.Count(h => h.IsPending) : 0;
                 diffBannerSummaryText.Text = count == 1 ? $"1 proposed change in {CurrentBuffer.FileName}" : $"{count} proposed changes in {CurrentBuffer.FileName}";
                 diffReviewBanner.IsVisible = true;
             }
@@ -447,52 +447,32 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        // Inline review of a proposed full-file text. The logic (derived hunks, per-hunk accept/reject, undo) is shared
+        // with WinForms in codeLess.Core/InlineDiffReview.cs; this layer only refreshes the view.
+
         public void StageProposedDiffContent(string newFullContent)
         {
             if (CurrentBuffer == null || newFullContent == null) return;
-            CurrentBuffer.PushUndoSnapshot();
-            string[] oldLines = CurrentBuffer.Lines.ToArray();
-            string[] newLines = newFullContent.Replace("\r\n", "\n").Split('\n');
+            InlineDiffReview.Stage(CurrentBuffer, newFullContent);
+            AfterInlineReviewChange();
+            var first = CurrentBuffer.DiffHunks.Where(h => h.IsPending).OrderBy(h => h.StartLine).FirstOrDefault();
+            if (first != null) GoToLine(InlineDiffReview.AnchorLine(CurrentBuffer, first) + 1);
+        }
 
-            CurrentBuffer.ProposedNewLines.Clear();
-            CurrentBuffer.RemovedLineHistory.Clear();
+        /// <summary>Re-derives the pending hunks after the buffer was edited outside the review actions (typing, undo).</summary>
+        public void NotifyExternalBufferEdit()
+        {
+            if (CurrentBuffer == null || CurrentBuffer.PreDiffContent == null) return;
+            InlineDiffReview.Refresh(CurrentBuffer);
+            CurrentBuffer.SyncProposedDiffProjection();
+            RefreshDiffBanner();
+            Canvas.InvalidateVisual();
+        }
 
-            int prefix = 0;
-            int minLen = Math.Min(oldLines.Length, newLines.Length);
-            while (prefix < minLen && oldLines[prefix] == newLines[prefix])
-                prefix++;
-
-            int oldSuffix = oldLines.Length - 1;
-            int newSuffix = newLines.Length - 1;
-            while (oldSuffix >= prefix && newSuffix >= prefix && oldLines[oldSuffix] == newLines[newSuffix])
-            {
-                oldSuffix--;
-                newSuffix--;
-            }
-
-            if (newSuffix >= prefix)
-            {
-                for (int i = prefix; i <= newSuffix; i++)
-                    CurrentBuffer.ProposedNewLines.Add(i);
-            }
-            else if (oldSuffix >= prefix && prefix < newLines.Length)
-            {
-                CurrentBuffer.ProposedNewLines.Add(prefix);
-            }
-
-            if (oldSuffix >= prefix)
-            {
-                var removed = new List<string>();
-                for (int i = prefix; i <= oldSuffix; i++)
-                    removed.Add(oldLines[i]);
-                int attachLine = Math.Min(prefix, Math.Max(0, newLines.Length - 1));
-                CurrentBuffer.RemovedLineHistory[attachLine] = removed;
-            }
-
-            CurrentBuffer.Lines = new List<string>(newLines);
-            CurrentBuffer.SyncContentFromLines();
-            CurrentBuffer.IsDirty = true;
-            CurrentBuffer.RefreshGutterDiff();
+        private void AfterInlineReviewChange()
+        {
+            CurrentBuffer.SyncProposedDiffProjection();
+            CurrentBuffer.ClampCursor();
             RefreshDiffBanner();
             BufferModified?.Invoke(CurrentBuffer);
             Canvas.InvalidateVisual();
@@ -501,28 +481,21 @@ namespace codeLess.AvaloniaApp
         public void AcceptAllPendingDiffs()
         {
             if (CurrentBuffer == null) return;
-            CurrentBuffer.ProposedNewLines.Clear();
-            CurrentBuffer.RemovedLineHistory.Clear();
-            CurrentBuffer.RefreshGutterDiff();
+            bool hadReview = CurrentBuffer.PreDiffContent != null || CurrentBuffer.HasPendingDiff;
+            InlineDiffReview.AcceptAll(CurrentBuffer);
+            CurrentBuffer.SyncProposedDiffProjection();
             RefreshDiffBanner();
-            DiffAllDecisionRequested?.Invoke(CurrentBuffer, true);
+            if (hadReview) DiffAllDecisionRequested?.Invoke(CurrentBuffer, true);
             BufferModified?.Invoke(CurrentBuffer);
             Canvas.InvalidateVisual();
         }
 
         public void RejectAllPendingDiffs()
         {
-            if (CurrentBuffer == null || !CurrentBuffer.HasPendingDiff) return;
-            if (CurrentBuffer.UndoStack.Count > 0)
-            {
-                string prev = CurrentBuffer.UndoStack.Pop().Content;
-                CurrentBuffer.Content = prev;
-                CurrentBuffer.SyncLinesFromContent();
-            }
-            CurrentBuffer.ProposedNewLines.Clear();
-            CurrentBuffer.RemovedLineHistory.Clear();
-            CurrentBuffer.IsDirty = (CurrentBuffer.Content != CurrentBuffer.SavedContent);
-            CurrentBuffer.RefreshGutterDiff();
+            if (CurrentBuffer == null || (CurrentBuffer.PreDiffContent == null && !CurrentBuffer.HasPendingDiff)) return;
+            InlineDiffReview.RejectAll(CurrentBuffer);
+            CurrentBuffer.SyncProposedDiffProjection();
+            CurrentBuffer.ClampCursor();
             RefreshDiffBanner();
             DiffAllDecisionRequested?.Invoke(CurrentBuffer, false);
             BufferModified?.Invoke(CurrentBuffer);
@@ -532,42 +505,24 @@ namespace codeLess.AvaloniaApp
         public void AcceptDiffHunkAtLine(int lineIdx)
         {
             if (CurrentBuffer == null) return;
-            for (int l = lineIdx - 3; l <= lineIdx + 10; l++)
-            {
-                CurrentBuffer.ProposedNewLines.Remove(l);
-                CurrentBuffer.RemovedLineHistory.Remove(l);
-            }
-            RefreshDiffBanner();
-            BufferModified?.Invoke(CurrentBuffer);
-            Canvas.InvalidateVisual();
+            if (InlineDiffReview.AcceptHunkAtLine(CurrentBuffer, lineIdx)) AfterInlineReviewChange();
         }
 
         public void RejectDiffHunkAtLine(int lineIdx)
         {
             if (CurrentBuffer == null) return;
-            if (CurrentBuffer.RemovedLineHistory.TryGetValue(lineIdx, out var oldLines) && oldLines != null && oldLines.Count > 0)
-            {
-                if (lineIdx >= 0 && lineIdx < CurrentBuffer.Lines.Count)
-                    CurrentBuffer.Lines[lineIdx] = oldLines[0];
-            }
-            CurrentBuffer.ProposedNewLines.Remove(lineIdx);
-            CurrentBuffer.RemovedLineHistory.Remove(lineIdx);
-            CurrentBuffer.SyncContentFromLines();
-            RefreshDiffBanner();
-            BufferModified?.Invoke(CurrentBuffer);
-            Canvas.InvalidateVisual();
+            if (InlineDiffReview.RejectHunkAtLine(CurrentBuffer, lineIdx)) AfterInlineReviewChange();
         }
 
         public void JumpDiffHunk(int direction)
         {
-            if (CurrentBuffer == null || CurrentBuffer.ProposedNewLines.Count == 0) return;
-            var sorted = CurrentBuffer.ProposedNewLines.OrderBy(x => x).ToList();
+            if (CurrentBuffer == null || CurrentBuffer.DiffHunks == null) return;
+            var sorted = CurrentBuffer.DiffHunks.Where(h => h.IsPending).Select(h => InlineDiffReview.AnchorLine(CurrentBuffer, h)).Distinct().OrderBy(x => x).ToList();
+            if (sorted.Count == 0) return;
             int cur = CurrentBuffer.CursorLine;
             int target = direction >= 0
-                ? sorted.FirstOrDefault(x => x > cur)
-                : sorted.LastOrDefault(x => x < cur);
-            if (target == 0 && !sorted.Contains(0))
-                target = direction >= 0 ? sorted[0] : sorted[sorted.Count - 1];
+                ? sorted.Where(x => x > cur).DefaultIfEmpty(sorted[0]).First()
+                : sorted.Where(x => x < cur).DefaultIfEmpty(sorted[sorted.Count - 1]).Last();
             GoToLine(target + 1);
         }
 
@@ -1396,6 +1351,7 @@ namespace codeLess.AvaloniaApp
         {
             if (CurrentBuffer != null)
             {
+                if (CurrentBuffer.PreDiffContent != null) { InlineDiffReview.Refresh(CurrentBuffer); CurrentBuffer.SyncProposedDiffProjection(); }
                 RefreshBreadcrumbs(onlyIfChanged: true);
                 RefreshDiffBanner();
                 BufferModified?.Invoke(CurrentBuffer);
@@ -4191,16 +4147,27 @@ namespace codeLess.AvaloniaApp
                 DrawConflictLineBackground(context, buf, docLine, y, codeAreaRight);
 
                 // Proposed inline diff highlight & per-hunk Accept/Reject pills
-                bool isProposedDiffLine = buf.ProposedNewLines != null && buf.ProposedNewLines.Contains(docLine);
-                if (isProposedDiffLine)
+                bool isProposedDiffLine = buf.ProposedNewLines.Contains(docLine);
+                bool isHunkStart = buf.ProposedHunkStarts.Contains(docLine);
+                if (isProposedDiffLine || isHunkStart)
                 {
-                    context.FillRectangle(new SolidColorBrush(Color.FromArgb(42, 34, 197, 94)), new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, LineHeight));
-                    bool isFirstInHunk = !buf.ProposedNewLines.Contains(docLine - 1);
-                    if (isFirstInHunk)
+                    if (isProposedDiffLine)
+                        context.FillRectangle(new SolidColorBrush(Color.FromArgb(42, 34, 197, 94)), new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, LineHeight));
+                    if (isHunkStart)
                     {
                         double pillRight = codeAreaRight - 10;
                         var rejectRect = new Rect(pillRight - 58, y + 2, 54, LineHeight - 4);
                         var acceptRect = new Rect(rejectRect.X - 62, y + 2, 58, LineHeight - 4);
+                        // Removed lines (same "-N removed" tag as WinForms; a pure deletion also gets a red rule above its anchor line).
+                        if (buf.RemovedLineHistory.TryGetValue(docLine, out var removedHere) && removedHere.Count > 0)
+                        {
+                            var remColor = Color.FromArgb(255, 251, 113, 133);
+                            if (!isProposedDiffLine) context.FillRectangle(new SolidColorBrush(remColor), new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, 2));
+                            var remFt = new FormattedText("-" + removedHere.Count + " removed", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(remColor));
+                            var remRect = new Rect(acceptRect.X - remFt.Width - 14, y + 2, remFt.Width + 10, LineHeight - 4);
+                            context.DrawRectangle(new SolidColorBrush(Color.FromArgb(64, 225, 29, 72)), null, remRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
+                            context.DrawText(remFt, new Point(remRect.X + 5, remRect.Y + (remRect.Height - remFt.Height) / 2));
+                        }
                         // Calm per-hunk actions: primary (accent) Accept, secondary (neutral) Reject.
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonPrimaryBackground(Theme))), null, acceptRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonSecondaryBackground(Theme))), null, rejectRect, UiTokens.ControlRadius, UiTokens.ControlRadius);

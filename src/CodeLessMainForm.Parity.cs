@@ -129,7 +129,7 @@ namespace codeLess.Studio
                 TaskProblemStore.Changed -= onProblems;
                 foreach (RunningTaskWin rt in runningTasksWin.ToList()) { try { if (rt.Exec.Terminate != null) rt.Exec.Terminate(); } catch { } }
             };
-            this.Deactivate += delegate { if (settings.FocusChangeSavesFiles) SaveAllDirtyFileBuffersWin(true); };
+            this.Deactivate += delegate { if (AutoSavePolicy.SavesOnWindowFocusLoss(settings)) SaveAllDirtyFileBuffersWin(true); };
 
             winAutoFetchTimer = new System.Windows.Forms.Timer();
             winAutoFetchTimer.Tick += delegate
@@ -162,11 +162,23 @@ namespace codeLess.Studio
             if (ReferenceEquals(cur, winPolledTab)) return;
             EditorTabBuffer leaving = winPolledTab;
             winPolledTab = cur;
-            if (leaving == null || settings.EffectiveAutoSaveMode != IdePersistentSettings.AutoSaveOnFocusChange) return;
-            if (leaving.IsDirty && !leaving.IsUntitled && !string.IsNullOrEmpty(leaving.FilePath) && File.Exists(leaving.FilePath) && openTabs.Contains(leaving))
+            if (leaving == null || !AutoSavePolicy.SavesOnEditorFocusLoss(settings)) return;
+            if (AutoSavePolicy.IsEligible(leaving) && openTabs.Contains(leaving))
             {
                 autoSaveDepthWin++;
                 try { SaveTabBuffer(leaving, true); } finally { autoSaveDepthWin--; }
+            }
+        }
+
+        /// <summary>files.autoSave = onFocusChange: the editor lost focus to another part of the workbench.</summary>
+        private void OnEditorControlLeaveWin(CodeLessEditorControl ctrl)
+        {
+            if (ctrl == null || !AutoSavePolicy.SavesOnEditorFocusLoss(settings)) return;
+            EditorTabBuffer buf = ctrl.CurrentBuffer;
+            if (AutoSavePolicy.IsEligible(buf) && openTabs.Contains(buf))
+            {
+                autoSaveDepthWin++;
+                try { SaveTabBuffer(buf, true); } finally { autoSaveDepthWin--; }
             }
         }
 
@@ -1155,6 +1167,7 @@ namespace codeLess.Studio
             foreach (EditorTabBuffer t in openTabs.ToList())
             {
                 if (t == null || !t.IsDirty || t.IsUntitled || t.IsLargeFileViewer || string.IsNullOrEmpty(t.FilePath) || !File.Exists(t.FilePath)) continue;
+                if (autoSave && !AutoSavePolicy.IsEligible(t)) continue; // e.g. an inline proposal still under review
                 if (autoSave) { autoSaveDepthWin++; try { SaveTabBuffer(t, true); } finally { autoSaveDepthWin--; } }
                 else SaveTabBuffer(t);
             }

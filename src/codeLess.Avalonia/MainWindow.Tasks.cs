@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using codeLess.Studio;
 
 namespace codeLess.AvaloniaApp
@@ -55,7 +56,9 @@ namespace codeLess.AvaloniaApp
                 TaskProblemStore.Changed -= OnTaskProblemsChanged;
                 foreach (var rt in runningTasks.ToList()) { try { rt.Exec.Terminate?.Invoke(); } catch { } }
             };
-            Deactivated += (s, e) => { if (settings.FocusChangeSavesFiles) SaveAllDirtyFileBuffers(autoSave: true); };
+            Deactivated += (s, e) => { if (AutoSavePolicy.SavesOnWindowFocusLoss(settings)) SaveAllDirtyFileBuffers(autoSave: true); };
+            // files.autoSave = onFocusChange: focus moving from an editor to any other part of the workbench saves it.
+            AddHandler(GotFocusEvent, OnWorkbenchGotFocusForAutoSave, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
         }
 
         // ------------------------------------------------------------------------------------------------
@@ -421,6 +424,7 @@ namespace codeLess.AvaloniaApp
 
         private void AutoSaveBuffer(EditorTabBuffer b)
         {
+            if (!AutoSavePolicy.IsEligible(b)) return; // never writes an inline proposal that is still under review
             autoSaveDepth++;
             try { SaveBufferToDisk(b); }
             finally { autoSaveDepth--; }
@@ -438,8 +442,31 @@ namespace codeLess.AvaloniaApp
         /// <summary>Hook in ActivateTab: files.autoSave = onFocusChange saves the editor being left.</summary>
         private void OnEditorFocusLeaving(EditorTabBuffer leaving, EditorTabBuffer next)
         {
-            if (leaving == null || ReferenceEquals(leaving, next) || !settings.FocusChangeSavesFiles || settings.EffectiveAutoSaveMode != IdePersistentSettings.AutoSaveOnFocusChange) return;
-            if (leaving.IsDirty && !leaving.IsUntitled && !string.IsNullOrEmpty(leaving.FilePath) && File.Exists(leaving.FilePath) && openTabs.Contains(leaving))
+            if (leaving == null || ReferenceEquals(leaving, next) || !AutoSavePolicy.SavesOnEditorFocusLoss(settings)) return;
+            if (AutoSavePolicy.IsEligible(leaving) && openTabs.Contains(leaving))
+                AutoSaveBuffer(leaving);
+        }
+
+        private EditorTabBuffer focusedEditorBufferForAutoSave;
+
+        /// <summary>
+        /// Tracks which editor has keyboard focus; when focus moves to anything outside the editors (explorer, search,
+        /// terminal, panels, chat, …) the buffer that was being edited is saved (onFocusChange). Widgets inside an editor
+        /// (find / inline AI bars) keep the editor focused, as in VS Code.
+        /// </summary>
+        private void OnWorkbenchGotFocusForAutoSave(object sender, Avalonia.Input.GotFocusEventArgs e)
+        {
+            var src = e.Source as Avalonia.Visual;
+            AvaloniaEditorControl editor = null;
+            for (var v = src; v != null; v = v.GetVisualParent())
+            {
+                if (ReferenceEquals(v, PrimaryEditor)) { editor = PrimaryEditor; break; }
+                if (ReferenceEquals(v, SplitEditor)) { editor = SplitEditor; break; }
+            }
+            var leaving = focusedEditorBufferForAutoSave;
+            focusedEditorBufferForAutoSave = editor?.CurrentBuffer;
+            if (leaving == null || ReferenceEquals(leaving, focusedEditorBufferForAutoSave)) return;
+            if (AutoSavePolicy.SavesOnEditorFocusLoss(settings) && openTabs.Contains(leaving) && AutoSavePolicy.IsEligible(leaving))
                 AutoSaveBuffer(leaving);
         }
 

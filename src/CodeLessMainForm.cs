@@ -505,8 +505,9 @@ namespace codeLess.Studio
             autoSaveTimer = new Timer { Interval = 3000 };
             autoSaveTimer.Tick += (s, e) =>
             {
+                autoSaveTimer.Stop();
                 RunAutoSaveTick();
-                if (!HasPendingAutoSave()) autoSaveTimer.Stop();
+                if (HasPendingAutoSave()) RestartAutoSaveTimer(NextAutoSaveDelayMs());
             };
 
             UpdateTelemetryBadges();
@@ -1538,12 +1539,16 @@ namespace codeLess.Studio
             }
         }
 
+        // files.autoSave = afterDelay (VS Code): a file is saved autoSaveDelay ms after its LAST edit; every edit restarts
+        // the delay (AutoSaveDebouncer). Buffers with an inline proposal under review are never auto-saved (AutoSavePolicy).
+        private readonly AutoSaveDebouncer autoSaveDebouncerWin = new AutoSaveDebouncer();
+
         private bool HasPendingAutoSave()
         {
-            if (settings == null || !settings.AutoSave) return false;
+            if (!AutoSavePolicy.SavesAfterDelay(settings)) return false;
             foreach (var t in openTabs)
             {
-                if (t.IsDirty && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath)) return true;
+                if (AutoSavePolicy.IsEligible(t)) return true;
             }
             return false;
         }
@@ -1551,17 +1556,44 @@ namespace codeLess.Studio
         /// <summary>Starts the autosave timer when there is something to save (called whenever buffers / tabs change).</summary>
         private void ArmAutoSaveTimer()
         {
-            if (autoSaveTimer != null && !autoSaveTimer.Enabled && HasPendingAutoSave()) autoSaveTimer.Start();
+            if (autoSaveTimer != null && !autoSaveTimer.Enabled && HasPendingAutoSave()) RestartAutoSaveTimer(NextAutoSaveDelayMs());
+        }
+
+        /// <summary>An edit restarts that buffer's delay (and the timer).</summary>
+        private void NoteAutoSaveEditWin(EditorTabBuffer buf)
+        {
+            if (buf == null || autoSaveTimer == null || !AutoSavePolicy.SavesAfterDelay(settings)) return;
+            autoSaveDebouncerWin.NoteEdit(buf, AutoSaveDebouncer.NowMs());
+            RestartAutoSaveTimer(settings.EffectiveAutoSaveDelayMs);
+        }
+
+        private void RestartAutoSaveTimer(long delayMs)
+        {
+            if (autoSaveTimer == null) return;
+            autoSaveTimer.Stop();
+            autoSaveTimer.Interval = (int)Math.Max(50, Math.Min(int.MaxValue, delayMs));
+            autoSaveTimer.Start();
+        }
+
+        private long NextAutoSaveDelayMs()
+        {
+            long now = AutoSaveDebouncer.NowMs();
+            long best = long.MaxValue;
+            foreach (var t in openTabs)
+                if (AutoSavePolicy.IsEligible(t)) best = Math.Min(best, autoSaveDebouncerWin.RemainingMs(t, now, settings.EffectiveAutoSaveDelayMs));
+            return best == long.MaxValue ? settings.EffectiveAutoSaveDelayMs : best;
         }
 
         public void RunAutoSaveTick()
         {
-            if (settings != null && settings.AutoSave)
+            if (!AutoSavePolicy.SavesAfterDelay(settings)) return;
+            long now = AutoSaveDebouncer.NowMs();
+            foreach (var t in openTabs.ToList())
             {
-                foreach (var t in openTabs.ToList())
+                if (AutoSavePolicy.IsEligible(t) && autoSaveDebouncerWin.IsDue(t, now, settings.EffectiveAutoSaveDelayMs))
                 {
-                    if (t.IsDirty && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath))
-                        SaveTabBuffer(t, true);
+                    autoSaveDebouncerWin.Forget(t);
+                    SaveTabBuffer(t, true);
                 }
             }
         }
@@ -3193,6 +3225,8 @@ if __name__ == '__main__':
         {
             if (lspController != null) lspController.Attach(ctrl);
             ctrl.OnSaveRequested += (buf) => SaveTabBufferUser(buf);
+            // The editor's own Accept All / Reject All on an agent proposal = accept / reject that file (same as Avalonia).
+            ctrl.OnDiffAllDecision += OnEditorDiffAllDecisionWin;
             ctrl.OnRunFileRequested += async (buf) => await ExecuteActiveFileInTerminalAsync(buf);
             ctrl.OnCtrlKRequested += async (inst, buf) => await HandleCtrlKInlineEditAsync(inst, buf);
             ctrl.OnPinContextRequested += (buf) => AddContextPill("@" + buf.FileName);
@@ -3239,8 +3273,11 @@ if __name__ == '__main__':
                 }
                 RefreshChangesetReviewBar();
                 UpdateStatusBarCursorAndLanguage(buf);
+                NoteAutoSaveEditWin(buf);
                 ArmAutoSaveTimer();
             };
+            // files.autoSave = onFocusChange: focus leaving the editor for any other part of the workbench saves it.
+            ctrl.Leave += (s, e) => OnEditorControlLeaveWin(ctrl);
             ctrl.OnCursorOrSelectionChanged += (buf) =>
             {
                 UpdateStatusBarCursorAndLanguage(buf);
@@ -6681,10 +6718,7 @@ if __name__ == '__main__':
                 if (agentCs != null) AcceptAgentChangeSetWin(agentCs, false); // writes + records the turn checkpoint
                 foreach (var t in openTabs)
                 {
-                    t.DiffHunks.Clear();
-                    t.PreDiffContent = null;
-                    t.IsDirty = (t.GetNormalizedContentRespectingFinalNewline() != (t.SavedContent ?? ""));
-                    t.RefreshGutterDiff();
+                    if (t != editorControl.CurrentBuffer && t != splitEditorControl.CurrentBuffer) InlineDiffReview.AcceptAll(t);
                 }
                 editorControl.AcceptAllHunks();
                 splitEditorControl.AcceptAllHunks();
@@ -6703,11 +6737,7 @@ if __name__ == '__main__':
                     {
                         if (t.PreDiffContent != null)
                         {
-                            t.Content = t.PreDiffContent;
-                            t.SyncLinesFromContent();
-                            t.PreDiffContent = null;
-                            t.IsDirty = (t.GetNormalizedContentRespectingFinalNewline() != (t.SavedContent ?? ""));
-                            t.RefreshGutterDiff();
+                            InlineDiffReview.RejectAll(t);
                             LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(t);
                         }
                         t.DiffHunks.Clear();
