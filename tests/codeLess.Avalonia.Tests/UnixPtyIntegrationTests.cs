@@ -66,7 +66,7 @@ namespace codeLess.Avalonia.Tests
                 var t = new Thread(() => s.Dispose()) { IsBackground = true };
                 t.Start();
                 Assert.True(t.Join(3000), "Dispose blocked");
-                Assert.True(sw.ElapsedMilliseconds < 3000);
+                Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(3000));
                 try { Directory.Delete(ws, true); } catch { }
             }
         }

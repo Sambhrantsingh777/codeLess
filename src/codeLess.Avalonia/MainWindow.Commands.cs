@@ -2803,11 +2803,19 @@ namespace codeLess.AvaloniaApp
 
             // Ensure the default (Savatarr Graphite) theme & clean workspace
             ApplyTheme(StudioTheme.GetById(StudioTheme.DefaultThemeId), persistSetting: false);
-            string repoDir = workspaceRoot;
-            if (File.Exists(Path.Combine(Environment.CurrentDirectory, "src", "codeLess.Core", "CoreModels.cs")))
+            // An explicit --workspace wins; otherwise the codeLess repo in the current directory, else the current directory.
+            string repoDir = !string.IsNullOrEmpty(App.StartupWorkspacePath) && Directory.Exists(App.StartupWorkspacePath)
+                ? App.StartupWorkspacePath
+                : workspaceRoot;
+            if (string.IsNullOrEmpty(App.StartupWorkspacePath) && File.Exists(Path.Combine(Environment.CurrentDirectory, "src", "codeLess.Core", "CoreModels.cs")))
                 repoDir = Environment.CurrentDirectory;
             else if (string.IsNullOrEmpty(repoDir) || !Directory.Exists(repoDir))
                 repoDir = Environment.CurrentDirectory;
+            // Automation: trust the fixture workspace for this run only (a throwaway trust store, never the user's list)
+            // so the Workspace Trust prompt doesn't cover the captures.
+            WorkspaceTrust.StorePathOverride = Path.Combine(Path.GetTempPath(), "codeless-suite-trust-" + Environment.ProcessId + ".json");
+            WorkspaceTrust.Trust(repoDir);
+            if (ModalHost.IsVisible) ModalHost.CloseModal();
             if (settings.RecentWorkspaces != null)
             {
                 settings.RecentWorkspaces.RemoveAll(p =>

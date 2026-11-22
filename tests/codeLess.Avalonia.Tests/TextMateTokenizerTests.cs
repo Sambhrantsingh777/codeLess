@@ -201,7 +201,7 @@ namespace codeLess.Avalonia.Tests
             gb.LineTimeBudgetMs = 50;
             var sw = Stopwatch.StartNew();
             gb.TokenizeLine(new string('a', 40) + "!", null);
-            Assert.True(sw.ElapsedMilliseconds < 3000, "tokenizer did not stop: " + sw.ElapsedMilliseconds + " ms");
+            Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(3000), "tokenizer did not stop: " + sw.ElapsedMilliseconds + " ms");
         }
 
         [Fact]
@@ -550,7 +550,7 @@ export class Store<T> extends Base implements IStore {
             doc.EnsureValid(lines, lines.Count - 1, 0);
             sw.Stop();
             output.WriteLine(string.Format("TypeScript single-line edit at line 10000: {0:F2} ms", sw.Elapsed.TotalMilliseconds));
-            Assert.True(sw.Elapsed.TotalMilliseconds < 200);
+            Assert.True(sw.Elapsed.TotalMilliseconds < PerfBudget.Ms(200), "took " + sw.Elapsed.TotalMilliseconds + " ms");
 
             var cs = reg.GetCompiled("source.cs", true);
             var csLines = new List<string>();
@@ -564,7 +564,7 @@ export class Store<T> extends Base implements IStore {
             csDoc.EnsureValid(csLines, csLines.Count - 1, 0);
             sw.Stop();
             output.WriteLine(string.Format("C# 20k lines: {0:F0} ms ({1:F0} lines/s)", sw.Elapsed.TotalMilliseconds, 19800 / (sw.Elapsed.TotalMilliseconds / 1000.0)));
-            Assert.True(tsMs < 30000, "TypeScript tokenization far too slow: " + tsMs);
+            Assert.True(tsMs < PerfBudget.Ms(30000), "TypeScript tokenization far too slow: " + tsMs);
         }
 
         private static string SamplePath()

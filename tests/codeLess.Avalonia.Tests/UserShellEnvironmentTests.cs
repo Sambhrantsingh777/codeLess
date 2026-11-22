@@ -37,7 +37,7 @@ namespace codeLess.Avalonia.Tests
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Assert.True(UserShellEnvironment.WaitForResolution(5000));
-            Assert.True(sw.ElapsedMilliseconds < 1000);
+            Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(1000));
         }
     }
 }

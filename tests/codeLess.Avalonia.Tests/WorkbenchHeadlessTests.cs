@@ -504,7 +504,7 @@ namespace codeLess.Avalonia.Tests
                     tab.InsertTextAtCursor("a");
                 }
                 sw.Stop();
-                Assert.True(sw.ElapsedMilliseconds < 250, $"Expected fast coalesced large-file edits, took {sw.ElapsedMilliseconds}ms");
+                Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(250), $"Expected fast coalesced large-file edits, took {sw.ElapsedMilliseconds}ms");
                 Assert.Single(tab.UndoStack);
 
                 window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window

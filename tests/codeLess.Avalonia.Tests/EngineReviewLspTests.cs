@@ -266,7 +266,7 @@ namespace codeLess.Avalonia.Tests
             if (Path.DirectorySeparatorChar == '\\') return;
             var sw = Stopwatch.StartNew();
             Assert.Null(LanguageServerRegistry.RunAndCapture("/bin/sleep", "10", 600));
-            Assert.True(sw.ElapsedMilliseconds < 5000, "timeout not enforced: " + sw.ElapsedMilliseconds);
+            Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(5000), "timeout not enforced: " + sw.ElapsedMilliseconds);
             string outp = LanguageServerRegistry.RunAndCapture("/bin/sh", "-c \"head -c 3000000 /dev/zero 1>&2; echo ok\"", 20000);
             Assert.Equal("ok", (outp ?? "").Trim());
         }

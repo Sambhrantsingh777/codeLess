@@ -501,7 +501,7 @@ namespace codeLess.Avalonia.Tests
             client.Start();
             var sw = Stopwatch.StartNew();
             var t = client.SendRequestAsync("setBreakpoints", new Dictionary<string, object> { { "x", new string('a', 1 << 20) } }, 500);
-            Assert.True(sw.ElapsedMilliseconds < 400, "SendRequestAsync blocked on the adapter's stdin: " + sw.ElapsedMilliseconds + " ms");
+            Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(400), "SendRequestAsync blocked on the adapter's stdin: " + sw.ElapsedMilliseconds + " ms");
             Assert.True(t.Wait(5000));
             Assert.False(t.Result.Success);
             output.Release.Set();

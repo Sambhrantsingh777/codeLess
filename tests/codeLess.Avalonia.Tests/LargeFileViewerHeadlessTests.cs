@@ -89,7 +89,7 @@ namespace codeLess.Avalonia.Tests
             Assert.True(tab.IsLargeFileViewer);
             Assert.Equal("", tab.Content);
             Assert.Single(tab.Lines);              // nothing was loaded into the List<string> buffer
-            Assert.True(sw.ElapsedMilliseconds < 2000, "open took " + sw.ElapsedMilliseconds + " ms");
+            Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(2000), "open took " + sw.ElapsedMilliseconds + " ms");
             Assert.Contains(tab, window.LargeFileTabs);
 
             var editor = window.PrimaryEditor;

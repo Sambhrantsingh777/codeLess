@@ -109,7 +109,7 @@ namespace codeLess.Avalonia.Tests
             var sw = Stopwatch.StartNew();
             Assert.True(c.EnsureValid(lines, lines.Count - 1, 0));
             output.WriteLine("bracket lexing 20k lines: " + sw.ElapsedMilliseconds + " ms");
-            Assert.True(sw.ElapsedMilliseconds < 2000);
+            Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(2000), "took " + sw.ElapsedMilliseconds + " ms");
             long before = c.ProcessedLineCount;
             lines[10001] = lines[10001] + " // edit";
             c.Sync(lines);
