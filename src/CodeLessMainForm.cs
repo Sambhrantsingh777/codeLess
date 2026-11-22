@@ -7244,7 +7244,7 @@ if __name__ == '__main__':
                 if (effectiveOutlineBuf != null && effectiveOutlineBuf.Symbols != null && effectiveOutlineBuf.Symbols.Count > 0)
                 {
                     foreach (AstSymbolItem s in effectiveOutlineBuf.Symbols)
-                        outlineListBox.Items.Add(string.Format("{0}  {1}", s.Kind == "class" ? "class" : "fn", s.Name));
+                        outlineListBox.Items.Add(string.Format("{0}  {1}", s.Kind, s.Name));
                 }
                 else
                 {
@@ -10603,8 +10603,8 @@ if __name__ == '__main__':
 
             string text = activeTab.Content ?? "";
             int branches = Regex.Matches(text, @"\b(if|else\s+if|for|foreach|while|case|catch|\&\&|\|\|)\b").Count;
-            int functions = activeTab.Symbols != null ? activeTab.Symbols.Count(s => s.Kind == "fn") : 0;
-            int classes = activeTab.Symbols != null ? activeTab.Symbols.Count(s => s.Kind != "fn") : 0;
+            int functions = activeTab.Symbols != null ? activeTab.Symbols.Count(s => s.Kind == "fn" || s.Kind == "method") : 0;
+            int classes = activeTab.Symbols != null ? activeTab.Symbols.Count(s => s.Kind != "fn" && s.Kind != "method" && s.Kind != "prop") : 0;
             int loc = activeTab.Lines.Count;
             int cyclomatic = 1 + branches;
 

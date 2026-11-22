@@ -3682,7 +3682,7 @@ namespace codeLess.Studio
                     }
                     else if (isLastSegOfLine && owner.ShowCodeLens && buf.Symbols != null && !isFolded && !buf.WordWrap)
                     {
-                        AstSymbolItem symOnLine = buf.Symbols.FirstOrDefault(s => s.Line == docLine + 1 && (s.Kind == "fn" || s.Kind == "class" || s.Kind == "struct" || s.Kind == "interface"));
+                        AstSymbolItem symOnLine = buf.Symbols.FirstOrDefault(s => s.Line == docLine + 1 && (s.Kind == "fn" || s.Kind == "method" || s.Kind == "class" || s.Kind == "struct" || s.Kind == "interface" || s.Kind == "record" || s.Kind == "enum" || s.Kind == "trait"));
                         if (symOnLine != null)
                         {
                             int lensX = GutterWidth + 8 + (sliceVisLen - effScrollLeft + 3) * CharWidth;

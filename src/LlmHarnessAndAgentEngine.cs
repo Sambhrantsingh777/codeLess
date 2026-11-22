@@ -438,15 +438,9 @@ namespace codeLess.Studio
                 // 1. Symbol extraction (classes, structs, interfaces, enums, functions, methods)
                 if (!inBlockComment && !inCsVerbatimStr && activeTripleQuote == null)
                 {
-                    Match m = symRegex.Match(line);
-                    if (m.Success)
+                    string kind, name;
+                    if (HeuristicSymbolExtractor.TryMatch(line, lang.Length > 0 ? lang : Path.GetExtension(filePath ?? ""), out kind, out name))
                     {
-                        string kw = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[3].Value;
-                        string name = m.Groups[2].Success ? m.Groups[2].Value : m.Groups[4].Value;
-                        string kind = "fn";
-                        if (kw == "class" || kw == "struct" || kw == "interface" || kw == "enum")
-                            kind = kw;
-
                         symbols.Add(new AstSymbolItem
                         {
                             Name = name,
@@ -775,7 +769,7 @@ namespace codeLess.Studio
                     s.Name.Length > prefix.Length);
                 if (sym != null)
                 {
-                    return sym.Name.Substring(prefix.Length) + (sym.Kind == "fn" ? "()" : "");
+                    return sym.Name.Substring(prefix.Length) + (sym.Kind == "fn" || sym.Kind == "method" ? "()" : "");
                 }
             }
 
@@ -855,11 +849,11 @@ namespace codeLess.Studio
                     {
                         string sKind = null;
                         string sName = null;
-                        Match m = symRegex.Match(lines[i]);
-                        if (m.Success)
+                        string hk, hn;
+                        if (HeuristicSymbolExtractor.TryMatch(lines[i], Path.GetExtension(fullPath ?? ""), out hk, out hn))
                         {
-                            sKind = m.Groups[1].Success ? m.Groups[1].Value : "fn";
-                            sName = m.Groups[2].Success ? m.Groups[2].Value : m.Groups[4].Value;
+                            sKind = hk;
+                            sName = hn;
                         }
                         else if (lines[i].Length < 240 && lines[i].IndexOf('(') >= 0)
                         {
