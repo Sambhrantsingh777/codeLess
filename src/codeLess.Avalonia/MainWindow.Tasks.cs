@@ -365,7 +365,7 @@ namespace codeLess.AvaloniaApp
             if (extraIndex < 0 || extraIndex >= problemsPanelExtra.Count) return false;
             var d = problemsPanelExtra[extraIndex];
             if (string.IsNullOrEmpty(d.FilePath) || !File.Exists(d.FilePath)) { SetStatusMessage(d.FilePath + " not found."); return true; }
-            Dispatcher.UIThread.Post(() => OpenFileAtLocation(d.FilePath, Math.Max(1, d.Line), Math.Max(1, d.Column), 0, preview: false, focusEditor: true));
+            MainUi.Post(() => OpenFileAtLocation(d.FilePath, Math.Max(1, d.Line), Math.Max(1, d.Column), 0, preview: false, focusEditor: true));
             return true;
         }
 

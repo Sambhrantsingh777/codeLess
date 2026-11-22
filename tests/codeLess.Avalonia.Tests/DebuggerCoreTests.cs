@@ -648,7 +648,7 @@ namespace codeLess.Avalonia.Tests
             Assert.NotNull(err);
             Assert.Null(DebugLaunchConfigurations.CreateDefaultForFile(t.File("main.c", "int main(){}"), t.Path, out err));
             Assert.Contains("Build", err);
-            t.File("main", "binary");
+            t.File(OperatingSystem.IsWindows() ? "main.exe" : "main", "binary");
             var cc = DebugLaunchConfigurations.CreateDefaultForFile(Path.Combine(t.Path, "main.c"), t.Path, out err);
             Assert.Equal("lldb", cc.AdapterFamily);
 
@@ -687,7 +687,8 @@ namespace codeLess.Avalonia.Tests
             buf.Breakpoints.Add(1);
             store.ApplyToBuffer(buf, false); // adopts gutter lines
             Assert.Single(store.All());
-            var bp = store.Toggle("/private/tmp/codeless_bp_test.py", 2); // macOS /private/tmp alias = same file
+            // macOS: /private/tmp is an alias of /tmp (same file); elsewhere toggle the same path
+            var bp = store.Toggle(OperatingSystem.IsMacOS() ? "/private/tmp/codeless_bp_test.py" : buf.FilePath, 2);
             Assert.NotNull(bp);
             store.ApplyToBuffer(buf, false);
             Assert.Equal(new[] { 1, 2 }, buf.Breakpoints.OrderBy(x => x).ToArray());
@@ -792,6 +793,35 @@ namespace codeLess.Avalonia.Tests
             Assert.Contains(all, i => i.Path == poetryPy && i.Kind == "poetry" && i.DisplayLabel.Contains("poetry"));
             Assert.Contains(all, i => i.Path == pipenvPy && i.Kind == "pipenv");
             Assert.Contains(all, i => i.Path == condaPy && i.Kind == "conda" && i.EnvName == "data");
+        }
+
+        [Fact]
+        public void WindowsLayout_FindsScriptsVenv_CondaRootPython_AndPicksWorkspaceEnv()
+        {
+            // Runs on every OS: discovery is told it's Windows and must use Scripts\python.exe / <prefix>\python.exe.
+            using var t = new TempDir();
+            string ws = Path.Combine(t.Path, "proj");
+            string home = Path.Combine(t.Path, "home");
+            t.File("proj/.venv/pyvenv.cfg", "home = C:\\Python312\nversion = 3.12.4\n");
+            string venvPy = t.File("proj/.venv/Scripts/python.exe", "MZ");
+            t.File("proj/.venv/bin/python", "#!"); // a unix layout must be ignored when IsWindows
+            t.File("home/miniconda3/conda-meta/python-3.11.4-h1_0.json", "{}");
+            string condaPy = t.File("home/miniconda3/python.exe", "MZ");
+            var env = new PythonDiscoveryEnvironment
+            {
+                IsWindows = true,
+                HomeDir = home,
+                GetEnv = n => null,
+                FindExecutable = n => null,
+                RunProcess = (exe, args, timeout) => null,
+                ProbeVersions = false
+            };
+            var all = PythonInterpreterDiscovery.Discover(ws, env);
+            var dot = all.First(i => string.Equals(i.Path, venvPy, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal("3.12.4", dot.Version);
+            Assert.DoesNotContain(all, i => i.Path.EndsWith(Path.Combine("bin", "python"), StringComparison.Ordinal));
+            Assert.Contains(all, i => string.Equals(i.Path, condaPy, StringComparison.OrdinalIgnoreCase) && i.Kind == "conda");
+            Assert.Equal(dot, PythonInterpreterDiscovery.PickDefault(all));
         }
 
         [Fact]

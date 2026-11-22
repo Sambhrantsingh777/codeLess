@@ -57,6 +57,7 @@ namespace codeLess.Avalonia.Tests
 
         private static void Pump(Func<bool> cond, int ms = 15000, string what = "condition")
         {
+            ms = PerfBudget.Wait(ms); // slow shared CI runners need longer waits (this is a timeout, not a perf assertion)
             var sw = Stopwatch.StartNew();
             while (sw.ElapsedMilliseconds < ms)
             {

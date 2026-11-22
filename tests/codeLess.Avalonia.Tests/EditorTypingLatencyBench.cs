@@ -129,8 +129,11 @@ namespace codeLess.Avalonia.Tests
             Assert.False(tab.IsDirty);
 
             // generous bounds (a shared headless box): the old path rebuilt ~5 MB of text per keystroke
-            Assert.True(typeMed < 4.0, report);
+            // Allocation per edit is machine-independent and catches the real regression (rebuilding the whole text per
+            // keystroke) everywhere. Wall-clock time is only strict on real hardware: virtualized CI runners render far slower
+            // (the GitHub macOS runner measured ~60 ms) — there it only guards against catastrophic slowdowns.
             Assert.True(editAllocKb < 256, report);
+            Assert.True(typeMed < (PerfBudget.IsCi ? 250.0 : 4.0), report);
             w.SuppressUnsavedPrompts = true;
             w.Close();
         }

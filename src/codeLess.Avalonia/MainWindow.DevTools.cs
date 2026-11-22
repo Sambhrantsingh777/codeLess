@@ -663,7 +663,7 @@ namespace codeLess.AvaloniaApp
             }
             view.Render(string.Join("\n", buf.Lines));
             var vv = view;
-            Dispatcher.UIThread.Post(() => vv.SyncToSourceLine(buf.ScrollTopLine), DispatcherPriority.Background);
+            MainUi.Post(() => vv.SyncToSourceLine(buf.ScrollTopLine), DispatcherPriority.Background);
             return view;
         }
 

@@ -486,7 +486,7 @@ namespace codeLess.AvaloniaApp
             stack.Children.Add(ok);
             ModalHost.ShowModal("breakpoint-options", "Breakpoint at " + Path.GetFileName(path) + ":" + (line + 1), stack, 460);
             var target = focus == "log" ? log : cond;
-            Dispatcher.UIThread.Post(() => target.Focus(), DispatcherPriority.Loaded);
+            MainUi.Post(() => target.Focus(), DispatcherPriority.Loaded);
         }
 
         // ---- Notifications (non-modal, only after the user asked to debug) ----

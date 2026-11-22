@@ -18,5 +18,11 @@ namespace codeLess.Avalonia.Tests
         }
 
         public static long Ms(long localBudgetMs) => (long)Math.Ceiling(localBudgetMs * Scale);
+
+        /// <summary>True on CI runners (GitHub sets CI=true).</summary>
+        public static bool IsCi => string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Scales a wait timeout (how long to wait for an async result, not a performance assertion).</summary>
+        public static int Wait(int localMs) => (int)Math.Min(int.MaxValue, Math.Ceiling(localMs * Math.Max(1.0, Scale)));
     }
 }

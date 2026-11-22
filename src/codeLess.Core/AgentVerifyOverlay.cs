@@ -393,7 +393,9 @@ namespace codeLess.Studio
                     string dst = MapToOverlay(kv.Key);
                     if (string.Equals(dst, kv.Key, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("Could not map " + kv.Key + " into the verification copy.");
-                    AgentChangeSetApplier.WriteTextLikeExisting(dst, kv.Value);
+                    // format (EOL / encoding / BOM) from the user's real file: the copy's git checkout may differ (core.autocrlf)
+                    string fmtNote;
+                    AgentChangeSetApplier.WriteTextLikeExisting(dst, kv.Value, kv.Key, out fmtNote);
                 }
             }
             if (deletedFiles != null)

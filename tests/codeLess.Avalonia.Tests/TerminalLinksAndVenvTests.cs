@@ -27,14 +27,15 @@ namespace codeLess.Avalonia.Tests
         }
         public string File(string rel, string content = "x\n")
         {
-            string full = System.IO.Path.Combine(Path, rel);
+            // normalized (platform separators) so expectations match what the product returns on Windows too
+            string full = System.IO.Path.GetFullPath(System.IO.Path.Combine(Path, rel.Replace('/', System.IO.Path.DirectorySeparatorChar)));
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full));
             System.IO.File.WriteAllText(full, content);
             return full;
         }
         public string Venv(string rel, params string[] scripts)
         {
-            string dir = System.IO.Path.Combine(Path, rel);
+            string dir = System.IO.Path.GetFullPath(System.IO.Path.Combine(Path, rel.Replace('/', System.IO.Path.DirectorySeparatorChar)));
             File(System.IO.Path.Combine(rel, "pyvenv.cfg"), "home = /usr/bin\n");
             foreach (string s in scripts) File(System.IO.Path.Combine(rel, s));
             return dir;

@@ -177,7 +177,7 @@ namespace codeLess.AvaloniaApp
             }
             catch (Exception ex)
             {
-                Dispatcher.UIThread.Post(() => ReportAiProblem("Terminal AI", ex));
+                MainUi.Post(() => ReportAiProblem("Terminal AI", ex));
                 callback?.Invoke("");
             }
         }

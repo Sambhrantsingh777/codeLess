@@ -200,15 +200,26 @@ namespace codeLess.Studio
         /// </summary>
         public static void WriteTextLikeExisting(string path, string text, out string note)
         {
+            WriteTextLikeExisting(path, text, path, out note);
+        }
+
+        /// <summary>
+        /// Writes <paramref name="text"/> to <paramref name="path"/> using the encoding / BOM / line endings / final newline of
+        /// <paramref name="formatSourcePath"/> (e.g. the user's real file when writing into a verification copy, whose git
+        /// checkout may have different line endings because of core.autocrlf).
+        /// </summary>
+        public static void WriteTextLikeExisting(string path, string text, string formatSourcePath, out string note)
+        {
             note = null;
             string dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
             string raw = text ?? "";
-            if (File.Exists(path))
+            string fmt = !string.IsNullOrEmpty(formatSourcePath) && File.Exists(formatSourcePath) ? formatSourcePath : path;
+            if (File.Exists(fmt))
             {
                 string eol; Encoding enc; bool bom; bool finalNl;
-                EditorTabBuffer.ReadFilePreservingMetadata(path, out eol, out enc, out bom, out finalNl);
-                if (new FileInfo(path).Length == 0)
+                EditorTabBuffer.ReadFilePreservingMetadata(fmt, out eol, out enc, out bom, out finalNl);
+                if (new FileInfo(fmt).Length == 0)
                 {
                     eol = raw.Contains("\r\n") ? "\r\n" : "\n";
                     finalNl = raw.EndsWith("\n");

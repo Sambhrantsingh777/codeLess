@@ -58,6 +58,9 @@ namespace codeLess.AvaloniaApp
                 gridCanvas.Render(ctx);
         }
 
+        // PTY reader threads raise output/exit events: post UI work in the control's own (UI) execution context.
+        private readonly UiPost uiPost = UiPost.CaptureCurrent();
+
         public AvaloniaTerminalEmulatorControl()
         {
             Focusable = true;
@@ -191,7 +194,7 @@ namespace codeLess.AvaloniaApp
             {
                 InlineShellPromptRequested(prompt, generatedCmd =>
                 {
-                    Dispatcher.UIThread.Post(() =>
+                    uiPost.Post(() =>
                     {
                         HideInlineAiBar();
                         if (!string.IsNullOrWhiteSpace(generatedCmd))
@@ -304,7 +307,7 @@ namespace codeLess.AvaloniaApp
                 {
                     if (System.Threading.Interlocked.Exchange(ref repaintQueued, 1) != 0)
                         return;
-                    Dispatcher.UIThread.Post(() =>
+                    uiPost.Post(() =>
                     {
                         System.Threading.Interlocked.Exchange(ref repaintQueued, 0);
                         gridCanvas.InvalidateVisual();
@@ -314,7 +317,7 @@ namespace codeLess.AvaloniaApp
                 };
                 Session.ProcessExited += code =>
                 {
-                    Dispatcher.UIThread.Post(() =>
+                    uiPost.Post(() =>
                     {
                         if (!exitedNotified)
                         {
@@ -327,7 +330,7 @@ namespace codeLess.AvaloniaApp
                 // A command that already finished (e.g. a task failing immediately) was still started: returning
                 // false made the task runner run it a second time through pipes. Report the missed exit instead.
                 if (Session.HasExited && !exitedNotified)
-                    Dispatcher.UIThread.Post(() => { if (!exitedNotified) { exitedNotified = true; SessionExited?.Invoke(this); } });
+                    uiPost.Post(() => { if (!exitedNotified) { exitedNotified = true; SessionExited?.Invoke(this); } });
                 return true;
             }
             catch

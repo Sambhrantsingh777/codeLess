@@ -803,7 +803,7 @@ namespace codeLess.AvaloniaApp
             _ = Task.Run(() =>
             {
                 var map = read();
-                Dispatcher.UIThread.Post(() => { if (string.Equals(root, workspaceRoot, PathKeyComparison)) apply(map); });
+                MainUi.Post(() => { if (string.Equals(root, workspaceRoot, PathKeyComparison)) apply(map); });
             });
         }
 

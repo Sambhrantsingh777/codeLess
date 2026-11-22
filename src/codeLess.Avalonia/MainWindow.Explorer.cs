@@ -234,7 +234,7 @@ namespace codeLess.AvaloniaApp
             {
                 var files = CollectIndexableFiles(ignoreRules, roots, CancellationToken.None, out bool cappedBg);
                 WorkspaceFileListCapped = cappedBg;
-                Dispatcher.UIThread.Post(() =>
+                MainUi.Post(() =>
                 {
                     if (gen != reindexGeneration || !string.Equals(root, workspaceRoot, PathKeyComparison)) return;
                     workspaceFiles.Clear();
@@ -265,7 +265,7 @@ namespace codeLess.AvaloniaApp
                     entries = LlmHarnessAndAgentEngine.GetGitStatusEntries(root) ?? new List<GitStatusEntry>();
                 }
                 catch { }
-                Dispatcher.UIThread.Post(() =>
+                MainUi.Post(() =>
                 {
                     gitRefreshRunning = false;
                     if (string.Equals(root, workspaceRoot, PathKeyComparison))
@@ -307,7 +307,7 @@ namespace codeLess.AvaloniaApp
                 {
                     // Buffer overflow or inotify watch limit: fall back to one full refresh.
                     lock (fsChangeLock) { fsTreeDirty = true; fsGitDirty = true; }
-                    Dispatcher.UIThread.Post(RestartFsDebounce);
+                    MainUi.Post(RestartFsDebounce);
                 };
                 w.EnableRaisingEvents = true;
                 workspaceWatcher = w;
@@ -366,7 +366,7 @@ namespace codeLess.AvaloniaApp
                     if (!structural && fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
                 }
             }
-            Dispatcher.UIThread.Post(RestartFsDebounce);
+            MainUi.Post(RestartFsDebounce);
         }
 
         private void RestartFsDebounce()
@@ -528,7 +528,7 @@ namespace codeLess.AvaloniaApp
             _ = Task.Run(() =>
             {
                 EnsureWorkspaceIndexed();
-                if (onReadyOnUiThread != null) Dispatcher.UIThread.Post(onReadyOnUiThread);
+                if (onReadyOnUiThread != null) MainUi.Post(onReadyOnUiThread);
             });
         }
 
@@ -640,7 +640,7 @@ namespace codeLess.AvaloniaApp
             ok.Click += (s, e) => ModalHost.CloseModal();
             stack.Children.Add(ok);
             ModalHost.ShowModal("message", title ?? "codeLess", stack, 460);
-            Dispatcher.UIThread.Post(() => ok.Focus(), DispatcherPriority.Loaded);
+            MainUi.Post(() => ok.Focus(), DispatcherPriority.Loaded);
         }
 
         public void ShowConfirmModal(string title, string message, string confirmLabel, Action onConfirm)
@@ -669,7 +669,7 @@ namespace codeLess.AvaloniaApp
             row.Children.Add(no);
             stack.Children.Add(row);
             ModalHost.ShowModal("confirm", title ?? "codeLess", stack, 480);
-            Dispatcher.UIThread.Post(() => yes.Focus(), DispatcherPriority.Loaded);
+            MainUi.Post(() => yes.Focus(), DispatcherPriority.Loaded);
         }
 
         // ---------------------------------------------------------------------------------------------

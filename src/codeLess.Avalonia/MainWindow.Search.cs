@@ -477,7 +477,7 @@ namespace codeLess.AvaloniaApp
                         batch = new List<List<CoreSearchMatch>>(pending);
                         pending.Clear();
                     }
-                    Dispatcher.UIThread.Post(() =>
+                    MainUi.Post(() =>
                     {
                         if (gen != workspaceSearchGeneration) return;
                         foreach (var list in batch) AppendSearchGroup(list);
@@ -498,7 +498,7 @@ namespace codeLess.AvaloniaApp
                     res = new WorkspaceSearchResult { Error = ex.Message };
                 }
                 flush();
-                Dispatcher.UIThread.Post(() => FinishWorkspaceSearch(gen, res));
+                MainUi.Post(() => FinishWorkspaceSearch(gen, res));
             });
         }
 
@@ -927,7 +927,7 @@ namespace codeLess.AvaloniaApp
             if (canvas.Bounds.Height < canvas.LineHeight * 2)
             {
                 // Canvas was hidden (welcome page) and has not been laid out yet: centre after layout.
-                Dispatcher.UIThread.Post(center, DispatcherPriority.Loaded);
+                MainUi.Post(center, DispatcherPriority.Loaded);
             }
             center();
             UpdateStatusBar();

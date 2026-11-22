@@ -246,7 +246,7 @@ namespace codeLess.AvaloniaApp
             if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime) return VerificationApprovalDecision.Deny; // never unattended
             if (Dispatcher.UIThread.CheckAccess()) return VerificationApprovalDecision.Deny;
             var tcs = new TaskCompletionSource<VerificationApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Dispatcher.UIThread.Post(() =>
+            MainUi.Post(() =>
             {
                 var stack = new StackPanel { Spacing = 10 };
                 stack.Children.Add(new TextBlock { Text = req.Reason ?? "", TextWrapping = TextWrapping.Wrap, FontSize = UiTokens.FontUi, Foreground = WorkbenchStyles.B(currentTheme.FgPrimary) });
@@ -275,7 +275,7 @@ namespace codeLess.AvaloniaApp
                 onClosed = () => { ModalHost.Closed -= onClosed; tcs.TrySetResult(VerificationApprovalDecision.Deny); };
                 ModalHost.Closed += onClosed;
                 ModalHost.ShowModal("agent-verify-approval", "Run Verification Command?", stack, 580);
-                Dispatcher.UIThread.Post(() => deny.Focus(), DispatcherPriority.Loaded);
+                MainUi.Post(() => deny.Focus(), DispatcherPriority.Loaded);
             });
             return tcs.Task.Wait(TimeSpan.FromMinutes(10)) ? tcs.Task.Result : VerificationApprovalDecision.Deny;
         }

@@ -1099,7 +1099,7 @@ namespace codeLess.AvaloniaApp
                 }
             }
             apply();
-            Dispatcher.UIThread.Post(apply, DispatcherPriority.Loaded);
+            Dispatcher.UIThread.Post(apply, DispatcherPriority.Loaded); // static helper, already on the UI thread
         }
 
         public void PromptCreateNewFileInWorkspace() => PromptCreateNewFileInWorkspace(null);
@@ -1728,7 +1728,7 @@ namespace codeLess.AvaloniaApp
                     if (results.All(r => r.code == 0)) SetStatusMessage("Committed.");
                     RefreshGitStatusInBackground();
                 }
-                if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime) Dispatcher.UIThread.Post(apply);
+                if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime) MainUi.Post(apply);
                 else apply();
             }
 
@@ -1859,7 +1859,7 @@ namespace codeLess.AvaloniaApp
                 }
             }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
             ModalHost.ShowModal("terminal-folder-picker", "New Terminal", stack, 520);
-            Dispatcher.UIThread.Post(() => buttons[0].Focus(), DispatcherPriority.Loaded);
+            MainUi.Post(() => buttons[0].Focus(), DispatcherPriority.Loaded);
         }
 
         public TerminalSessionEntry CreateNewTerminalSession(string shellProfile = null, string customWorkDir = null)
@@ -2595,7 +2595,7 @@ namespace codeLess.AvaloniaApp
                     }
                 }
                 if (decision != UnsavedPromptResult.Cancel && proceedAfterDecision != null)
-                    Dispatcher.UIThread.Post(proceedAfterDecision);
+                    MainUi.Post(proceedAfterDecision);
             });
             ModalHost.ShowModal("unsaved-changes", "Unsaved Changes — codeLess", view, 500);
             return false;
@@ -3107,7 +3107,7 @@ namespace codeLess.AvaloniaApp
             if (Dispatcher.UIThread.CheckAccess()) return false; // cannot block the UI thread waiting for a click
 
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Dispatcher.UIThread.Post(() =>
+            MainUi.Post(() =>
             {
                 var stack = new StackPanel { Spacing = 10 };
                 stack.Children.Add(new TextBlock
@@ -3144,7 +3144,7 @@ namespace codeLess.AvaloniaApp
                 onClosed = () => { ModalHost.Closed -= onClosed; tcs.TrySetResult(false); }; // Esc / dismiss = Deny
                 ModalHost.Closed += onClosed;
                 ModalHost.ShowModal("agent-tool-approval", "Allow Agent Command?", stack, 560);
-                Dispatcher.UIThread.Post(() => deny.Focus(), DispatcherPriority.Loaded); // default = safe choice
+                MainUi.Post(() => deny.Focus(), DispatcherPriority.Loaded); // default = safe choice
             });
             // Unanswered for 10 minutes => deny.
             return tcs.Task.Wait(TimeSpan.FromMinutes(10)) && tcs.Task.Result;

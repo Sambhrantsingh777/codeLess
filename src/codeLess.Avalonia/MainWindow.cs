@@ -231,6 +231,13 @@ namespace codeLess.AvaloniaApp
 
         public MainWindow() : this(null) { }
 
+        /// <summary>
+        /// UI posts from background work (git, file watcher, indexing, processes) run in the window's own UI execution
+        /// context (captured at construction on the UI thread), never in the posting thread's context.
+        /// </summary>
+        private readonly UiPost mainUiPost = UiPost.CaptureCurrent();
+        private UiPost MainUi => mainUiPost;
+
         public MainWindow(string initialPath)
         {
             Title = "codeLess";
@@ -2514,7 +2521,7 @@ namespace codeLess.AvaloniaApp
                     : (LlmHarnessAndAgentEngine.GetGitStatusEntries(capturedRoot) ?? new List<GitStatusEntry>());
                 if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
 
-                Dispatcher.UIThread.Post(() =>
+                MainUi.Post(() =>
                 {
                     if (token.IsCancellationRequested || loadGen != workspaceLoadGeneration) return;
                     workspaceFiles.Clear();
@@ -2736,7 +2743,7 @@ namespace codeLess.AvaloniaApp
                     string head = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(capturedWs, fullPath); // gutter = working tree vs index
                     if (head != null)
                     {
-                        Dispatcher.UIThread.Post(() =>
+                        MainUi.Post(() =>
                         {
                             tab.GitHeadContent = head;
                             tab.RefreshGutterDiff();

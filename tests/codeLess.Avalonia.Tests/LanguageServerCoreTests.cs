@@ -142,7 +142,8 @@ namespace codeLess.Avalonia.Tests
             string p = "/tmp/my dir/a#b/naïve 😀.py";
             string uri = LspText.PathToUri(p);
             Assert.StartsWith("file:///tmp/my%20dir/a%23b/na%C3%AFve%20%F0%9F%98%80.py", uri);
-            Assert.Equal(p, LspText.UriToPath(uri));
+            // a rooted unix path maps to the current drive's root on Windows ("\\tmp\\...")
+            Assert.Equal(p.Replace('/', Path.DirectorySeparatorChar), LspText.UriToPath(uri));
             Assert.Equal("file:///C:/Users/x/a.ts", LspText.PathToUri("C:\\Users\\x\\a.ts"));
             Assert.Equal("C:\\Users\\x\\a.ts", LspText.UriToPath("file:///c%3A/Users/x/a.ts").Replace("c:", "C:"));
             Assert.Null(LspText.UriToPath("untitled:Untitled-1"));

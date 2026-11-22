@@ -182,7 +182,7 @@ namespace codeLess.AvaloniaApp
             row.Children.Add(restrict);
             stack.Children.Add(row);
             ModalHost.ShowModal("workspace-trust", WorkspaceTrust.PromptTitle, stack, 560);
-            Avalonia.Threading.Dispatcher.UIThread.Post(() => restrict.Focus(), Avalonia.Threading.DispatcherPriority.Loaded);
+            MainUi.Post(() => restrict.Focus(), Avalonia.Threading.DispatcherPriority.Loaded);
         }
 
         /// <summary>Manage Workspace Trust: trust / restrict the open folder and revoke trusted folders.</summary>

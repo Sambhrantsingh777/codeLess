@@ -47,7 +47,7 @@ namespace codeLess.AvaloniaApp
             string current = CurrentAppVersion;
             Task.Run(() => UpdateChecker.Check(current, 8000)).ContinueWith(t =>
             {
-                Dispatcher.UIThread.Post(() =>
+                MainUi.Post(() =>
                 {
                     updateCheckInFlight = false;
                     var r = t.Status == TaskStatus.RanToCompletion ? t.Result : new UpdateCheckResult { Error = "Update check failed." };
@@ -142,7 +142,7 @@ namespace codeLess.AvaloniaApp
             row.Children.Add(download);
             stack.Children.Add(row);
             ModalHost.ShowModal("update-available", "Update Available", stack, 560);
-            Dispatcher.UIThread.Post(() => download.Focus(), DispatcherPriority.Loaded);
+            MainUi.Post(() => download.Focus(), DispatcherPriority.Loaded);
         }
     }
 }
