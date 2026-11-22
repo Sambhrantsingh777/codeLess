@@ -438,6 +438,22 @@ namespace codeLess.Avalonia.Tests
         }
 
         [Fact]
+        public void Python_Layout_Handles_The_Native_Windows_Venv_Layout()
+        {
+            if (Path.DirectorySeparatorChar != '\\') return; // the Lib\\site-packages layout is only probed on Windows
+            string venv = Path.Combine(dir, "winvenv");
+            string baseDir = Path.Combine(dir, "Python312");
+            Write("winvenv/pyvenv.cfg", "home = " + baseDir + "\nversion = 3.12.4\n");
+            Write("winvenv/Scripts/python.exe", "");
+            Write("winvenv/Lib/site-packages/flask/__init__.py", "");
+            Write("Python312/Lib/os.py", "");
+            var layout = PythonEnvironmentLayout.FromInterpreter(Path.Combine(venv, "Scripts", "python.exe"), null, null);
+            Assert.Equal("3.12", layout.Version);
+            Assert.Contains(Path.Combine(venv, "Lib", "site-packages"), layout.SitePackages);
+            Assert.Equal(Path.Combine(baseDir, "Lib"), layout.StdlibDir);
+        }
+
+        [Fact]
         public void Python_Layout_Is_Derived_From_A_Venv_Without_Running_It()
         {
             string venv = Path.Combine(dir, ".venv");

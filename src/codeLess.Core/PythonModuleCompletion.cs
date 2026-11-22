@@ -467,6 +467,12 @@ namespace codeLess.Studio
             {
                 string basePrefix = windows ? home : SafeParent(home);
                 if (!string.IsNullOrEmpty(basePrefix)) AddLibDirs(l, basePrefix, windows, false);
+                // MSYS2/MinGW Pythons on Windows use the Unix layout: "home" is <base>\bin
+                if (windows && l.StdlibDir == null)
+                {
+                    string parent = SafeParent(home);
+                    if (!string.IsNullOrEmpty(parent)) AddLibDirs(l, parent, windows, false);
+                }
             }
             return l;
         }
@@ -480,10 +486,14 @@ namespace codeLess.Studio
         {
             if (windows)
             {
+                // Native Windows layout (<prefix>\Lib\site-packages, <prefix>\Lib\os.py). When it is not there, fall
+                // through to the Unix layout (<prefix>/lib/pythonX.Y), which MSYS2/MinGW Pythons and venvs created by
+                // them use on Windows.
+                int before = l.SitePackages.Count;
                 string lib = Path.Combine(prefix, "Lib");
                 if (sitePackages) AddIfDir(l.SitePackages, Path.Combine(lib, "site-packages"));
                 if (l.StdlibDir == null && File.Exists(Path.Combine(lib, "os.py"))) l.StdlibDir = lib;
-                return;
+                if (l.SitePackages.Count > before || l.StdlibDir != null) return;
             }
             string libRoot = Path.Combine(prefix, "lib");
             string verDir = null;
