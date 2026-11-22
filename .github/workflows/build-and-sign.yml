@@ -287,7 +287,23 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Run Avalonia Headless Tests natively on Linux
-        run: dotnet test tests/codeLess.Avalonia.Tests/codeLess.Avalonia.Tests.csproj -c Release --nologo
+        run: dotnet test tests/codeLess.Avalonia.Tests/codeLess.Avalonia.Tests.csproj -c Release --nologo --logger "trx;LogFileName=test-results.trx" --results-directory TestResults
+
+      - name: Report failed tests as annotations
+        if: failure()
+        shell: pwsh
+        run: |
+          $trx = Get-ChildItem -Path TestResults -Filter *.trx -Recurse | Select-Object -First 1
+          if (-not $trx) { Write-Output "::error title=No test results::test host may have crashed before writing results"; exit 0 }
+          [xml]$x = Get-Content $trx.FullName
+          $failed = $x.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -ne 'Passed' -and $_.outcome -ne 'NotExecuted' }
+          foreach ($f in $failed) {
+            $msg = ($f.Output.ErrorInfo.Message + ' | ' + ($f.Output.ErrorInfo.StackTrace -split "`n" | Select-Object -First 3) -join ' ')
+            if ($msg.Length -gt 900) { $msg = $msg.Substring(0, 900) }
+            $msg = $msg -replace "`r", '' -replace "`n", ' '
+            Write-Output "::error title=FAILED $($f.testName)::$msg"
+          }
+          Write-Output "$(@($failed).Count) failed test(s)"
 
       - name: Build Linux x64 & arm64 Debian (.deb) and Portable (.tar.gz) Packages
         run: |
