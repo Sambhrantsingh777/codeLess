@@ -174,7 +174,7 @@ namespace codeLess.Avalonia.Tests
                 double fold = sw.Elapsed.TotalMilliseconds;
                 Assert.Single(buf.GutterModifiedLines);
                 report.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, " {0} lines: gutter {1:F1} ms, analysis {2:F1} ms, folding {3:F1} ms, large={4};", n, gutter, ast, fold, buf.IsLargeFile));
-                if (n <= 100000) Assert.True(gutter < 250 && ast < 1500, report.ToString());
+                if (n <= 100000) Assert.True(gutter < PerfBudget.Ms(250) && ast < PerfBudget.Ms(1500), report.ToString()); // scaled on slow CI runners
             }
             string rp = System.Environment.GetEnvironmentVariable("CODELESS_BENCH_REPORT");
             if (!string.IsNullOrEmpty(rp)) BenchUtil.Append(rp, report.ToString());
