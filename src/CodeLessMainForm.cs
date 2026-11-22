@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Savatarr")]
 [assembly: AssemblyProduct("codeLess")]
 [assembly: AssemblyCopyright("Copyright © 2026 Savatarr. All rights reserved.")]
-[assembly: AssemblyVersion("3.3.3.0")]
-[assembly: AssemblyFileVersion("3.3.3.0")]
+[assembly: AssemblyVersion("3.3.4.0")]
+[assembly: AssemblyFileVersion("3.3.4.0")]
 
 namespace codeLess.Studio
 {

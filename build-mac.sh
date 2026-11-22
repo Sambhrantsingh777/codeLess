@@ -11,7 +11,7 @@ cd "$SCRIPT_DIR"
 APP_NAME="codeLess"
 BUNDLE_ID="com.savatarr.codeless"
 PUBLISHER="Savatarr"
-VERSION="3.3.3"
+VERSION="3.3.4"
 CSPROJ="src/codeLess.Avalonia/codeLess.Avalonia.csproj"
 ENTITLEMENTS="$SCRIPT_DIR/macos/entitlements.plist"
 

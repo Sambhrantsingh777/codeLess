@@ -1,37 +1,41 @@
-# codeLess v3.3.3
+# codeLess v3.3.4
 
-A VS Code-parity release driven by bug reports from v3.3.1 on macOS (v3.3.2 was tagged but never published: a flaky
-test stopped its release build). Every fix ships on Windows, macOS and Linux.
-
-## Fixed
-
-- **Strings in long lines are coloured correctly.** Highlighting used to restart at the visible part of a long line, so a
-  big JSON/dict literal in a `.py` file showed quoted text as variables once you scrolled or wrapped. Lines are now
-  tokenized from their start (cached, so a 1 MB single-line file costs ~40 ms once and < 2 ms per frame), and multi-line
-  strings and comments (`"""…"""`, `/* … */`, `@"…"`, template literals) stay coloured on every line. New bundled
-  TextMate grammars for **Python** and **JSON**.
-- **Find & Replace options you can see.** Match Case, Match Whole Word and Use Regular Expression are now proper
-  toggles with a clear ON state, tooltips and VS Code's shortcuts (⌥⌘C / ⌥⌘W / ⌥⌘R on macOS, Alt+C / Alt+W / Alt+R
-  elsewhere). New: **Preserve Case**, **Find in Selection**, Replace All with Ctrl/Cmd+Alt+Enter, and an "Invalid regex"
-  message. Whole-word matching follows VS Code's rules (works for queries like `foo(`) in the editor and in Search.
-- **Word Wrap in the menu.** View → Word Wrap (⌥Z / Alt+Z) is checkable and per editor; on macOS ⌥Z no longer types "Ω".
-- **Ctrl+Tab switches editors** — from the editor, terminal, side bar or chat. Hold Ctrl and tap Tab to walk a
-  "Recently used editors" list, release to open; a quick tap returns to the previous file. On macOS the key never reached
-  the app before. Closing an editor now focuses the one you used last.
-- **Code no longer paints over the line numbers** when the editor is scrolled horizontally.
-- A suggestion list left open in one file can no longer insert into another after switching tabs.
+Driven by your bug reports from v3.3.3 on macOS: smoother editing and terminal, real in-app updates, language servers
+that install themselves, and a long list of VS Code-parity fixes. Every change ships on Windows, macOS and Linux.
 
 ## New
 
-- **Path completion in imports** as you type: JS/TS `import` / `require` / `export … from`, CSS `@import` and `url()`,
-  HTML `src`/`href`, C/C++ `#include "…"`, Markdown links. Relative paths, tsconfig/jsconfig aliases (`@/…`), npm
-  packages; folders first and drill in as you go.
-- **Python module completion** after `import` and `from`: workspace modules, relative imports, packages installed in the
-  selected interpreter, the standard library, and names inside a module (`from x import …`, honouring `__all__`).
-- **Complete menu bar, like VS Code's**: app menu (Settings ⌘,), File (Open Recent, Revert, Auto Save), Edit
-  (Cut/Copy/Paste that work in any focused field, Find/Replace in Files, comments, Emmet), Selection, View (Appearance,
-  Zoom, Minimap, Breadcrumbs, Sticky Scroll, panels), Go (Back/Forward, Switch Editor, Definition, References, Problems,
-  Bracket), Run (breakpoints), Terminal (tasks), Window and Help. Check marks reflect live state; Windows has the same set.
+- **Updates inside the app.** Help → Check for Updates (also in the codeLess menu on macOS) downloads the new version,
+  verifies it against the release's SHA-256 checksums and offers **Restart to Update** (saving or asking about unsaved
+  files first). Works for the macOS app, the Windows installer, MSI and portable builds, and the Linux tarball; the .deb
+  shows the `sudo apt install` command. Offline Mode blocks it. Settings → Update mode.
+- **Language servers install themselves.** Open a Python, TypeScript/JavaScript, Bash, YAML, HTML/CSS/JSON, Go, Rust,
+  C# or Lua file without a server and codeLess installs one into its own folder (never system-wide, never with sudo),
+  shows progress in the status bar and starts it — no more "install one with npm i -g …" pop-ups. Settings → "Install
+  missing language servers automatically".
+- **Smooth scrolling and caret.** Pixel-precise trackpad scrolling with momentum, animated wheel / Page Up/Down / jumps
+  (VS Code's 125 ms), a gliding caret with a fading blink — and ~3–7× cheaper frames on big files. Settings to turn each
+  off and choose the cursor blinking style.
+- **Terminal feel like VS Code.** Steady block cursor in the text colour (outline when unfocused, bar for vim and other
+  apps that ask), no blink by default, box-drawing and Powerline glyphs drawn on the cell grid, 12 px Menlo / 14 px
+  Consolas with font-height rows, minimum contrast, synchronized output for TUIs, scrolled-back view stays put while
+  output arrives, only changed rows repaint. Parsing 100k lines is ~9× faster.
+- **Undo / Redo go to the change** — the caret lands on the edit and it is centred if it was off-screen.
+- **Find history:** ↑ / ↓ in the Find, Replace and Search boxes recall earlier searches.
+
+## Fixed
+
+- macOS menu bar: the app menu had only Quit — About, Check for Updates and Settings (⌘,) are back.
+- macOS keys like VS Code: **Control+G** Go to Line, ⌘G / ⇧⌘G Find Next / Previous, Control+Shift+G Source Control.
+- Git change markers no longer mark every line when edits are far apart.
+- Clicking a line no longer shows its git blame — inline blame is off by default like VS Code (Git: Toggle Line Blame).
+- An empty new file closes without asking to save; Save on an untitled file asks where (it used to write
+  `Untitled-1.cs` silently); new files take the workspace's language and Save As suggests its extension.
+- Opening a folder no longer opens a file by itself, and the Welcome tab can be closed with no files open (VS Code's
+  empty editor with shortcuts appears).
+- Terminals follow File → Open Folder (idle shells restart in the new folder with its venv; busy ones are left alone).
+- Windows: Node-based tools in folders with spaces (e.g. `C:\Users\John Smith`) now start.
+- Settings such as editor niceties and sticky scroll no longer reset on restart (macOS / Linux).
 
 ## Trust and verification
 
@@ -40,4 +44,5 @@ OpenPGP-signed (`docs/codeLess-release-signing-key.asc`). See `docs/SIGNING.md`.
 
 ## Upgrade notes
 
+- From v3.3.3 or older, download this version once by hand; from here on codeLess updates itself.
 - Windows SmartScreen and macOS Gatekeeper may still warn until code-signing certificates are in place.
