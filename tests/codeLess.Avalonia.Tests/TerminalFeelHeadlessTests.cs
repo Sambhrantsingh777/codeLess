@@ -207,7 +207,7 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal((int)Math.Round(exact, MidpointRounding.AwayFromZero), term.ScrollbackOffset);
             // a flick is not capped at 10 rows per event any more
             term.WheelForTest(8.3);
-            Assert.True(term.ScrollbackOffset > 30, "offset " + term.ScrollbackOffset);
+            Assert.True(term.ScrollbackOffset > 20, "offset " + term.ScrollbackOffset); // old cap: 10 rows per event (rows per wheel unit differ per OS)
             term.RenderGridForTest(800, 300);
             Assert.Equal("line " + (term.FallbackBuffer.ScrollbackCount - term.ScrollbackOffset), TopRowText(term));
         }
