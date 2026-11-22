@@ -103,6 +103,9 @@ namespace codeLess.AvaloniaApp
             };
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
+                // Finder/Dock launches get a minimal PATH: import the user's login-shell environment (nvm, pyenv, Homebrew...)
+                // in the background so tasks, language servers and debug adapters find the user's tools (VS Code parity).
+                UserShellEnvironment.StartResolve();
                 var mainWindow = new MainWindow(StartupWorkspacePath);
                 desktop.MainWindow = mainWindow;
 

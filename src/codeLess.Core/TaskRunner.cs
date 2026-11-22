@@ -41,8 +41,12 @@ namespace codeLess.Studio
         /// <summary>Plain-text output (ANSI removed), capped at 2 MB.</summary>
         public string Transcript { get { lock (gate) return transcript.ToString(); } }
 
+        /// <summary>Tasks start on the UI thread: wait only briefly for the startup shell-environment import (it began at launch).</summary>
+        public static int TaskEnvWaitMs = 1500;
+
         public static TaskExecution Prepare(TaskDefinition task, DebugVariableContext ctx, bool windows)
         {
+            UserShellEnvironment.WaitForResolution(TaskEnvWaitMs);
             TaskExecution ex = new TaskExecution();
             ex.Task = task;
             ex.CommandLine = TaskConfiguration.BuildCommandLine(task, ctx, windows);
@@ -139,6 +143,7 @@ namespace codeLess.Studio
 
         public static ProcessStartInfo BuildStartInfo(string commandLine, string cwd, Dictionary<string, string> env, bool windows)
         {
+            UserShellEnvironment.WaitForResolution(TaskExecution.TaskEnvWaitMs);
             ProcessStartInfo psi;
             if (windows) psi = new ProcessStartInfo("cmd.exe", "/d /s /c \"" + commandLine + "\"");
             else psi = new ProcessStartInfo("/bin/sh", "-c " + GitCli.QuoteArg(commandLine));

@@ -349,6 +349,7 @@ namespace codeLess.Studio
         /// <summary>Decides which server (if any) to run for <paramref name="languageId"/>. Performs file-system probing; call off the UI thread.</summary>
         public static LanguageServerResolution Resolve(string languageId, string workspaceRoot, LanguageServerUserSettings user)
         {
+            UserShellEnvironment.WaitForResolution(8000);
             LanguageServerResolution r = new LanguageServerResolution();
             r.LanguageId = languageId;
             LanguageServerDefinition d = DefinitionForLanguage(languageId);

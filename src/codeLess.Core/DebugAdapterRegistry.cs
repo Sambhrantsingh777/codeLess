@@ -51,6 +51,7 @@ namespace codeLess.Studio
     {
         public static DebugAdapterResolution Resolve(DebugLaunchConfig config, Dictionary<string, object> launchArgs, string pythonInterpreter, DebugAdapterEnvironment env)
         {
+            UserShellEnvironment.WaitForResolution(8000);
             DebugAdapterResolution r = new DebugAdapterResolution();
             if (env == null) env = DebugAdapterEnvironment.CreateDefault(null);
             string family = config.AdapterFamily;
