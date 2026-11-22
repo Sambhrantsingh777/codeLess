@@ -252,7 +252,7 @@ namespace codeLess.Studio
             req.Prompt = prompt;
             req.Vendor = vendor;
             req.HarnessId = settings.ActiveHarnessId;
-            req.ActiveTab = activeTab;
+            req.ActiveTab = AgentTurnInputs.SnapshotTab(activeTab); // repair / Best-of-N turns run on worker threads
             req.WorkspaceRoot = workspaceRoot;
             req.WorkspaceFiles = workspaceFiles != null ? workspaceFiles.ToList() : new List<string>();
             req.Pills = attachedContextPills != null ? attachedContextPills.ToList() : new List<string>();

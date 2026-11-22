@@ -291,7 +291,8 @@ namespace codeLess.AvaloniaApp
         {
             return new AgentTurnRequest
             {
-                Engine = aiEngine, Mode = mode, Prompt = prompt, Vendor = vendor, HarnessId = harnessId, ActiveTab = tab,
+                // A detached copy of the editor: repair / Best-of-N turns run on worker threads.
+                Engine = aiEngine, Mode = mode, Prompt = prompt, Vendor = vendor, HarnessId = harnessId, ActiveTab = AgentTurnInputs.SnapshotTab(tab),
                 WorkspaceRoot = ws, WorkspaceFiles = files ?? new List<string>(), Pills = pills ?? new List<string>(), TerminalText = term ?? "",
                 BaseTextProvider = SnapshotBufferTexts()
             };

@@ -10132,17 +10132,32 @@ if __name__ == '__main__':
                 ? conPtyTerminalControl.Session.GetRecentOutputText(100)
                 : (terminalOutput != null ? terminalOutput.Text : "");
 
-            AgentExecutionTurnResult turn = await aiEngine.RunAutonomousAgentLoopAsync(
+            // Off the UI thread (QA #25) on detached inputs. While a chat turn is running on the main engine, the
+            // inline edit runs on an isolated engine copy (own Stop flag / trace, no terminal) instead of sharing it (QA #24).
+            LlmHarnessAndAgentEngine engine = aiEngine.IsTurnRunning ? aiEngine.CreateIsolatedCopy() : aiEngine;
+            EditorTabBuffer bufSnapshot = AgentTurnInputs.SnapshotTab(buf);
+            List<string> filesSnapshot = AgentTurnInputs.SnapshotList(workspaceFiles);
+            List<string> pillsSnapshot = AgentTurnInputs.SnapshotList(attachedContextPills);
+            string harnessId = settings.ActiveHarnessId;
+            string wsRoot = workspaceRoot;
+            statusLeftLabel.Text = "Inline edit: asking " + GetActiveModelDisplayName() + "…";
+            AgentExecutionTurnResult turn = await Task.Run(() => engine.RunAutonomousAgentLoopAsync(
                 "ctrl_k",
                 instruction,
                 vendor,
-                settings.ActiveHarnessId,
-                buf,
-                workspaceRoot,
-                workspaceFiles,
-                attachedContextPills,
+                harnessId,
+                bufSnapshot,
+                wsRoot,
+                filesSnapshot,
+                pillsSnapshot,
                 termLog
-            );
+            ));
+            if (IsDisposed) return;
+            if (LlmHarnessAndAgentEngine.IsBusyResult(turn))
+            {
+                statusLeftLabel.Text = turn.AssistantReply;
+                return;
+            }
 
             ApplyStagedTurnEdits(turn, instruction);
             AppendTurnToChatAndTrace(turn, GetActiveModelDisplayName());
@@ -10214,17 +10229,25 @@ if __name__ == '__main__':
                     ? conPtyTerminalControl.Session.GetRecentOutputText(120)
                     : (terminalOutput != null ? terminalOutput.Text : "");
 
-                AgentExecutionTurnResult turn = await aiEngine.RunAutonomousAgentLoopAsync(
-                    currentAgentMode,
+                // The whole loop (LLM calls, tools, shell commands) runs on a worker thread with detached inputs so
+                // the window stays responsive (QA #25); tool approvals marshal to the UI thread (OnRequestToolApproval).
+                string loopMode = currentAgentMode;
+                string harnessId = settings.ActiveHarnessId;
+                EditorTabBuffer tabSnapshot = AgentTurnInputs.SnapshotTab(activeTab);
+                string wsRoot = workspaceRoot;
+                List<string> filesSnapshot = AgentTurnInputs.SnapshotList(workspaceFiles);
+                List<string> pillsSnapshot = AgentTurnInputs.SnapshotList(attachedContextPills);
+                AgentExecutionTurnResult turn = await Task.Run(() => aiEngine.RunAutonomousAgentLoopAsync(
+                    loopMode,
                     prompt,
                     vendor,
-                    settings.ActiveHarnessId,
-                    activeTab,
-                    workspaceRoot,
-                    workspaceFiles,
-                    attachedContextPills,
+                    harnessId,
+                    tabSnapshot,
+                    wsRoot,
+                    filesSnapshot,
+                    pillsSnapshot,
                     termLog
-                );
+                ));
                 List<TurnFileChange> terminalChanges = await EndAgentTurnWin(turnTracker);
 
                 Action completeOnUi = () =>

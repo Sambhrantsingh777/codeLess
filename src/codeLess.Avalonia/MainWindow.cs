@@ -2039,7 +2039,7 @@ namespace codeLess.AvaloniaApp
 
             chatSendBtn = WorkbenchStyles.IconButton("send", "Send (Enter)", null, currentTheme, 28, 16);
             chatSendBtn.Name = "ChatSendBtn";
-            chatSendBtn.Click += (s, e) => SubmitChatMessage();
+            chatSendBtn.Click += (s, e) => { if (IsChatTurnRunning) StopChatTurn(); else SubmitChatMessage(); };
 
             Grid.SetColumn(chatProviderCombo, 0); bottomRow.Children.Add(chatProviderCombo);
             Grid.SetColumn(chatModelCombo, 1); bottomRow.Children.Add(chatModelCombo);

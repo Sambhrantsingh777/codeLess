@@ -2199,6 +2199,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             }
 
             LastStreamingChunkCount = 0;
+            // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
+            bool partOfTurn = InTurnOfThisEngine;
 
             return await Task.Run(() =>
             {
@@ -2276,7 +2278,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         string line;
                         while ((line = sr.ReadLine()) != null)
                         {
-                            if (CancelStreamingRequested) { ledger.Note = "Cancelled by user"; break; }
+                            if (partOfTurn && CancelStreamingRequested) { ledger.Note = "Cancelled by user"; break; }
                             rawBuilder.AppendLine(line);
                             string trimmed = line.Trim();
                             if (trimmed.StartsWith("data:"))
@@ -2330,7 +2332,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                         {
                                             streamedText.Append(deltaChunk);
                                             LastStreamingChunkCount++;
-                                            if (OnStreamingChunk != null)
+                                            if (partOfTurn && OnStreamingChunk != null)
                                             {
                                                 try { OnStreamingChunk(deltaChunk); } catch { }
                                             }
@@ -2469,7 +2471,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             }
         }
 
-        public async Task<AgentExecutionTurnResult> RunAutonomousAgentLoopAsync(
+        // Public entry point (one turn per engine): LlmAgentEngine.Turns.cs.
+        private async Task<AgentExecutionTurnResult> RunAutonomousAgentLoopCoreAsync(
             string mode,
             string userInstruction,
             ByokVendor preferredVendor,
@@ -2478,11 +2481,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             string workspaceRoot,
             List<string> workspaceFiles,
             List<string> contextPills,
-            string recentTerminalOutput = "",
-            Dictionary<string, string> baseStagedFiles = null
+            string recentTerminalOutput,
+            Dictionary<string, string> baseStagedFiles
         )
         {
-            CancelStreamingRequested = false;
             Stopwatch sw = Stopwatch.StartNew();
             AgentExecutionTurnResult result = new AgentExecutionTurnResult();
             // Repair turns patch on top of the previous proposal (staged, never written) instead of the disk text.
@@ -2688,7 +2690,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         break;
 
                     result.Iterations++;
-                    string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp);
+                    // ConfigureAwait(false): tools (shell commands, file reads) never run on a UI thread, whoever calls.
+                    string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp).ConfigureAwait(false);
                     finalReply = llmOutput;
 
                     // Extract <think> or <thinking> block if present
@@ -2809,9 +2812,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ToolSummaries = res.ToolCalls.Select(t => "[" + t.ToolName + "] " + t.Summary).ToList()
             };
             res.Trace = trace;
-            TraceHistory.Insert(0, trace);
-            if (TraceHistory.Count > 50)
-                TraceHistory.RemoveAt(TraceHistory.Count - 1);
+            lock (TraceHistory)
+            {
+                TraceHistory.Insert(0, trace);
+                if (TraceHistory.Count > 50)
+                    TraceHistory.RemoveAt(TraceHistory.Count - 1);
+            }
         }
 
         private List<Dictionary<string, object>> ParseToolCalls(string text)
