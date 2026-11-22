@@ -303,6 +303,7 @@ namespace codeLess.Avalonia.Tests
         {
             string dir = Path.Combine(Path.GetTempPath(), "codeLess_dap_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
+            TestTrust.Trust(dir); // workspace-local tools / git / tasks need a trusted folder
             string p = Path.Combine(dir, "prog.py");
             File.WriteAllText(p, "import sys\n\ndef main():\n    x = 42\n    return x\n\nmain()\n");
             return p;

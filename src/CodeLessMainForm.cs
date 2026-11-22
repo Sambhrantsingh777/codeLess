@@ -350,14 +350,18 @@ namespace codeLess.Studio
             {
                 if (AgentToolApprovalOverride != null)
                     return AgentToolApprovalOverride(toolName, detail);
-                if (!settings.RequireAgentToolApproval || SuppressUnsavedPrompts)
+                // Restricted Mode: agent shell commands always ask (never auto-approved, never run unattended).
+                bool restrictedShell = string.Equals(toolName, "run_terminal", StringComparison.OrdinalIgnoreCase) && WorkspaceTrust.IsRestricted(workspaceRoot);
+                if (restrictedShell && SuppressUnsavedPrompts) return false;
+                if (!restrictedShell && (!settings.RequireAgentToolApproval || SuppressUnsavedPrompts))
                     return true;
                 bool approved = false;
                 Action ask = () =>
                 {
                     approved = MessageBox.Show(
                         this,
-                        "Allow AI Agent to execute tool '" + toolName + "'?\n\n" + detail,
+                        "Allow AI Agent to execute tool '" + toolName + "'?\n\n" + detail +
+                        (restrictedShell ? "\n\nThis folder is in Restricted Mode: the command runs code from a folder you haven't trusted." : ""),
                         "codeLess Agent — Tool Execution Approval",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Question
@@ -2414,6 +2418,7 @@ namespace codeLess.Studio
 
             editorsSplitContainer.Controls.Add(editorControl);
             editorsSplitContainer.Controls.Add(splitEditorControl);
+            InitializeWorkspaceTrustWin(); // Restricted Mode status item + banner
             editorsSplitContainer.Resize += (s, e) =>
             {
                 if (isSplitEditorActive && splitEditorControl != null)
@@ -2472,6 +2477,7 @@ namespace codeLess.Studio
             int w = statusBar.ClientSize.Width > 100 ? statusBar.ClientSize.Width : 1200;
 
             int leftX = 8;
+            leftX = LayoutRestrictedModeItem(leftX);
             if (statusLeftLabel.Visible && !string.IsNullOrEmpty(statusLeftLabel.Text))
             {
                 int textW = TextRenderer.MeasureText(statusLeftLabel.Text, StatusItemFont, new Size(400, 20), TextFormatFlags.NoPadding).Width;
@@ -3052,6 +3058,7 @@ namespace codeLess.Studio
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
             helpMenu.DropDownItems.Add(CreateMenuItem("Best-of-N Arena (Compare Providers)...", "", () => OpenBestOfNDialogWin()));
             AddAgentTrustMenuItems(helpMenu);
+            helpMenu.DropDownItems.Add(CreateMenuItem("Manage Workspace Trust...", "", () => ShowManageWorkspaceTrustWin()));
             helpMenu.DropDownItems.Add(CreateMenuItem("Architecture & Dependency Map...", "", () => OpenArchitectureGraphDialog()));
             helpMenu.DropDownItems.Add(CreateMenuItem("Zero-RAM Time-Travel Checkpoints...", "", () => OpenTimeTravelCheckpointsDialog()));
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -5380,6 +5387,7 @@ if __name__ == '__main__':
                     if (editorControl != null) editorControl.Invalidate(true);
                     if (isNoGit)
                     {
+                        if (IsWorkspaceRestrictedWin) { gitStatusList.Items.Add("Source control is disabled in Restricted Mode (Help > Manage Workspace Trust)"); return; }
                         gitStatusList.Items.Add("Not a Git repository (run 'git init' in Terminal)");
                         return;
                     }
@@ -7988,6 +7996,7 @@ if __name__ == '__main__':
                 additionalWorkspaceFolders.Clear();
             workspaceRoot = rootDir;
             if (lspController != null) lspController.SetWorkspaceRoot(rootDir);
+            OnWorkspaceTrustFolderOpenedWin();
             terminalWorkingDir = rootDir;
             SyncTerminalsToWorkingDirectory(rootDir);
             settings.AddRecentWorkspace(rootDir);
@@ -8360,12 +8369,19 @@ if __name__ == '__main__':
                     NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size,
                     InternalBufferSize = 64 * 1024
                 };
-                FileSystemEventHandler onChanged = (s, e) => QueueWorkspaceFsChange(e.FullPath, e.ChangeType != WatcherChangeTypes.Changed, e.ChangeType == WatcherChangeTypes.Deleted);
+                FileSystemEventHandler onChanged = (s, e) =>
+                {
+                    NotifyLspFileEvent(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
+                        : e.ChangeType == WatcherChangeTypes.Changed ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
+                    QueueWorkspaceFsChange(e.FullPath, e.ChangeType != WatcherChangeTypes.Changed, e.ChangeType == WatcherChangeTypes.Deleted);
+                };
                 workspaceFileWatcher.Changed += onChanged;
                 workspaceFileWatcher.Created += onChanged;
                 workspaceFileWatcher.Deleted += onChanged;
                 workspaceFileWatcher.Renamed += (s, e) =>
                 {
+                    NotifyLspFileEvent(e.OldFullPath, LanguageServerManager.FileDeleted);
+                    NotifyLspFileEvent(e.FullPath, LanguageServerManager.FileCreated);
                     QueueWorkspaceFsChange(e.OldFullPath, true, true);
                     QueueWorkspaceFsChange(e.FullPath, true, false);
                 };
@@ -8378,6 +8394,14 @@ if __name__ == '__main__':
                 workspaceFileWatcher.EnableRaisingEvents = true;
             }
             catch { }
+        }
+
+        /// <summary>Forwards a workspace file event to language servers that registered file watchers (any thread).</summary>
+        private void NotifyLspFileEvent(string path, int changeType)
+        {
+            WinFormsLanguageServerController c = lspController;
+            LanguageServerManager m = c != null ? c.Manager : null;
+            if (m != null) m.NotifyFileSystemChange(path, changeType);
         }
 
         private readonly object fsChangeLock = new object();
@@ -10683,6 +10707,7 @@ if __name__ == '__main__':
             if (ExecuteParityCommand(cmdId)) return;
             if (ExecuteEditorNicetyCommand(cmdId)) return;
             if (ExecuteAgentTrustCommandWin(cmdId)) return;
+            if (ExecuteWorkspaceTrustCommandWin(cmdId)) return;
             if (cmdId == "open_arena") OpenBestOfNDialogWin();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();

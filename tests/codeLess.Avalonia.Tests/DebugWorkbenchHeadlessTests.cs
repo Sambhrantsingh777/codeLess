@@ -42,6 +42,7 @@ namespace codeLess.Avalonia.Tests
         {
             string dir = Path.Combine(Path.GetTempPath(), "codeLess_dbgui_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
+            TestTrust.Trust(dir); // workspace-local tools / git / tasks need a trusted folder
             py = Path.Combine(dir, "prog.py");
             File.WriteAllText(py, "import sys\n\ndef main():\n    x = 42\n    return x\n\nmain()\n\nprint('bye')\n\nz = 1\n");
             cs = Path.Combine(dir, "Calc.cs");

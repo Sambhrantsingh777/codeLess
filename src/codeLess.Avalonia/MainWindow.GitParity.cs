@@ -231,6 +231,7 @@ namespace codeLess.AvaloniaApp
         {
             string repo = ParityRepo();
             if (repo == null) { SetStatusMessage("No git repository found for the open folder."); return false; }
+            if (WorkspaceTrust.IsRestricted(repo)) { SetStatusMessage(WorkspaceTrust.RestrictedMessage("Git")); return false; }
             if (gitOpCts != null) { if (!quiet) SetStatusMessage("Git: '" + gitOpTitle + "' is still running (click the status bar item to cancel)."); return false; }
             var cts = new CancellationTokenSource();
             gitOpCts = cts;
@@ -310,7 +311,7 @@ namespace codeLess.AvaloniaApp
         public void GitFetch() => RunGitOperation("Fetch", (repo, ct, p) => GitRemoteOps.Fetch(repo, false, false, ct, p));
         public void GitFetchPrune() => RunGitOperation("Fetch (Prune)", (repo, ct, p) => GitRemoteOps.Fetch(repo, false, true, ct, p));
         public void GitFetchAll() => RunGitOperation("Fetch From All Remotes", (repo, ct, p) => GitRemoteOps.Fetch(repo, true, false, ct, p));
-        public void GitPull() => RunGitOperation("Pull", (repo, ct, p) => GitRemoteOps.Pull(repo, settings.GitRebaseWhenSync, ct, p));
+        public void GitPull() => RunGitOperation("Pull", (repo, ct, p) => GitRemoteOps.Pull(repo, false, ct, p)); // VS Code: plain Pull honours pull.rebase; rebaseWhenSync is for Sync
         public void GitPullRebase() => RunGitOperation("Pull (Rebase)", (repo, ct, p) => GitRemoteOps.Pull(repo, true, ct, p));
         public void GitPush() => RunGitOperation("Push", (repo, ct, p) => GitRemoteOps.Push(repo, ct, p));
         public void GitSync() => RunGitOperation("Sync", (repo, ct, p) => GitRemoteOps.Sync(repo, settings.GitRebaseWhenSync, ct, p));

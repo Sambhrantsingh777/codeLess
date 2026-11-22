@@ -414,6 +414,22 @@ namespace codeLess.AvaloniaApp
                     ctx.DrawLine(pen, new Point(cx + d, cy - d), new Point(cx - d, cy + d));
                     break;
                 }
+                case "shield":
+                {
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx, cy - s * 0.80), false);
+                        gctx.LineTo(new Point(cx + s * 0.66, cy - s * 0.52));
+                        gctx.LineTo(new Point(cx + s * 0.62, cy + s * 0.10));
+                        gctx.QuadraticBezierTo(new Point(cx + s * 0.50, cy + s * 0.62), new Point(cx, cy + s * 0.84));
+                        gctx.QuadraticBezierTo(new Point(cx - s * 0.50, cy + s * 0.62), new Point(cx - s * 0.62, cy + s * 0.10));
+                        gctx.LineTo(new Point(cx - s * 0.66, cy - s * 0.52));
+                        gctx.EndFigure(true);
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    break;
+                }
                 case "warning":
                 {
                     var geo = new StreamGeometry();

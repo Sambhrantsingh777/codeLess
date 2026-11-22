@@ -284,6 +284,14 @@ namespace codeLess.Studio
             pr.Method = method;
             pr.StartedUtc = DateTime.UtcNow;
             pending[id] = pr;
+            if (connection.IsClosed)
+            {
+                // Closed between the first check and the registration: OnClosed may already have drained `pending`, so
+                // nobody else would ever complete this request (with timeoutMs <= 0 it would hang forever).
+                PendingRequest mine;
+                if (pending.TryRemove(id, out mine)) tcs.TrySetException(new IOException("Language server is not running"));
+                return tcs.Task;
+            }
 
             Dictionary<string, object> msg = LspJson.Obj("jsonrpc", "2.0", "id", id, "method", method);
             if (parameters != null) msg["params"] = parameters;

@@ -1019,7 +1019,7 @@ namespace codeLess.Studio
                     if (string.IsNullOrEmpty(name) || RepoScanSkipNames.Contains(name)) continue;
                     try
                     {
-                        if ((new DirectoryInfo(sub).Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                        if (IsSymlinkOrJunction(sub, new DirectoryInfo(sub).Attributes)) continue;
                     }
                     catch { continue; }
                     string dotGit = Path.Combine(sub, ".git");
@@ -1209,6 +1209,7 @@ namespace codeLess.Studio
                 string rel = GetRelativePath(repoRoot, filePath).Replace('\\', '/');
                 if (string.IsNullOrEmpty(rel) || rel.StartsWith(".."))
                     return null;
+                if (GitSafety.BlockReason(repoRoot, "show") != null) return null; // Restricted Mode
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = "git",
@@ -1382,6 +1383,7 @@ namespace codeLess.Studio
         public static string RunProcessStdoutRaw(string fileName, string args, string workingDir, int timeoutMs, out int exitCode)
         {
             exitCode = -1;
+            if (GitSafety.IsGit(fileName) && GitSafety.BlockReason(workingDir, args) != null) return ""; // Restricted Mode
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -1397,6 +1399,7 @@ namespace codeLess.Studio
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+                if (GitSafety.IsGit(fileName)) GitSafety.Apply(psi, workingDir);
                 using (Process p = new Process())
                 {
                     p.StartInfo = psi;
@@ -1478,6 +1481,11 @@ namespace codeLess.Studio
         {
             exitCode = -1;
             timedOut = false;
+            if (GitSafety.IsGit(fileName))
+            {
+                string blocked = GitSafety.BlockReason(workingDir, args);
+                if (blocked != null) return blocked; // Restricted Mode: git must not read an untrusted repository's config
+            }
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo
@@ -1493,6 +1501,7 @@ namespace codeLess.Studio
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+                if (GitSafety.IsGit(fileName)) GitSafety.Apply(psi, workingDir);
                 if (extraEnv != null)
                     foreach (KeyValuePair<string, string> kv in extraEnv) psi.EnvironmentVariables[kv.Key] = kv.Value;
                 // Incremental, binary-clean capture (raw chars, no line splitting, so NUL-separated "git -z" output
@@ -2267,6 +2276,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 {
                 HttpWebRequest req = (HttpWebRequest)WebRequest.Create(endpoint);
                 req.Method = "POST";
+                // Never follow redirects silently: the hop would bypass the Offline Mode check and the Network ledger, and
+                // would re-send the API key to wherever the endpoint points.
+                req.AllowAutoRedirect = false;
                 req.ContentType = "application/json";
                 req.KeepAlive = false;
                 req.Timeout = Math.Max(2000, HttpTimeoutMs);
@@ -2320,6 +2332,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     using (StreamReader sr = new StreamReader(ledger.WrapResponseStream(res.GetResponseStream()), Encoding.UTF8))
                     {
                         ledger.Status = (int)res.StatusCode;
+                        if (LedgerHttp.IsRedirectStatus((int)res.StatusCode))
+                        {
+                            string loc = res.Headers["Location"] ?? "";
+                            throw new InvalidOperationException("The AI endpoint " + endpoint + " redirected (HTTP " + (int)res.StatusCode + ") to " +
+                                loc + ". codeLess does not follow redirects for AI requests; set the final URL as the provider's Base URL.");
+                        }
                         string contentType = (res.ContentType ?? "").ToLowerInvariant();
                         StringBuilder rawBuilder = new StringBuilder();
                         StringBuilder streamedText = new StringBuilder();
@@ -3447,7 +3465,19 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         /// Files-On-Demand placeholders, dedup and WCI layers also carry FILE_ATTRIBUTE_REPARSE_POINT but are ordinary
         /// files; rejecting those refused every agent edit in OneDrive-synced Desktop/Documents folders.
         /// </summary>
-        private static bool IsNameSurrogateReparsePoint(string path)
+        /// <summary>
+        /// True for entries that redirect elsewhere and must not be descended into / followed: symlinks and junctions
+        /// (Windows "name surrogate" reparse points) and Unix symlinks. Other reparse points - OneDrive Files-On-Demand
+        /// placeholders, dedup / HSM / AppExecLink-free cloud files - are ordinary files and folders and return false.
+        /// </summary>
+        public static bool IsSymlinkOrJunction(string path, FileAttributes attributes)
+        {
+            if ((attributes & FileAttributes.ReparsePoint) == 0) return false;
+            if (Path.DirectorySeparatorChar != '\\') return true; // .NET reports Unix symlinks as ReparsePoint
+            return IsNameSurrogateReparsePoint(path);
+        }
+
+        public static bool IsNameSurrogateReparsePoint(string path)
         {
             try
             {
@@ -3472,7 +3502,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         }
 
         /// <summary>Resolves symlinks of the deepest existing ancestor (Unix realpath); the non-existent tail is appended.</summary>
-        private static string ResolveRealPathUnix(string path)
+        internal static string ResolveRealPathUnix(string path)
         {
             string full = Path.GetFullPath(path);
             string cur = full;

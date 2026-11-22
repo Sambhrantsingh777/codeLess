@@ -19,7 +19,9 @@ namespace codeLess.Studio
         Error,
         Stopped,
         NotInstalled,
-        Disabled
+        Disabled,
+        /// <summary>Not started: the workspace is in Restricted Mode and this server would run project code.</summary>
+        Restricted
     }
 
     /// <summary>Snapshot of the server serving one file, for the status bar.</summary>
@@ -51,6 +53,7 @@ namespace codeLess.Studio
                             return "{ } No " + (d != null ? d.DisplayName : name) + " server";
                         }
                     case LanguageServerState.Disabled: return "{ } " + name + " (off)";
+                    case LanguageServerState.Restricted: return "{ } " + name + " (Restricted Mode)";
                     default: return "";
                 }
             }
@@ -117,6 +120,14 @@ namespace codeLess.Studio
         internal readonly HashSet<string> DynamicRegistrations = new HashSet<string>(StringComparer.Ordinal);
         internal readonly Dictionary<string, string> ProgressTitles = new Dictionary<string, string>(StringComparer.Ordinal);
         internal readonly List<DateTime> CrashTimes = new List<DateTime>();
+        /// <summary>workspace/didChangeWatchedFiles watchers by registration id (dynamic registration).</summary>
+        internal readonly Dictionary<string, List<LspFileWatcher>> FileWatchers = new Dictionary<string, List<LspFileWatcher>>(StringComparer.Ordinal);
+
+        /// <summary>Number of workspace/didChangeWatchedFiles watchers the server registered.</summary>
+        public int RegisteredFileWatcherCount
+        {
+            get { lock (FileWatchers) { int n = 0; foreach (List<LspFileWatcher> l in FileWatchers.Values) n += l.Count; return n; } }
+        }
 
         private readonly object chainLock = new object();
         private Task chain = Task.FromResult(true);
@@ -351,6 +362,7 @@ namespace codeLess.Studio
             ShutdownAll(1500);
             disposed = true;
             if (debounceTimer != null) { try { debounceTimer.Dispose(); } catch { } }
+            lock (watchLock) { if (watchTimer != null) { try { watchTimer.Dispose(); } catch { } watchTimer = null; } }
         }
 
         public List<LanguageServerInstance> GetInstances()
@@ -391,6 +403,21 @@ namespace codeLess.Studio
             }
             try { doc.LatestText = textProvider() ?? ""; } catch { doc.LatestText = ""; }
             AttachDocument(doc);
+        }
+
+        /// <summary>LSP version last sent to the server for this document (-1 when it isn't open on a server).</summary>
+        public int GetSentVersion(string path)
+        {
+            LspOpenDocument d = FindDoc(path);
+            if (d == null || d.SentText == null) return -1;
+            return d.Version;
+        }
+
+        /// <summary>Text the server currently has for this document (null when it isn't open on a server).</summary>
+        public string GetSentText(string path)
+        {
+            LspOpenDocument d = FindDoc(path);
+            return d != null ? d.SentText : null;
         }
 
         public bool IsDocumentOpen(string path)
@@ -599,6 +626,17 @@ namespace codeLess.Studio
         {
             if (disposed || inst.ShuttingDown) return;
             int gen = Interlocked.Increment(ref inst.Generation);
+            // One process per instance: a previous process that is still alive (double restart, crash-restart race) is
+            // killed before a new one starts - otherwise it would be orphaned until codeLess exits.
+            Process previous = inst.Process;
+            LspRpcEndpoint previousEp = inst.Endpoint;
+            if (previous != null || previousEp != null)
+            {
+                inst.Endpoint = null;
+                inst.Process = null;
+                if (previousEp != null) { try { previousEp.Dispose(); } catch { } }
+                KillProcessTree(previous);
+            }
             inst.State = LanguageServerState.Starting;
             inst.ProgressText = null;
             LanguageServerUserSettings user = null;
@@ -608,11 +646,11 @@ namespace codeLess.Studio
             inst.LastResolveUtc = DateTime.UtcNow;
             if (!res.CanStart)
             {
-                inst.State = res.Disabled ? LanguageServerState.Disabled : LanguageServerState.NotInstalled;
+                inst.State = res.Disabled ? LanguageServerState.Disabled : res.Restricted ? LanguageServerState.Restricted : LanguageServerState.NotInstalled;
                 inst.Message = res.Problem;
                 inst.AppendLog("[client] " + res.Problem + (res.InstallCommand != null ? " Install with: " + res.InstallCommand : ""));
                 RaiseStatusChanged();
-                if (!res.Disabled && raiseHint) MaybeRaiseHint(inst, res);
+                if (!res.Disabled && !res.Restricted && raiseHint) MaybeRaiseHint(inst, res);
                 return;
             }
 
@@ -633,6 +671,11 @@ namespace codeLess.Studio
                 proc.BeginErrorReadLine();
                 Process capturedProc = proc;
                 proc.Exited += delegate { OnProcessExited(inst, capturedProc, gen); };
+                if (inst.Generation != gen || inst.ShuttingDown || disposed)
+                {
+                    AbandonStart(inst, proc, null);
+                    return;
+                }
             }
             catch (Exception ex)
             {
@@ -669,17 +712,32 @@ namespace codeLess.Studio
             catch (Exception ex)
             {
                 Exception inner = ex is AggregateException && ex.InnerException != null ? ex.InnerException : ex;
-                if (inst.Generation != gen || inst.ShuttingDown) return;
+                if (inst.Generation != gen || inst.ShuttingDown || disposed) { AbandonStart(inst, proc, ep); return; }
                 inst.AppendLog("[client] initialize failed: " + inner.Message);
                 KillProcessTree(proc);
                 HandleCrash(inst, gen, "initialize failed: " + inner.Message);
                 return;
             }
-            if (inst.Generation != gen || inst.ShuttingDown) return;
+            if (inst.Generation != gen || inst.ShuttingDown || disposed) { AbandonStart(inst, proc, ep); return; }
             inst.State = LanguageServerState.Running;
             inst.Message = res.DisplayName + " is running (pid " + inst.ProcessId + ").";
             inst.AppendLog("[client] " + inst.Message);
             RaiseStatusChanged();
+        }
+
+        /// <summary>
+        /// A restart / workspace switch / shutdown happened while this start was in progress: the process it launched is no
+        /// longer tracked by anyone, so kill it here (LSP-4) instead of leaking it until codeLess exits.
+        /// </summary>
+        private static void AbandonStart(LanguageServerInstance inst, Process proc, LspRpcEndpoint ep)
+        {
+            if (ep != null && ReferenceEquals(inst.Endpoint, ep)) inst.Endpoint = null;
+            if (proc != null && ReferenceEquals(inst.Process, proc)) inst.Process = null;
+            int pid = 0;
+            try { pid = proc != null ? proc.Id : 0; } catch { }
+            if (ep != null) { try { ep.Dispose(); } catch { } }
+            KillProcessTree(proc);
+            inst.AppendLog("[client] Discarded server process " + pid + " (restarted or stopped while it was starting)");
         }
 
         private void SendConfiguration(LanguageServerInstance inst)
@@ -701,6 +759,8 @@ namespace codeLess.Studio
             Dictionary<string, object> initOptions = new Dictionary<string, object>(StringComparer.Ordinal);
             if (inst.Definition != null && (inst.Definition.Id == "json" || inst.Definition.Id == "html" || inst.Definition.Id == "css"))
                 initOptions["provideFormatter"] = true;
+            if (inst.Resolution != null && inst.Resolution.InitializationOptions != null)
+                foreach (KeyValuePair<string, object> kv in inst.Resolution.InitializationOptions) initOptions[kv.Key] = kv.Value;
             return LspJson.Obj(
                 "processId", pid,
                 "clientInfo", LspJson.Obj("name", "codeLess", "version", ClientVersion),
@@ -726,7 +786,7 @@ namespace codeLess.Studio
                     "applyEdit", true,
                     "workspaceEdit", LspJson.Obj("documentChanges", true, "resourceOperations", LspJson.Arr("create", "rename", "delete"), "failureHandling", "textOnlyTransactional"),
                     "didChangeConfiguration", LspJson.Obj("dynamicRegistration", true),
-                    "didChangeWatchedFiles", LspJson.Obj("dynamicRegistration", false),
+                    "didChangeWatchedFiles", LspJson.Obj("dynamicRegistration", true, "relativePatternSupport", true),
                     "executeCommand", LspJson.Obj("dynamicRegistration", false),
                     "configuration", true,
                     "workspaceFolders", true),
@@ -825,6 +885,23 @@ namespace codeLess.Studio
                     StartInstance(inst, false);
                     ReopenDocuments(inst);
                 });
+            }
+        }
+
+        /// <summary>
+        /// Workspace Trust changed: servers whose root changed between trusted and Restricted Mode are re-resolved and
+        /// restarted (trusting enables workspace-local / project-executing servers at once; revoking stops them).
+        /// </summary>
+        public void OnWorkspaceTrustChanged()
+        {
+            LanguageServerRegistry.ClearCache();
+            foreach (LanguageServerInstance inst in GetInstances())
+            {
+                bool trustedNow = WorkspaceTrust.IsTrusted(inst.Root);
+                bool trustedThen = inst.Resolution == null || inst.Resolution.WorkspaceTrusted;
+                if (trustedNow == trustedThen) continue;
+                inst.AppendLog("[client] Workspace Trust changed (" + (trustedNow ? "trusted" : "Restricted Mode") + "): restarting");
+                RestartInstance(inst);
             }
         }
 
@@ -1009,6 +1086,14 @@ namespace codeLess.Studio
             string path = LspText.UriToPath(uri);
             if (path == null) return;
             LspOpenDocument doc = FindDoc(path);
+            // versionSupport is advertised: diagnostics computed for an older version than the one the server already got
+            // would be drawn at stale positions; a fresh publish for the current version follows.
+            int diagVersion = LspJson.GetInt(prms, "version", -1);
+            if (doc != null && doc.SentText != null && diagVersion >= 0 && diagVersion < doc.Version)
+            {
+                inst.AppendLog("[client] dropped diagnostics for v" + diagVersion + " (document is at v" + doc.Version + ")");
+                return;
+            }
             string text = doc != null ? (doc.SentText ?? doc.LatestText) : null;
             List<int> starts = text != null ? LspText.LineStarts(text) : null;
             List<LspDiagnostic> diags = LspDiagnostic.ParseMany(LspJson.Get(prms, "diagnostics"));
@@ -1097,6 +1182,11 @@ namespace codeLess.Studio
                                 string m = LspJson.GetString(r, "method");
                                 string cap = CapabilityForMethod(m);
                                 if (cap != null) inst.DynamicRegistrations.Add(cap);
+                                if (m == "workspace/didChangeWatchedFiles")
+                                {
+                                    List<LspFileWatcher> ws = LspFileWatcher.ParseMany(LspJson.Get(r, "registerOptions"), inst.Root);
+                                    lock (inst.FileWatchers) { inst.FileWatchers[LspJson.GetString(r, "id") ?? Guid.NewGuid().ToString("N")] = ws; }
+                                }
                                 inst.AppendLog("[client] registered " + m);
                             }
                         return null;
@@ -1109,6 +1199,8 @@ namespace codeLess.Studio
                             {
                                 string cap = CapabilityForMethod(LspJson.GetString(r, "method"));
                                 if (cap != null) inst.DynamicRegistrations.Remove(cap);
+                                string id = LspJson.GetString(r, "id");
+                                if (id != null) lock (inst.FileWatchers) { inst.FileWatchers.Remove(id); }
                             }
                         return null;
                     }
@@ -1173,6 +1265,90 @@ namespace codeLess.Studio
                 case "textDocument/documentSymbol": return "documentSymbolProvider";
                 case "textDocument/codeAction": return "codeActionProvider";
                 default: return null;
+            }
+        }
+
+        // ================================================================ watched files
+
+        private readonly object watchLock = new object();
+        private readonly List<KeyValuePair<string, int>> pendingFileEvents = new List<KeyValuePair<string, int>>();
+        private Timer watchTimer;
+        public int WatchedFilesDebounceMs = 200;
+
+        /// <summary>LSP FileChangeType: 1 = created, 2 = changed, 3 = deleted.</summary>
+        public const int FileCreated = 1, FileChanged = 2, FileDeleted = 3;
+
+        /// <summary>
+        /// Feeds a file system event (from the workspace watcher, any thread) to servers that registered matching
+        /// workspace/didChangeWatchedFiles watchers. Batched and debounced; .git internals and node_modules packages are
+        /// skipped like VS Code's files.watcherExclude defaults.
+        /// </summary>
+        public void NotifyFileSystemChange(string path, int changeType)
+        {
+            if (disposed || string.IsNullOrEmpty(path) || changeType < 1 || changeType > 3) return;
+            string norm = path.Replace('\\', '/');
+            if (norm.Contains("/.git/") || norm.EndsWith("/.git", StringComparison.Ordinal)) return;
+            int nm = norm.IndexOf("/node_modules/", StringComparison.Ordinal);
+            if (nm >= 0 && norm.IndexOf('/', nm + "/node_modules/".Length) >= 0) return;
+            lock (watchLock)
+            {
+                if (pendingFileEvents.Count >= 10000) return;
+                pendingFileEvents.Add(new KeyValuePair<string, int>(path, changeType));
+                if (watchTimer == null) watchTimer = new Timer(delegate { FlushFileEvents(); }, null, Timeout.Infinite, Timeout.Infinite);
+                watchTimer.Change(Math.Max(1, WatchedFilesDebounceMs), Timeout.Infinite);
+            }
+        }
+
+        /// <summary>Sends the queued file events now (also called by the debounce timer).</summary>
+        public void FlushFileEvents()
+        {
+            List<KeyValuePair<string, int>> events;
+            lock (watchLock)
+            {
+                if (pendingFileEvents.Count == 0) return;
+                events = new List<KeyValuePair<string, int>>(pendingFileEvents);
+                pendingFileEvents.Clear();
+            }
+            // Collapse per path: created+changed = created, created+deleted = nothing, deleted+created = changed.
+            Dictionary<string, int> last = new Dictionary<string, int>(StringComparer.Ordinal);
+            List<string> order = new List<string>();
+            foreach (KeyValuePair<string, int> e in events)
+            {
+                string key = LspText.PathKey(e.Key);
+                int prev;
+                if (!last.TryGetValue(key, out prev)) { last[key] = e.Value; order.Add(e.Key); continue; }
+                int merged = e.Value;
+                if (prev == FileCreated && e.Value == FileChanged) merged = FileCreated;
+                else if (prev == FileCreated && e.Value == FileDeleted) merged = 0;
+                else if (prev == FileDeleted && e.Value == FileCreated) merged = FileChanged;
+                else if (prev == 0 && e.Value != FileDeleted) merged = FileCreated;
+                last[key] = merged;
+            }
+            foreach (LanguageServerInstance inst in GetInstances())
+            {
+                if (inst.State != LanguageServerState.Running || inst.Endpoint == null) continue;
+                List<LspFileWatcher> watchers = new List<LspFileWatcher>();
+                lock (inst.FileWatchers) { foreach (List<LspFileWatcher> l in inst.FileWatchers.Values) watchers.AddRange(l); }
+                if (watchers.Count == 0) continue;
+                List<object> changes = new List<object>();
+                foreach (string p in order)
+                {
+                    int type = last[LspText.PathKey(p)];
+                    if (type == 0) continue;
+                    foreach (LspFileWatcher w in watchers)
+                    {
+                        if (!w.Matches(p, type)) continue;
+                        changes.Add(LspJson.Obj("uri", LspText.PathToUri(Path.GetFullPath(p)), "type", type));
+                        break;
+                    }
+                }
+                if (changes.Count == 0) continue;
+                LanguageServerInstance target = inst;
+                target.Enqueue(delegate
+                {
+                    if (target.Endpoint != null && target.State == LanguageServerState.Running)
+                        target.Endpoint.SendNotification("workspace/didChangeWatchedFiles", LspJson.Obj("changes", changes));
+                });
             }
         }
 
@@ -1540,11 +1716,43 @@ namespace codeLess.Studio
             inst.Enqueue(delegate { if (inst.Endpoint != null) inst.Endpoint.SendNotification(method, parameters); });
         }
 
+        /// <summary>How the client must handle a Command attached to a completion item / code action.</summary>
+        public enum LspCommandTarget { Ignore, TriggerSuggest, TriggerParameterHints, Server }
+
+        /// <summary>
+        /// Commands such as editor.action.triggerParameterHints are *client* commands (VS Code runs them locally); only commands
+        /// the server lists in executeCommandProvider.commands may be sent with workspace/executeCommand.
+        /// </summary>
+        public static LspCommandTarget ClassifyCommand(string commandName, IList<string> serverCommands)
+        {
+            if (string.IsNullOrEmpty(commandName)) return LspCommandTarget.Ignore;
+            if (commandName == "editor.action.triggerSuggest") return LspCommandTarget.TriggerSuggest;
+            if (commandName == "editor.action.triggerParameterHints") return LspCommandTarget.TriggerParameterHints;
+            if (serverCommands != null)
+                foreach (string c in serverCommands)
+                    if (string.Equals(c, commandName, StringComparison.Ordinal)) return LspCommandTarget.Server;
+            return LspCommandTarget.Ignore;
+        }
+
+        /// <summary><see cref="ClassifyCommand(string, IList{string})"/> for the server of <paramref name="path"/> (unknown commands are logged).</summary>
+        public LspCommandTarget ClassifyCommand(string path, object command)
+        {
+            string name = LspJson.GetString(command, "command");
+            LanguageServerInstance i = GetInstanceForPath(path);
+            List<string> serverCommands = i != null ? i.GetTriggerCharacters("executeCommandProvider", "commands") : null;
+            LspCommandTarget t = ClassifyCommand(name, serverCommands);
+            if (t == LspCommandTarget.Ignore && i != null && !string.IsNullOrEmpty(name))
+                i.AppendLog("[client] ignored client command '" + name + "' (not supported by codeLess and not offered by the server)");
+            return t;
+        }
+
         /// <summary>workspace/executeCommand for a Command object ({title, command, arguments}).</summary>
         public async Task<object> ExecuteCommandAsync(string path, object command, CancellationToken ct)
         {
             string name = LspJson.GetString(command, "command");
             if (string.IsNullOrEmpty(name)) return null;
+            // Commands often answer with workspace/applyEdit for several files: the server must have every pending change first.
+            FlushAllDirty();
             try
             {
                 Dictionary<string, object> p = LspJson.Obj("command", name);

@@ -2415,7 +2415,15 @@ namespace codeLess.Studio
             string repText = replaceInput.Text ?? "";
             if (isRegexSearch)
             {
-                try { repText = Regex.Replace(selectedText, q, repText, opts); }
+                // Expand $1 / $& against the whole line at the match position so lookarounds keep their context.
+                try
+                {
+                    int selLine, selCol, selEndLine, selEndCol;
+                    CurrentBuffer.GetNormalizedSelection(out selLine, out selCol, out selEndLine, out selEndCol);
+                    Regex lineRx = new Regex(BuildEffectiveSearchRegexPattern(q), opts, TimeSpan.FromSeconds(2));
+                    string lineText = selLine >= 0 && selLine < CurrentBuffer.Lines.Count ? CurrentBuffer.Lines[selLine] : selectedText;
+                    repText = WorkspaceSearchEngine.ExpandReplacementAt(lineText, lineRx, selCol, selectedText.Length, repText, true);
+                }
                 catch { }
             }
 
@@ -2436,14 +2444,20 @@ namespace codeLess.Studio
                 findStatusLabel.Text = "No results";
                 return;
             }
-            CurrentBuffer.PushUndoSnapshot();
             RegexOptions opts = isCaseSearch ? RegexOptions.None : RegexOptions.IgnoreCase;
             string pattern = BuildEffectiveSearchRegexPattern(q);
             try
             {
-                string replaced = Regex.Replace(CurrentBuffer.Content ?? "", pattern, replaceInput.Text ?? "", opts);
+                // Line by line with the same semantics as UpdateSearchMatches: \s / [^x] / $ never join lines, and in
+                // plain-text mode '$' in the replacement stays literal.
+                Regex rx = new Regex(pattern, opts, TimeSpan.FromSeconds(5));
+                int replacedCount;
+                string replaced = WorkspaceSearchEngine.ReplaceInText(CurrentBuffer.Content ?? "", rx,
+                    WorkspaceSearchEngine.PrepareReplacementText(replaceInput.Text ?? "", isRegexSearch), out replacedCount);
+                if (replacedCount > 0) countBefore = replacedCount;
                 if (replaced != CurrentBuffer.Content)
                 {
+                    CurrentBuffer.PushUndoSnapshot();
                     CurrentBuffer.Content = replaced;
                     CurrentBuffer.SyncLinesFromContent();
                     NotifyBufferContentChanged();

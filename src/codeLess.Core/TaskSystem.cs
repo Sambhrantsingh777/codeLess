@@ -161,8 +161,8 @@ namespace codeLess.Studio
                 if (dep is string) t.DependsOn.Add((string)dep);
                 else if (dep is List<object>) foreach (object x in (List<object>)dep) { string s = x as string; if (s != null) t.DependsOn.Add(s); }
                 string order = DapJson.Str(d, "dependsOrder");
-                t.DependsOrderSequence = true; // parallel dependencies are run in sequence too (simpler, deterministic)
-                if (order == "parallel") t.DependsOrderSequence = false;
+                // VS Code: dependencies run in parallel unless "dependsOrder": "sequence".
+                t.DependsOrderSequence = order == "sequence";
                 t.IsBackground = DapJson.Bool(d, "isBackground", false);
                 t.Hide = DapJson.Bool(d, "hide", false);
                 Dictionary<string, object> pres = DapJson.Obj(d, "presentation");
@@ -230,12 +230,16 @@ namespace codeLess.Studio
             return "'" + a.Replace("'", "'\\''") + "'";
         }
 
-        /// <summary>cmd.exe quoting for args.</summary>
+        /// <summary>
+        /// cmd.exe quoting for args: tokens with spaces or cmd metacharacters are quoted for CommandLineToArgvW and then every
+        /// metacharacter (including the quotes, % and !) is caret-escaped, so cmd neither splits them at &amp; | &lt; &gt; nor
+        /// expands %VAR% - the program receives the argument literally (same scheme as language-server npm shims).
+        /// </summary>
         public static string QuoteWindows(string a)
         {
             if (a == null) return "\"\"";
-            if (a.Length > 0 && a.IndexOfAny(new char[] { ' ', '\t', '"', '&', '|', '<', '>', '^', '(', ')' }) < 0) return a;
-            return "\"" + a.Replace("\"", "\\\"") + "\"";
+            if (a.Length > 0 && a.IndexOfAny(new char[] { ' ', '\t', '"', '&', '|', '<', '>', '^', '(', ')', '%', '!' }) < 0) return a;
+            return LanguageServerRegistry.CaretEscapeForCmd(LanguageServerRegistry.QuoteArgAlways(a));
         }
 
         /// <summary>

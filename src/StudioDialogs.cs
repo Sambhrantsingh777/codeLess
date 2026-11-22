@@ -1270,6 +1270,11 @@ namespace codeLess.Studio
                 string agId = ag[3];
                 addCmd(ag[0], ag[1], ag[2], () => { SelectedCommandId = agId; this.DialogResult = DialogResult.OK; this.Close(); });
             }
+            foreach (string[] wt in CodeLessMainForm.WorkspaceTrustPaletteCommands)
+            {
+                string wtId = wt[3];
+                addCmd(wt[0], wt[1], wt[2], () => { SelectedCommandId = wtId; this.DialogResult = DialogResult.OK; this.Close(); });
+            }
             addCmd("Arena", "Best-of-N Arena: Compare Providers With Verification", "",
                 () => { SelectedCommandId = "open_arena"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Architecture", "Open Interactive Live Code & Dependency Map", "",
@@ -2637,6 +2642,7 @@ namespace codeLess.Studio
             ExcludedFoldersInput.ApplyTheme(activeTheme);
             body.Controls.Add(ExcludedFoldersInput);
             y += 32;
+            WorkspaceTrustSettingsBlockWin.Build(body, activeTheme, ref y);
 
             // AI & BYOK SECTION
             addSectionHeader("AI & BYOK MODEL SETTINGS", y);

@@ -357,6 +357,14 @@ namespace codeLess.Studio
             ICollection<string> sessionApprovals, CancellationToken ct, Action<string> onOutput)
         {
             VerificationResult res;
+            if (WorkspaceTrust.IsRestricted(workspaceRoot))
+            {
+                // Restricted Mode: verification would run the project's build/test (workspace code) - never automatically.
+                res = new VerificationResult();
+                res.Status = VerificationStatus.Denied;
+                res.Message = WorkspaceTrust.RestrictedMessage("Verification");
+                return res;
+            }
             VerificationCommand cmd = ResolveCommand(workspaceRoot);
             if (cmd == null)
             {

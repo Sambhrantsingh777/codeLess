@@ -154,11 +154,17 @@ namespace codeLess.Studio
                 }
                 if (c != '$' || i + 1 >= s.Length) { sb.Append(c); i++; continue; }
                 char nx = s[i + 1];
-                if (char.IsDigit(nx))
+                if (nx >= '0' && nx <= '9')
                 {
                     int j = i + 1;
-                    while (j < s.Length && char.IsDigit(s[j])) j++;
-                    int n = int.Parse(s.Substring(i + 1, j - i - 1), CultureInfo.InvariantCulture);
+                    while (j < s.Length && s[j] >= '0' && s[j] <= '9') j++;
+                    int n;
+                    if (!int.TryParse(s.Substring(i + 1, j - i - 1), NumberStyles.None, CultureInfo.InvariantCulture, out n))
+                    {
+                        sb.Append(s, i, j - i); // overflowing tab stop number: literal text
+                        i = j;
+                        continue;
+                    }
                     Mark(offsets, lengths, n, sb.Length, 0);
                     i = j;
                     continue;
@@ -166,11 +172,20 @@ namespace codeLess.Studio
                 if (nx == '{')
                 {
                     int j = i + 2;
-                    if (j < s.Length && char.IsDigit(s[j]))
+                    int kEnd = j;
+                    while (kEnd < s.Length && s[kEnd] >= '0' && s[kEnd] <= '9') kEnd++;
+                    int parsedN = 0;
+                    bool validN = kEnd > j && int.TryParse(s.Substring(j, kEnd - j), NumberStyles.None, CultureInfo.InvariantCulture, out parsedN);
+                    if (kEnd > j && !validN)
                     {
-                        int k = j;
-                        while (k < s.Length && char.IsDigit(s[k])) k++;
-                        int n = int.Parse(s.Substring(j, k - j), CultureInfo.InvariantCulture);
+                        sb.Append("${");
+                        i = j;
+                        continue;
+                    }
+                    if (validN)
+                    {
+                        int k = kEnd;
+                        int n = parsedN;
                         int start = sb.Length;
                         if (k < s.Length && s[k] == ':')
                         {

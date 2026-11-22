@@ -1384,7 +1384,8 @@ namespace codeLess.AvaloniaApp
             currentGitEntries = entries ?? new List<GitStatusEntry>();
             bool noGit = string.IsNullOrEmpty(branch) || branch == "no-git";
             if (!noGit) RefreshGutterBaselines(); // staging / commits change the index the gutter compares with
-            scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
+            scmBranchBanner.Text = IsWorkspaceRestricted && noGit ? "Source control is disabled in Restricted Mode (Manage Workspace Trust)"
+                : noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
             SetStatusBranch(noGit ? "no-git" : branch);
 
             // Update Activity Bar Git badge
@@ -1500,6 +1501,7 @@ namespace codeLess.AvaloniaApp
         public static string RunGit(string repoRoot, int timeoutMs, out int exitCode, params string[] args)
         {
             exitCode = -1;
+            if (GitSafety.BlockReason(repoRoot, args) != null) return ""; // Restricted Mode
             try
             {
                 var psi = new ProcessStartInfo("git")
@@ -1511,6 +1513,7 @@ namespace codeLess.AvaloniaApp
                     RedirectStandardInput = true,
                     CreateNoWindow = true
                 };
+                GitSafety.Apply(psi, repoRoot);
                 psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
                 foreach (string a in args) psi.ArgumentList.Add(a);
                 using var p = Process.Start(psi);
@@ -2544,6 +2547,7 @@ namespace codeLess.AvaloniaApp
             all.AddRange(BuildParityPaletteCommands());
             all.AddRange(BuildTaskPaletteCommands());
             all.AddRange(BuildAgentTrustPaletteCommands());
+            all.AddRange(BuildWorkspaceTrustPaletteCommands());
             all.AddRange(BuildExtensionPaletteCommands());
             return all;
         }
@@ -2621,8 +2625,18 @@ namespace codeLess.AvaloniaApp
                     ApplyEditorNicetySettings();
                     UpdateStatusBar();
                 },
-                () => ModalHost.CloseModal());
+                () => ModalHost.CloseModal(),
+                BuildSettingsTrustSection());
             ModalHost.ShowModal("settings", "Preferences: Settings — codeLess", view, 600);
+        }
+
+        private Control BuildSettingsTrustSection()
+        {
+            var host = new ContentControl();
+            Action rebuild = null;
+            rebuild = () => host.Content = BuildWorkspaceTrustManager(currentTheme, rebuild);
+            rebuild();
+            return host;
         }
 
         public void ShowKeyboardShortcutsModal()
@@ -3077,7 +3091,9 @@ namespace codeLess.AvaloniaApp
             if (AgentToolApprovalOverride != null) return AgentToolApprovalOverride(toolName, detail);
             bool isShell = string.Equals(toolName, "run_terminal", StringComparison.OrdinalIgnoreCase);
             if (!isShell) return true;
-            if (settings != null && !settings.RequireAgentToolApproval) return true;
+            // Restricted Mode: agent shell commands always ask (never auto-approved, never run unattended).
+            bool restricted = WorkspaceTrust.IsRestricted(workspaceRoot);
+            if (settings != null && !settings.RequireAgentToolApproval && !restricted) return true;
             if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime) return false; // never run unattended
             if (Dispatcher.UIThread.CheckAccess()) return false; // cannot block the UI thread waiting for a click
 
@@ -3087,7 +3103,8 @@ namespace codeLess.AvaloniaApp
                 var stack = new StackPanel { Spacing = 10 };
                 stack.Children.Add(new TextBlock
                 {
-                    Text = "The AI agent wants to run a shell command. Review it carefully before allowing it:",
+                    Text = "The AI agent wants to run a shell command. Review it carefully before allowing it:" +
+                           (restricted ? "\n(This folder is in Restricted Mode: the command runs code from a folder you haven't trusted.)" : ""),
                     TextWrapping = TextWrapping.Wrap,
                     FontSize = 12.5,
                     Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary))

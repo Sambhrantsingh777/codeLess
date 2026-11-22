@@ -193,6 +193,7 @@ namespace codeLess.Avalonia.Tests
         {
             string repo = GitCli.FindRepoRoot(AppContext.BaseDirectory);
             if (repo == null || !GitCli.IsAvailable()) return; // packaged test run without git
+            TestTrust.Trust(repo); // git doesn't run in Restricted Mode
             Assert.False(string.IsNullOrEmpty(GitCli.ReadHeadSignature(repo)));
             string file = Path.Combine(repo, "LICENSE");
             if (!File.Exists(file)) return;

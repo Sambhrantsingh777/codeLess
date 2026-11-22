@@ -55,7 +55,7 @@ namespace codeLess.AvaloniaApp
             lsp.ClientVersion = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "3.2";
             lsp.UserSettingsProvider = LanguageServerSettingsOverride ?? (() => settings.GetLanguageServerUserSettings());
             lsp.IsHintSuppressed = lang => settings.IsLanguageServerHintDismissed(lang);
-            lsp.ApplyWorkspaceEditHandler = edit => ApplyLspWorkspaceEdit(edit, "Applied").Success;
+            lsp.ApplyWorkspaceEditHandler = edit => ApplyLspWorkspaceEdit(edit, "Applied", LspEditGuard.ForServer(lsp)).Success;
             lsp.DiagnosticsChanged += OnLspDiagnosticsChanged;
             lsp.StatusChanged += UpdateLspStatusItem;
             lsp.ServerMissing += ShowLanguageServerHint;
@@ -502,6 +502,8 @@ namespace codeLess.AvaloniaApp
         public async Task<LspApplyResult> ApplyRenameAsync(EditorTabBuffer buf, string path, int line, int col, string newName)
         {
             LspWorkspaceEdit edit;
+            // Snapshot before the request: typing while the server computes the rename must not shift its offsets (LSP-6).
+            var guard = LspEditGuard.Capture(openTabs, lsp);
             try { edit = await lsp.RequestRenameAsync(path, line, col, newName, CancellationToken.None); }
             catch (Exception ex)
             {
@@ -510,10 +512,12 @@ namespace codeLess.AvaloniaApp
                 return null;
             }
             if (edit == null || edit.IsEmpty) { SetStatusMessage("Rename: the language server returned no changes."); return null; }
-            return ApplyLspWorkspaceEdit(edit, "Renamed to '" + newName + "':");
+            return ApplyLspWorkspaceEdit(edit, "Renamed to '" + newName + "':", guard);
         }
 
-        internal LspApplyResult ApplyLspWorkspaceEdit(LspWorkspaceEdit edit, string verb)
+        internal LspApplyResult ApplyLspWorkspaceEdit(LspWorkspaceEdit edit, string verb) => ApplyLspWorkspaceEdit(edit, verb, null);
+
+        internal LspApplyResult ApplyLspWorkspaceEdit(LspWorkspaceEdit edit, string verb, LspEditGuard guard)
         {
             var result = LspEditing.ApplyWorkspaceEdit(edit, FindOpenTabByPath, (oldPath, newPath) =>
             {
@@ -522,7 +526,12 @@ namespace codeLess.AvaloniaApp
                 tab.FilePath = newPath;
                 tab.FileName = Path.GetFileName(newPath);
                 tab.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, newPath) : tab.FileName;
-            });
+            }, guard);
+            if (result.Rejected)
+            {
+                SetStatusMessage(verb + " not applied: " + result.Errors[0]);
+                return result;
+            }
             foreach (var b in result.ChangedBuffers)
             {
                 if (ReferenceEquals(PrimaryEditor.CurrentBuffer, b)) PrimaryEditor.Canvas.CommitExternalEdit();
@@ -577,6 +586,7 @@ namespace codeLess.AvaloniaApp
                 range = new LspRange(sl, sc, el, ec);
             }
             else range = new LspRange(buf.CursorLine, buf.CursorCol, buf.CursorLine, buf.CursorCol);
+            var listGuard = LspEditGuard.Capture(openTabs, lsp);
             var actions = await lsp.RequestCodeActionsAsync(path, range, CancellationToken.None);
             if (actions == null || actions.Count == 0) { SetStatusMessage("No code actions available."); return; }
             var ordered = actions.OrderByDescending(a => a.IsPreferred).ThenBy(a => a.DisabledReason != null).ToList();
@@ -584,18 +594,21 @@ namespace codeLess.AvaloniaApp
             {
                 Category = a.DisabledReason != null ? "Unavailable" : (string.IsNullOrEmpty(a.Kind) ? "Action" : (a.Kind.StartsWith("quickfix") ? "Quick Fix" : a.Kind)),
                 Title = a.Title + (a.IsPreferred ? "  ★" : "") + (a.DisabledReason != null ? "  (" + a.DisabledReason + ")" : ""),
-                Execute = () => { if (a.DisabledReason == null) _ = ApplyCodeActionAsync(path, a); }
+                Execute = () => { if (a.DisabledReason == null) _ = ApplyCodeActionAsync(path, a, listGuard); }
             }).ToList();
             CommandPalette.Open("", entries, currentTheme?.Id);
             CommandPalette.ModeHintLabel.Text = "Code Actions — Enter to apply";
         }
 
-        public async Task ApplyCodeActionAsync(string path, LspCodeAction action)
+        public async Task ApplyCodeActionAsync(string path, LspCodeAction action, LspEditGuard listGuard = null)
         {
             if (lsp == null || action == null) return;
+            // An edit that came with the list was computed for the text at list time; a lazily resolved one for the text at resolve time.
+            var guard = action.Edit != null && listGuard != null ? listGuard : LspEditGuard.Capture(openTabs, lsp);
             var resolved = await lsp.ResolveCodeActionAsync(path, action, CancellationToken.None) ?? action;
-            if (resolved.Edit != null) ApplyLspWorkspaceEdit(resolved.Edit, resolved.Title + ":");
-            if (resolved.Command != null) await lsp.ExecuteCommandAsync(path, resolved.Command, CancellationToken.None);
+            if (resolved.Edit != null) ApplyLspWorkspaceEdit(resolved.Edit, resolved.Title + ":", guard);
+            if (resolved.Command != null && lsp.ClassifyCommand(path, resolved.Command) == LanguageServerManager.LspCommandTarget.Server)
+                await lsp.ExecuteCommandAsync(path, resolved.Command, CancellationToken.None);
         }
 
         private List<PaletteEntryItem> BuildLanguageServerPaletteCommands()
@@ -1043,7 +1056,15 @@ namespace codeLess.AvaloniaApp
             }
             if (!LspEditing.ApplyCompletion(buf, item)) return;
             Editor.Canvas.CommitExternalEdit();
-            if (item.Command != null && lsp != null) _ = lsp.ExecuteCommandAsync(s.FilePath, item.Command, CancellationToken.None);
+            if (item.Command != null && lsp != null)
+            {
+                switch (lsp.ClassifyCommand(s.FilePath, item.Command))
+                {
+                    case LanguageServerManager.LspCommandTarget.TriggerSuggest: TriggerCompletion(null, false); return;
+                    case LanguageServerManager.LspCommandTarget.TriggerParameterHints: TriggerSignatureHelp(null, false); return;
+                    case LanguageServerManager.LspCommandTarget.Server: _ = lsp.ExecuteCommandAsync(s.FilePath, item.Command, CancellationToken.None); break;
+                }
+            }
             string path = PathOrNull;
             if (lsp != null && path != null && item.IsSnippet && (item.InsertText ?? item.TextEdit?.NewText ?? "").Contains("("))
                 TriggerSignatureHelp(null, false);

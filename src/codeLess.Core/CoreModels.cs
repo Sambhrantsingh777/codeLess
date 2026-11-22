@@ -806,6 +806,108 @@ namespace codeLess.Studio
             }
         }
 
+        /// <summary>
+        /// Encoding detection shared by every reader that must round-trip a file losslessly: BOM (UTF-8/16/32), else strict
+        /// UTF-8, else the ANSI code page on .NET Framework / Latin-1 on .NET 8 (both map every byte, so nothing is lost).
+        /// </summary>
+        public static Encoding DetectFileEncoding(byte[] rawBytes, out bool hasBom, out int bomLen)
+        {
+            hasBom = false;
+            bomLen = 0;
+            if (rawBytes == null || rawBytes.Length == 0) return new UTF8Encoding(false);
+            if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+            {
+                hasBom = true; bomLen = 3;
+                return new UTF8Encoding(true);
+            }
+            if (rawBytes.Length >= 4 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE && rawBytes[2] == 0x00 && rawBytes[3] == 0x00)
+            {
+                hasBom = true; bomLen = 4;
+                return new UTF32Encoding(false, true);
+            }
+            if (rawBytes.Length >= 4 && rawBytes[0] == 0x00 && rawBytes[1] == 0x00 && rawBytes[2] == 0xFE && rawBytes[3] == 0xFF)
+            {
+                hasBom = true; bomLen = 4;
+                return new UTF32Encoding(true, true);
+            }
+            if (rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE)
+            {
+                hasBom = true; bomLen = 2;
+                return new UnicodeEncoding(false, true);
+            }
+            if (rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF)
+            {
+                hasBom = true; bomLen = 2;
+                return new UnicodeEncoding(true, true);
+            }
+            try
+            {
+                UTF8Encoding strictUtf8 = new UTF8Encoding(false, true);
+                strictUtf8.GetString(rawBytes);
+                return new UTF8Encoding(false);
+            }
+            catch
+            {
+#if NETFRAMEWORK
+                return Encoding.Default;
+#else
+                // On .NET Core / .NET 8 Encoding.Default is UTF-8, which would replace every non-UTF-8 byte with U+FFFD
+                // and corrupt the file on save. Latin-1 maps bytes 1:1 so the file round-trips losslessly.
+                return Encoding.GetEncoding(28591);
+#endif
+            }
+        }
+
+        /// <summary>
+        /// Reads a file exactly as stored (line endings untouched, mixed EOLs kept) with the lossless encoding detection of
+        /// <see cref="DetectFileEncoding"/>. Pair with <see cref="EncodeTextStrict"/> to write it back byte-identically.
+        /// </summary>
+        public static string ReadFileExact(string filePath, out Encoding encoding, out bool hasBom)
+        {
+            byte[] raw = File.ReadAllBytes(filePath);
+            int bomLen;
+            encoding = DetectFileEncoding(raw, out hasBom, out bomLen);
+            return encoding.GetString(raw, bomLen, raw.Length - bomLen);
+        }
+
+        /// <summary>
+        /// Encodes text for disk in <paramref name="encoding"/> (+ BOM). Throws <see cref="EncoderFallbackException"/>
+        /// instead of silently writing '?' when a character can't be represented (e.g. an emoji in a Latin-1 file).
+        /// </summary>
+        public static byte[] EncodeTextStrict(string text, Encoding encoding, bool hasBom)
+        {
+            Encoding enc = encoding ?? new UTF8Encoding(hasBom);
+            if (enc is UTF8Encoding) enc = new UTF8Encoding(hasBom, true);
+            else if (enc is UnicodeEncoding) enc = new UnicodeEncoding(enc.CodePage == 1201, hasBom, true);
+            else if (enc is UTF32Encoding) enc = new UTF32Encoding(enc.CodePage == 12001, hasBom, true);
+            else enc = Encoding.GetEncoding(enc.CodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ReplacementFallback);
+            byte[] preamble = hasBom ? enc.GetPreamble() : new byte[0];
+            byte[] body = enc.GetBytes(text ?? "");
+            if (preamble.Length == 0) return body;
+            byte[] all = new byte[preamble.Length + body.Length];
+            Buffer.BlockCopy(preamble, 0, all, 0, preamble.Length);
+            Buffer.BlockCopy(body, 0, all, preamble.Length, body.Length);
+            return all;
+        }
+
+        /// <summary>True when every character of <paramref name="text"/> can be stored in <paramref name="encoding"/>.</summary>
+        public static bool CanEncodeLosslessly(string text, Encoding encoding)
+        {
+            if (string.IsNullOrEmpty(text) || encoding == null) return true;
+            try { EncodeTextStrict(text, encoding, false); return true; }
+            catch (EncoderFallbackException) { return false; }
+        }
+
+        /// <summary>Overwrites a file's bytes in place (keeps its identity, permissions and xattrs, like the editor's Save).</summary>
+        public static void WriteBytesInPlace(string filePath, byte[] bytes)
+        {
+            using (FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read))
+            {
+                fs.SetLength(0);
+                if (bytes != null && bytes.Length > 0) fs.Write(bytes, 0, bytes.Length);
+            }
+        }
+
         public static string ReadFilePreservingMetadata(
             string filePath,
             out string eolSequence,
@@ -828,57 +930,8 @@ namespace codeLess.Studio
                 return "";
             }
 
-            int bomLen = 0;
-            if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
-            {
-                hasBom = true;
-                encoding = new UTF8Encoding(true);
-                bomLen = 3;
-            }
-            else if (rawBytes.Length >= 4 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE && rawBytes[2] == 0x00 && rawBytes[3] == 0x00)
-            {
-                hasBom = true;
-                encoding = new UTF32Encoding(false, true);
-                bomLen = 4;
-            }
-            else if (rawBytes.Length >= 4 && rawBytes[0] == 0x00 && rawBytes[1] == 0x00 && rawBytes[2] == 0xFE && rawBytes[3] == 0xFF)
-            {
-                hasBom = true;
-                encoding = new UTF32Encoding(true, true);
-                bomLen = 4;
-            }
-            else if (rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE)
-            {
-                hasBom = true;
-                encoding = new UnicodeEncoding(false, true);
-                bomLen = 2;
-            }
-            else if (rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF)
-            {
-                hasBom = true;
-                encoding = new UnicodeEncoding(true, true);
-                bomLen = 2;
-            }
-            else
-            {
-                hasBom = false;
-                try
-                {
-                    UTF8Encoding strictUtf8 = new UTF8Encoding(false, true);
-                    strictUtf8.GetString(rawBytes);
-                    encoding = new UTF8Encoding(false);
-                }
-                catch
-                {
-#if NETFRAMEWORK
-                    encoding = Encoding.Default;
-#else
-                    // On .NET Core / .NET 8 Encoding.Default is UTF-8, which would replace every non-UTF-8 byte with U+FFFD
-                    // and corrupt the file on save. Latin-1 maps bytes 1:1 so the file round-trips losslessly.
-                    encoding = Encoding.GetEncoding(28591);
-#endif
-                }
-            }
+            int bomLen;
+            encoding = DetectFileEncoding(rawBytes, out hasBom, out bomLen);
 
             string decoded = encoding.GetString(rawBytes, bomLen, rawBytes.Length - bomLen);
 
@@ -975,7 +1028,14 @@ namespace codeLess.Studio
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
             string diskText = GetDiskTextWithMetadata();
-            WriteFilePreservingMetadata(path, diskText, FileEncoding, HasBom);
+            Encoding used;
+            WriteFilePreservingMetadataLossless(path, diskText, FileEncoding, HasBom, out used);
+            if (used != null && FileEncoding != null && used.CodePage != FileEncoding.CodePage)
+            {
+                // Upgraded to UTF-8 because the text no longer fits the legacy encoding: the status bar must say so.
+                FileEncoding = used;
+                HasBom = false;
+            }
         }
 
         public static void WriteFilePreservingMetadata(
@@ -1002,7 +1062,24 @@ namespace codeLess.Studio
 
         public static void WriteFilePreservingMetadata(string filePath, string exactTextWithEol, Encoding encoding, bool hasBom)
         {
+            Encoding used;
+            WriteFilePreservingMetadataLossless(filePath, exactTextWithEol, encoding, hasBom, out used);
+        }
+
+        /// <summary>
+        /// Like <see cref="WriteFilePreservingMetadata(string, string, Encoding, bool)"/>, but when the text contains characters
+        /// the file's legacy (ANSI / Latin-1 / other single-byte) encoding can't represent - an emoji, CJK, "→" - the file is
+        /// written as UTF-8 instead of silently turning them into '?'. <paramref name="usedEncoding"/> reports what was written.
+        /// </summary>
+        public static void WriteFilePreservingMetadataLossless(string filePath, string exactTextWithEol, Encoding encoding, bool hasBom, out Encoding usedEncoding)
+        {
             Encoding enc = encoding ?? new UTF8Encoding(hasBom);
+            if (!(enc is UTF8Encoding) && !(enc is UnicodeEncoding) && !(enc is UTF32Encoding) && !CanEncodeLosslessly(exactTextWithEol, enc))
+            {
+                enc = new UTF8Encoding(false);
+                hasBom = false;
+            }
+            usedEncoding = enc;
             if (enc is UTF8Encoding)
                 enc = new UTF8Encoding(hasBom);
             else if (enc is UnicodeEncoding)

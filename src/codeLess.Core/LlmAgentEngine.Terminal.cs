@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 
 namespace codeLess.Studio
 {
@@ -30,6 +31,23 @@ namespace codeLess.Studio
             return inWs;
         }
 
+        /// <summary>What the model is told about the temporary copy - only claims that are actually true for this copy.</summary>
+        public static string DescribeOverlayForModel(VerificationOverlay overlay, int stagedCount)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("[Ran in a temporary copy of the workspace with your ").Append(stagedCount).Append(" staged edit(s) applied. ");
+            sb.Append("The user's files were not changed, and files this command creates or modifies in the copy are discarded: to change files, propose edits.");
+            if (overlay.Strategy == "git-clone")
+                sb.Append(" The copy has its own git repository without remotes: commits, branches, tags and stash there don't affect the user's repository.");
+            if (overlay.ClonedFolders.Count > 0)
+                sb.Append(" ").Append(string.Join(", ", overlay.ClonedFolders.ToArray())).Append(" are private copy-on-write copies.");
+            if (overlay.SharedFolders.Count > 0)
+                sb.Append(" WARNING: ").Append(string.Join(", ", overlay.SharedFolders.ToArray()))
+                  .Append(" are SHARED with the user's real workspace (not copied): anything written there changes the user's real environment.");
+            sb.Append("]\n");
+            return sb.ToString();
+        }
+
         /// <summary>
         /// Runs an approved agent command. Returns the combined output (with a leading note when it ran in the copy or
         /// when the staged edits couldn't be applied).
@@ -49,7 +67,17 @@ namespace codeLess.Studio
                 if (overlay != null)
                 {
                     runDir = overlay.OverlayWorkspace;
-                    note = "[Ran in a temporary copy of the workspace with your " + staged.Count + " staged edit(s) applied. The user's files were not changed, and files this command creates or modifies in the copy are discarded: to change files, propose edits.]\n";
+                    note = DescribeOverlayForModel(overlay, staged.Count);
+                    if (overlay.WouldModifySharedDependencies(cmd))
+                    {
+                        string shared = string.Join(", ", overlay.SharedFolders.ToArray());
+                        overlay.Dispose();
+                        exitCode = 1;
+                        return "[Not run: this command installs or removes packages, but " + shared +
+                               " in the temporary copy is shared with the user's real workspace (this file system can't make a private copy), " +
+                               "so it would change the user's real environment while your edits are still unaccepted. Propose the edits " +
+                               "(e.g. to package.json / requirements.txt) and let the user install after accepting.]\n";
+                    }
                 }
                 else
                 {

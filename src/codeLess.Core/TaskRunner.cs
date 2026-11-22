@@ -30,6 +30,12 @@ namespace codeLess.Studio
         public Action Terminate;
         /// <summary>Raised once when the process ends (on the thread that reported the exit).</summary>
         public event Action<TaskExecution> Exited;
+        /// <summary>Background (watch) task: output line that marks "ready" (problemMatcher.background.endsPattern), or null.</summary>
+        public System.Text.RegularExpressions.Regex BackgroundEnds;
+        /// <summary>True once <see cref="BackgroundEnds"/> matched.</summary>
+        public bool BackgroundReady;
+
+        private readonly List<Action<TaskExecution, bool>> finishWaiters = new List<Action<TaskExecution, bool>>();
 
         private int lastPublishTick;
         private bool publishPending;
@@ -54,6 +60,7 @@ namespace codeLess.Studio
             if (string.IsNullOrEmpty(ex.Cwd) || !Directory.Exists(ex.Cwd)) ex.Cwd = ctx != null ? ctx.WorkspaceFolder : null;
             ex.Env = TaskConfiguration.ResolveEnv(task, ctx);
             ex.Matchers = new ProblemMatcherEngine(BuiltInProblemMatchers.Resolve(task.ProblemMatchers), ctx != null ? ctx.WorkspaceFolder : null, ex.Cwd);
+            if (task.IsBackground) ex.BackgroundEnds = BackgroundTaskPatterns.EndsPattern(task);
             ex.Splitter.LineReady += ex.OnLine;
             ex.Matchers.ProblemFound += delegate (DiagnosticItem d) { ex.SchedulePublish(); };
             return ex;
@@ -76,6 +83,47 @@ namespace codeLess.Studio
             Matchers.FeedLine(line);
             // Problems that arrived inside the throttle window are published by the next output line (watch tasks).
             if (HasPendingPublish) SchedulePublish();
+            System.Text.RegularExpressions.Regex ends = BackgroundEnds;
+            if (ends != null && !BackgroundReady)
+            {
+                bool hit = false;
+                try { hit = ends.IsMatch(line); } catch { }
+                if (hit) SignalFinished(true, true);
+            }
+        }
+
+        /// <summary>
+        /// Calls <paramref name="callback"/>(execution, success) once the task is done for its dependents: on exit (success =
+        /// exit code 0, not terminated), or - for a background task - when its endsPattern matched (success). A background
+        /// task without an endsPattern can't be tracked (VS Code warns too) and counts as done right away. Race-free: if the
+        /// task already finished, the callback runs immediately on the calling thread.
+        /// </summary>
+        public void WhenFinished(Action<TaskExecution, bool> callback)
+        {
+            if (callback == null) return;
+            bool now;
+            bool ok;
+            lock (gate)
+            {
+                bool exited = !IsRunning && EndedUtc != default(DateTime);
+                if (exited) { now = true; ok = ExitCode == 0 && !WasTerminated || BackgroundReady; }
+                else if (BackgroundReady || (Task != null && Task.IsBackground && BackgroundEnds == null)) { now = true; ok = true; }
+                else { finishWaiters.Add(callback); now = false; ok = false; }
+            }
+            if (now) { try { callback(this, ok); } catch { } }
+        }
+
+        private void SignalFinished(bool ok, bool background)
+        {
+            List<Action<TaskExecution, bool>> waiters;
+            lock (gate)
+            {
+                if (background) BackgroundReady = true;
+                if (finishWaiters.Count == 0) return;
+                waiters = new List<Action<TaskExecution, bool>>(finishWaiters);
+                finishWaiters.Clear();
+            }
+            foreach (Action<TaskExecution, bool> w in waiters) { try { w(this, ok); } catch { } }
         }
 
         public void OnOutputBytes(byte[] buf, int count) { Splitter.FeedBytes(buf, count); }
@@ -117,6 +165,7 @@ namespace codeLess.Studio
             PublishProblems();
             Action<TaskExecution> h = Exited;
             if (h != null) { try { h(this); } catch { } }
+            SignalFinished(exitCode == 0 && !WasTerminated, false);
         }
 
         public int ErrorCount

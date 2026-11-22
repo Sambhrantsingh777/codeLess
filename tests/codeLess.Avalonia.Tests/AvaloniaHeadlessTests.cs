@@ -51,6 +51,7 @@ namespace codeLess.Avalonia.Tests
         {
             string dir = Path.Combine(Path.GetTempPath(), "codeLess_Parity_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
+            TestTrust.Trust(dir); // workspace-local tools / git / tasks need a trusted folder
 
             // Excluded folders that MUST be filtered out in Explorer tree
             Directory.CreateDirectory(Path.Combine(dir, "bench"));

@@ -58,6 +58,7 @@ namespace codeLess.Studio
         /// <summary>Runs git with the given arguments in <paramref name="repo"/> and returns raw stdout ("" on failure).</summary>
         public static string Run(string repo, int timeoutMs, out int exitCode, params string[] args)
         {
+            if (GitSafety.BlockReason(repo, args) != null) { exitCode = -1; return ""; } // Restricted Mode
             List<string> all = new List<string>();
             all.Add("--no-optional-locks");
             all.Add("-c");

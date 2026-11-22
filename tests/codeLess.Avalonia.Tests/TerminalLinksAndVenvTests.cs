@@ -23,6 +23,7 @@ namespace codeLess.Avalonia.Tests
         {
             Path = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "codeLess_tl_" + Guid.NewGuid().ToString("N").Substring(0, 8)));
             Directory.CreateDirectory(Path);
+            TestTrust.Trust(Path); // workspace-local tools / git / tasks need a trusted folder
         }
         public string File(string rel, string content = "x\n")
         {

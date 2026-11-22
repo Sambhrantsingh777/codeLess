@@ -49,10 +49,16 @@ namespace codeLess.Studio
 
         public DebugController Debugger { get { return debugController; } }
 
-        private sealed class WinFormsDebugHost : IDebugUiHost
+        private sealed class WinFormsDebugHost : IDebugUiHost, IDebugTaskHost
         {
             private readonly CodeLessMainForm f;
             public WinFormsDebugHost(CodeLessMainForm f) { this.f = f; }
+
+            /// <summary>launch.json preLaunchTask / postDebugTask through the shared task chain runner.</summary>
+            public void RunTaskByLabel(string label, Action<bool, string> completed)
+            {
+                f.RunTaskByLabelWin(label, completed);
+            }
 
             public void Post(Action action)
             {

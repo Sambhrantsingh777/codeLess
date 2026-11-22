@@ -656,7 +656,8 @@ namespace codeLess.Studio
         }
 
         /// <summary>
-        /// Regex used by Replace All. Multiline so ^ / $ behave per line exactly like the (line based) search did.
+        /// Regex used by Replace All. It is applied line by line (see <see cref="ReplaceInText"/>), exactly like the search,
+        /// so ^ / $ / \s / [^x] / lookarounds can never see or consume a line break the results list did not show.
         /// </summary>
         public static Regex BuildReplaceRegex(string query, WorkspaceSearchOptions options, out string errorMessage)
         {
@@ -665,7 +666,7 @@ namespace codeLess.Studio
             if (options == null) options = new WorkspaceSearchOptions();
             try
             {
-                return new Regex(BuildPattern(query, options), BuildRegexOptions(options) | RegexOptions.Multiline, TimeSpan.FromSeconds(5));
+                return new Regex(BuildPattern(query, options), BuildRegexOptions(options), TimeSpan.FromSeconds(5));
             }
             catch (Exception ex)
             {
@@ -682,21 +683,82 @@ namespace codeLess.Studio
             return rep;
         }
 
-        /// <summary>Applies the replacement to in-memory text. Returns the input unchanged when nothing matched.</summary>
+        /// <summary>
+        /// Applies the replacement to in-memory text. Returns the input unchanged when nothing matched.
+        /// The regex runs on each line separately (line content without its "\n" / "\r\n" terminator) and zero-length
+        /// matches are skipped - the same semantics as the search (<see cref="ScanOneFile"/>), so the number of replaced
+        /// matches always equals the number of results the user previewed and line breaks are never removed or joined.
+        /// </summary>
         public static string ReplaceInText(string text, Regex rx, string preparedReplacement, out int replacedCount)
         {
             replacedCount = 0;
             if (string.IsNullOrEmpty(text) || rx == null) return text;
             int count = 0;
-            string next;
+            string rep = preparedReplacement ?? "";
+            StringBuilder sb = null;
+            int pos = 0;
+            int copiedUpTo = 0;
             try
             {
-                string rep = preparedReplacement ?? "";
-                next = rx.Replace(text, delegate(Match m) { count++; return m.Result(rep); });
+                while (pos <= text.Length)
+                {
+                    int nl = text.IndexOf('\n', pos);
+                    int end = nl < 0 ? text.Length : nl;
+                    int lineEnd = (end > pos && text[end - 1] == '\r') ? end - 1 : end;
+                    string line = text.Substring(pos, lineEnd - pos);
+                    int lineCount = 0;
+                    string replaced = rx.Replace(line, delegate(Match m)
+                    {
+                        if (m.Length == 0) return m.Value;
+                        lineCount++;
+                        return m.Result(rep);
+                    });
+                    if (lineCount > 0)
+                    {
+                        if (sb == null) sb = new StringBuilder(text.Length + 64);
+                        sb.Append(text, copiedUpTo, pos - copiedUpTo);
+                        sb.Append(replaced);
+                        copiedUpTo = lineEnd;
+                        count += lineCount;
+                    }
+                    if (nl < 0) break;
+                    pos = nl + 1;
+                }
             }
             catch (RegexMatchTimeoutException) { return text; }
+            if (count == 0 || sb == null) return text;
+            sb.Append(text, copiedUpTo, text.Length - copiedUpTo);
             replacedCount = count;
-            return count > 0 ? next : text;
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Replacement text for one find-widget match at (<paramref name="col"/>, <paramref name="len"/>) of
+        /// <paramref name="line"/>. In regex mode the match is re-run at that position on the whole line (so lookbehinds keep
+        /// their context) and $1 / ${name} / $&amp; are expanded like VS Code; plain mode returns the text literally.
+        /// </summary>
+        public static string ExpandReplacementAt(string line, Regex rx, int col, int len, string replacement, bool useRegex)
+        {
+            string rep = replacement ?? "";
+            if (!useRegex || rx == null || line == null || col < 0 || col > line.Length) return rep;
+            try
+            {
+                Match m = rx.Match(line, col);
+                while (m.Success && m.Index < col) m = m.NextMatch();
+                if (m.Success && m.Index == col && m.Length == len) return m.Result(rep);
+            }
+            catch (RegexMatchTimeoutException) { }
+            catch (ArgumentException) { }
+            return rep;
+        }
+
+        /// <summary>Counts the matches <see cref="ReplaceInText"/> would replace (same per-line semantics as the search).</summary>
+        public static int CountReplaceableMatches(string text, Regex rx)
+        {
+            if (string.IsNullOrEmpty(text) || rx == null) return 0;
+            int n;
+            ReplaceInText(text, rx, "", out n);
+            return n;
         }
 
         public static Dictionary<string, string> ReplaceInFiles(

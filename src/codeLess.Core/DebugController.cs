@@ -25,6 +25,15 @@ namespace codeLess.Studio
         IdePersistentSettings Settings { get; }
     }
 
+    /// <summary>
+    /// Optional host capability: run a task (with its dependsOn) by label - used for launch.json preLaunchTask /
+    /// postDebugTask. <paramref name="completed"/> must be called on the UI thread with (success, message).
+    /// </summary>
+    public interface IDebugTaskHost
+    {
+        void RunTaskByLabel(string label, Action<bool, string> completed);
+    }
+
     public sealed class DebugConsoleEntry
     {
         public string Category; // stdout | stderr | console | important | input | result | error
@@ -187,10 +196,62 @@ namespace codeLess.Studio
 
         // ---- Session lifecycle ----
 
-        /// <summary>Starts debugging (no-op when a session is already active). Call on the UI thread.</summary>
+        /// <summary>
+        /// Starts debugging (no-op when a session is already active). Call on the UI thread. Runs the configuration's
+        /// preLaunchTask first (like VS Code) and only debugs when it succeeded; postDebugTask runs when the session ends.
+        /// Refused in Restricted Mode (debugging runs workspace code and adapters / interpreters the workspace chooses).
+        /// </summary>
         public Task StartAsync(DebugLaunchConfig config, string activeFile)
         {
             if (config == null) return Task.FromResult(0);
+            if (IsActive)
+            {
+                host.ShowStatus("A debug session is already running.");
+                return Task.FromResult(0);
+            }
+            string wsForTrust = host.WorkspaceRoot;
+            if (string.IsNullOrEmpty(wsForTrust) && !string.IsNullOrEmpty(activeFile)) { try { wsForTrust = Path.GetDirectoryName(activeFile); } catch { } }
+            if (WorkspaceTrust.IsRestricted(wsForTrust))
+            {
+                LastError = WorkspaceTrust.RestrictedMessage("Debugging");
+                host.ShowDebugError(LastError, "Use Manage Workspace Trust to trust this folder.", null);
+                return Task.FromResult(0);
+            }
+            string preLaunch = DebugLaunchConfigurations.GetTaskLabel(config, "preLaunchTask");
+            if (!string.IsNullOrEmpty(preLaunch))
+            {
+                IDebugTaskHost tasks = host as IDebugTaskHost;
+                if (tasks == null)
+                {
+                    LastError = "preLaunchTask '" + preLaunch + "' can't run here: tasks are not available.";
+                    host.ShowDebugError(LastError, null, null);
+                    return Task.FromResult(0);
+                }
+                TaskCompletionSource<int> started = new TaskCompletionSource<int>();
+                host.ShowStatus("Running preLaunchTask '" + preLaunch + "'...");
+                AppendConsole("console", "Running preLaunchTask '" + preLaunch + "'...\n");
+                tasks.RunTaskByLabel(preLaunch, delegate (bool ok, string message)
+                {
+                    if (!ok)
+                    {
+                        // VS Code: a failed preLaunchTask doesn't debug a stale build.
+                        LastError = "preLaunchTask '" + preLaunch + "' failed" + (string.IsNullOrEmpty(message) ? "." : ": " + message);
+                        AppendConsole("stderr", LastError + "\n");
+                        host.ShowDebugError(LastError, "Fix the task (see the Terminal / Problems), then start debugging again.", null);
+                        StatusText = "";
+                        RaiseState();
+                        started.TrySetResult(0);
+                        return;
+                    }
+                    StartAfterPreLaunch(config, activeFile).ContinueWith(delegate { started.TrySetResult(0); });
+                });
+                return started.Task;
+            }
+            return StartAfterPreLaunch(config, activeFile);
+        }
+
+        private Task StartAfterPreLaunch(DebugLaunchConfig config, string activeFile)
+        {
             if (IsActive)
             {
                 host.ShowStatus("A debug session is already running.");
@@ -494,6 +555,16 @@ namespace codeLess.Studio
             RefreshBufferDecorations();
             AppendConsole("console", "Debug session '" + s.Name + "' ended.\n");
             StatusText = "";
+            string postTask = DebugLaunchConfigurations.GetTaskLabel(lastConfig, "postDebugTask");
+            IDebugTaskHost postHost = host as IDebugTaskHost;
+            if (!string.IsNullOrEmpty(postTask) && postHost != null && !restartPending)
+            {
+                AppendConsole("console", "Running postDebugTask '" + postTask + "'...\n");
+                postHost.RunTaskByLabel(postTask, delegate (bool ok, string message)
+                {
+                    if (!ok) AppendConsole("stderr", "postDebugTask '" + postTask + "' failed" + (string.IsNullOrEmpty(message) ? "." : ": " + message) + "\n");
+                });
+            }
             RaiseCallStack();
             RaiseState();
             Action h = BreakpointsChanged;

@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace codeLess.Studio
 {
@@ -40,6 +41,11 @@ namespace codeLess.Studio
         public string InstallCommandWindows;
         public string InstallCommandAny;
         public string InstallUrl;
+        /// <summary>
+        /// The server executes project code by design (rust-analyzer build scripts / proc macros, jdtls Gradle / Maven
+        /// import, MSBuild evaluation for C#): never started in Restricted Mode, even from PATH.
+        /// </summary>
+        public bool ExecutesProjectCode;
 
         public bool HandlesLanguage(string languageId)
         {
@@ -60,8 +66,14 @@ namespace codeLess.Studio
         public bool Disabled;
         public string Problem;        // human readable reason when Executable == null
         public string InstallCommand; // suggested install command (may be null)
+        /// <summary>Not started because the workspace is in Restricted Mode (Problem says why).</summary>
+        public bool Restricted;
+        /// <summary>Whether the workspace was trusted when this was resolved (a trust change re-resolves).</summary>
+        public bool WorkspaceTrusted = true;
+        /// <summary>Extra initializationOptions (e.g. the TypeScript server pinned to a non-workspace tsserver in Restricted Mode).</summary>
+        public Dictionary<string, object> InitializationOptions;
 
-        public bool CanStart { get { return !Disabled && !string.IsNullOrEmpty(Executable); } }
+        public bool CanStart { get { return !Disabled && !Restricted && !string.IsNullOrEmpty(Executable); } }
     }
 
     /// <summary>User overrides parsed from the "LanguageServerOverrides" setting (one "language = command args" per line).</summary>
@@ -196,6 +208,7 @@ namespace codeLess.Studio
             d.LanguageIds = new string[] { "rust" };
             d.Candidates.Add(new LanguageServerCandidate("rust-analyzer", "rust-analyzer"));
             d.RootMarkers = new string[] { "Cargo.toml" };
+            d.ExecutesProjectCode = true; // build scripts, proc macros, cargo config wrappers
             d.InstallCommandAny = "rustup component add rust-analyzer";
             list.Add(d);
 
@@ -216,6 +229,7 @@ namespace codeLess.Studio
             d.Candidates.Add(new LanguageServerCandidate("OmniSharp", "OmniSharp", "-lsp"));
             d.Candidates.Add(new LanguageServerCandidate("omnisharp", "OmniSharp", "-lsp"));
             d.RootMarkers = new string[] { "*.sln", "*.csproj" };
+            d.ExecutesProjectCode = true; // MSBuild evaluation runs targets / tasks from the project
             d.InstallCommandAny = "dotnet tool install --global csharp-ls";
             list.Add(d);
 
@@ -224,6 +238,7 @@ namespace codeLess.Studio
             d.LanguageIds = new string[] { "java" };
             d.Candidates.Add(new LanguageServerCandidate("jdtls", "jdtls"));
             d.RootMarkers = new string[] { "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", ".project" };
+            d.ExecutesProjectCode = true; // Gradle / Maven project import runs build scripts and wrappers
             d.InstallCommandMac = "brew install jdtls";
             d.InstallUrl = "https://download.eclipse.org/jdtls/snapshots/";
             list.Add(d);
@@ -354,6 +369,8 @@ namespace codeLess.Studio
             r.LanguageId = languageId;
             LanguageServerDefinition d = DefinitionForLanguage(languageId);
             r.Definition = d;
+            bool trusted = WorkspaceTrust.IsTrusted(workspaceRoot);
+            r.WorkspaceTrusted = trusted;
             if (user == null) user = new LanguageServerUserSettings();
             string overrideLine = null;
             if (user.GloballyDisabled)
@@ -410,6 +427,7 @@ namespace codeLess.Studio
                         return r;
                     }
                     r.Executable = resolved;
+                    ApplyRestrictedMode(r, workspaceRoot, trusted);
                     return r;
                 }
             }
@@ -427,6 +445,7 @@ namespace codeLess.Studio
                 r.Args = (string[])c.Args.Clone();
                 r.DisplayName = c.DisplayName;
                 if (d.Id == "java") r.Args = new string[] { "-data", JdtlsDataDir(workspaceRoot) };
+                ApplyRestrictedMode(r, workspaceRoot, trusted);
                 return r;
             }
             r.DisplayName = d.Candidates.Count > 0 ? d.Candidates[0].DisplayName : d.DisplayName;
@@ -435,10 +454,191 @@ namespace codeLess.Studio
             return r;
         }
 
-        private static string JdtlsDataDir(string root)
+        /// <summary>
+        /// Restricted Mode rules for a resolved server: servers that run project code by design are not started; the
+        /// TypeScript server is pinned to a TypeScript that doesn't come from the workspace (typescript-language-server
+        /// would otherwise load node_modules/typescript); pyright / basedpyright don't start when the project's config
+        /// names a virtual environment (pyright would execute its interpreter); lua-language-server doesn't start when
+        /// .luarc loads a runtime plugin.
+        /// </summary>
+        private static void ApplyRestrictedMode(LanguageServerResolution r, string workspaceRoot, bool trusted)
         {
-            string key = (root ?? "default").GetHashCode().ToString("x8", CultureInfo.InvariantCulture);
-            return Path.Combine(Path.GetTempPath(), "codeLess-jdtls", key);
+            if (trusted || r.Definition == null) return;
+            LanguageServerDefinition d = r.Definition;
+            if (d.ExecutesProjectCode)
+            {
+                r.Restricted = true;
+                r.Problem = r.DisplayName + " runs code from the project (build scripts / project import), so it doesn't start in Restricted Mode. Trust this folder to enable it.";
+                return;
+            }
+            if (d.Id == "typescript")
+            {
+                string tsserver = FindNonWorkspaceTsserver(r.Executable, workspaceRoot);
+                if (tsserver == null)
+                {
+                    r.Restricted = true;
+                    r.Problem = "In Restricted Mode the TypeScript server must not load the workspace's own TypeScript, and no global TypeScript was found next to " +
+                                r.DisplayName + " (install it with: npm i -g typescript). Trust this folder to use the workspace version.";
+                    return;
+                }
+                r.InitializationOptions = new Dictionary<string, object>(StringComparer.Ordinal);
+                r.InitializationOptions["tsserver"] = LspJson.Obj("path", tsserver);
+                return;
+            }
+            if (d.Id == "python" && WorkspaceNamesPythonEnvironment(workspaceRoot) && r.DisplayName != null &&
+                (r.DisplayName.IndexOf("pyright", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                r.Restricted = true;
+                r.Problem = "This project's pyright configuration selects a virtual environment, whose interpreter " + r.DisplayName +
+                            " would run; that doesn't happen in Restricted Mode. Trust this folder to enable it.";
+                return;
+            }
+            if (d.Id == "lua" && LuaConfigLoadsPlugin(workspaceRoot))
+            {
+                r.Restricted = true;
+                r.Problem = "This project's .luarc file loads a runtime plugin (Lua code run by the server), so lua-language-server doesn't start in Restricted Mode. Trust this folder to enable it.";
+            }
+        }
+
+        /// <summary>A tsserver.js that is not inside <paramref name="workspaceRoot"/>: bundled with / installed next to the server.</summary>
+        public static string FindNonWorkspaceTsserver(string serverExe, string workspaceRoot)
+        {
+            if (string.IsNullOrEmpty(serverExe)) return null;
+            List<string> starts = new List<string>();
+            try { starts.Add(Path.GetDirectoryName(Path.GetFullPath(serverExe))); } catch { }
+            try
+            {
+                if (!LspText.IsWindows())
+                {
+                    string real = LlmHarnessAndAgentEngine.ResolveRealPathUnix(serverExe);
+                    if (!string.IsNullOrEmpty(real)) starts.Add(Path.GetDirectoryName(real));
+                }
+            }
+            catch { }
+            string wsKey = string.IsNullOrEmpty(workspaceRoot) ? null : LspText.PathKey(workspaceRoot) + "/";
+            foreach (string start in starts)
+            {
+                string dir = start;
+                for (int i = 0; i < 6 && !string.IsNullOrEmpty(dir); i++)
+                {
+                    string[] cands = new string[]
+                    {
+                        JoinPath(dir, "node_modules", "typescript", "lib", "tsserver.js"),
+                        JoinPath(dir, "lib", "node_modules", "typescript", "lib", "tsserver.js"),
+                        JoinPath(dir, "lib", "node_modules", "typescript-language-server", "node_modules", "typescript", "lib", "tsserver.js")
+                    };
+                    foreach (string c in cands)
+                    {
+                        try
+                        {
+                            if (!File.Exists(c)) continue;
+                            if (wsKey != null && LspText.PathKey(c).StartsWith(wsKey, StringComparison.Ordinal)) continue;
+                            return c;
+                        }
+                        catch { }
+                    }
+                    dir = Path.GetDirectoryName(dir);
+                }
+            }
+            return null;
+        }
+
+        private static string JoinPath(string first, params string[] parts)
+        {
+            string r = first;
+            foreach (string p in parts) r = Path.Combine(r, p);
+            return r;
+        }
+
+        /// <summary>pyrightconfig.json / pyproject.toml [tool.pyright|basedpyright] names "venv" or "venvPath".</summary>
+        public static bool WorkspaceNamesPythonEnvironment(string workspaceRoot)
+        {
+            if (string.IsNullOrEmpty(workspaceRoot)) return false;
+            try
+            {
+                string cfg = Path.Combine(workspaceRoot, "pyrightconfig.json");
+                if (File.Exists(cfg))
+                {
+                    string t = File.ReadAllText(cfg);
+                    if (t.IndexOf("\"venv", StringComparison.Ordinal) >= 0 || t.IndexOf("pythonPath", StringComparison.Ordinal) >= 0) return true;
+                }
+                string pp = Path.Combine(workspaceRoot, "pyproject.toml");
+                if (File.Exists(pp))
+                {
+                    string t = File.ReadAllText(pp);
+                    int sec = t.IndexOf("[tool.pyright]", StringComparison.Ordinal);
+                    if (sec < 0) sec = t.IndexOf("[tool.basedpyright]", StringComparison.Ordinal);
+                    if (sec >= 0)
+                    {
+                        int next = t.IndexOf("\n[", sec + 5, StringComparison.Ordinal);
+                        string body = next > 0 ? t.Substring(sec, next - sec) : t.Substring(sec);
+                        if (System.Text.RegularExpressions.Regex.IsMatch(body, @"(?m)^\s*(venv|venvPath|pythonPath)\s*=")) return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>.luarc.json(c) configures runtime.plugin.</summary>
+        public static bool LuaConfigLoadsPlugin(string workspaceRoot)
+        {
+            if (string.IsNullOrEmpty(workspaceRoot)) return false;
+            foreach (string n in new string[] { ".luarc.json", ".luarc.jsonc" })
+            {
+                try
+                {
+                    string p = Path.Combine(workspaceRoot, n);
+                    if (File.Exists(p) && File.ReadAllText(p).IndexOf("plugin", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                }
+                catch { }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// jdtls workspace (-data) folder for a project root. Stable across launches (SHA-1 of the normalized path - not
+        /// string.GetHashCode, which .NET Core randomizes per process) and kept in the user cache folder, not in temp, so
+        /// jdtls reuses its index instead of re-importing the project and leaving a new multi-hundred-MB folder each session.
+        /// </summary>
+        public static string JdtlsDataDir(string root)
+        {
+            string norm = string.IsNullOrEmpty(root) ? "default" : LspText.PathKey(root);
+            string key = AgentHash.Sha1Hex(Encoding.UTF8.GetBytes(norm)).Substring(0, 16);
+            string name = Path.GetFileName((root ?? "").TrimEnd('/', '\\'));
+            StringBuilder safe = new StringBuilder();
+            foreach (char c in name ?? "")
+            {
+                if (safe.Length >= 32) break;
+                safe.Append(char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.' ? c : '_');
+            }
+            return Path.Combine(Path.Combine(UserCacheDir(), "jdtls"), (safe.Length > 0 ? safe + "-" : "") + key);
+        }
+
+        /// <summary>Per-user cache folder for codeLess (~/Library/Caches/codeLess, $XDG_CACHE_HOME/codeLess, %LOCALAPPDATA%/codeLess/Cache).</summary>
+        public static string UserCacheDir()
+        {
+            string baseDir = null;
+            try
+            {
+                if (LspText.IsWindows())
+                {
+                    string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                    if (!string.IsNullOrEmpty(local)) baseDir = Path.Combine(Path.Combine(local, "codeLess"), "Cache");
+                }
+                else if (LspText.IsMacOS())
+                {
+                    baseDir = Path.Combine(Path.Combine(Path.Combine(HomeDir(), "Library"), "Caches"), "codeLess");
+                }
+                else
+                {
+                    string xdg = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+                    baseDir = Path.Combine(!string.IsNullOrEmpty(xdg) && Path.IsPathRooted(xdg) ? xdg : Path.Combine(HomeDir(), ".cache"), "codeLess");
+                }
+            }
+            catch { }
+            if (string.IsNullOrEmpty(baseDir)) baseDir = Path.Combine(Path.GetTempPath(), "codeLess-cache");
+            return baseDir;
         }
 
         // ---------------------------------------------------------------- executable discovery
@@ -458,7 +658,9 @@ namespace codeLess.Studio
             if (!string.IsNullOrEmpty(extra))
                 foreach (string p in extra.Split(Path.PathSeparator)) AddDir(dirs, p);
 
-            if (!string.IsNullOrEmpty(workspaceRoot))
+            // Workspace-local servers (node_modules/.bin, venvs) only for trusted folders: in Restricted Mode a cloned repo
+            // must not be able to plant "node_modules/.bin/typescript-language-server" and have it run on open.
+            if (!string.IsNullOrEmpty(workspaceRoot) && WorkspaceTrust.IsTrusted(workspaceRoot))
             {
                 AddDir(dirs, Path.Combine(workspaceRoot, "node_modules", ".bin"));
                 foreach (string venv in new string[] { ".venv", "venv", "env", ".env" })
@@ -562,7 +764,7 @@ namespace codeLess.Studio
         public static string FindExecutable(string name, string workspaceRoot)
         {
             if (string.IsNullOrEmpty(name)) return null;
-            string cacheKey = name + "|" + (workspaceRoot ?? "");
+            string cacheKey = name + "|" + (workspaceRoot ?? "") + "|" + (WorkspaceTrust.IsTrusted(workspaceRoot) ? "t" : "r");
             lock (cacheLock)
             {
                 KeyValuePair<DateTime, string> hit;
@@ -632,26 +834,51 @@ namespace codeLess.Studio
             return result;
         }
 
-        private static string RunAndCapture(string exe, string args, int timeoutMs)
+        /// <summary>
+        /// Runs a short probe (e.g. `npm config get prefix`) with a real timeout: stdout and stderr are drained asynchronously
+        /// (a chatty stderr can't fill its pipe and block the child) and a hung probe is killed with its process tree. Runs in
+        /// the user's home folder so a project's .npmrc can't redirect the probe.
+        /// </summary>
+        public static string RunAndCapture(string exe, string args, int timeoutMs)
         {
+            Process p = null;
             try
             {
                 ProcessStartInfo psi = BuildStartInfo(exe, LanguageServerUserSettings.SplitCommandLine(args).ToArray(), null);
                 psi.RedirectStandardInput = false;
-                using (Process p = Process.Start(psi))
+                string home = HomeDir();
+                if (!string.IsNullOrEmpty(home) && Directory.Exists(home)) psi.WorkingDirectory = home;
+                StringBuilder output = new StringBuilder();
+                object gate = new object();
+                p = new Process();
+                p.StartInfo = psi;
+                ManualResetEvent eof = new ManualResetEvent(false);
+                p.OutputDataReceived += delegate (object s, DataReceivedEventArgs e)
                 {
-                    string output = p.StandardOutput.ReadToEnd();
-                    if (!p.WaitForExit(timeoutMs)) { try { p.Kill(); } catch { } return null; }
-                    return output;
+                    if (e.Data == null) { eof.Set(); return; }
+                    lock (gate) { if (output.Length < 65536) output.Append(e.Data).Append('\n'); }
+                };
+                p.ErrorDataReceived += delegate (object s, DataReceivedEventArgs e) { };
+                p.Start();
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+                if (!p.WaitForExit(Math.Max(100, timeoutMs)))
+                {
+                    LanguageServerManager.KillProcessTree(p);
+                    return null;
                 }
+                eof.WaitOne(1000); // bounded: a grandchild holding the pipe open must not hang the probe
+                lock (gate) { return output.ToString(); }
             }
-            catch { return null; }
+            catch { if (p != null) LanguageServerManager.KillProcessTree(p); return null; }
+            finally { if (p != null) { try { p.Dispose(); } catch { } } }
         }
 
         /// <summary>Finds a Python interpreter inside a workspace virtualenv (for pyright's python.pythonPath).</summary>
         public static string FindWorkspaceVenvPython(string workspaceRoot)
         {
             if (string.IsNullOrEmpty(workspaceRoot)) return null;
+            if (!WorkspaceTrust.IsTrusted(workspaceRoot)) return null; // Restricted Mode: never hand the server a workspace interpreter
             foreach (string venv in new string[] { ".venv", "venv", "env", ".env" })
             {
                 string p = LspText.IsWindows()
@@ -707,7 +934,7 @@ namespace codeLess.Studio
             if (LspText.IsWindows() && (ext == ".cmd" || ext == ".bat"))
             {
                 psi.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-                psi.Arguments = "/d /s /c \"" + QuoteArg(exe) + (argLine.Length > 0 ? " " + argLine : "") + "\"";
+                psi.Arguments = BuildCmdExeArguments(exe, args);
             }
             else
             {
@@ -726,12 +953,64 @@ namespace codeLess.Studio
                 string exeDir = Path.GetDirectoryName(exe);
                 if (!string.IsNullOrEmpty(exeDir)) pathDirs.Add(exeDir);
                 string cur = Environment.GetEnvironmentVariable("PATH") ?? "";
-                foreach (string p in cur.Split(Path.PathSeparator)) if (p.Length > 0) AddDir(pathDirs, p);
+                // Only absolute PATH entries: "." or relative entries would resolve "node" / "python" inside the workspace
+                // (the server's working directory).
+                foreach (string p in cur.Split(Path.PathSeparator))
+                {
+                    string q = p.Trim().Trim('"');
+                    if (q.Length > 0 && Path.IsPathRooted(q)) AddDir(pathDirs, q);
+                }
                 foreach (string c in CommonDirectories()) { try { if (Directory.Exists(c)) AddDir(pathDirs, c); } catch { } }
                 psi.EnvironmentVariables["PATH"] = string.Join(Path.PathSeparator.ToString(), pathDirs.ToArray());
+                // cmd.exe (npm .cmd shims) otherwise looks for "node.exe" etc. in the current directory - the workspace.
+                if (LspText.IsWindows()) psi.EnvironmentVariables["NoDefaultCurrentDirectoryInExePath"] = "1";
             }
             catch { }
             return psi;
+        }
+
+        /// <summary>
+        /// Arguments for running a .cmd / .bat shim through cmd.exe: every token is quoted for CommandLineToArgvW and then
+        /// every cmd metacharacter ( ) % ! ^ " &lt; &gt; &amp; | is caret-escaped, so paths such as C:\Users\R&amp;D\... or
+        /// arguments with %VAR% / quotes reach the program literally instead of being split or expanded by cmd.
+        /// </summary>
+        public static string BuildCmdExeArguments(string exe, string[] args)
+        {
+            StringBuilder cmd = new StringBuilder();
+            cmd.Append(QuoteArgAlways(exe));
+            if (args != null)
+                foreach (string a in args) cmd.Append(' ').Append(QuoteArgAlways(a));
+            return "/d /s /c \"" + CaretEscapeForCmd(cmd.ToString()) + "\"";
+        }
+
+        /// <summary>Prefixes every cmd.exe metacharacter with '^'.</summary>
+        public static string CaretEscapeForCmd(string s)
+        {
+            StringBuilder sb = new StringBuilder((s ?? "").Length * 2);
+            foreach (char c in s ?? "")
+            {
+                if ("()%!^\"<>&|".IndexOf(c) >= 0) sb.Append('^');
+                sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>CommandLineToArgvW quoting that always wraps the argument in double quotes.</summary>
+        public static string QuoteArgAlways(string a)
+        {
+            StringBuilder sb = new StringBuilder("\"");
+            int backslashes = 0;
+            foreach (char c in a ?? "")
+            {
+                if (c == '\\') { backslashes++; continue; }
+                if (c == '"') { sb.Append('\\', backslashes * 2 + 1); sb.Append('"'); backslashes = 0; continue; }
+                sb.Append('\\', backslashes);
+                backslashes = 0;
+                sb.Append(c);
+            }
+            sb.Append('\\', backslashes * 2);
+            sb.Append('"');
+            return sb.ToString();
         }
 
         public static string JoinArgs(string[] args)

@@ -46,7 +46,7 @@ namespace codeLess.Studio
             mgr = new LanguageServerManager(PostToUi);
             mgr.UserSettingsProvider = delegate { return settings.GetLanguageServerUserSettings(); };
             mgr.IsHintSuppressed = delegate (string lang) { return settings.IsLanguageServerHintDismissed(lang); };
-            mgr.ApplyWorkspaceEditHandler = delegate (LspWorkspaceEdit edit) { return ApplyWorkspaceEdit(edit, "Applied").Success; };
+            mgr.ApplyWorkspaceEditHandler = delegate (LspWorkspaceEdit edit) { return ApplyWorkspaceEdit(edit, "Applied", LspEditGuard.ForServer(mgr)).Success; };
             mgr.DiagnosticsChanged += OnDiagnosticsChanged;
             mgr.StatusChanged += UpdateStatusItem;
             mgr.ServerMissing += ShowHint;
@@ -544,6 +544,8 @@ namespace codeLess.Studio
             }
             if (string.IsNullOrEmpty(newName) || newName == placeholder) return;
             LspWorkspaceEdit edit;
+            // Snapshot before the request: typing while the server computes the rename must not shift its offsets.
+            LspEditGuard guard = LspEditGuard.Capture(GetOpenTabs != null ? GetOpenTabs() : null, mgr);
             try { edit = await mgr.RequestRenameAsync(path, line, col, newName, CancellationToken.None); }
             catch (Exception ex)
             {
@@ -552,10 +554,15 @@ namespace codeLess.Studio
                 return;
             }
             if (edit == null || edit.IsEmpty) { Status("Rename: the language server returned no changes."); return; }
-            ApplyWorkspaceEdit(edit, "Renamed to '" + newName + "':");
+            ApplyWorkspaceEdit(edit, "Renamed to '" + newName + "':", guard);
         }
 
         public LspApplyResult ApplyWorkspaceEdit(LspWorkspaceEdit edit, string verb)
+        {
+            return ApplyWorkspaceEdit(edit, verb, null);
+        }
+
+        public LspApplyResult ApplyWorkspaceEdit(LspWorkspaceEdit edit, string verb, LspEditGuard guard)
         {
             LspApplyResult result = LspEditing.ApplyWorkspaceEdit(edit, FindOpenTab, delegate (string oldPath, string newPath)
             {
@@ -565,7 +572,12 @@ namespace codeLess.Studio
                 tab.FileName = Path.GetFileName(newPath);
                 string root = Root;
                 tab.RelativePath = root != null ? LlmHarnessAndAgentEngine.GetRelativePath(root, newPath) : tab.FileName;
-            });
+            }, guard);
+            if (result.Rejected)
+            {
+                Status(verb + " not applied: " + result.Errors[0]);
+                return result;
+            }
             foreach (EditorTabBuffer b in result.ChangedBuffers)
             {
                 bool shown = false;
@@ -625,6 +637,7 @@ namespace codeLess.Studio
                 range = new LspRange(sl, sc, el, ec);
             }
             else range = new LspRange(buf.CursorLine, buf.CursorCol, buf.CursorLine, buf.CursorCol);
+            LspEditGuard listGuard = LspEditGuard.Capture(GetOpenTabs != null ? GetOpenTabs() : null, mgr);
             List<LspCodeAction> actions = await mgr.RequestCodeActionsAsync(path, range, CancellationToken.None);
             if (actions == null || actions.Count == 0) { Status("No code actions available."); return; }
             List<LspCodeAction> ordered = actions.OrderByDescending(a => a.IsPreferred).ThenBy(a => a.DisabledReason != null).ToList();
@@ -638,9 +651,12 @@ namespace codeLess.Studio
             int i = Pick("Code Actions", rows, enabled);
             if (i < 0) return;
             LspCodeAction chosen = ordered[i];
+            // An edit that came with the list was computed for the text at list time; a lazily resolved one for the text at resolve time.
+            LspEditGuard guard = chosen.Edit != null ? listGuard : LspEditGuard.Capture(GetOpenTabs != null ? GetOpenTabs() : null, mgr);
             LspCodeAction resolved = await mgr.ResolveCodeActionAsync(path, chosen, CancellationToken.None) ?? chosen;
-            if (resolved.Edit != null) ApplyWorkspaceEdit(resolved.Edit, resolved.Title + ":");
-            if (resolved.Command != null) await mgr.ExecuteCommandAsync(path, resolved.Command, CancellationToken.None);
+            if (resolved.Edit != null) ApplyWorkspaceEdit(resolved.Edit, resolved.Title + ":", guard);
+            if (resolved.Command != null && mgr.ClassifyCommand(path, resolved.Command) == LanguageServerManager.LspCommandTarget.Server)
+                await mgr.ExecuteCommandAsync(path, resolved.Command, CancellationToken.None);
         }
 
         /// <summary>Palette / menu commands ("lsp_*").</summary>
@@ -1115,7 +1131,13 @@ namespace codeLess.Studio
             Editor.NotifyBufferContentChanged();
             Editor.Canvas.Invalidate();
             Editor.Canvas.Focus();
-            if (item.Command != null && lsp != null) { Task<object> ignored = lsp.ExecuteCommandAsync(s.FilePath, item.Command, CancellationToken.None); }
+            if (item.Command != null && lsp != null)
+            {
+                LanguageServerManager.LspCommandTarget target = lsp.ClassifyCommand(s.FilePath, item.Command);
+                if (target == LanguageServerManager.LspCommandTarget.TriggerSuggest) { TriggerCompletion(null, false); return; }
+                if (target == LanguageServerManager.LspCommandTarget.TriggerParameterHints) { TriggerSignatureHelp(null, false); return; }
+                if (target == LanguageServerManager.LspCommandTarget.Server) { Task<object> ignored = lsp.ExecuteCommandAsync(s.FilePath, item.Command, CancellationToken.None); }
+            }
             string inserted = item.InsertText ?? (item.TextEdit != null ? item.TextEdit.NewText : "") ?? "";
             if (item.IsSnippet && inserted.Contains("(")) TriggerSignatureHelp(null, false);
         }

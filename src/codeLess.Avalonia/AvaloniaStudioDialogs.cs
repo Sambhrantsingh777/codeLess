@@ -723,7 +723,8 @@ namespace codeLess.AvaloniaApp
             StudioSettings settings,
             StudioTheme theme,
             Action<StudioSettings> onApplied,
-            Action onClosed)
+            Action onClosed,
+            Control workspaceTrustSection = null)
         {
             Color textPrimary = AvaloniaColorHelper.ToAvColor(theme.TextPrimary);
             Color textSecondary = AvaloniaColorHelper.ToAvColor(theme.TextSecondary);
@@ -810,6 +811,13 @@ namespace codeLess.AvaloniaApp
 
             // Files (auto save, save actions) and source control sync options.
             stack.Children.Add(ParitySettingsSection.Build(settings, theme, out var applyParity));
+
+            // Workspace Trust: trusted folders (revocable) - changes apply immediately, like VS Code's trust editor.
+            if (workspaceTrustSection != null)
+            {
+                stack.Children.Add(WorkbenchStyles.SectionLabel("Workspace Trust", theme));
+                stack.Children.Add(workspaceTrustSection);
+            }
 
             var btnRow = new StackPanel
             {

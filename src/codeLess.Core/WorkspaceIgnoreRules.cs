@@ -176,6 +176,8 @@ namespace codeLess.Studio
         private readonly Dictionary<string, bool> nugetCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         private readonly object cacheLock = new object();
         private GitIgnoreFile infoExclude;
+        /// <summary>.gitignore files of the folders between the workspace root (exclusive) and the repository root (inclusive), nearest first.</summary>
+        private GitIgnoreFile[] ancestorIgnores = new GitIgnoreFile[0];
 
         public string Root { get { return root; } }
         public bool UsesGitIgnore { get { return useGitIgnore; } }
@@ -187,7 +189,60 @@ namespace codeLess.Studio
             excludedNames.Add(".git");
             useGitIgnore = respectGitIgnore;
             if (useGitIgnore && root.Length > 0)
-                infoExclude = GitIgnoreFile.Load(root, Path.Combine(Path.Combine(root, ".git"), Path.Combine("info", "exclude")));
+            {
+                // The opened folder may be a subfolder of a repository (or a linked worktree): like git / ripgrep, honour
+                // the .gitignore files of the folders above it up to the repository root and the repository's info/exclude.
+                string repoRoot = null;
+                try { repoRoot = GitCli.FindRepoRoot(root); } catch { }
+                if (string.IsNullOrEmpty(repoRoot)) repoRoot = root;
+                repoRoot = Path.GetFullPath(repoRoot).TrimEnd('/', '\\');
+                string commonDir = ResolveGitCommonDir(repoRoot);
+                if (commonDir != null)
+                    infoExclude = GitIgnoreFile.Load(repoRoot, Path.Combine(Path.Combine(commonDir, "info"), "exclude"));
+                List<GitIgnoreFile> anc = new List<GitIgnoreFile>();
+                if (repoRoot.Length < root.Length && root.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    string d = Path.GetDirectoryName(root);
+                    while (d != null && d.Length >= repoRoot.Length)
+                    {
+                        GitIgnoreFile gi = GitIgnoreFile.Load(d, Path.Combine(d, ".gitignore"));
+                        if (gi != null) anc.Add(gi);
+                        if (d.Length == repoRoot.Length) break;
+                        d = Path.GetDirectoryName(d);
+                    }
+                }
+                ancestorIgnores = anc.ToArray();
+            }
+        }
+
+        /// <summary>The repository's common git dir (handles ".git" files of linked worktrees / submodules and commondir).</summary>
+        public static string ResolveGitCommonDir(string repoRoot)
+        {
+            try
+            {
+                string dotGit = Path.Combine(repoRoot, ".git");
+                string gitDir = null;
+                if (Directory.Exists(dotGit)) gitDir = dotGit;
+                else if (File.Exists(dotGit))
+                {
+                    string first = File.ReadAllText(dotGit).Trim();
+                    if (first.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string g = first.Substring(7).Trim();
+                        gitDir = Path.IsPathRooted(g) ? g : Path.GetFullPath(Path.Combine(repoRoot, g));
+                    }
+                }
+                if (gitDir == null || !Directory.Exists(gitDir)) return null;
+                string commonFile = Path.Combine(gitDir, "commondir");
+                if (File.Exists(commonFile))
+                {
+                    string c = File.ReadAllText(commonFile).Trim();
+                    string common = Path.IsPathRooted(c) ? c : Path.GetFullPath(Path.Combine(gitDir, c));
+                    if (Directory.Exists(common)) return common;
+                }
+                return gitDir;
+            }
+            catch { return null; }
         }
 
         private GitIgnoreFile GetGitIgnore(string dir)
@@ -264,9 +319,14 @@ namespace codeLess.Studio
                 if (dir.Length == root.Length) break;
                 dir = Path.GetDirectoryName(dir);
             }
+            foreach (GitIgnoreFile gi in ancestorIgnores)
+            {
+                int v = gi.Match(RelativeTo(gi.BaseDir, fullPath), name, isDir);
+                if (v != 0) return v > 0;
+            }
             if (infoExclude != null)
             {
-                int v = infoExclude.Match(RelativeTo(root, fullPath), name, isDir);
+                int v = infoExclude.Match(RelativeTo(infoExclude.BaseDir, fullPath), name, isDir);
                 if (v != 0) return v > 0;
             }
             return false;
@@ -355,7 +415,8 @@ namespace codeLess.Studio
                         string full = fsi.FullName;
                         if ((fsi.Attributes & FileAttributes.Directory) == FileAttributes.Directory)
                         {
-                            if ((fsi.Attributes & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint) continue;
+                            // Only symlinks / junctions are skipped: OneDrive Files-On-Demand folders are reparse points too.
+                            if (LlmHarnessAndAgentEngine.IsSymlinkOrJunction(full, fsi.Attributes)) continue;
                             if (item.Depth + 1 > MaxWalkDepth) continue;
                             string dname = fsi.Name;
                             if (IsExcludedName(full, dname) || IsIgnoredByChain(chain, full, dname, true)) continue;
@@ -406,6 +467,7 @@ namespace codeLess.Studio
                 if (d.Length == root.Length) break;
                 d = Path.GetDirectoryName(d);
             }
+            list.AddRange(ancestorIgnores);
             if (infoExclude != null) list.Add(infoExclude);
             return list.ToArray();
         }

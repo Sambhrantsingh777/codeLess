@@ -1085,25 +1085,8 @@ namespace codeLess.Studio
             string url = src;
             Task.Factory.StartNew(delegate
             {
-                byte[] data = null;
-                NetworkRequestScope scope;
-                string reason;
-                if (NetworkLedger.TryBegin(NetworkFeature, "GET", url, out scope, out reason))
-                {
-                    try
-                    {
-                        using (System.Net.Http.HttpClient hc = new System.Net.Http.HttpClient())
-                        {
-                            hc.Timeout = TimeSpan.FromSeconds(15);
-                            System.Net.Http.HttpResponseMessage resp = hc.GetAsync(url).Result;
-                            scope.Status = (int)resp.StatusCode;
-                            if (resp.IsSuccessStatusCode) data = resp.Content.ReadAsByteArrayAsync().Result;
-                            if (data != null) scope.AddReceived(data.Length);
-                        }
-                        scope.Complete();
-                    }
-                    catch (Exception ex) { scope.Fail(ex); }
-                }
+                // Every redirect hop is checked against Offline Mode and recorded in the Network ledger.
+                byte[] data = LedgerHttp.DownloadBytes(NetworkFeature, url, 15000, 8 * 1024 * 1024);
                 lock (remoteImages) { remotePending.Remove(url); if (data != null && data.Length < 8 * 1024 * 1024) remoteImages[url] = data; }
                 if (data == null) return;
                 try

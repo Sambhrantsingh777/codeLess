@@ -139,36 +139,59 @@ namespace codeLess.AvaloniaApp
         // Running
         // ------------------------------------------------------------------------------------------------
 
-        public TaskExecution RunTask(TaskDefinition task) => RunTask(task, new HashSet<string>(StringComparer.Ordinal));
+        /// <summary>
+        /// Runs a task (its dependsOn graph first, via the shared <see cref="TaskChainRunner"/>). Returns the execution of a
+        /// task without dependencies (null for chains / composite tasks, which complete asynchronously).
+        /// </summary>
+        public TaskExecution RunTask(TaskDefinition task) => RunTask(task, null);
 
-        private TaskExecution RunTask(TaskDefinition task, HashSet<string> visiting)
+        /// <summary>Runs <paramref name="task"/> with its dependencies; <paramref name="completed"/> gets (success, message).</summary>
+        public TaskExecution RunTask(TaskDefinition task, Action<bool, string> completed)
         {
-            if (task == null) return null;
-            if (string.IsNullOrEmpty(workspaceRoot)) { SetStatusMessage("Open a folder to run tasks."); return null; }
-            // task.saveBeforeRun "always" (VS Code default): save modified files first.
-            SaveAllDirtyFileBuffers(autoSave: false);
-
-            // dependsOn: run dependencies first (sequentially), then this task.
-            if (task.DependsOn.Count > 0 && visiting.Add(task.Label))
+            if (task == null) { completed?.Invoke(false, "No task."); return null; }
+            if (string.IsNullOrEmpty(workspaceRoot)) { SetStatusMessage("Open a folder to run tasks."); completed?.Invoke(false, "Open a folder to run tasks."); return null; }
+            if (WorkspaceTrust.IsRestricted(workspaceRoot))
             {
-                var all = LoadWorkspaceTasks();
-                var deps = task.DependsOn.Select(l => TaskConfiguration.FindByLabel(all, l)).Where(t => t != null).ToList();
-                RunDependencyChain(deps, 0, task, visiting);
+                // Restricted Mode: tasks run commands chosen by the workspace.
+                string msg = WorkspaceTrust.RestrictedMessage("Tasks");
+                SetStatusMessage(msg);
+                AppendOutputLog("[Tasks] " + msg);
+                completed?.Invoke(false, msg);
                 return null;
             }
-            return StartTask(task);
+            // task.saveBeforeRun "always" (VS Code default): save modified files first.
+            SaveAllDirtyFileBuffers(autoSave: false);
+            TaskExecution leafExec = null;
+            var runner = new TaskChainRunner
+            {
+                LoadTasks = LoadWorkspaceTasksIncludingHidden,
+                StartLeaf = t => { var ex = StartTask(t); if (ReferenceEquals(t, task)) leafExec = ex; return ex; },
+                PostToUi = a => PostUi(a)
+            };
+            runner.Run(task, (ok, msg) =>
+            {
+                if (!ok && msg != null)
+                {
+                    SetStatusMessage("Task '" + task.Label + "': " + msg);
+                    AppendOutputLog("[Tasks] " + task.DisplayLabel + ": " + msg);
+                }
+                completed?.Invoke(ok, msg);
+            });
+            return task.DependsOn.Count == 0 ? leafExec : null;
         }
 
-        private void RunDependencyChain(List<TaskDefinition> deps, int index, TaskDefinition final, HashSet<string> visiting)
+        /// <summary>Runs the task with this label (or display label) and its dependencies (preLaunchTask / postDebugTask).</summary>
+        public void RunTaskByLabel(string label, Action<bool, string> completed)
         {
-            if (index >= deps.Count) { if (!string.IsNullOrEmpty(final.Command)) StartTask(final); return; }
-            var exec = RunTask(deps[index], visiting);
-            if (exec == null) { RunDependencyChain(deps, index + 1, final, visiting); return; }
-            exec.Exited += ex => PostUi(() =>
-            {
-                if (ex.ExitCode == 0) RunDependencyChain(deps, index + 1, final, visiting);
-                else SetStatusMessage("Task '" + final.Label + "' not started: dependency '" + deps[index].Label + "' failed.");
-            });
+            var task = TaskConfiguration.FindByLabel(LoadWorkspaceTasksIncludingHidden(), label);
+            if (task == null) { completed?.Invoke(false, "Could not find the task '" + label + "'."); return; }
+            RunTask(task, completed);
+        }
+
+        private List<TaskDefinition> LoadWorkspaceTasksIncludingHidden()
+        {
+            if (string.IsNullOrEmpty(workspaceRoot)) return new List<TaskDefinition>();
+            return TaskConfiguration.LoadAll(workspaceRoot, out string _);
         }
 
         private TaskExecution StartTask(TaskDefinition task)
