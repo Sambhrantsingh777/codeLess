@@ -4312,11 +4312,6 @@ namespace codeLess.Studio
             get { return ctrlKOverlay != null && ctrlKOverlay.Visible; }
         }
 
-        private static string SynthesizeLocalShellCommand(string naturalPrompt)
-        {
-            return "";
-        }
-
         protected override void OnGotFocus(EventArgs e)
         {
             base.OnGotFocus(e);

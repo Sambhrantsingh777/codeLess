@@ -1846,7 +1846,7 @@ namespace codeLess.Studio
             arenaTopBtn = CreateHeaderButton("Arena", new Point(790, 5), 68, false);
             arenaTopBtn.FlatAppearance.BorderSize = 0;
             arenaTopBtn.Visible = false;
-            arenaTopBtn.Click += (s, e) => OpenMultiHarnessArenaDialog();
+            arenaTopBtn.Click += (s, e) => OpenBestOfNDialogWin();
 
             archMapTopBtn = CreateHeaderButton("Map", new Point(862, 5), 62, false);
             archMapTopBtn.FlatAppearance.BorderSize = 0;
@@ -2257,7 +2257,7 @@ namespace codeLess.Studio
             actGitBtn.Click += (s, e) => { handleSidebarIconClick("git"); if (leftSidebar.Visible) RefreshGitSidebarStatus(); };
             actExtBtn.Click += (s, e) => handleSidebarIconClick("extensions");
             actHarnessBtn.Click += (s, e) => handleSidebarIconClick("harness");
-            actArenaBtn.Click += (s, e) => OpenMultiHarnessArenaDialog();
+            actArenaBtn.Click += (s, e) => OpenBestOfNDialogWin();
             actTermBtn.Click += (s, e) => ToggleBottomDockVisibility();
             actHomeBtn.Click += (s, e) => OpenWelcomeTab();
             actAccountBtn.Click += (s, e) => OpenByokConfigurationDialog();
@@ -2463,29 +2463,6 @@ namespace codeLess.Studio
             this.Controls.Add(activityBar);
             this.Controls.Add(statusBar);
             this.Controls.Add(topBar);
-        }
-
-        private Label CreateStatusBarItem(string text, string tooltip, Action<Control> onClick)
-        {
-            Label lbl = new Label
-            {
-                Text = text,
-                AutoSize = true,
-                Height = 22,
-                Padding = new Padding(5, 3, 5, 3),
-                Font = StatusItemFont,
-                ForeColor = Color.White,
-                BackColor = Color.Transparent,
-                Cursor = Cursors.Hand,
-                UseMnemonic = false
-            };
-            lbl.MouseEnter += (s, e) => { lbl.BackColor = StatusItemHoverColor(); };
-            lbl.MouseLeave += (s, e) => { lbl.BackColor = Color.Transparent; };
-            if (onClick != null)
-                lbl.Click += (s, e) => onClick(lbl);
-            if (!string.IsNullOrEmpty(tooltip) && statusBarToolTip != null)
-                statusBarToolTip.SetToolTip(lbl, tooltip);
-            return lbl;
         }
 
         private void LayoutStatusBarItems()
@@ -3092,7 +3069,7 @@ namespace codeLess.Studio
                 catch { }
             }));
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
-            helpMenu.DropDownItems.Add(CreateMenuItem("Best-of-N Arena (Compare Providers)...", "", () => OpenMultiHarnessArenaDialog()));
+            helpMenu.DropDownItems.Add(CreateMenuItem("Best-of-N Arena (Compare Providers)...", "", () => OpenBestOfNDialogWin()));
             AddAgentTrustMenuItems(helpMenu);
             helpMenu.DropDownItems.Add(CreateMenuItem("Architecture & Dependency Map...", "", () => OpenArchitectureGraphDialog()));
             helpMenu.DropDownItems.Add(CreateMenuItem("Zero-RAM Time-Travel Checkpoints...", "", () => OpenTimeTravelCheckpointsDialog()));
@@ -10622,12 +10599,6 @@ if __name__ == '__main__':
             AppendChatMessage("VSIX HOST • AST METRICS", report);
         }
 
-        private void OpenMultiHarnessArenaDialog()
-        {
-            // Best-of-N across providers/models with verification (replaces the single-provider harness race).
-            OpenBestOfNDialogWin();
-        }
-
         private void OpenArchitectureGraphDialog()
         {
             using (var dlg = new ArchitectureGraphDialog(aiEngine, workspaceFiles, workspaceRoot, activeTheme))
@@ -10691,7 +10662,7 @@ if __name__ == '__main__':
             if (ExecuteParityCommand(cmdId)) return;
             if (ExecuteEditorNicetyCommand(cmdId)) return;
             if (ExecuteAgentTrustCommandWin(cmdId)) return;
-            if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
+            if (cmdId == "open_arena") OpenBestOfNDialogWin();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
             else if (cmdId == "open_rest_client") OpenRestApiPlaygroundDialog();
@@ -11043,11 +11014,6 @@ if __name__ == '__main__':
             {
                 dlg.ShowDialog(this);
             }
-        }
-
-        private void PromptGoToLineDialog()
-        {
-            OpenCommandPalette(":");
         }
 
         private string GetSelectedNodePath()

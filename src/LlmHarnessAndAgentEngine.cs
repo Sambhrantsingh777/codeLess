@@ -3510,40 +3510,6 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             };
         }
 
-        private string BuildArchitectureOrSearchResponse(string prompt, List<Bm25CodeChunk> topChunks, string workspaceRoot)
-        {
-            StringBuilder sb = new StringBuilder();
-            sb.AppendLine("### Workspace Architecture & Semantic Analysis");
-            sb.AppendLine("Query: `" + prompt + "`");
-            sb.AppendLine();
-            sb.AppendLine("#### Relevant Semantic Codebase Chunks (BM25 + Symbol Boost):");
-            if (topChunks.Count == 0)
-            {
-                sb.AppendLine("- Open any project folder (`Ctrl+O`) or scaffold a new project (`New Project...`) to index symbols.");
-            }
-            else
-            {
-                foreach (Bm25CodeChunk c in topChunks)
-                {
-                    sb.AppendLine(string.Format("- **`{0}`** (Lines {1}–{2}, Score: `{3}`, Symbol: `{4}`)",
-                        c.RelativePath, c.StartLine, c.EndLine, c.Score,
-                        string.IsNullOrEmpty(c.SymbolName) ? "module" : c.SymbolName));
-                }
-                Bm25CodeChunk top = topChunks[0];
-                string previewSnippet = string.Join("\n", (top.Snippet ?? "").Replace("\r\n", "\n").Split('\n').Take(12));
-                if (!string.IsNullOrWhiteSpace(previewSnippet))
-                {
-                    string ext = Path.GetExtension(top.RelativePath ?? "").TrimStart('.').ToLowerInvariant();
-                    sb.AppendLine("```" + (string.IsNullOrEmpty(ext) ? "code" : ext));
-                    sb.AppendLine(previewSnippet.TrimEnd());
-                    sb.AppendLine("```");
-                }
-            }
-            sb.AppendLine();
-            sb.AppendLine("Tip: Open a source file in the editor and use **Agent**, **Composer**, **Auto-Fix**, or **`Ctrl+K`** to generate surgical code diffs.");
-            return sb.ToString();
-        }
-
         public static string TransformCodeWithAstRules(
             string content,
             string lang,

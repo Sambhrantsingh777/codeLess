@@ -1352,68 +1352,6 @@ namespace codeLess.AvaloniaApp
             return grid;
         }
 
-        private Grid BuildRunDebugSidebarView()
-        {
-            var grid = new Grid
-            {
-                RowDefinitions = new RowDefinitions("Auto,*"),
-                Margin = new Thickness(10, 8),
-                IsVisible = false
-            };
-
-            var stack = new StackPanel { Spacing = 8 };
-            runConfigCombo = new ComboBox
-            {
-                ItemsSource = new[]
-                {
-                    "Polyglot Runner (Active File)",
-                    ".NET Build & Run (dotnet run)",
-                    "Verification Suite (dotnet test)"
-                },
-                SelectedIndex = 0,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-
-            var startRunBtn = new Button
-            {
-                Content = "▶  Start Debugging / Run (F5)",
-                FontWeight = FontWeight.SemiBold,
-                FontSize = 12,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                Padding = new Thickness(10, 6),
-                Background = new SolidColorBrush(Color.FromRgb(22, 163, 74)),
-                Foreground = Brushes.White
-            };
-            startRunBtn.Click += (s, e) => RunActiveFileInTerminal();
-
-            var buildBtn = new Button
-            {
-                Content = "▶  Run Workspace Build Task (Ctrl+Shift+B)",
-                FontSize = 11.5,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(10, 5)
-            };
-            buildBtn.Click += (s, e) => RunWorkspaceBuildInTerminal();
-
-            runStatusSummary = new TextBlock
-            {
-                Text = "Ready. Press F5 or click Start to execute in the integrated VT100 terminal.",
-                FontSize = 11.5,
-                TextWrapping = TextWrapping.Wrap
-            };
-
-            stack.Children.Add(new TextBlock { Text = "LAUNCH CONFIGURATION", FontSize = 10.5, FontWeight = FontWeight.Bold });
-            stack.Children.Add(runConfigCombo);
-            stack.Children.Add(startRunBtn);
-            stack.Children.Add(buildBtn);
-            stack.Children.Add(runStatusSummary);
-
-            Grid.SetRow(stack, 0);
-            grid.Children.Add(stack);
-            return grid;
-        }
-
         private Grid BuildExtensionsSidebarView()
         {
             var grid = new Grid
