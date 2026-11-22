@@ -1,13 +1,29 @@
 # codeLess — Lightweight Native Agentic IDE & Multi-Harness Coding Workbench
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-3.2.3-0ea5e9.svg)](https://github.com/Sambhrantsingh777/codeLess/releases)
+[![Version](https://img.shields.io/badge/version-3.3.0-0ea5e9.svg)](https://github.com/Sambhrantsingh777/codeLess/releases)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-10b981.svg)](#installation--building-from-source)
 [![BYOK](https://img.shields.io/badge/AI-100%25%20BYOK%20%26%20Local%20Ollama-8b5cf6.svg)](#multi-profile-llm-harness--byok-providers)
 
 **codeLess** (by **Savatarr**) is a fast, open-source, native polyglot code editor and AI software engineering IDE for **Windows**, **macOS** (`arm64` & `x64`), and **Linux** (`x64` & `arm64`).
 
 Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders its workbench, syntax-highlighted virtualized editor canvas, minimap, diff review hunks, and truecolor VT100 terminal directly through native C# graphics pipelines (**Win32 / GDI+ on `.NET Framework 4.8`** for a **`~1012 KB` standalone Windows `.exe`**, and **`.NET 8 + Avalonia Skia`** for native macOS and Linux desktop bundles). It pairs **VS Code keybindings** with a **Bring-Your-Own-Key (BYOK) autonomous coding agent** and **5 model-family-tuned LLM harnesses**—with zero subscription lock-in, zero intermediary proxy servers, and zero telemetry.
+
+---
+
+## Measured: codeLess vs VS Code
+
+Same Mac (Apple M3, 8 GB), same workspace and file, one app at a time, median of 3 — VS Code 1.147 with a fresh profile
+and extensions disabled. Full method, ranges and caveats: [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
+
+| Metric | codeLess | VS Code |
+| :--- | :--- | :--- |
+| Idle memory (whole process tree, phys_footprint) | **199 MB** | 1,062 MB |
+| Idle CPU | **0.4 %** of one core | 4.3 % |
+| Processes | **2** | 10 |
+| Open a 100 MB file | **74 ms** | 355 ms |
+| Memory with a 300 MB file open | **270 MB** | 1,659 MB |
+| Cold start to first frame | **993 ms** | 1,089 ms |
 
 ---
 
@@ -20,7 +36,7 @@ Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders
 | **Windows Setup Installer (`codeLess-Setup.exe`)** | **`2.39 MB`** (Inno Setup LZMA2, per-user `PrivilegesRequired=lowest`) |
 | **macOS Self-Contained Disk Image (`.dmg`)** | **`46.8 MB`** (`osx-arm64`) / **`48.3 MB`** (`osx-x64`) *(bundles `.NET 8` + Skia runtime)* |
 | **Managed (.NET GC) Heap (Full Workbench Loaded)** | **`~30 MB`** |
-| **Total Memory Footprint, macOS (Retina, Metal, incl. GPU surfaces)** | **`~230 MB`** steady · **`~260 MB`** startup peak *(Activity Monitor "Memory")* |
+| **Total Memory Footprint, macOS (whole process tree, idle, workspace + file open)** | **`199 MB`** phys_footprint · `214 MB` RSS · 2 processes *(measured with `bench/run_bench.py`; VS Code 1.147: 1,062 MB / 10 processes)* |
 | **20,000-File Repository Async Open** | **`30 ms` return**, **`23 ms` first tree paint** (non-blocking background indexing) |
 | **6 MB (`70,000+`-Line) Source File Open** | **`< 200 ms`** (viewport-virtualized line rendering) |
 
@@ -65,11 +81,18 @@ Connect API keys (via Preferences `Ctrl/Cmd+,` or standard environment variables
 
 ## Key IDE Features
 
-- **Viewport-Virtualized Code Editor**: Syntax highlighting across major languages, code folding (brace and Python indentation blocks), `76px` token minimap, breadcrumbs (`folder › file › symbol`), inline Code Lens complexity hints, multi-cursor editing (`Ctrl/Cmd+D`, `Ctrl/Cmd+Shift+L`, `Alt+Click`, rectangular box selection), and auto-closing pairs.
-- **Inline Diff Staging & Time-Travel Checkpoints**: Review AI edits directly in the editor with per-hunk **Accept** / **Reject** controls and instant rollback via disk-backed **Time-Travel Checkpoints** (`~/.codeless/checkpoints`).
-- **Byte-Accurate Git Integration**: Preserves `CRLF`, `LF`, `UTF-8 BOM`, and trailing-newline metadata across saves, formatting, search/replace, and AI diff staging so single-line edits produce clean 1-line `git diff` hunks. Includes sidebar Source Control (stage, unstage, discard, commit) and live gutter diff bars.
-- **Native Integrated Terminal (ConPTY & Unix PTY)**: Interactive shells (`pwsh`, `powershell`, `cmd`, `zsh`, `bash`, `WSL`) with 24-bit Truecolor ANSI/VT100 rendering, alternate screen (`?1049h`), 5,000-line scrollback, split terminal panes (`Ctrl+Shift+5`), multiple named sessions, and `file:line` click-to-jump.
-- **11 Built-In Studio Themes + VSIX / OpenVSX Extensions**: Ships 11 dark and light themes (`Savatarr Graphite` (default), `codeLess Obsidian Pro`, `Tokyo Night Storm`, `Catppuccin Mocha`, `Sublime Mariana`, `Solarized Light`, `GitHub Light Daylight`, and more), plus `.vsix` theme/snippet installation and OpenVSX registry search.
+Everything below is built in — no extensions to find, install or configure — and works on Windows, macOS and Linux.
+
+- **Code intelligence (built-in LSP client)**: completion with docs and snippets, hover, signature help, go to definition / type definition / implementation, find references, rename across files, format, quick fixes, live diagnostics and outline. Language servers are auto-detected (pyright, typescript-language-server, gopls, rust-analyzer, clangd, csharp-ls, jdtls, …); without one, a heuristic outline, word-based suggestions and import-aware `Cmd/Ctrl+Click` navigation still work.
+- **Debugger (DAP)**: Run and Debug view, breakpoints with conditions / hit counts / logpoints, variables, watch, call stack, debug console, `launch.json` with `preLaunchTask`; debugpy, dlv, lldb-dap / codelldb, netcoredbg. **Zero-setup Python**: interpreter picker (venv, uv, poetry, pipenv, conda, pyenv), Run/Debug Python File and automatic venv activation in new terminals.
+- **Verified AI agent**: AI edits can be built and tested in a private copy of your workspace before you accept them, with optional auto-repair, "Accept if Verified", Best-of-N across models and per-turn undo/redo (including files the agent's commands created or deleted).
+- **Git**: inline blame, commit graph and file history, branch picker, Sync / Pull / Push / Publish, merge-conflict "Accept Current / Incoming / Both", stage or revert a single hunk from the gutter, byte-accurate saves (`CRLF` / `LF` / BOM preserved).
+- **Tasks**: `tasks.json`, Run Build Task (`Cmd/Ctrl+Shift+B`), auto-detected npm / make / dotnet / cargo / go / pytest tasks, problem matchers feeding the Problems panel.
+- **Editor**: viewport-virtualized canvas, real word wrap, sticky scroll, bracket-pair colours and guides, indent guides, occurrence highlight, folding (braces, Allman, regions, indentation, Markdown), multi-cursor, HTML/JSX tag auto-close and linked rename, Emmet, TextMate grammars (18 bundled + VSIX grammars), scrollbar with overview ruler, indentation detection and `.editorconfig`, inline diff review with deleted-line zones.
+- **Huge files and big repos**: files of 50 MB+ open instantly in a read-only viewer with search, go to line and live tail; `.gitignore`-aware Find in Files and Quick Open across 50k+ files.
+- **Privacy you can see**: View → Network Activity lists every request codeLess makes; **Offline Mode** blocks everything except localhost (local models keep working); zero telemetry. **Workspace Trust** asks before anything from an unfamiliar folder can run.
+- **Native Integrated Terminal (ConPTY & Unix PTY)**: Truecolor VT100, split panes, named sessions, `Cmd/Ctrl+Click` on URLs and `file:line:col`.
+- **More**: `.http` request runner, native Markdown preview, 11 built-in themes plus VSIX themes / snippets / grammars and OpenVSX search.
 
 ---
 
