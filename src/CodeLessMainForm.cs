@@ -335,6 +335,7 @@ namespace codeLess.Studio
         {
             try { SetCurrentProcessExplicitAppUserModelID("Savatarr.codeLess"); } catch { }
             this.settings = IdePersistentSettings.Load();
+            EditorNicetyOptions.ApplyFrom(this.settings);
             this.themes = StudioTheme.GetBuiltInThemes();
             this.activeTheme = StudioTheme.ResolveTheme(themes, settings.ActiveThemeId);
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
@@ -10648,6 +10649,7 @@ if __name__ == '__main__':
                 return;
             }
             if (ExecuteDevToolsCommand(cmdId)) return;
+            if (ExecuteEditorNicetyCommand(cmdId)) return;
             if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
@@ -10924,6 +10926,7 @@ if __name__ == '__main__':
         public void ApplySettingsToEditors()
         {
             if (settings == null) return;
+            EditorNicetyOptions.ApplyFrom(settings);
             foreach (var ctrl in new[] { editorControl, splitEditorControl })
             {
                 if (ctrl == null) continue;

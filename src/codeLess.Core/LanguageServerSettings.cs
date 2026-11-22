@@ -139,6 +139,7 @@ namespace codeLess.Studio
     {
         private static readonly object sync = new object();
         private static readonly Dictionary<string, List<AstSymbolItem>> byFile = new Dictionary<string, List<AstSymbolItem>>(StringComparer.Ordinal);
+        private static readonly Dictionary<string, List<StickySymbolRange>> scopesByFile = new Dictionary<string, List<StickySymbolRange>>(StringComparer.Ordinal);
 
         public static void Set(string filePath, List<LspDocumentSymbol> symbols)
         {
@@ -146,8 +147,9 @@ namespace codeLess.Studio
             if (key.Length == 0) return;
             lock (sync)
             {
-                if (symbols == null) { byFile.Remove(key); return; }
+                if (symbols == null) { byFile.Remove(key); scopesByFile.Remove(key); return; }
                 List<AstSymbolItem> list = new List<AstSymbolItem>();
+                List<StickySymbolRange> scopes = new List<StickySymbolRange>();
                 foreach (LspDocumentSymbol d in symbols)
                 {
                     if (d == null || d.Range == null) continue;
@@ -159,8 +161,38 @@ namespace codeLess.Studio
                     it.LineSpan = Math.Max(1, d.Range.EndLine - d.Range.StartLine + 1);
                     it.Signature = d.Detail ?? "";
                     list.Add(it);
+                    // container symbols (namespace, class, method, function, ...) become sticky-scroll scopes
+                    if (d.Range.EndLine > d.Range.StartLine && IsScopeKind(d.Kind))
+                    {
+                        StickySymbolRange sr = new StickySymbolRange();
+                        sr.StartLine = d.Range.StartLine;
+                        sr.EndLine = d.Range.EndLine;
+                        sr.NameLine = sel.StartLine;
+                        sr.Name = d.Name;
+                        scopes.Add(sr);
+                    }
                 }
                 byFile[key] = list;
+                scopesByFile[key] = scopes;
+            }
+        }
+
+        private static bool IsScopeKind(int kind)
+        {
+            // LSP SymbolKind: Module 2, Namespace 3, Package 4, Class 5, Method 6, Property 7, Constructor 9, Enum 10,
+            // Interface 11, Function 12, Object 19, Struct 23, Operator 25
+            return kind == 2 || kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 7 || kind == 9 || kind == 10 ||
+                   kind == 11 || kind == 12 || kind == 19 || kind == 23 || kind == 25;
+        }
+
+        /// <summary>Scope ranges of the last document-symbol response for a file (null when none).</summary>
+        public static List<StickySymbolRange> GetScopeRanges(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath)) return null;
+            lock (sync)
+            {
+                List<StickySymbolRange> l;
+                return scopesByFile.TryGetValue(LspText.PathKey(filePath), out l) ? l : null;
             }
         }
 

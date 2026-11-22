@@ -2530,6 +2530,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Help", Title = "About codeLess", Execute = ShowAboutModal }
             };
             all.AddRange(BuildLanguageServerPaletteCommands());
+            all.AddRange(BuildEditorNicetiesPaletteCommands());
             all.AddRange(BuildDevToolsPaletteCommands());
             return all;
         }
@@ -2602,6 +2603,7 @@ namespace codeLess.AvaloniaApp
                     ApplyTheme(StudioTheme.GetById(updated.ThemeId), persistSetting: true);
                     PrimaryEditor.ShowMinimap = updated.ShowMinimap;
                     PrimaryEditor.Canvas.FontSizePx = updated.FontSize;
+                    ApplyEditorNicetySettings();
                     UpdateStatusBar();
                 },
                 () => ModalHost.CloseModal());

@@ -117,6 +117,10 @@ $coreSourceFiles = @(
     (Join-Path $projectRoot "src\VsixAndPluginHostEngine.cs")
 )
 
+# Bundled MIT TextMate grammars (src\codeLess.Core\Grammars\*.gz) are embedded as resources
+$grammarResources = @(Get-ChildItem -Path (Join-Path $projectRoot "src\codeLess.Core\Grammars") -Filter "*.gz" -ErrorAction SilentlyContinue |
+    ForEach-Object { "/resource:$($_.FullName),codeLess.Grammars.$($_.Name)" })
+
 & $cscPath /nologo /codepage:65001 /target:library /optimize+ /define:NETFRAMEWORK `
     /out:$outCoreDll `
     /r:System.dll `
@@ -126,6 +130,7 @@ $coreSourceFiles = @(
     /r:System.IO.Compression.dll `
     /r:System.IO.Compression.FileSystem.dll `
     /r:System.Net.Http.dll `
+    $grammarResources `
     $coreSourceFiles
 
 if ($LASTEXITCODE -ne 0) {
@@ -145,8 +150,10 @@ $sourceFiles = @(
     "src\CodeLessMainForm.Debug.cs",
     "src\LanguageServerWinForms.cs",
     "src\CodeLessEditorCanvas.DevTools.cs",
+    "src\CodeLessEditorCanvas.Niceties.cs",
     "src\DevToolsWinForms.cs",
     "src\CodeLessMainForm.DevTools.cs",
+    "src\CodeLessMainForm.EditorNiceties.cs",
     "src\LargeFileViewerWinForms.cs",
     "src\CodeLessMainForm.Smoke.cs",
     "src\CodeLessMainForm.cs"

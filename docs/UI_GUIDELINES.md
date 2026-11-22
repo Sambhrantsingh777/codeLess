@@ -204,6 +204,18 @@ styled like panel tabs (11 px regular, 1 px accent underline).
 **Network Activity window.** 14 px semibold summary, note 11.5 px capped at 820 px, 26 px filter and buttons,
 UPPERCASE 11 px column headers, 12 px rows; only the Status / Blocked cells use the error / warning color.
 
+**Editor decorations** (`src/codeLess.Core/UiDesignTokens.Editor.cs`, both editors):
+
+| Decoration | Value |
+|---|---|
+| Bracket pair colors | VS Code `editorBracketHighlight.foreground1..3`, rotating by nesting level — dark: `#FFD700`, `#DA70D6`, `#179FFF`; light: `#0431FA`, `#319331`, `#7B3814`. Brackets inside strings / comments keep their token color |
+| Unexpected closing bracket | dark `#FF1212`, light `#E51400` |
+| Active bracket pair guide | the pair's color blended 60 % (light 55 %) over the editor background, 1 px, at the shallower of the opener line's indent and the closer column |
+| Indent guides | the `IndentGuide` / `IndentGuideActive` tokens; guides at columns 0, t, 2t … below the line's indent (blank lines continue the deeper block) |
+| Word / selection highlight | editor background + 16 % `FgPrimary` (light 10 %) fill, 28 % (light 22 %) 1 px outline, 2 px radius; shown 250 ms after the caret settles |
+| Matching bracket box | unchanged (accent box in Avalonia, accent-secondary in WinForms) |
+| Sticky scroll | at most 5 lines (and at most a quarter of the editor height); editor background, gutter with line numbers, hover = hover token, 4 px shadow (black 43 %, light 16 %) below; click reveals the line at the top and moves the caret there |
+
 ## 5. Platform notes
 
 - **Avalonia:** `WorkbenchStyles.Apply(theme)` overrides Fluent resource keys (`TextControl*`, `Button*`,

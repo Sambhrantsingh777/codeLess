@@ -193,6 +193,8 @@ namespace codeLess.AvaloniaApp
             }
             catch (Exception ex) { LogSuiteError(outputDir, ex); }
 
+            await RunEditorNicetiesScreensAsync(outputDir); // sticky scroll, bracket colors / guides, occurrences, TextMate
+
             // Theme sweep: editor + explorer + terminal in every built-in theme.
             try
             {

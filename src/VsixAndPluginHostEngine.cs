@@ -287,6 +287,9 @@ main();
                                     }
                                 }
 
+                                // TextMate grammars ("languages" + "grammars") for syntax highlighting in both editors
+                                try { TextMateGrammarRegistry.Shared.RegisterVsixContributions(pkgBaseDir, contrib); } catch { }
+
                                 if (contrib.ContainsKey("commands") && contrib["commands"] is ArrayList)
                                 {
                                     foreach (object cmdObj in (ArrayList)contrib["commands"])
@@ -472,6 +475,8 @@ main();
                     if (colors.ContainsKey("button.background"))
                         custom.AccentPrimary = StudioTheme.Hex(Convert.ToString(colors["button.background"]), custom.AccentPrimary);
                 }
+                // "tokenColors" drive TextMate scope colors when this theme is active (comments / trailing commas tolerated)
+                try { custom.VsixTokenColors = TextMateTheme.ReadTokenColors(themeJsonPath); } catch { }
 
                 return custom;
             }

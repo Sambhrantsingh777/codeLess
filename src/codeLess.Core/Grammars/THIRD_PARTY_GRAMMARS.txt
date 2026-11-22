@@ -1,0 +1,46 @@
+Bundled TextMate grammars (gzip-compressed JSON, embedded in codeLess.Core as resources)
+=========================================================================================
+
+Only MIT-licensed grammars are bundled. Each file is the JSON conversion shipped in the MIT-licensed
+VS Code repository (microsoft/vscode, extensions/*/syntaxes), re-serialized without whitespace and gzipped.
+Upstream source, pinned commit and license (as recorded in VS Code's ThirdPartyNotices.txt):
+
+file                               scope                 upstream (commit)                                                         license
+go.tmLanguage.json.gz              source.go             worlpaker/go-syntax (c74e22eb9ef32958e3edd130ea750ce78d8b8241)            MIT, Copyright (c) 2023 Furkan Ozalp
+rust.tmLanguage.json.gz            source.rust           dustypomerleau/rust-syntax (ca34cf382a7b250144f2ccb99ff9af96912c79f2)     MIT, Copyright (c) 2020 Dustin Pomerleau
+yaml.tmLanguage.json.gz            source.yaml           RedCMD/YAML-Syntax-Highlighter (c42cf86959ba238dc8a825bdd07bed6f5e97c978) MIT, Copyright (c) RedCMD
+yaml-1.2.tmLanguage.json.gz        source.yaml.1.2       RedCMD/YAML-Syntax-Highlighter (53d38bbc66b704803de54ffce5b251bf97211c60) MIT, Copyright (c) RedCMD
+yaml-embedded.tmLanguage.json.gz   source.yaml.embedded  RedCMD/YAML-Syntax-Highlighter (c42cf86959ba238dc8a825bdd07bed6f5e97c978) MIT, Copyright (c) RedCMD
+shell.tmLanguage.json.gz           source.shell          jeff-hykin/better-shell-syntax (35020b0bd79a90d3b262b4c13a8bb0b33adc1f45) MIT, Copyright (c) 2019 Jeff Hykin
+css.tmLanguage.json.gz             source.css            microsoft/vscode-css (de9e6beee756760f31b15efbd782735fc25de3db)           MIT, Copyright (c) Microsoft Corporation
+scss.tmLanguage.json.gz            source.css.scss       atom/language-sass (f52ab12f7f9346cc2568129d8c4419bd3d506b47)             MIT, Copyright (c) GitHub Inc.
+markdown.tmLanguage.json.gz        text.html.markdown    microsoft/vscode-markdown-tm-grammar (0812fc4b190efc17bfed0d5b4ff918eff8e4e377) MIT, Copyright (c) Microsoft Corporation
+sql.tmLanguage.json.gz             source.sql            microsoft/vscode-mssql (684648ee5414eb2d9df22b0392ef05079f91e44e)         MIT, Copyright (c) 2016 Microsoft, Copyright (c) Pedro Dias
+xml.tmLanguage.json.gz             text.xml              atom/language-xml (7bc75dfe779ad5b35d9bf4013d9181864358cb49)              MIT, Copyright (c) 2014 GitHub Inc.
+typescript.tmLanguage.json.gz      source.ts             microsoft/TypeScript-TmLanguage (48f608692aa6d6ad7bd65b478187906c798234a8) MIT, Copyright (c) Microsoft Corporation
+typescriptreact.tmLanguage.json.gz source.tsx            microsoft/TypeScript-TmLanguage (48f608692aa6d6ad7bd65b478187906c798234a8) MIT, Copyright (c) Microsoft Corporation
+javascript.tmLanguage.json.gz      source.js             microsoft/TypeScript-TmLanguage (48f608692aa6d6ad7bd65b478187906c798234a8) MIT, Copyright (c) Microsoft Corporation
+javascriptreact.tmLanguage.json.gz source.js.jsx         microsoft/TypeScript-TmLanguage (48f608692aa6d6ad7bd65b478187906c798234a8) MIT, Copyright (c) Microsoft Corporation
+csharp.tmLanguage.json.gz          source.cs             dotnet/csharp-tmLanguage (c2719309e91d2e26be21fce0ecaaca86c7b48ce4)       MIT, Copyright (c) .NET Foundation and Contributors
+ruby.tmLanguage.json.gz            source.ruby           Shopify/ruby-lsp (e044408a069f43c892143f19c389628eebffbd01)               MIT, Copyright (c) Shopify Inc.
+makefile.tmLanguage.json.gz        source.makefile       fadeevab/make.tmbundle (1d4c0b541959995db098df751ffc129da39a294b)         MIT, Copyright (c) Alexander Fadeev
+
+Not bundled (non-MIT or unverified licence): HTML / Markdown-derived TextMate bundles (TextMate Bundle License),
+Lua, INI (TextMate Bundle License), Dockerfile (Apache-2.0), C/C++ (GPL-3.0), PHP (MIT AND Boost), Python
+(MagicPython: licence not verifiable offline), JSON. These languages keep the built-in tokenizer unless an installed
+VSIX extension contributes a grammar.
+
+MIT License text (applies to every file above, with the copyright holders listed):
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
