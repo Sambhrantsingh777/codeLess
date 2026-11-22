@@ -281,10 +281,7 @@ namespace codeLess.Studio
 
         private static string ComputeOccurrenceTargetWF(EditorTabBuffer buf, out bool whole)
         {
-            bool hasSel = buf.HasSelection();
-            int sL = 0, sC = 0, eL = 0, eC = 0;
-            if (hasSel) buf.GetNormalizedSelection(out sL, out sC, out eL, out eC);
-            return EditorOccurrences.GetHighlightTarget(buf.Lines, buf.CursorLine, buf.CursorCol, hasSel, sL, sC, eL, eC, out whole);
+            return EditorOccurrences.GetHighlightTarget(buf, out whole);
         }
 
         /// <summary>Applies the debounced highlight now (tests).</summary>
@@ -307,8 +304,9 @@ namespace codeLess.Studio
             List<OccurrenceMatch> matches = new List<OccurrenceMatch>();
             EditorOccurrences.FindInLine(fullLineText, docLine, wfOccTarget, wfOccWhole, true, matches);
             if (matches.Count == 0) return;
-            using (SolidBrush fill = new SolidBrush(UiTokens.WordHighlightBackground(th)))
-            using (Pen border = new Pen(UiTokens.WordHighlightBorder(th)))
+            Color borderColor = UiTokens.WordHighlightBorder(th);
+            using (SolidBrush fill = new SolidBrush(wfOccWhole ? UiTokens.WordHighlightBackground(th) : UiTokens.SelectionHighlightBackground(th)))
+            using (Pen border = new Pen(borderColor))
             {
                 foreach (OccurrenceMatch m in matches)
                 {
@@ -319,7 +317,7 @@ namespace codeLess.Studio
                     if (x2 <= GutterWidth || x1 >= codeAreaRight) continue;
                     x1 = Math.Max(GutterWidth, x1);
                     g.FillRectangle(fill, x1, y + 1, Math.Max(1, x2 - x1), LineHeight - 2);
-                    g.DrawRectangle(border, x1, y + 1, Math.Max(1, x2 - x1 - 1), LineHeight - 3);
+                    if (borderColor.A > 0) g.DrawRectangle(border, x1, y + 1, Math.Max(1, x2 - x1 - 1), LineHeight - 3);
                     LastFrameOccurrenceCount++;
                 }
             }

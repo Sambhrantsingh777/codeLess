@@ -5605,7 +5605,7 @@ if __name__ == '__main__':
                     ).Width;
                     int inset = Math.Max(4, (b.Width - textW) / 2);
                     using (SolidBrush br = new SolidBrush(activeTheme.AccentPrimary))
-                        e.Graphics.FillRectangle(br, inset, b.Height - 2, Math.Max(8, b.Width - inset * 2), 2);
+                        e.Graphics.FillRectangle(br, inset, b.Height - UiTokens.PanelTabIndicatorWidth, Math.Max(8, b.Width - inset * 2), UiTokens.PanelTabIndicatorWidth);
                 }
             };
             return b;
@@ -5858,8 +5858,10 @@ if __name__ == '__main__':
                 maxDockBtn.Location = new Point(rx - maxDockBtn.Width, 4);
                 rx = maxDockBtn.Left - btnGap;
 
+                // Terminal actions only on the TERMINAL tab (VS Code shows each view's own actions).
+                bool termTabActive = activeBottomTab == "terminal";
                 int neededForCoreTermBtns = killTermProcBtn.Width + splitTermBtn.Width + newTermSessionBtn.Width + btnGap * 3;
-                if (rx - autoHealTermBtn.Width - neededForCoreTermBtns >= minRightX)
+                if (termTabActive && rx - autoHealTermBtn.Width - neededForCoreTermBtns >= minRightX)
                 {
                     autoHealTermBtn.Visible = true;
                     autoHealTermBtn.Location = new Point(rx - autoHealTermBtn.Width, 4);
@@ -5870,7 +5872,7 @@ if __name__ == '__main__':
                     autoHealTermBtn.Visible = false;
                 }
 
-                if (rx - killTermProcBtn.Width >= minRightX)
+                if (termTabActive && rx - killTermProcBtn.Width >= minRightX)
                 {
                     killTermProcBtn.Visible = true;
                     killTermProcBtn.Location = new Point(rx - killTermProcBtn.Width, 4);
@@ -5881,7 +5883,7 @@ if __name__ == '__main__':
                     killTermProcBtn.Visible = false;
                 }
 
-                if (rx - splitTermBtn.Width >= minRightX)
+                if (termTabActive && rx - splitTermBtn.Width >= minRightX)
                 {
                     splitTermBtn.Visible = true;
                     splitTermBtn.Location = new Point(rx - splitTermBtn.Width, 4);
@@ -5892,7 +5894,7 @@ if __name__ == '__main__':
                     splitTermBtn.Visible = false;
                 }
 
-                if (rx - newTermSessionBtn.Width >= minRightX)
+                if (termTabActive && rx - newTermSessionBtn.Width >= minRightX)
                 {
                     newTermSessionBtn.Visible = true;
                     newTermSessionBtn.Location = new Point(rx - newTermSessionBtn.Width, 4);
@@ -5924,7 +5926,7 @@ if __name__ == '__main__':
                 else
                 {
                     if (outputChannelCombo != null) outputChannelCombo.Visible = false;
-                    if (availForCombo < 68)
+                    if (!termTabActive || availForCombo < 68)
                     {
                         terminalSessionCombo.Visible = false;
                     }

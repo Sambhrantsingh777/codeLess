@@ -130,7 +130,8 @@ namespace codeLess.AvaloniaApp
     {
         public sealed class Result
         {
-            public Control Panel;
+            /// <summary>One check box per nicety (plain string content; the settings view lays them out).</summary>
+            public CheckBox[] Boxes;
             public Action<IdePersistentSettings> Apply;
         }
 
@@ -153,20 +154,9 @@ namespace codeLess.AvaloniaApp
             var linked = Chk("Linked tag rename", s.EditorLinkedTagEditing, "editor.linkedEditing");
             var emmet = Chk("Emmet on Tab", s.EditorEmmetOnTab, "emmet.triggerExpansionOnTab");
 
-            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto"), Margin = new Thickness(0, 2, 0, 0) };
-            var all = new Control[] { bracket, guides, indent, sticky, occ, tm, close, linked, emmet };
-            for (int i = 0; i < all.Length; i++)
-            {
-                Grid.SetColumn(all[i], i % 3);
-                Grid.SetRow(all[i], i / 3);
-                grid.Children.Add(all[i]);
-            }
-            var panel = new StackPanel { Spacing = 2 };
-            panel.Children.Add(WorkbenchStyles.SectionLabel("Editor", theme));
-            panel.Children.Add(grid);
             return new Result
             {
-                Panel = panel,
+                Boxes = new[] { bracket, guides, indent, sticky, occ, tm, close, linked, emmet },
                 Apply = st =>
                 {
                     st.EditorBracketPairColorization = bracket.IsChecked == true;

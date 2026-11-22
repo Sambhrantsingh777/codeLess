@@ -212,7 +212,13 @@ namespace codeLess.AvaloniaApp
             string branch = branchStatus?.Branch ?? (branchStatus != null && branchStatus.IsDetached ? GitCli.ShortHash(branchStatus.Oid) : null);
             string keys = IsMacUi ? "⌘Enter" : "Ctrl+Enter";
             bool amend = scmAmendCheck?.IsChecked == true;
-            scmCommitInput.Watermark = "Message (" + keys + " to " + (amend ? "amend" : "commit") + (string.IsNullOrEmpty(branch) ? "" : " on '" + branch + "'") + ")";
+            // Long branch names (worktrees) are shortened so the placeholder fits the two-line box instead of being cut off.
+            string shown = branch != null && branch.Length > 22 ? branch.Substring(0, 21) + "…" : branch;
+            scmCommitInput.Watermark = "Message (" + keys + " to " + (amend ? "amend" : "commit") + (string.IsNullOrEmpty(shown) ? "" : " on '" + shown + "'") + ")";
+            ToolTip.SetTip(scmCommitInput, string.IsNullOrEmpty(branch) ? null : "Commit on '" + branch + "'");
+            // The banner used a HEAD-file read that falls back to "main" in linked worktrees; prefer git's own answer.
+            if (scmBranchBanner != null && !string.IsNullOrEmpty(branchStatus?.Branch))
+                scmBranchBanner.Text = "Branch: " + branchStatus.Branch + " (" + currentGitEntries.Count + " changed)";
         }
 
         private void OnSyncStatusClicked()
@@ -936,51 +942,68 @@ namespace codeLess.AvaloniaApp
 
         private Control BuildScmRow(GitStatusEntry e, ScmGroup g, Color color, Color muted, int conflicts)
         {
+            // VS Code layout: name + folder (one ellipsized line), hover-only vector actions, status letter pinned right.
             var captured = e;
             char badge = ScmGrouping.BadgeFor(g, e.IndexStatus, e.WorkingTreeStatus);
             string label = ScmLabel(e);
             string dir = Path.GetDirectoryName((e.RepoRelativePath ?? e.RelativePath ?? "").TrimEnd('/'))?.Replace('\\', '/') ?? "";
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"), Height = 24 };
-            var text = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            text.Children.Add(new LiteralTextBlock(label) { FontSize = 11.5, Foreground = new SolidColorBrush(color) });
-            if (dir.Length > 0) text.Children.Add(new LiteralTextBlock(dir) { FontSize = 10.5, Foreground = new SolidColorBrush(muted), VerticalAlignment = VerticalAlignment.Center });
-            if (conflicts > 0) text.Children.Add(new LiteralTextBlock(conflicts + " conflict" + (conflicts == 1 ? "" : "s")) { FontSize = 10.5, Foreground = new SolidColorBrush(color), VerticalAlignment = VerticalAlignment.Center });
-            text.Children.Add(new LiteralTextBlock(badge.ToString()) { FontSize = 11, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(color), VerticalAlignment = VerticalAlignment.Center });
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Height = UiTokens.ListRowHeight, Background = Brushes.Transparent };
+            var text = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap, VerticalAlignment = VerticalAlignment.Center, FontSize = UiTokens.FontUi };
+            text.Inlines.Add(new Avalonia.Controls.Documents.Run(label) { Foreground = new SolidColorBrush(color) });
+            if (dir.Length > 0) text.Inlines.Add(new Avalonia.Controls.Documents.Run("  " + dir) { Foreground = new SolidColorBrush(muted), FontSize = UiTokens.FontSmall });
+            if (conflicts > 0) text.Inlines.Add(new Avalonia.Controls.Documents.Run("  " + conflicts + " conflict" + (conflicts == 1 ? "" : "s")) { Foreground = new SolidColorBrush(color), FontSize = UiTokens.FontSmall });
             var open = new Button
             {
                 Content = text,
                 Background = Brushes.Transparent,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(4, 1)
+                VerticalAlignment = VerticalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(8, 0, 4, 0),
+                MinHeight = 0
             };
             ToolTip.SetTip(open, (e.RepoRelativePath ?? e.RelativePath) + (g == ScmGroup.Merge ? " — open to resolve conflicts" : g == ScmGroup.Untracked ? " — open file" : " — open changes"));
             open.Click += (s, ev) => OpenScmEntry(captured, g);
             row.Children.Add(open);
-            int col = 1;
-            Button Add(string content, string tip, Action a)
-            {
-                var b = new Button { Content = content, FontSize = 11, Padding = new Thickness(6, 1), Margin = new Thickness(2, 0, 0, 0) };
-                ToolTip.SetTip(b, tip);
-                b.Click += (s, ev) => a();
-                Grid.SetColumn(b, col++);
-                row.Children.Add(b);
-                return b;
-            }
-            Add("↗", "Open File", () => { if (File.Exists(captured.FullPath)) OpenFileInTab(captured.FullPath, preview: false); });
+
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, VerticalAlignment = VerticalAlignment.Center, IsVisible = false, Name = "ScmRowActions" };
+            void Add(string icon, string tip, Action a) => actions.Children.Add(WorkbenchStyles.IconButton(icon, tip, a, currentTheme, 22, 14));
+            Add("go-to-file", "Open File", () => { if (File.Exists(captured.FullPath)) OpenFileInTab(captured.FullPath, preview: false); });
             switch (g)
             {
                 case ScmGroup.Staged:
-                    Add("−", "Unstage Changes", () => ExecuteGitUnstageFile(captured));
+                    Add("minus", "Unstage Changes", () => ExecuteGitUnstageFile(captured));
                     break;
                 case ScmGroup.Merge:
-                    Add("+", "Stage Changes (mark as resolved)", () => StageResolvedFile(captured));
+                    Add("plus", "Stage Changes (mark as resolved)", () => StageResolvedFile(captured));
                     break;
                 default:
-                    Add("↺", g == ScmGroup.Untracked ? "Delete File" : "Discard Changes", () => ConfirmAndDiscardGitFile(captured));
-                    Add("+", "Stage Changes", () => ExecuteGitStageFile(captured));
+                    Add(g == ScmGroup.Untracked ? "trash" : "discard", g == ScmGroup.Untracked ? "Delete File" : "Discard Changes", () => ConfirmAndDiscardGitFile(captured));
+                    Add("plus", "Stage Changes", () => ExecuteGitStageFile(captured));
                     break;
             }
+            Grid.SetColumn(actions, 1);
+            row.Children.Add(actions);
+
+            var badgeText = new LiteralTextBlock(badge.ToString())
+            {
+                FontSize = UiTokens.FontSmall,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = new SolidColorBrush(color),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+                Width = 16,
+                Margin = new Thickness(2, 0, 10, 0)
+            };
+            Grid.SetColumn(badgeText, 2);
+            row.Children.Add(badgeText);
+
+            var hover = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.Hover(currentTheme, currentTheme.BgSidebar)));
+            row.PointerEntered += (s, ev) => { actions.IsVisible = true; row.Background = hover; };
+            row.PointerExited += (s, ev) => { actions.IsVisible = row.IsKeyboardFocusWithin; row.Background = Brushes.Transparent; };
+            row.GotFocus += (s, ev) => actions.IsVisible = true;
+            row.LostFocus += (s, ev) => { if (!row.IsKeyboardFocusWithin && !row.IsPointerOver) actions.IsVisible = false; };
             return row;
         }
 

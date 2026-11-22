@@ -2499,13 +2499,14 @@ namespace codeLess.Studio
             int y = 10;
             Func<string, int, Label> addSectionHeader = (txt, top) =>
             {
+                // UI_GUIDELINES dialogs: section labels 11 px semibold UPPERCASE in FgSecondary (accent is scarce).
                 Label hdr = new Label
                 {
                     Location = new Point(22, top),
-                    Size = new Size(680, 22),
+                    AutoSize = true,
                     Text = txt,
-                    Font = new Font("Segoe UI Semibold", 9.2f, FontStyle.Regular),
-                    ForeColor = activeTheme.AccentPrimary,
+                    Font = new Font("Segoe UI Semibold", UiTokens.Pt(UiTokens.FontHeader), FontStyle.Regular),
+                    ForeColor = activeTheme.FgSecondary,
                     UseMnemonic = false
                 };
                 body.Controls.Add(hdr);
@@ -2623,7 +2624,7 @@ namespace codeLess.Studio
             ShowWelcomeBox = addCheck("Show Welcome page on startup", settings.ShowWelcomeOnStartup, 24, y);
             ActivatePythonEnvBox = addCheck("Activate Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, 380, y);
             y += 24;
-            OfflineModeBox = addCheck("Offline Mode (block all non-local network requests)", settings.OfflineMode, 24, y);
+            OfflineModeBox = addCheck("Offline mode (block non-local network requests)", settings.OfflineMode, 24, y);
             AutoUpdateCheckBox = addCheck("Check for updates automatically (once a day)", settings.AutoCheckForUpdates, 380, y);
             AutoSaveBox.Visible = false; // superseded by the files.autoSave mode below
             y += 24;
@@ -2705,7 +2706,7 @@ namespace codeLess.Studio
             TestConnStatusLabel = new Label
             {
                 Location = new Point(240, y),
-                Size = new Size(460, 20),
+                Size = new Size(426, 20),
                 Text = "Ready — configure provider API key or custom OpenAI-compatible endpoint.",
                 Font = new Font("Segoe UI", 8.3f),
                 ForeColor = activeTheme.FgMuted,
@@ -2806,7 +2807,7 @@ namespace codeLess.Studio
             TemperatureInput.Value = (decimal)Math.Max(0.0f, Math.Min(2.0f, settings.AiTemperature));
             body.Controls.Add(TemperatureInput);
 
-            PrivacyModeBox = addCheck("Privacy Mode (Zero data retention / local-only indexing)", settings.PrivacyMode, 355, y + 2);
+            PrivacyModeBox = addCheck("Privacy mode (zero data retention)", settings.PrivacyMode, 355, y + 2);
             y += 38;
 
             Action liveApply = () =>
@@ -2837,7 +2838,7 @@ namespace codeLess.Studio
 
             Button saveBtn = new Button
             {
-                Location = new Point(425, y),
+                Location = new Point(425, 10),
                 Size = new Size(130, 32),
                 Text = "Save Settings",
                 FlatStyle = FlatStyle.Flat,
@@ -2856,7 +2857,7 @@ namespace codeLess.Studio
 
             Button cancelBtn = new Button
             {
-                Location = new Point(565, y),
+                Location = new Point(565, 10),
                 Size = new Size(100, 32),
                 Text = "Cancel",
                 FlatStyle = FlatStyle.Flat,
@@ -2909,14 +2910,59 @@ namespace codeLess.Studio
                     revertToSnapshot();
             };
 
-            body.Controls.Add(saveBtn);
-            body.Controls.Add(cancelBtn);
+            // Footer docked below the scrolling body, so Save / Cancel are always visible (they used to sit at the
+            // end of the scrolled content).
+            Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 50, BackColor = activeTheme.BgSidebar };
+            footer.Paint += (s, e) =>
+            {
+                using (Pen p = new Pen(activeTheme.BorderSubtle))
+                    e.Graphics.DrawLine(p, 0, 0, footer.Width, 0);
+            };
+            saveBtn.Size = new Size(130, UiTokens.ControlHeight + 2);
+            cancelBtn.Size = new Size(100, UiTokens.ControlHeight + 2);
+            footer.Controls.Add(saveBtn);
+            footer.Controls.Add(cancelBtn);
+            footer.Resize += (s, e) =>
+            {
+                cancelBtn.Location = new Point(footer.Width - 20 - cancelBtn.Width, (footer.Height - cancelBtn.Height) / 2);
+                saveBtn.Location = new Point(cancelBtn.Left - 8 - saveBtn.Width, cancelBtn.Top);
+            };
             this.AcceptButton = saveBtn;
             this.CancelButton = cancelBtn;
 
             Panel titleBar = BuildDarkDialogTitleBar("codeLess — Settings & AI Configuration (Ctrl+,)", activeTheme, false, true);
             this.Controls.Add(body);
+            this.Controls.Add(footer);
             this.Controls.Add(titleBar);
+            FitWidthToContent(body);
+        }
+
+        /// <summary>
+        /// Check boxes are sized to their measured text (never clipped), and the dialog's minimum width is the widest
+        /// row plus padding and the vertical scroll bar, so no control is cut off or needs horizontal scrolling at the
+        /// minimum or the default size.
+        /// </summary>
+        private void FitWidthToContent(Panel body)
+        {
+            int maxRight = 0;
+            foreach (Control c in body.Controls)
+            {
+                CheckBox cb = c as CheckBox;
+                if (cb != null)
+                {
+                    int need = TextRenderer.MeasureText(cb.Text ?? "", cb.Font).Width + 26;
+                    int limit = cb.Left < 300 ? 380 - 8 - cb.Left : int.MaxValue; // left column must not run into the right one
+                    cb.Width = Math.Min(Math.Max(need, 60), limit);
+                    if (need > limit) { cb.AutoEllipsis = true; }
+                }
+                Label lb = c as Label;
+                if (lb != null && !lb.AutoSize && lb.Width > 0)
+                    lb.AutoEllipsis = true;
+                if (c.Visible || c is CheckBox) maxRight = Math.Max(maxRight, c.Right);
+            }
+            int minW = maxRight + body.Padding.Right + SystemInformation.VerticalScrollBarWidth + 6;
+            this.MinimumSize = new Size(Math.Max(640, minW), 560);
+            if (this.Width < this.MinimumSize.Width) this.Width = this.MinimumSize.Width;
         }
 
         public void SaveSettings()

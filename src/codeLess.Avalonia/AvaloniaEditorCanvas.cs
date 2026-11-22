@@ -4183,6 +4183,7 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
 
             hunkActionHitBoxes.Clear();
+            deferredOverlays.Clear();
             annotationHitBoxes.Clear();
             if (buf.ScrollTopLine != lastNotifiedScrollTop)
             {
@@ -4247,6 +4248,9 @@ namespace codeLess.AvaloniaApp
             int tabStop = TabFor(buf);
             int caretRowIdx = CaretRowOf(buf, buf.CursorLine, buf.CursorCol, true);
 
+            // Code rows never paint past the text area (long tokens, ghost text and annotations used to show between the
+            // minimap and the scroll bar); WinForms clips the same way.
+            using (context.PushClip(new Rect(0, 0, Math.Max(0, codeAreaRight), Math.Max(0, Bounds.Height))))
             for (int r = 0; r < rows.Count; r++)
             {
                 var vr = rows[r];
@@ -4274,26 +4278,10 @@ namespace codeLess.AvaloniaApp
                     // Pills only on the first visual row of a word-wrapped hunk-start line.
                     if (isHunkStart && vr.IsFirstRow)
                     {
-                        double pillRight = codeAreaRight - 10;
-                        var rejectRect = new Rect(pillRight - 58, y + 2, 54, LineHeight - 4);
-                        var acceptRect = new Rect(rejectRect.X - 62, y + 2, 58, LineHeight - 4);
-                        // the removed lines themselves are shown as the read-only red zone above (QA #30), like VS Code
-                        // VS Code-style overlay widget: an opaque bordered backdrop so code under the actions never bleeds through.
-                        var backdrop = new Rect(acceptRect.X - 4, y + 0.5, rejectRect.Right - acceptRect.X + 8, LineHeight - 1);
-                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetShadow(Theme))), null, backdrop.Translate(new Vector(0, 1)), UiTokens.ControlRadius + 1, UiTokens.ControlRadius + 1);
-                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBackground(Theme))),
-                            new Pen(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBorder(Theme))), 1), backdrop, UiTokens.ControlRadius + 1, UiTokens.ControlRadius + 1);
-                        // Calm per-hunk actions: primary (accent) Accept, secondary (neutral) Reject.
-                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonPrimaryBackground(Theme))), null, acceptRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
-                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonSecondaryBackground(Theme))), null, rejectRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
-
-                        var accFt = new FormattedText("Accept", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.OnAccent(Theme))));
-                        var rejFt = new FormattedText("Reject", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.FgPrimary)));
-                        context.DrawText(accFt, new Point(acceptRect.X + (acceptRect.Width - accFt.Width) / 2, acceptRect.Y + (acceptRect.Height - accFt.Height) / 2));
-                        context.DrawText(rejFt, new Point(rejectRect.X + (rejectRect.Width - rejFt.Width) / 2, rejectRect.Y + (rejectRect.Height - rejFt.Height) / 2));
-
-                        hunkActionHitBoxes.Add((acceptRect, docLine, true));
-                        hunkActionHitBoxes.Add((rejectRect, docLine, false));
+                        // Drawn after every row's text (below) so code never paints over the overlay widget.
+                        double pillY = y;
+                        int pillLine = docLine;
+                        deferredOverlays.Add(() => DrawHunkActionPills(context, pillY, pillLine, codeAreaRight));
                     }
                 }
 
@@ -4463,7 +4451,7 @@ namespace codeLess.AvaloniaApp
                             bool hot = ReferenceEquals(ann, hoveredAnnotation) || (hoveredAnnotation != null && hoveredAnnotation.Tag != null && ReferenceEquals(hoveredAnnotation.Tag, ann.Tag));
                             IBrush annBrush = ann.IsAction
                                 ? new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.AccentPrimary, (byte)(hot ? 255 : 200)))
-                                : new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.TextSecondary, (byte)(hot ? 200 : 125)));
+                                : new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.TextSecondary, (byte)(hot ? 200 : (Theme.IsLight ? 165 : 125))));
                             var aft = new FormattedText(ann.Text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, ann.IsAction ? CachedUiFontBold : fontItalic, FontSizePx - (ann.IsAction ? 1.5 : 0.5), annBrush);
                             aft.MaxTextWidth = Math.Max(20, codeAreaRight - ax - 8);
                             aft.MaxLineCount = 1;
@@ -4578,6 +4566,8 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
+            foreach (var overlay in deferredOverlays) overlay();
+            deferredOverlays.Clear();
             RenderStickyScroll(context, buf, rowToDoc, codeBaseX, codeAreaRight);
             EndNicetiesFrame(buf);
 
@@ -4614,6 +4604,34 @@ namespace codeLess.AvaloniaApp
         }
 
         /// <summary>Selections of the primary caret and every extra caret (single- and multi-line) on one screen row.</summary>
+
+        private readonly List<Action> deferredOverlays = new List<Action>();
+
+        /// <summary>Per-hunk Accept / Reject overlay widget (opaque, bordered) at the right edge of a hunk's first row.</summary>
+        private void DrawHunkActionPills(DrawingContext context, double y, int docLine, double codeAreaRight)
+        {
+            double pillRight = codeAreaRight - 10;
+            var rejectRect = new Rect(pillRight - 58, y + 2, 54, LineHeight - 4);
+            var acceptRect = new Rect(rejectRect.X - 62, y + 2, 58, LineHeight - 4);
+            // the removed lines themselves are shown as the read-only red zone above (QA #30), like VS Code
+            // VS Code-style overlay widget: an opaque bordered backdrop so code under the actions never bleeds through.
+            var backdrop = new Rect(acceptRect.X - 4, y + 0.5, rejectRect.Right - acceptRect.X + 8, LineHeight - 1);
+            context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetShadow(Theme))), null, backdrop.Translate(new Vector(0, 1)), UiTokens.ControlRadius + 1, UiTokens.ControlRadius + 1);
+            context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBackground(Theme))),
+                new Pen(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WidgetBorder(Theme))), 1), backdrop, UiTokens.ControlRadius + 1, UiTokens.ControlRadius + 1);
+            // Calm per-hunk actions: primary (accent) Accept, secondary (neutral) Reject.
+            context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonPrimaryBackground(Theme))), null, acceptRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
+            context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonSecondaryBackground(Theme))), null, rejectRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
+
+            var accFt = new FormattedText("Accept", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.OnAccent(Theme))));
+            var rejFt = new FormattedText("Reject", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.FgPrimary)));
+            context.DrawText(accFt, new Point(acceptRect.X + (acceptRect.Width - accFt.Width) / 2, acceptRect.Y + (acceptRect.Height - accFt.Height) / 2));
+            context.DrawText(rejFt, new Point(rejectRect.X + (rejectRect.Width - rejFt.Width) / 2, rejectRect.Y + (rejectRect.Height - rejFt.Height) / 2));
+
+            hunkActionHitBoxes.Add((acceptRect, docLine, true));
+            hunkActionHitBoxes.Add((rejectRect, docLine, false));
+        }
+
         private void DrawRowSelectionHighlight(DrawingContext context, EditorTabBuffer buf, EditorVisualRow vr, double y, double codeBaseX, IBrush selBrush)
         {
             if (buf.HasSelection())

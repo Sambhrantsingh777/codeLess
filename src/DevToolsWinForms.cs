@@ -605,12 +605,14 @@ namespace codeLess.Studio
             bool compact = r.Width < 560;
             int dateW = 100, authorW = compact ? 0 : Math.Min(150, Math.Max(80, r.Width / 6)), hashW = compact ? 0 : 66;
             int msgRight = r.Right - dateW - authorW - hashW - 8;
+            // Ref badges: at most ~45 % of the message column, so long branch names never squeeze the subject away
+            int badgeLimit = x + Math.Max(60, (int)((msgRight - x) * 0.45));
             foreach (GitRefBadge rf in c.Refs)
             {
-                if (x > msgRight - 40) break;
+                if (x > msgRight - 40 || x > badgeLimit - 30) break;
                 Color bc = rf.Kind == GitRefBadge.KindTag ? Color.FromArgb(202, 138, 4) : (rf.Kind == GitRefBadge.KindRemote ? Color.FromArgb(100, 116, 139) : Theme.AccentPrimary);
                 Font f = rf.IsCurrent ? uiBold : small;
-                int bw = Math.Min(170, TextRenderer.MeasureText(rf.Name, f).Width + 8);
+                int bw = Math.Max(30, Math.Min(Math.Min(170, TextRenderer.MeasureText(rf.Name, f).Width + 8), badgeLimit - x));
                 Rectangle br = new Rectangle(x, r.Y + 4, bw, r.Height - 8);
                 using (SolidBrush b = new SolidBrush(bc)) g.FillRectangle(b, br);
                 TextRenderer.DrawText(g, rf.Name, f, br, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
@@ -683,11 +685,12 @@ namespace codeLess.Studio
             detailsPanel.Controls.Add(files);
             detailsPanel.Controls.Add(copyHash);
             detailsPanel.Controls.Add(details);
-            var splitter = new Splitter { Dock = DockStyle.Right, Width = 3 };
+            splitter = new Splitter { Dock = DockStyle.Right, Width = 3, MinSize = GitGraphSplitLayout.DetailsMinWidth, MinExtra = GitGraphSplitLayout.ListMinWidth };
             Controls.Add(List);
             Controls.Add(splitter);
             Controls.Add(detailsPanel);
             Controls.Add(toolbar);
+            Resize += delegate { ApplySplitLayout(); };
             SetWatermark();
 
             List.SelectionChanged += delegate (int idx) { ShowDetails(idx >= 0 && idx < List.Commits.Count ? List.Commits[idx] : null); };
@@ -703,6 +706,49 @@ namespace codeLess.Studio
             refresh.Click += delegate { Reload(); };
             ApplyTheme(theme);
             Reload();
+        }
+
+        private readonly Splitter splitter;
+        private int stackedState = -1; // -1 unknown, 0 side by side, 1 stacked
+
+        /// <summary>True when the details are stacked below the commit list (narrow pane).</summary>
+        public bool IsStacked { get { return stackedState == 1; } }
+
+        /// <summary>Details beside the list (draggable, min widths) or below it when the pane is narrow.</summary>
+        private void ApplySplitLayout()
+        {
+            if (Width <= 0 || Height <= 0) return;
+            int want = GitGraphSplitLayout.ShouldStack(Width) ? 1 : 0;
+            if (want == stackedState)
+            {
+                // keep the list from being squeezed when the pane shrinks
+                if (want == 0 && Width - detailsPanel.Width - splitter.Width < GitGraphSplitLayout.ListMinWidth)
+                    detailsPanel.Width = Math.Max(GitGraphSplitLayout.DetailsMinWidth, Width - splitter.Width - GitGraphSplitLayout.ListMinWidth);
+                return;
+            }
+            stackedState = want;
+            SuspendLayout();
+            if (want == 1)
+            {
+                detailsPanel.Dock = DockStyle.Bottom;
+                detailsPanel.Height = GitGraphSplitLayout.InitialDetailsHeight(Height - toolbar.Height);
+                splitter.Dock = DockStyle.Bottom;
+                splitter.Height = 3;
+                splitter.MinSize = GitGraphSplitLayout.DetailsMinHeight;
+                splitter.MinExtra = GitGraphSplitLayout.ListMinHeight;
+                details.Height = 120;
+            }
+            else
+            {
+                detailsPanel.Dock = DockStyle.Right;
+                detailsPanel.Width = GitGraphSplitLayout.InitialDetailsWidth(Width);
+                splitter.Dock = DockStyle.Right;
+                splitter.Width = 3;
+                splitter.MinSize = GitGraphSplitLayout.DetailsMinWidth;
+                splitter.MinExtra = GitGraphSplitLayout.ListMinWidth;
+                details.Height = 190;
+            }
+            ResumeLayout(true);
         }
 
         private void SetWatermark()

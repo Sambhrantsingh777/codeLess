@@ -481,27 +481,59 @@ namespace codeLess.AvaloniaApp
             headerGrid.Children.Add(closeBtn);
 
             bodyHost = new ContentControl();
+            // The body gets the card's remaining height: content that fills the dialog (its own search box /
+            // scrolling / footer) is sized to it, anything else scrolls here. Nothing may draw outside the card.
+            bodyScroll = new ScrollViewer
+            {
+                Content = bodyHost,
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
+            };
 
-            var cardStack = new StackPanel();
-            cardStack.Children.Add(headerGrid);
-            cardStack.Children.Add(bodyHost);
+            var cardGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+            cardGrid.Children.Add(headerGrid);
+            Grid.SetRow(bodyScroll, 1);
+            cardGrid.Children.Add(bodyScroll);
 
             cardBorder = new Border
             {
-                Child = cardStack,
+                Child = cardGrid,
                 Width = 620,
                 MaxHeight = 560,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 CornerRadius = new CornerRadius(UiTokens.PopupRadius + 2),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(20, 14, 20, 18)
+                Padding = new Thickness(20, 14, 20, 18),
+                ClipToBounds = true
             };
 
             Child = cardBorder;
         }
 
         private readonly Button closeButton;
+        private readonly ScrollViewer bodyScroll;
+
+        /// <summary>Largest card height (px); the card also keeps a margin to the window edges.</summary>
+        public const double MaxCardHeight = 760;
+        public const double CardWindowMargin = 24;
+        public Border Card => cardBorder;
+        public ScrollViewer BodyScroll => bodyScroll;
+
+        /// <summary>Marks dialog content that sizes itself to the dialog (own scrolling region and footer).</summary>
+        public static readonly AttachedProperty<bool> FillsDialogProperty =
+            AvaloniaProperty.RegisterAttached<AvaloniaModalDialogHost, Control, bool>("FillsDialog");
+        public static void SetFillsDialog(Control c, bool value) => c.SetValue(FillsDialogProperty, value);
+        public static bool GetFillsDialog(Control c) => c.GetValue(FillsDialogProperty);
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            if (!double.IsInfinity(availableSize.Height))
+                cardBorder.MaxHeight = Math.Max(160, Math.Min(MaxCardHeight, availableSize.Height - CardWindowMargin * 2));
+            if (!double.IsInfinity(availableSize.Width))
+                cardBorder.MaxWidth = Math.Max(240, availableSize.Width - CardWindowMargin * 2);
+            return base.MeasureOverride(availableSize);
+        }
 
         public void ApplyTheme(StudioTheme theme)
         {
@@ -523,6 +555,9 @@ namespace codeLess.AvaloniaApp
             ActiveDialogId = dialogId ?? "";
             titleBlock.Text = title ?? "codeLess";
             cardBorder.Width = width;
+            bool fills = content != null && GetFillsDialog(content);
+            bodyScroll.VerticalScrollBarVisibility = fills ? Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled : Avalonia.Controls.Primitives.ScrollBarVisibility.Auto;
+            bodyScroll.Offset = new Vector(0, 0);
             bodyHost.Content = content;
             IsVisible = true;
             // Move keyboard focus into the dialog; otherwise keystrokes / Enter kept editing the file behind the
@@ -726,154 +761,7 @@ namespace codeLess.AvaloniaApp
             Action onClosed,
             Control workspaceTrustSection = null)
         {
-            Color textPrimary = AvaloniaColorHelper.ToAvColor(theme.TextPrimary);
-            Color textSecondary = AvaloniaColorHelper.ToAvColor(theme.TextSecondary);
-            Color accent = AvaloniaColorHelper.ToAvColor(theme.AccentPrimary);
-
-            var stack = new StackPanel { Spacing = 8 };
-
-            // Theme selector
-            var themes = StudioTheme.GetAllBuiltInThemes();
-            var themeCombo = new ComboBox
-            {
-                ItemsSource = themes.Select(t => $"{t.Name} ({t.Id})").ToList(),
-                SelectedIndex = Math.Max(0, themes.FindIndex(t => string.Equals(t.Id, settings.ThemeId, StringComparison.OrdinalIgnoreCase))),
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-
-            var fontBox = new TextBox { Text = settings.FontSize.ToString("0.#", CultureInfo.InvariantCulture), Width = 90 };
-            var tabBox = new TextBox { Text = settings.TabSize.ToString(CultureInfo.InvariantCulture), Width = 90 };
-            var wrapChk = new CheckBox { Content = "Word Wrap (Alt+Z)", IsChecked = settings.WordWrap, Foreground = new SolidColorBrush(textPrimary) };
-            var insertSpacesChk = new CheckBox { Content = "Insert Spaces (Tab inserts spaces)", IsChecked = settings.InsertSpaces, Foreground = new SolidColorBrush(textPrimary) };
-            var detectIndentChk = new CheckBox { Content = "Detect Indentation (from the file's content and .editorconfig)", IsChecked = settings.DetectIndentation, Foreground = new SolidColorBrush(textPrimary) };
-            var minimapChk = new CheckBox { Content = "Show Editor Minimap", IsChecked = settings.ShowMinimap, Foreground = new SolidColorBrush(textPrimary) };
-            var autoSaveChk = new CheckBox { Content = "Auto Save Modified Files", IsChecked = settings.AutoSave, Foreground = new SolidColorBrush(textPrimary) };
-            var venvChk = new CheckBox { Content = "Activate Python environment in new terminals", IsChecked = settings.ActivatePythonEnvironmentInTerminal, Foreground = new SolidColorBrush(textPrimary) };
-            var excludedBox = new TextBox { Text = settings.ExcludedFolders ?? "" };
-            var offlineChk = new CheckBox { Content = "Offline Mode (block all non-local network requests; local Ollama / LM Studio keep working)", IsChecked = NetworkLedger.OfflineMode, Foreground = new SolidColorBrush(textPrimary) };
-            var updateChk = new CheckBox { Content = "Check for updates automatically (once a day)", IsChecked = settings.AutoCheckForUpdates, Foreground = new SolidColorBrush(textPrimary) };
-
-            var providers = LlmHarnessAndAgentEngine.GetAllProviderTemplates();
-            string activeNormId = StudioSettings.NormalizeProviderId(settings.ActiveProvider);
-            int initProvIdx = providers.FindIndex(p =>
-                string.Equals(p.Name, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(StudioSettings.NormalizeProviderId(p.Name), activeNormId, StringComparison.OrdinalIgnoreCase));
-            var providerCombo = new ComboBox
-            {
-                ItemsSource = providers.Select(p => p.Name).ToList(),
-                SelectedIndex = Math.Max(0, initProvIdx),
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            var modelBox = new TextBox { Text = settings.ActiveModel ?? "" };
-            var apiKeyBox = new TextBox { Text = settings.GetActiveApiKey() ?? "", PasswordChar = '•', Watermark = "sk-... / API Key (stored per provider)" };
-            providerCombo.SelectionChanged += (s, e) =>
-            {
-                if (providerCombo.SelectedIndex >= 0 && providerCombo.SelectedIndex < providers.Count)
-                {
-                    var selectedProv = providers[providerCombo.SelectedIndex];
-                    apiKeyBox.Text = settings.GetApiKeyForProvider(selectedProv.Name) ?? "";
-                    if (!string.IsNullOrWhiteSpace(selectedProv.DefaultModel))
-                        modelBox.Text = selectedProv.DefaultModel;
-                }
-            };
-
-            stack.Children.Add(WorkbenchStyles.SectionLabel("Color Theme", theme));
-            stack.Children.Add(themeCombo);
-
-            var rowMetrics = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
-            rowMetrics.Children.Add(new TextBlock { Text = "Font Size", FontSize = UiTokens.FontUi, VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(textSecondary) });
-            rowMetrics.Children.Add(fontBox);
-            rowMetrics.Children.Add(new TextBlock { Text = "Tab Size", FontSize = UiTokens.FontUi, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Foreground = new SolidColorBrush(textSecondary) });
-            rowMetrics.Children.Add(tabBox);
-            stack.Children.Add(rowMetrics);
-
-            var togglesRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
-            togglesRow.Children.Add(wrapChk);
-            togglesRow.Children.Add(minimapChk);
-            stack.Children.Add(togglesRow);
-            var indentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
-            indentRow.Children.Add(insertSpacesChk);
-            indentRow.Children.Add(detectIndentChk);
-            stack.Children.Add(indentRow);
-            var niceties = EditorNicetiesSettingsPanel.Build(settings, theme, textPrimary);
-            stack.Children.Add(niceties.Panel);
-            stack.Children.Add(venvChk);
-            stack.Children.Add(offlineChk);
-            stack.Children.Add(updateChk);
-
-            stack.Children.Add(WorkbenchStyles.SectionLabel("Excluded Workspace Folders (comma-separated)", theme));
-            stack.Children.Add(excludedBox);
-
-            stack.Children.Add(WorkbenchStyles.SectionLabel("AI Provider & BYOK Configuration", theme));
-            stack.Children.Add(providerCombo);
-            stack.Children.Add(modelBox);
-            stack.Children.Add(apiKeyBox);
-
-            // Files (auto save, save actions) and source control sync options.
-            stack.Children.Add(ParitySettingsSection.Build(settings, theme, out var applyParity));
-
-            // Workspace Trust: trusted folders (revocable) - changes apply immediately, like VS Code's trust editor.
-            if (workspaceTrustSection != null)
-            {
-                stack.Children.Add(WorkbenchStyles.SectionLabel("Workspace Trust", theme));
-                stack.Children.Add(workspaceTrustSection);
-            }
-
-            var btnRow = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Spacing = 8,
-                Margin = new Thickness(0, 6, 0, 0)
-            };
-            var saveBtn = new Button
-            {
-                Content = "Save & Apply",
-                Padding = new Thickness(14, 4),
-                MinHeight = UiTokens.ControlHeight
-            };
-            WorkbenchStyles.StylePrimaryButton(saveBtn, theme);
-            var closeBtn = new Button
-            {
-                Content = "Cancel",
-                Padding = new Thickness(14, 4),
-                MinHeight = UiTokens.ControlHeight
-            };
-
-            saveBtn.Click += (s, e) =>
-            {
-                if (themeCombo.SelectedIndex >= 0 && themeCombo.SelectedIndex < themes.Count)
-                    settings.ThemeId = themes[themeCombo.SelectedIndex].Id;
-                if (float.TryParse(fontBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float fs) && fs >= 8 && fs <= 32)
-                    settings.FontSize = fs;
-                if (int.TryParse(tabBox.Text, out int ts) && ts >= 1 && ts <= 16)
-                    settings.TabSize = ts;
-                settings.WordWrap = wrapChk.IsChecked == true;
-                settings.InsertSpaces = insertSpacesChk.IsChecked == true;
-                settings.DetectIndentation = detectIndentChk.IsChecked == true;
-                settings.ShowMinimap = minimapChk.IsChecked == true;
-                niceties.Apply(settings);
-                settings.AutoSave = autoSaveChk.IsChecked == true;
-                settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
-                settings.OfflineMode = offlineChk.IsChecked == true;
-                settings.AutoCheckForUpdates = updateChk.IsChecked == true;
-                NetworkLedger.SetOfflineMode(settings.OfflineMode);
-                settings.ExcludedFolders = (excludedBox.Text ?? "").Trim();
-                if (providerCombo.SelectedIndex >= 0 && providerCombo.SelectedIndex < providers.Count)
-                    settings.ActiveProvider = StudioSettings.NormalizeProviderId(providers[providerCombo.SelectedIndex].Name);
-                if (!string.IsNullOrWhiteSpace(modelBox.Text))
-                    settings.ActiveModel = modelBox.Text.Trim();
-                settings.SetApiKeyForProvider(settings.ActiveProvider, (apiKeyBox.Text ?? "").Trim());
-                applyParity(settings);
-
-                onApplied?.Invoke(settings);
-            };
-            closeBtn.Click += (s, e) => onClosed?.Invoke();
-
-            btnRow.Children.Add(saveBtn);
-            btnRow.Children.Add(closeBtn);
-            stack.Children.Add(btnRow);
-            return new ScrollViewer { Content = stack, MaxHeight = 640, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto };
+            return SettingsDialogView.Build(settings, theme, onApplied, onClosed, workspaceTrustSection);
         }
 
         public static Control BuildKeyboardShortcutsView(StudioTheme theme)

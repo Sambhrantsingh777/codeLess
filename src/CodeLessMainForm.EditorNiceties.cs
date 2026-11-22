@@ -71,7 +71,7 @@ namespace codeLess.Studio
             boxes.Add(addCheck("Indent guides", s.EditorIndentGuides, 24, y));
             boxes.Add(addCheck("Sticky scroll", s.EditorStickyScroll, 380, y));
             y += 24;
-            boxes.Add(addCheck("Highlight occurrences of the word under the caret", s.EditorHighlightOccurrences, 24, y));
+            boxes.Add(addCheck("Highlight occurrences of the word at the caret", s.EditorHighlightOccurrences, 24, y));
             boxes.Add(addCheck("TextMate grammars (bundled + VSIX)", s.EditorTextMateHighlighting, 380, y));
             y += 24;
             boxes.Add(addCheck("Auto close HTML / XML / JSX tags", s.EditorAutoCloseTags, 24, y));

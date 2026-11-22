@@ -88,14 +88,15 @@ namespace codeLess.AvaloniaApp
             bool compact = r.Width < 560;
             if (compact) { authorW = 0; hashW = 0; }
             double msgRight = right - dateW - authorW - hashW - 8;
-            // Ref badges
+            // Ref badges: at most ~45 % of the message column, so long branch names never squeeze the subject away
+            double badgeLimit = x + Math.Max(60, (msgRight - x) * 0.45);
             foreach (var rf in c.Refs)
             {
-                if (x > msgRight - 40) break;
+                if (x > msgRight - 40 || x > badgeLimit - 30) break;
                 Color bc = rf.Kind == GitRefBadge.KindTag ? Color.FromRgb(202, 138, 4) : (rf.Kind == GitRefBadge.KindRemote ? Color.FromRgb(100, 116, 139) : AvaloniaColorHelper.ToAvColor(Theme.AccentPrimary));
                 string label = (rf.Kind == GitRefBadge.KindTag ? "🏷 " : "") + rf.Name;
                 var ft = Text(label, rf.IsCurrent ? DevToolsFonts.UiBold : DevToolsFonts.Ui, 10.5, Brushes.White);
-                double bw = Math.Min(ft.Width + 10, 180);
+                double bw = Math.Max(30, Math.Min(Math.Min(ft.Width + 10, 180), badgeLimit - x));
                 ft.MaxTextWidth = bw - 8; ft.MaxLineCount = 1; ft.Trimming = TextTrimming.CharacterEllipsis;
                 var br = new Rect(x, r.Y + 4, bw, r.Height - 8);
                 ctx.DrawRectangle(new SolidColorBrush(bc, rf.IsCurrent ? 1.0 : 0.8), rf.IsCurrent ? new Pen(Brushes.White, 1) : null, br, 3, 3);
@@ -161,12 +162,74 @@ namespace codeLess.AvaloniaApp
 
         private readonly UiPost ui = UiPost.CaptureCurrent();
 
+        private readonly Grid contentGrid = new Grid();
+        private readonly Grid detailsGrid = new Grid();
+        private readonly GridSplitter splitter;
+        private readonly ScrollViewer detailsScroll;
+        private bool? stacked;
+        public bool IsStacked => stacked == true;
+        public Control DetailsPane => detailsBorder;
+        public Control ContentGrid => contentGrid;
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            if (!double.IsInfinity(availableSize.Width) && availableSize.Width > 0) ApplySplitLayout(availableSize.Width);
+            return base.MeasureOverride(availableSize);
+        }
+
+        /// <summary>Side-by-side split (wide) or details below the list (narrow); keeps the user's split while the mode is unchanged.</summary>
+        public void ApplySplitLayout(double width)
+        {
+            bool wantStacked = GitGraphSplitLayout.ShouldStack(width);
+            if (stacked == wantStacked) return;
+            stacked = wantStacked;
+            contentGrid.ColumnDefinitions.Clear();
+            contentGrid.RowDefinitions.Clear();
+            detailsGrid.ColumnDefinitions.Clear();
+            detailsGrid.RowDefinitions.Clear();
+            if (wantStacked)
+            {
+                contentGrid.RowDefinitions.Add(new RowDefinition(1.2, GridUnitType.Star) { MinHeight = GitGraphSplitLayout.ListMinHeight });
+                contentGrid.RowDefinitions.Add(new RowDefinition(4, GridUnitType.Pixel));
+                contentGrid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star) { MinHeight = GitGraphSplitLayout.DetailsMinHeight });
+                Place(List, 0, 0); Place(splitter, 1, 0); Place(detailsBorder, 2, 0);
+                splitter.ResizeDirection = GridResizeDirection.Rows;
+                splitter.Width = double.NaN; splitter.Height = 4;
+                splitter.Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
+                detailsBorder.BorderThickness = new Thickness(0, 1, 0, 0);
+                // short and wide: message on the left, changed files on the right
+                detailsGrid.ColumnDefinitions.Add(new ColumnDefinition(3, GridUnitType.Star) { MinWidth = 180 });
+                detailsGrid.ColumnDefinitions.Add(new ColumnDefinition(2, GridUnitType.Star));
+                Place(detailsScroll, 0, 0); Place(filesList, 0, 1);
+                detailsScroll.MaxHeight = double.PositiveInfinity;
+                filesList.Margin = new Thickness(0, 8, 0, 0);
+            }
+            else
+            {
+                double detailsW = GitGraphSplitLayout.InitialDetailsWidth(width);
+                contentGrid.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star) { MinWidth = GitGraphSplitLayout.ListMinWidth });
+                contentGrid.ColumnDefinitions.Add(new ColumnDefinition(4, GridUnitType.Pixel));
+                contentGrid.ColumnDefinitions.Add(new ColumnDefinition(detailsW, GridUnitType.Pixel) { MinWidth = GitGraphSplitLayout.DetailsMinWidth });
+                Place(List, 0, 0); Place(splitter, 0, 1); Place(detailsBorder, 0, 2);
+                splitter.ResizeDirection = GridResizeDirection.Columns;
+                splitter.Height = double.NaN; splitter.Width = 4;
+                splitter.Cursor = new Cursor(StandardCursorType.SizeWestEast);
+                detailsBorder.BorderThickness = new Thickness(1, 0, 0, 0);
+                detailsGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                detailsGrid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));
+                Place(detailsScroll, 0, 0); Place(filesList, 1, 0);
+                detailsScroll.MaxHeight = 320;
+                filesList.Margin = new Thickness(0);
+            }
+        }
+
+        private static void Place(Control c, int row, int col) { Grid.SetRow(c, row); Grid.SetColumn(c, col); }
+
         public GitGraphView(string repoRoot, string repoRelativeFile)
         {
             RepoRoot = repoRoot;
             FilePathFilter = repoRelativeFile;
             RowDefinitions = new RowDefinitions("34,*");
-            ColumnDefinitions = new ColumnDefinitions("*,4,320");
             List.ShowGraph = string.IsNullOrEmpty(repoRelativeFile);
 
             var refreshBtn = WorkbenchStyles.IconButton("refresh", null, null, null);
@@ -179,22 +242,20 @@ namespace codeLess.AvaloniaApp
             Grid.SetColumn(statusText, 3); tg.Children.Add(statusText);
             allBranches.IsVisible = List.ShowGraph;
             toolbar = new Border { Child = tg, BorderThickness = new Thickness(0, 0, 0, 1) };
-            Grid.SetColumnSpan(toolbar, 3);
             Children.Add(toolbar);
 
-            Grid.SetRow(List, 1);
-            Children.Add(List);
-            var splitter = new GridSplitter { Width = 4, Background = Brushes.Transparent, ResizeDirection = GridResizeDirection.Columns };
-            Grid.SetRow(splitter, 1); Grid.SetColumn(splitter, 1);
-            Children.Add(splitter);
-
-            var detailsGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-            detailsGrid.Children.Add(new ScrollViewer { Content = detailsPanel, MaxHeight = 320 });
-            Grid.SetRow(filesList, 1);
+            // List | details as a draggable split; stacked (details below the list) when the pane is narrow.
+            Grid.SetRow(contentGrid, 1);
+            Children.Add(contentGrid);
+            contentGrid.Children.Add(List);
+            splitter = new GridSplitter { Background = Brushes.Transparent, Name = "GitGraphSplitter" };
+            contentGrid.Children.Add(splitter);
+            detailsScroll = new ScrollViewer { Content = detailsPanel };
+            detailsGrid.Children.Add(detailsScroll);
             detailsGrid.Children.Add(filesList);
-            detailsBorder = new Border { Child = detailsGrid, BorderThickness = new Thickness(1, 0, 0, 0) };
-            Grid.SetRow(detailsBorder, 1); Grid.SetColumn(detailsBorder, 2);
-            Children.Add(detailsBorder);
+            detailsBorder = new Border { Child = detailsGrid };
+            contentGrid.Children.Add(detailsBorder);
+            ApplySplitLayout(800);
 
             List.SelectionChanged += idx => ShowDetails(idx >= 0 && idx < List.Commits.Count ? List.Commits[idx] : null);
             List.NearEnd += () => LoadMore();
@@ -284,14 +345,16 @@ namespace codeLess.AvaloniaApp
                 return;
             }
             var hashRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            hashRow.Children.Add(new SelectableTextBlock { Text = c.Hash, FontFamily = new FontFamily(DevToolsFonts.MonoFamily), FontSize = 11.5, Foreground = AvaloniaColorHelper.ToBrush(theme.FgSecondary), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxWidth = 220 });
+            var hashText = new SelectableTextBlock { Text = GitCli.ShortHash(c.Hash), FontFamily = new FontFamily(DevToolsFonts.MonoFamily), FontSize = 11.5, Foreground = AvaloniaColorHelper.ToBrush(theme.FgSecondary), VerticalAlignment = VerticalAlignment.Center };
+            ToolTip.SetTip(hashText, c.Hash);
+            hashRow.Children.Add(hashText);
             var copy = WorkbenchStyles.IconButton("copy", "Copy commit hash", null, theme, 22, 14);
             copy.Click += (s, e) => CopyToClipboard?.Invoke(c.Hash);
             hashRow.Children.Add(copy);
             detailsPanel.Children.Add(hashRow);
             detailsPanel.Children.Add(new SelectableTextBlock { Text = c.Subject, FontWeight = FontWeight.SemiBold, FontSize = 13, TextWrapping = TextWrapping.Wrap, Foreground = AvaloniaColorHelper.ToBrush(theme.FgPrimary) });
-            detailsPanel.Children.Add(Muted(c.AuthorName + " <" + c.AuthorEmail + ">"));
-            detailsPanel.Children.Add(Muted(c.AuthorTimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + "  (" + GitCli.FormatRelativeTime(c.AuthorTimeUtc, DateTime.UtcNow) + ")"));
+            detailsPanel.Children.Add(MutedLine(c.AuthorName + " <" + c.AuthorEmail + ">"));
+            detailsPanel.Children.Add(MutedLine(c.AuthorTimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + "  (" + GitCli.FormatRelativeTime(c.AuthorTimeUtc, DateTime.UtcNow) + ")"));
             if (c.Refs.Count > 0) detailsPanel.Children.Add(Muted(string.Join(", ", c.Refs.Select(r => r.Name))));
             if (c.IsMerge) detailsPanel.Children.Add(Muted("Merge of " + string.Join(", ", c.Parents.Select(GitCli.ShortHash)) + " — files shown against the first parent"));
             var body = new SelectableTextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = AvaloniaColorHelper.ToBrush(theme.FgSecondary) };
@@ -335,6 +398,14 @@ namespace codeLess.AvaloniaApp
         }
 
         private TextBlock Muted(string s) => new TextBlock { Text = s, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Foreground = AvaloniaColorHelper.ToBrush(theme.FgMuted) };
+
+        /// <summary>Single-line metadata (author + email, date): ellipsized with the full text in a tooltip, never broken mid-token.</summary>
+        private TextBlock MutedLine(string s)
+        {
+            var tb = new TextBlock { Text = s, FontSize = 11.5, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis, Foreground = AvaloniaColorHelper.ToBrush(theme.FgMuted) };
+            ToolTip.SetTip(tb, s);
+            return tb;
+        }
 
         public void ApplyTheme(StudioTheme t)
         {
