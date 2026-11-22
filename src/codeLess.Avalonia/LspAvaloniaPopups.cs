@@ -115,7 +115,8 @@ namespace codeLess.AvaloniaApp
                 var it = session.Visible[i];
                 int index = i;
                 var row = new Grid { ColumnDefinitions = new ColumnDefinitions("22,*,Auto"), Height = RowHeight };
-                var glyph = new TextBlock { Text = KindGlyph(it.Kind), Foreground = KindBrush(it.Kind), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+                Control glyph = CompletionKindIcons.ForItem(it, theme) ?? // files: type badge, folders: folder glyph (path completion)
+                    new TextBlock { Text = KindGlyph(it.Kind), Foreground = KindBrush(it.Kind), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
                 var label = new TextBlock
                 {
                     Text = LspCompletionSession.LeftText(it),

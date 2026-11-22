@@ -114,6 +114,41 @@ namespace codeLess.Avalonia.Tests
         }
 
         [AvaloniaFact]
+        public void HorizontalScroll_TextIsClippedAtTheGutter_ColumnsStayAligned_AndOffsetIsClamped()
+        {
+            // varied lengths / indents, tabs, one line long enough for the windowed path (> 360 chars)
+            string src = "class OrderService\n{\n\tprivate readonly IRepository repository = repo; // field with a long tail comment to scroll\n" +
+                         "        public void Place(string customerId, decimal amount) { if (string.IsNullOrWhiteSpace(customerId)) throw new ArgumentException(\"x\"); }\n" +
+                         "\t\tvar order = new Order(Guid.NewGuid(), customerId, amount, DateTime.UtcNow);\n" +
+                         "    " + new string('x', 30) + " = \"" + new string('y', 400) + "\";\n}\n";
+            var (w, tab) = Open("OrderService.cs", src);
+            var canvas = w.PrimaryEditor.Canvas;
+            canvas.CaptureFrameTokens = true;
+            RenderOnce(canvas);
+            tab.CursorLine = 3; tab.CursorCol = 93; tab.ClearSelection();
+            tab.ScrollLeftPx = 40 * canvas.CharWidth;
+            RenderOnce(canvas);
+            Assert.True(canvas.LastFrameTextClipLeft >= AvaloniaVirtualEditorCanvas.GutterWidth, "text clip " + canvas.LastFrameTextClipLeft);
+            double origin = AvaloniaVirtualEditorCanvas.GutterWidth + 8 - tab.ScrollLeftPx;
+            var runs = canvas.LastFrameRunOrigins;
+            Assert.True(runs.Select(r => r.DocLine).Distinct().Count() >= 4, "lines drawn: " + runs.Select(r => r.DocLine).Distinct().Count());
+            foreach (var r in runs) Assert.Equal(origin, r.X - r.Vcol * canvas.CharWidth, 3); // same column = same x on every line
+
+            // an offset left over from a wider layout / longer content is clamped to the longest line
+            tab.ScrollLeftPx = 5000 * canvas.CharWidth;
+            RenderOnce(canvas);
+            Assert.True(tab.ScrollLeftPx <= canvas.MaxScrollLeftPxForTest() + canvas.CharWidth, "scroll " + tab.ScrollLeftPx);
+            // word wrap on resets it; turning it off again only scrolls as far as needed to reveal the caret (col 93)
+            tab.ScrollLeftPx = 40 * canvas.CharWidth;
+            w.InvokeMenuCommand("view.wordWrap");
+            Assert.Equal(0, tab.ScrollLeftPx);
+            w.InvokeMenuCommand("view.wordWrap");
+            Assert.True(tab.ScrollLeftPx <= 93 * canvas.CharWidth, "scroll after unwrap " + tab.ScrollLeftPx);
+            w.SuppressUnsavedPrompts = true;
+            w.Close();
+        }
+
+        [AvaloniaFact]
         public void WrappedLongLine_ContinuationRowsKeepStringColors()
         {
             string line = BigDictLine(30);

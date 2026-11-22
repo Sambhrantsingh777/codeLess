@@ -51,6 +51,10 @@ namespace codeLess.AvaloniaApp
         public bool CaptureFrameTokens { get; set; }
         /// <summary>Styled tokens painted in the last frame per (doc line, slice start) when <see cref="CaptureFrameTokens"/> is on.</summary>
         public readonly List<(int DocLine, int SliceStart, List<SyntaxTokenSpan> Tokens)> LastFrameTokens = new List<(int, int, List<SyntaxTokenSpan>)>();
+        /// <summary>Tests: (doc line, visual column, x) of every plain token run drawn in the last frame.</summary>
+        public readonly List<(int DocLine, int Vcol, double X)> LastFrameRunOrigins = new List<(int, int, double)>();
+        /// <summary>Left edge of the clip the code text of the last frame was drawn in (tests: never inside the gutter).</summary>
+        public double LastFrameTextClipLeft { get; private set; }
         public BracketPair ActiveBracketPair => activeBracketPair;
         public ActiveIndentGuide ActiveIndentGuideInfo => activeGuide;
         public EditorSyntaxSession SyntaxSession => Buffer == null ? null : EditorSyntaxSession.For(Buffer);
@@ -67,6 +71,7 @@ namespace codeLess.AvaloniaApp
             LastFrameTextMateLines = 0;
             LastFrameFallbackLines = 0;
             LastFrameTokens.Clear();
+            LastFrameRunOrigins.Clear();
             frameHadGuesses = false;
             frameSession = EditorSyntaxSession.For(buf);
             frameSession.Prepare(buf);

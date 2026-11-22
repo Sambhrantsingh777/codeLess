@@ -3455,7 +3455,7 @@ namespace codeLess.AvaloniaApp
             // Ghost text acceptance
             if (!string.IsNullOrEmpty(buf.GhostTextSuggestion))
             {
-                if (e.Key == Key.Tab && !shift && !ctrlOrCmd && !alt)
+                if (e.Key == Key.Tab && !shift && !ctrl && !meta && !alt)
                 {
                     AcceptGhostText(singleWordOnly: false);
                     e.Handled = true;
@@ -3821,6 +3821,7 @@ namespace codeLess.AvaloniaApp
                     }
                     break;
                 case Key.Tab:
+                    if (ctrl || meta) break; // Ctrl+Tab / Cmd+Tab switch editors (workbench), never indent
                     if (!shift && !ctrlOrCmd && !alt && TryHandleNicetyTab(buf)) { e.Handled = true; break; } // Emmet
                     HandleTabKey(shift); // honours the buffer's tab size / insert spaces (detected, .editorconfig, settings)
                     e.Handled = true;
@@ -4306,6 +4307,13 @@ namespace codeLess.AvaloniaApp
             bool hasFolds = buf.FoldedBlockRanges.Count > 0;
             bool wrapping = buf.WordWrap;
             if (wrapping && buf.ScrollLeftCol != 0) buf.ScrollLeftPx = 0;
+            else if (!wrapping && buf.ScrollLeftCol != 0 && Bounds.Width > GutterWidth + 40)
+            {
+                // a horizontal offset left over from another layout (narrower window, longer content before an edit,
+                // a file shown in a narrow split) never scrolls past the longest line: no text clipped on the left
+                double maxLeft = MaxScrollLeftPx(buf);
+                if (buf.ScrollLeftPx > maxLeft + 0.5) buf.ScrollLeftPx = maxLeft;
+            }
             int maxRows = (int)(h / LineHeight) + 2;
             var rows = BuildViewportRows(buf, maxRows);
             lastFrameRows = rows;
@@ -4441,7 +4449,12 @@ namespace codeLess.AvaloniaApp
                 double curX = codeBaseX + renderVcol * CharWidth;
                 string renderLineText = renderSliceEnd > renderSliceStart ? lineText.Substring(renderSliceStart, renderSliceEnd - renderSliceStart) : "";
 
+                // code text never paints over the line-number gutter when scrolled horizontally (runs that start left of
+                // the text area used to be drawn whole: "posi16ry = repo" over the line numbers)
+                var textClip = new Rect(GutterWidth + 1, y, Math.Max(0, codeAreaRight - GutterWidth - 1), LineHeight);
+                LastFrameTextClipLeft = textClip.X;
                 if (renderLineText.Length > 0)
+                using (context.PushClip(textClip))
                 {
                     var tokens = GetNicetyTokens(buf, docLine, lineText, renderSliceStart, renderLineText);
                     foreach (var tk in tokens)
@@ -4459,6 +4472,7 @@ namespace codeLess.AvaloniaApp
                         {
                             // Fast path: plain monospace run, one FormattedText positioned on the grid.
                             double x0 = codeBaseX + renderVcol * CharWidth;
+                            if (CaptureFrameTokens) LastFrameRunOrigins.Add((docLine, renderVcol, x0));
                             double runW = t.Length * CharWidth;
                             if (x0 + runW >= GutterWidth && x0 <= codeAreaRight)
                             {

@@ -149,6 +149,7 @@ $sourceFiles = @(
     "src\CodeLessEditorCanvas.Debug.cs",
     "src\CodeLessMainForm.Debug.cs",
     "src\LanguageServerWinForms.cs",
+    "src\LanguageServerWinForms.Imports.cs",
     "src\CodeLessEditorCanvas.DevTools.cs",
     "src\CodeLessEditorCanvas.Niceties.cs",
     "src\DevToolsWinForms.cs",
@@ -163,6 +164,7 @@ $sourceFiles = @(
     "src\CodeLessMainForm.AgentTrust.cs",
     "src\WorkspaceTrustWinForms.cs",
     "src\CodeLessMainForm.Menus.cs",
+    "src\CodeLessMainForm.EditorSwitcher.cs",
     "src\CodeLessMainForm.cs"
 )
 

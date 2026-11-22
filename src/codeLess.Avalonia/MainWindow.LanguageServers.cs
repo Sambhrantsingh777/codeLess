@@ -95,6 +95,7 @@ namespace codeLess.AvaloniaApp
         /// <summary>Hook: ActivateTab. Opens the document on its server and closes documents whose tab is gone.</summary>
         private void LspOnTabActivated(EditorTabBuffer tab)
         {
+            foreach (var b in lspBindings) b.HidePopupsIfEditorChanged(); // a suggest list of the previous file must not edit this one
             if (lsp == null) return;
             lsp.SetWorkspaceRoot(string.IsNullOrEmpty(workspaceRoot) ? null : workspaceRoot);
             LspSyncOpenDocuments();
@@ -660,7 +661,7 @@ namespace codeLess.AvaloniaApp
     }
 
     /// <summary>Per-editor LSP UI state: completion popup, hover and signature tips, request cancellation.</summary>
-    public sealed class LspEditorBinding
+    public sealed partial class LspEditorBinding
     {
         private readonly MainWindow window;
         public readonly AvaloniaEditorControl Editor;
@@ -837,6 +838,7 @@ namespace codeLess.AvaloniaApp
             string path = PathOrNull;
             HideHover();
             if (string.IsNullOrEmpty(text) || Buf == null) return;
+            if (TryImportCompletionOnTyped(text)) return; // import paths / Python modules (merged with the server's items)
             if (lsp == null || path == null || !lsp.IsActive(path)) { OnTextTypedWordBased(text); return; }
             var buf = Buf;
             string lineText = buf.Lines[buf.CursorLine];
@@ -943,6 +945,7 @@ namespace codeLess.AvaloniaApp
             var buf = Buf;
             string path = PathOrNull;
             if (buf == null) return;
+            if (!incompleteRetrigger && TryStartImportCompletionAtCaret(triggerCharacter)) return;
             if (lsp == null || path == null || !lsp.IsActive(path))
             {
                 if (triggerCharacter == null && !incompleteRetrigger) ShowWordBasedSuggestions(); // Ctrl+Space works in comments / strings too
@@ -1054,8 +1057,10 @@ namespace codeLess.AvaloniaApp
                 await Task.WhenAny(t, Task.Delay(400));
                 if (!ReferenceEquals(buf, Buf) || LspEditing.BufferText(buf) != before) return;
             }
+            PrepareImportAccept(s, item, buf);
             if (!LspEditing.ApplyCompletion(buf, item)) return;
             Editor.Canvas.CommitExternalEdit();
+            if (RetriggerAfterImportAccept(item)) return; // accepted a folder: list its contents (popup stays open)
             if (item.Command != null && lsp != null)
             {
                 switch (lsp.ClassifyCommand(s.FilePath, item.Command))

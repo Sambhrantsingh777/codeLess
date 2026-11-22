@@ -2562,6 +2562,9 @@ namespace codeLess.Studio
         /// <summary>When it returns true for the current buffer the word-based popup stays hidden (a language server completes instead).</summary>
         public Func<EditorTabBuffer, bool> SuppressBuiltInAutocomplete;
 
+        /// <summary>Ctrl+Space hook: returns true when it opened another list (import path / module completion).</summary>
+        public Func<bool> ExplicitSuggestHandler;
+
         /// <summary>Open documents (MainForm tabs): word-based suggestions use every open document of the same language.</summary>
         public Func<IEnumerable<EditorTabBuffer>> OpenDocumentsProvider;
 
@@ -2578,6 +2581,7 @@ namespace codeLess.Studio
             bool pending = QuickSuggestPending;
             QuickSuggestPending = false;
             if (CurrentBuffer == null) { autocompleteFrame.Visible = false; return; }
+            if (forceShow && ExplicitSuggestHandler != null && ExplicitSuggestHandler()) { autocompleteFrame.Visible = false; return; }
             if (SuppressBuiltInAutocomplete != null && SuppressBuiltInAutocomplete(CurrentBuffer)) { autocompleteFrame.Visible = false; return; }
             if (!forceShow && !autocompleteFrame.Visible && !pending) return; // deleting / moving never opens it
             CurrentBuffer.ClampCursor();
@@ -3495,6 +3499,12 @@ namespace codeLess.Studio
             buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
             bool hasSel = buf.HasSelection();
 
+            // leftover horizontal offset (narrower window / longer content before an edit) never scrolls past the longest line
+            if (!buf.WordWrap && buf.ScrollLeftCol > 0)
+            {
+                int maxLeftCol = MaxScrollLeftColWF(buf);
+                if (buf.ScrollLeftCol > maxLeftCol) buf.ScrollLeftCol = maxLeftCol;
+            }
             int screenRow = 0;
             for (int docLine = buf.ScrollTopLine; docLine < totalLines && screenRow <= visLines; docLine++)
             {

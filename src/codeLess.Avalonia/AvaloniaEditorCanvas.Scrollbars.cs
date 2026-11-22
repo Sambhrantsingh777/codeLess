@@ -142,6 +142,9 @@ namespace codeLess.AvaloniaApp
             return max;
         }
 
+        /// <summary>Tests: horizontal scroll range of the current buffer.</summary>
+        public double MaxScrollLeftPxForTest() => MaxScrollLeftPx(Buffer);
+
         /// <summary>Horizontal scroll range in pixels (0 while wrapping or when everything fits).</summary>
         internal double MaxScrollLeftPx(EditorTabBuffer b)
         {

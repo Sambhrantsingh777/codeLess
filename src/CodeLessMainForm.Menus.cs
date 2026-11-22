@@ -67,8 +67,8 @@ namespace codeLess.Studio
             switchEditor.DropDownItems.Add(CreateMenuItem("Next Editor", "Ctrl+PageDown", delegate { SwitchTabByOffset(1); }));
             switchEditor.DropDownItems.Add(CreateMenuItem("Previous Editor", "Ctrl+PageUp", delegate { SwitchTabByOffset(-1); }));
             switchEditor.DropDownItems.Add(new ToolStripSeparator());
-            switchEditor.DropDownItems.Add(CreateMenuItem("Next Used Editor", "Ctrl+Tab", delegate { SwitchTabByOffset(1); }));
-            switchEditor.DropDownItems.Add(CreateMenuItem("Previous Used Editor", "Ctrl+Shift+Tab", delegate { SwitchTabByOffset(-1); }));
+            switchEditor.DropDownItems.Add(CreateMenuItem("Next Used Editor", "Ctrl+Tab", delegate { List<EditorTabBuffer> mru = EditorMruOrder; if (mru.Count > 1) ActivateTabWin(mru[1]); }));
+            switchEditor.DropDownItems.Add(CreateMenuItem("Previous Used Editor", "Ctrl+Shift+Tab", delegate { List<EditorTabBuffer> mru = EditorMruOrder; if (mru.Count > 1) ActivateTabWin(mru[mru.Count - 1]); }));
             goMenu.DropDownItems.Insert(Math.Min(3, goMenu.DropDownItems.Count), switchEditor);
             goMenu.DropDownItems.Insert(Math.Min(4, goMenu.DropDownItems.Count), new ToolStripSeparator());
 

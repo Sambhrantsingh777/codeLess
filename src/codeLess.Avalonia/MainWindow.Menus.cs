@@ -160,9 +160,9 @@ namespace codeLess.AvaloniaApp
                 ["go.forward"] = NavigateForward,
                 ["go.nextEditor"] = () => CycleEditorTab(1),
                 ["go.previousEditor"] = () => CycleEditorTab(-1),
-                // MRU switching belongs to the Ctrl+Tab handler (quick pick when present): invoke the real binding
-                ["go.nextUsedEditor"] = () => SimulateShortcut(Key.Tab, KeyModifiers.Control),
-                ["go.previousUsedEditor"] = () => SimulateShortcut(Key.Tab, KeyModifiers.Control | KeyModifiers.Shift),
+                // VS Code openNext/PreviousRecentlyUsedEditor: the MRU list kept by the Ctrl+Tab editor switcher
+                ["go.nextUsedEditor"] = () => { var mru = EditorMruOrder; if (mru.Count > 1) ActivateTab(mru[1]); },
+                ["go.previousUsedEditor"] = () => { var mru = EditorMruOrder; if (mru.Count > 1) ActivateTab(mru[mru.Count - 1]); },
                 ["go.file"] = OpenQuickOpen,
                 ["go.symbolInEditor"] = () => OpenCommandPalette("@"),
                 ["go.symbolInWorkspace"] = () => OpenCommandPalette("#"),

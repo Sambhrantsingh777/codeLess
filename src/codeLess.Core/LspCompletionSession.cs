@@ -19,6 +19,13 @@ namespace codeLess.Studio
         public int SelectedIndex;
         public string Prefix = "";
         public const int MaxVisible = 200;
+        /// <summary>
+        /// Path / module completion: what counts as part of the segment being completed (file names contain '-' and
+        /// '.'). Null = identifier characters. Set together with <see cref="ImportContext"/>.
+        /// </summary>
+        public Func<char, bool> SegmentCharPredicate;
+        /// <summary>Non-null when this list completes an import path / module (<see cref="ImportCompletionEngine"/>).</summary>
+        public ImportCompletionContext ImportContext;
 
         public LspCompletionItem Selected
         {
@@ -83,7 +90,7 @@ namespace codeLess.Studio
         {
             if (caretLine != Line || lineText == null || caretCol < StartCol || caretCol > lineText.Length) return false;
             for (int i = StartCol; i < caretCol; i++)
-                if (!LspEditing.IsWordChar(lineText[i])) return false;
+                if (SegmentCharPredicate != null ? !SegmentCharPredicate(lineText[i]) : !LspEditing.IsWordChar(lineText[i])) return false;
             string prefix = lineText.Substring(StartCol, caretCol - StartCol);
             LspCompletionItem previous = Selected;
             Prefix = prefix;

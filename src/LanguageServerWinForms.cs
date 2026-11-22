@@ -101,6 +101,7 @@ namespace codeLess.Studio
         /// <summary>Hook: called whenever the tab strip is rebuilt. Opens the active document, closes documents whose tab is gone.</summary>
         public void SyncTabs()
         {
+            foreach (WinFormsLspEditorBinding b in bindings) b.HidePopupsIfEditorChanged(); // stale suggest list of the previous file
             if (mgr == null) return;
             mgr.SetWorkspaceRoot(Root);
             List<EditorTabBuffer> tabs = GetOpenTabs != null ? GetOpenTabs() : new List<EditorTabBuffer>();
@@ -739,7 +740,7 @@ namespace codeLess.Studio
     }
 
     /// <summary>Per-editor LSP UI state (completion popup, hover / signature tips) for the WinForms canvas.</summary>
-    internal sealed class WinFormsLspEditorBinding
+    internal sealed partial class WinFormsLspEditorBinding
     {
         private readonly WinFormsLanguageServerController owner;
         public readonly CodeLessEditorControl Editor;
@@ -801,7 +802,8 @@ namespace codeLess.Studio
             editor.Canvas.MouseMovedOverCanvas += OnMouseMoved;
             editor.Canvas.MouseLeftCanvas += OnMouseLeft;
             editor.OnCursorOrSelectionChanged += OnCaretMoved;
-            editor.SuppressBuiltInAutocomplete = delegate (EditorTabBuffer b) { return owner.IsActiveFor(b); };
+            editor.SuppressBuiltInAutocomplete = delegate (EditorTabBuffer b) { return owner.IsActiveFor(b) || IsImportContextAtCaret(b); };
+            editor.ExplicitSuggestHandler = delegate { return TryStartImportCompletionAtCaret(null); };
             ApplyTheme();
         }
 
@@ -830,6 +832,7 @@ namespace codeLess.Studio
             Editor.Canvas.MouseLeftCanvas -= OnMouseLeft;
             Editor.OnCursorOrSelectionChanged -= OnCaretMoved;
             Editor.SuppressBuiltInAutocomplete = null;
+            Editor.ExplicitSuggestHandler = null;
         }
 
         private StudioTheme Theme { get { return owner.GetTheme != null ? owner.GetTheme() : null; } }
@@ -902,6 +905,7 @@ namespace codeLess.Studio
                 if (e.KeyCode == Keys.Escape) { CloseCompletion(); return true; }
             }
             if (e.KeyCode == Keys.Escape && signatureTip.Visible) { HideSignature(); return true; }
+            if (e.KeyCode == Keys.Space && e.Control && !e.Alt && !e.Shift && TryStartImportCompletionAtCaret(null)) return true;
             if (e.KeyCode == Keys.Space && e.Control && !e.Alt && owner.IsActiveFor(Buf))
             {
                 if (e.Shift) TriggerSignatureHelp(null, false);
@@ -923,6 +927,7 @@ namespace codeLess.Studio
         private void OnCharTyped(char ch)
         {
             HideHover();
+            if (TryImportCompletionOnTyped(ch)) return; // import paths / Python modules (merged with the server's items)
             LanguageServerManager lsp = Lsp;
             string path = PathOrNull;
             if (lsp == null || path == null || !lsp.IsActive(path)) return;
@@ -978,6 +983,7 @@ namespace codeLess.Studio
             EditorTabBuffer buf = Buf;
             string path = PathOrNull;
             if (lsp == null || buf == null || path == null) return;
+            if (!incompleteRetrigger && TryStartImportCompletionAtCaret(triggerCharacter)) return;
             if (completionCts != null) completionCts.Cancel();
             CancellationTokenSource cts = new CancellationTokenSource();
             completionCts = cts;
@@ -1046,7 +1052,8 @@ namespace codeLess.Studio
             using (SolidBrush b = new SolidBrush(bg)) e.Graphics.FillRectangle(b, e.Bounds);
             if (it == null) return;
             Rectangle glyph = new Rectangle(e.Bounds.X + 2, e.Bounds.Y, 20, e.Bounds.Height);
-            TextRenderer.DrawText(e.Graphics, KindGlyph(it.Kind), e.Font, glyph, accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            if (!DrawPathKindGlyph(e.Graphics, it, glyph, fg2))
+                TextRenderer.DrawText(e.Graphics, KindGlyph(it.Kind), e.Font, glyph, accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             string right = LspCompletionSession.RightText(it);
             int rightW = Math.Min(170, TextRenderer.MeasureText(right, e.Font).Width);
             Rectangle labelRect = new Rectangle(e.Bounds.X + 24, e.Bounds.Y, e.Bounds.Width - 30 - rightW, e.Bounds.Height);
@@ -1127,10 +1134,12 @@ namespace codeLess.Studio
                 await Task.WhenAny(t, Task.Delay(400));
                 if (!ReferenceEquals(buf, Buf) || LspEditing.BufferText(buf) != before) return;
             }
+            PrepareImportAccept(s, item, buf);
             if (!LspEditing.ApplyCompletion(buf, item)) return;
             Editor.NotifyBufferContentChanged();
             Editor.Canvas.Invalidate();
             Editor.Canvas.Focus();
+            if (RetriggerAfterImportAccept(item)) return; // accepted a folder: list its contents
             if (item.Command != null && lsp != null)
             {
                 LanguageServerManager.LspCommandTarget target = lsp.ClassifyCommand(s.FilePath, item.Command);
