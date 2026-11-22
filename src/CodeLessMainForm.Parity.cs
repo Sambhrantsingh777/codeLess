@@ -275,6 +275,7 @@ namespace codeLess.Studio
         {
             string repo = ParityRepoWin();
             if (repo == null) { ParityStatus("No git repository found for the open folder."); return false; }
+            if (WorkspaceTrust.IsRestricted(repo)) { ParityStatus(WorkspaceTrust.RestrictedMessage("Git")); return false; }
             if (winGitOpCts != null) { if (!quiet) ParityStatus("Git: '" + winGitOpTitle + "' is still running (click the sync item to cancel)."); return false; }
             CancellationTokenSource cts = new CancellationTokenSource();
             winGitOpCts = cts;

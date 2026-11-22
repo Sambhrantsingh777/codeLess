@@ -5382,6 +5382,7 @@ if __name__ == '__main__':
                     if (editorControl != null) editorControl.Invalidate(true);
                     if (isNoGit)
                     {
+                        if (IsWorkspaceRestrictedWin) { gitStatusList.Items.Add("Source control is disabled in Restricted Mode (Help > Manage Workspace Trust)"); return; }
                         gitStatusList.Items.Add("Not a Git repository (run 'git init' in Terminal)");
                         return;
                     }

@@ -231,6 +231,7 @@ namespace codeLess.AvaloniaApp
         {
             string repo = ParityRepo();
             if (repo == null) { SetStatusMessage("No git repository found for the open folder."); return false; }
+            if (WorkspaceTrust.IsRestricted(repo)) { SetStatusMessage(WorkspaceTrust.RestrictedMessage("Git")); return false; }
             if (gitOpCts != null) { if (!quiet) SetStatusMessage("Git: '" + gitOpTitle + "' is still running (click the status bar item to cancel)."); return false; }
             var cts = new CancellationTokenSource();
             gitOpCts = cts;

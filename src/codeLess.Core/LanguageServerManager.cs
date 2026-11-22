@@ -123,6 +123,12 @@ namespace codeLess.Studio
         /// <summary>workspace/didChangeWatchedFiles watchers by registration id (dynamic registration).</summary>
         internal readonly Dictionary<string, List<LspFileWatcher>> FileWatchers = new Dictionary<string, List<LspFileWatcher>>(StringComparer.Ordinal);
 
+        /// <summary>Number of workspace/didChangeWatchedFiles watchers the server registered.</summary>
+        public int RegisteredFileWatcherCount
+        {
+            get { lock (FileWatchers) { int n = 0; foreach (List<LspFileWatcher> l in FileWatchers.Values) n += l.Count; return n; } }
+        }
+
         private readonly object chainLock = new object();
         private Task chain = Task.FromResult(true);
 
@@ -1080,6 +1086,14 @@ namespace codeLess.Studio
             string path = LspText.UriToPath(uri);
             if (path == null) return;
             LspOpenDocument doc = FindDoc(path);
+            // versionSupport is advertised: diagnostics computed for an older version than the one the server already got
+            // would be drawn at stale positions; a fresh publish for the current version follows.
+            int diagVersion = LspJson.GetInt(prms, "version", -1);
+            if (doc != null && doc.SentText != null && diagVersion >= 0 && diagVersion < doc.Version)
+            {
+                inst.AppendLog("[client] dropped diagnostics for v" + diagVersion + " (document is at v" + doc.Version + ")");
+                return;
+            }
             string text = doc != null ? (doc.SentText ?? doc.LatestText) : null;
             List<int> starts = text != null ? LspText.LineStarts(text) : null;
             List<LspDiagnostic> diags = LspDiagnostic.ParseMany(LspJson.Get(prms, "diagnostics"));

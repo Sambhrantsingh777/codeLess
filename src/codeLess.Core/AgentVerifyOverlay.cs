@@ -523,7 +523,7 @@ namespace codeLess.Studio
             if (common == null) return 0;
             string wtDir = Path.Combine(common, "worktrees");
             if (!Directory.Exists(wtDir)) return 0;
-            string overlays = TrimSep(SafeFull(OverlaysRoot));
+            string overlaysKey = LspText.PathKey(OverlaysRoot) + "/"; // PathKey folds /private/var vs /var (git records realpaths)
             foreach (string admin in Directory.GetDirectories(wtDir))
             {
                 try
@@ -532,8 +532,7 @@ namespace codeLess.Studio
                     if (!File.Exists(gitdirFile)) continue;
                     string wtGit = File.ReadAllText(gitdirFile).Trim();       // <worktree>/.git
                     string wtPath = TrimSep(SafeFull(Path.GetDirectoryName(wtGit) ?? ""));
-                    if (wtPath.Length <= overlays.Length || !wtPath.StartsWith(overlays + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
-                        !wtPath.StartsWith(overlays + "/", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (wtPath.Length == 0 || !LspText.PathKey(wtPath).StartsWith(overlaysKey, StringComparison.Ordinal)) continue;
                     if (Directory.Exists(wtPath)) SafeDeleteTree(wtPath);
                     SafeDeleteTree(admin);
                     n++;

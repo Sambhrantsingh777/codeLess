@@ -23,7 +23,16 @@ stdout = sys.stdout.buffer
 docs = {}          # uri -> {"text": str, "version": int, "languageId": str}
 root_path = None
 state = {"configuration": None, "registered": False, "progress_created": False, "applyEdit": None,
-         "didSave": 0, "didClose": [], "changes": [], "initOptions": None, "clientCapabilities": None}
+         "didSave": 0, "didClose": [], "changes": [], "initOptions": None, "clientCapabilities": None,
+         "watched": []}
+# Optional switches (tests): --init-delay-ms N (slow initialize), --watch-py (register a "**/*.py" file watcher)
+INIT_DELAY_MS = 0
+WATCH_PY = False
+for _i, _a in enumerate(sys.argv):
+    if _a == "--init-delay-ms" and _i + 1 < len(sys.argv):
+        INIT_DELAY_MS = int(sys.argv[_i + 1])
+    if _a == "--watch-py":
+        WATCH_PY = True
 pending = {}       # id -> method for requests we sent to the client
 next_id = [1000]
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -167,6 +176,9 @@ def handle(msg):
         send({"id": mid, "result": result})
 
     if method == "initialize":
+        if INIT_DELAY_MS > 0:
+            import time
+            time.sleep(INIT_DELAY_MS / 1000.0)
         root_path = params.get("rootPath") or (uri_to_path(params["rootUri"]) if params.get("rootUri") else None)
         state["initOptions"] = params.get("initializationOptions")
         state["clientCapabilities"] = params.get("capabilities")
@@ -188,7 +200,11 @@ def handle(msg):
         request_client("window/workDoneProgress/create", {"token": "tok1"})
         send({"method": "$/progress", "params": {"token": "tok1", "value": {"kind": "begin", "title": "Indexing", "percentage": 0}}})
         send({"method": "$/progress", "params": {"token": "tok1", "value": {"kind": "end"}}})
-        request_client("client/registerCapability", {"registrations": [{"id": "r1", "method": "workspace/didChangeWatchedFiles", "registerOptions": {}}]})
+        if WATCH_PY:
+            request_client("client/registerCapability", {"registrations": [{"id": "r1", "method": "workspace/didChangeWatchedFiles",
+                                                                            "registerOptions": {"watchers": [{"globPattern": "**/*.py"}]}}]})
+        else:
+            request_client("client/registerCapability", {"registrations": [{"id": "r1", "method": "workspace/didChangeWatchedFiles", "registerOptions": {}}]})
         send({"method": "window/logMessage", "params": {"type": 3, "message": "fake-lsp ready"}})
     elif method == "shutdown":
         reply(None)
@@ -196,6 +212,9 @@ def handle(msg):
         sys.exit(0)
     elif method == "fake/crash":
         os._exit(3)
+    elif method == "workspace/didChangeWatchedFiles":
+        for ch in params.get("changes", []):
+            state["watched"].append([ch.get("uri"), ch.get("type")])
     elif method == "textDocument/didOpen":
         td = params["textDocument"]
         docs[td["uri"]] = {"text": td["text"], "version": td.get("version", 0), "languageId": td.get("languageId")}

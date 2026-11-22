@@ -188,7 +188,10 @@ namespace codeLess.Avalonia.Tests
                     Assert.Equal("copy", ov.Strategy);
                     Assert.Equal("print(2)\n", File.ReadAllText(Path.Combine(ov.OverlayWorkspace, "main.py")));
                     Assert.False(Directory.Exists(Path.Combine(ov.OverlayWorkspace, "bin")));
-                    Assert.True(VerificationOverlay.IsLink(Path.Combine(ov.OverlayWorkspace, ".venv")));
+                    // Copy-on-write clone where the file system supports it (APFS), else a shared link reported as such.
+                    string venv = Path.Combine(ov.OverlayWorkspace, ".venv");
+                    Assert.True(File.Exists(Path.Combine(venv, "lib", "site.py")));
+                    Assert.True(ov.ClonedFolders.Contains(".venv") ? !VerificationOverlay.IsLink(venv) : VerificationOverlay.IsLink(venv) && ov.SharedFolders.Contains(".venv"));
                 }
                 Assert.Equal("print(1)\n", File.ReadAllText(Path.Combine(ws, "main.py")));
 

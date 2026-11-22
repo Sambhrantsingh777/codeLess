@@ -1384,7 +1384,8 @@ namespace codeLess.AvaloniaApp
             currentGitEntries = entries ?? new List<GitStatusEntry>();
             bool noGit = string.IsNullOrEmpty(branch) || branch == "no-git";
             if (!noGit) RefreshGutterBaselines(); // staging / commits change the index the gutter compares with
-            scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
+            scmBranchBanner.Text = IsWorkspaceRestricted && noGit ? "Source control is disabled in Restricted Mode (Manage Workspace Trust)"
+                : noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
             SetStatusBranch(noGit ? "no-git" : branch);
 
             // Update Activity Bar Git badge

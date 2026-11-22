@@ -839,7 +839,7 @@ namespace codeLess.Studio
         /// (a chatty stderr can't fill its pipe and block the child) and a hung probe is killed with its process tree. Runs in
         /// the user's home folder so a project's .npmrc can't redirect the probe.
         /// </summary>
-        internal static string RunAndCapture(string exe, string args, int timeoutMs)
+        public static string RunAndCapture(string exe, string args, int timeoutMs)
         {
             Process p = null;
             try
