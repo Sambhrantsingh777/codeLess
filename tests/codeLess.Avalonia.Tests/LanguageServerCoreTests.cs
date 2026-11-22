@@ -334,6 +334,9 @@ namespace codeLess.Avalonia.Tests
             var m = new LanguageServerManager(a => a());
             m.ChangeDebounceMs = 20;
             m.RestartBackoffMs = 50;
+            // Slow / loaded CI runners (Windows): a request timing out reads as "no result" and fails the assertion.
+            m.RequestTimeoutMs = PerfBudget.Wait(m.RequestTimeoutMs);
+            m.LongRequestTimeoutMs = PerfBudget.Wait(m.LongRequestTimeoutMs);
             string line = "python = \"" + python + "\" \"" + serverScript + "\"";
             m.UserSettingsProvider = () => LanguageServerUserSettings.Parse(overrides ?? line, false);
             m.SetWorkspaceRoot(root);
@@ -480,6 +483,7 @@ namespace codeLess.Avalonia.Tests
             File.WriteAllText(other, "from app import compute\r\nvalue = compute()\r\n");
             m.OpenDocument(buf.FilePath, () => LspEditing.BufferText(buf));
             WaitUntil(() => m.GetStatus(buf.FilePath)?.State == LanguageServerState.Running);
+            WaitUntil(() => LspDiagnosticsStore.Count(buf.FilePath) == 1, what: "server processed didOpen"); // BAD -> 1 diagnostic
 
             string placeholder = Run(m.PrepareRenameAsync(buf.FilePath, 0, 5, CancellationToken.None));
             Assert.Equal("compute", placeholder);
