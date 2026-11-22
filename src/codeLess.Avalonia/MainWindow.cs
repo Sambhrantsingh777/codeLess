@@ -2069,6 +2069,7 @@ namespace codeLess.AvaloniaApp
             OnDebugWorkspaceChanged();
             LspOnWorkspaceChanged();
             OnWorkspaceTrustFolderOpened();
+            FollowWorkspaceInTerminals(workspaceRoot); // VS Code: terminals start in the newly opened folder
 
             string folderName = Path.GetFileName(workspaceRoot.TrimEnd('\\', '/'));
             if (string.IsNullOrEmpty(folderName)) folderName = workspaceRoot;
@@ -2428,18 +2429,19 @@ namespace codeLess.AvaloniaApp
 
         public EditorTabBuffer CreateNewUntitledTab()
         {
-            int idx = openTabs.Count(t => t.FileName.StartsWith("Untitled-", StringComparison.OrdinalIgnoreCase)) + 1;
-            string name = $"Untitled-{idx}.cs";
+            // VS Code: "Untitled-N" (no extension); the language follows the workspace's main language, not a fixed ".cs".
+            string name = UntitledFileDefaults.NextUntitledName(openTabs.Select(t => t.FileName));
             var tab = new EditorTabBuffer
             {
                 FilePath = "",
                 RelativePath = name,
                 FileName = name,
-                Language = "cs",
+                Language = UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
                 Content = "",
                 SavedContent = "",
                 WordWrap = settings.WordWrap,
                 IsDirty = false,
+                IsUntitled = true,
                 IsPreviewTab = false
             };
             tab.SyncLinesFromContent();
@@ -2501,7 +2503,7 @@ namespace codeLess.AvaloniaApp
         public bool CloseTab(EditorTabBuffer tab, bool forceWithoutPrompt = false)
         {
             if (tab == null) return true;
-            if (!forceWithoutPrompt && tab.IsDirty)
+            if (!forceWithoutPrompt && UntitledFileDefaults.NeedsSavePrompt(tab))
             {
                 if (!ConfirmSaveOrDiscardDirtyTabs(new[] { tab }, () => { if (openTabs.Contains(tab)) CloseTab(tab, forceWithoutPrompt: true); }))
                     return false;
@@ -2569,12 +2571,20 @@ namespace codeLess.AvaloniaApp
         {
             if (tab == null) return false;
             if (tab.IsLargeFileViewer) { SetStatusMessage($"{tab.FileName} is open read-only in the large-file viewer and cannot be saved."); return false; }
+            if (string.IsNullOrWhiteSpace(tab.FilePath) && AvaloniaTerminalEmulatorControl.IsDesktopRuntime && StorageProvider != null)
+            {
+                // Untitled: ask where to save it (VS Code) instead of silently writing "Untitled-1" somewhere.
+                _ = PromptSaveAsAsync(tab);
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(tab.FilePath))
             {
                 string dir = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot)
                     ? workspaceRoot
                     : Path.GetTempPath();
-                tab.FilePath = Path.Combine(dir, tab.FileName);
+                tab.FilePath = Path.Combine(dir, UntitledFileDefaults.SuggestSaveFileName(tab, workspaceRoot, workspaceFiles));
+                tab.FileName = Path.GetFileName(tab.FilePath);
+                tab.IsUntitled = false;
             }
 
             try
@@ -2624,6 +2634,7 @@ namespace codeLess.AvaloniaApp
         private void OnEditorBufferModified(EditorTabBuffer buf)
         {
             if (buf == null) return;
+            if (buf.IsDirty && UntitledFileDefaults.IsEmptyUntitled(buf)) buf.IsDirty = false; // empty untitled: nothing to save (VS Code)
             LspOnBufferModified(buf);
             bool previewChanged = false;
             if (buf.IsDirty && buf.IsPreviewTab)

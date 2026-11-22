@@ -124,11 +124,30 @@ namespace codeLess.Studio
         public string GrammarScope { get { return scope; } }
         public bool GrammarPending { get { return grammarPending; } }
 
+        /// <summary>
+        /// The path the grammar is resolved from: the file path, or for an untitled editor its name plus the extension of
+        /// its language mode ("Untitled-1" + "py"), so new files are highlighted in the workspace's language.
+        /// </summary>
+        public static string SyntaxPathFor(EditorTabBuffer buf)
+        {
+            if (buf == null) return "";
+            if (!string.IsNullOrEmpty(buf.FilePath)) return buf.FilePath;
+            string name = buf.FileName ?? "";
+            string ext = "";
+            try { ext = System.IO.Path.GetExtension(name); } catch { }
+            if (string.IsNullOrEmpty(ext))
+            {
+                string lang = UntitledFileDefaults.NormalizeLanguageExtension(buf.Language);
+                if (!string.IsNullOrEmpty(lang) && lang != "txt") return name + "." + lang;
+            }
+            return name;
+        }
+
         /// <summary>Resolves the grammar / profile for the buffer's file and syncs the caches with its lines.</summary>
         public void Prepare(EditorTabBuffer buf)
         {
             if (buf == null) return;
-            string p = buf.FilePath ?? buf.FileName ?? "";
+            string p = SyntaxPathFor(buf);
             if (!pathInitialized || !string.Equals(p, path, StringComparison.Ordinal))
             {
                 pathInitialized = true;

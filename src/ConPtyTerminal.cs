@@ -3505,6 +3505,52 @@ namespace codeLess.Studio
             return true;
         }
 
+        /// <summary>
+        /// True when the shell itself owns the terminal (no foreground job such as a dev server, vim or a test run).
+        /// Unix: the pty's foreground process group is the shell's. Elsewhere: the last output line looks like a prompt.
+        /// </summary>
+        public bool IsShellForegroundIdle()
+        {
+            if (isDisposed || HasExited) return true;
+            if (!ConPtyNative.IsWindowsPlatform())
+            {
+                int fd = unixMasterFd;
+                int pid = ProcessId;
+                if (fd >= 0 && pid > 0)
+                {
+                    try
+                    {
+                        int fg = UnixPtyNative.tcgetpgrp(fd);
+                        if (fg > 0) return fg == pid;
+                    }
+                    catch { }
+                }
+            }
+            return IsIdleAtPrompt();
+        }
+
+        /// <summary>
+        /// Follows a newly opened workspace folder like VS Code (which starts fresh terminals in the new folder): an
+        /// exited or idle shell is restarted in <paramref name="newDir"/> (fresh environment, so the old workspace's venv
+        /// is gone and the new one can be activated); a shell running a foreground job is left untouched.
+        /// Returns "respawned", "same" (already there), "busy" or "disposed".
+        /// </summary>
+        public string FollowWorkspaceFolder(string newDir)
+        {
+            if (isDisposed) return "disposed";
+            string resolved = (!string.IsNullOrEmpty(newDir) && Directory.Exists(newDir))
+                ? Path.GetFullPath(newDir)
+                : GetDefaultHomeDirectory();
+            // PathKey folds macOS's /private/var vs /var (the OS reports the resolved form for the shell's cwd).
+            string keyCur = LspText.PathKey(GetLiveWorkingDirectory() ?? "");
+            string keyNew = LspText.PathKey(resolved);
+            if (!HasExited && string.Equals(keyCur, keyNew, ConPtyNative.IsWindowsPlatform() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                return "same";
+            if (!HasExited && !IsShellForegroundIdle()) return "busy";
+            RespawnInDirectory(resolved);
+            return "respawned";
+        }
+
         public void NavigateToDirectory(string newDir, bool clearScreen = false)
         {
             string resolved = (!string.IsNullOrEmpty(newDir) && Directory.Exists(newDir))

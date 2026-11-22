@@ -372,7 +372,9 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrEmpty(shortcut)) return "";
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                if (shortcut == "Ctrl+`") return "Ctrl+`";
+                // VS Code's macOS keymap keeps literal Control for these (Cmd+G is Find Next, Cmd+Tab is the app switcher).
+                if (shortcut == "Ctrl+`" || shortcut == "Ctrl+G" || shortcut == "Ctrl+Shift+G" || shortcut == "Ctrl+Tab" ||
+                    shortcut == "Ctrl+Shift+Tab" || shortcut == "Ctrl+-" || shortcut == "Ctrl+Shift+-") return shortcut;
                 return shortcut
                     .Replace("Ctrl+", "Cmd+")
                     .Replace("Alt+", "Option+");
@@ -776,7 +778,7 @@ namespace codeLess.AvaloniaApp
                 ("Workbench & Navigation", "Quick Open, Go to File", "Ctrl+P / Ctrl+E", "Cmd+P / Cmd+E"),
                 ("Workbench & Navigation", "Go to Symbol in Editor", "Ctrl+Shift+O", "Cmd+Shift+O"),
                 ("Workbench & Navigation", "Go to Symbol in Workspace", "Ctrl+T", "Cmd+T"),
-                ("Workbench & Navigation", "Go to Line / Column", "Ctrl+G", "Cmd+G"),
+                ("Workbench & Navigation", "Go to Line / Column", "Ctrl+G", "Ctrl+G"),
                 ("Workbench & Navigation", "Navigate Back / Forward", "Alt+Left / Alt+Right", "Ctrl+- / Ctrl+Shift+-"),
                 ("Workbench & Navigation", "Open Settings", "Ctrl+,", "Cmd+,"),
                 ("Workbench & Navigation", "Open Keyboard Shortcuts", "Ctrl+K Ctrl+S", "Cmd+K Cmd+S"),

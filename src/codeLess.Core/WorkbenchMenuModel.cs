@@ -211,7 +211,7 @@ namespace codeLess.Studio
                 Sep(),
                 C("view.explorer", "Explorer", "Ctrl+Shift+E"),
                 C("view.search", "Search", "Ctrl+Shift+F"),
-                C("view.scm", "Source Control", "Ctrl+Shift+G"),
+                C("view.scm", "Source Control", "Ctrl+Shift+G", "Ctrl+Shift+G"), // macOS: literal Control+Shift+G like VS Code
                 C("view.run", "Run and Debug", "Ctrl+Shift+D"),
                 C("view.extensions", "Extensions", "Ctrl+Shift+X"),
                 Sep(),
@@ -242,7 +242,7 @@ namespace codeLess.Studio
                 C("go.definition", "Go to Definition", "F12"),
                 C("go.references", "Go to References", "Shift+F12"),
                 Sep(),
-                C("go.line", "Go to Line/Column...", "Ctrl+G"),
+                C("go.line", "Go to Line/Column...", "Ctrl+G", "Ctrl+G"), // macOS: literal Control+G like VS Code (Cmd+G = Find Next)
                 C("go.bracket", "Go to Bracket", "Ctrl+Shift+\\"),
                 Sep(),
                 C("go.nextProblem", "Next Problem", "F8"),

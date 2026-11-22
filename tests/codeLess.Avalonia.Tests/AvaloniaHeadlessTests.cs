@@ -972,8 +972,8 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("#", window.CommandPalette.InitialPrefix);
                 window.CommandPalette.Close();
 
-                // 5. Ctrl+G / Cmd+G -> ':' Go to Line
-                window.SimulateShortcut(Key.G, KeyModifiers.Meta);
+                // 5. Ctrl+G -> ':' Go to Line (also on macOS: literal Control+G like VS Code; Cmd+G is Find Next)
+                window.SimulateShortcut(Key.G, KeyModifiers.Control);
                 Assert.True(window.CommandPalette.IsVisible);
                 Assert.Equal(":", window.CommandPalette.InitialPrefix);
                 window.CommandPalette.Close();

@@ -385,6 +385,23 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
+            // macOS uses VS Code's mac keymap here: Control+G = Go to Line, Control+Shift+G = Source Control (literal
+            // Control, not Cmd), while Cmd+G / Cmd+Shift+G are Find Next / Find Previous.
+            if (MacKeymap.IsMacOS && key == Key.G && !alt)
+            {
+                if (ctrl && !meta)
+                {
+                    if (shift) SwitchSidebarView("git"); else OpenCommandPalette(":");
+                    return true;
+                }
+                if (meta && !ctrl)
+                {
+                    var ed = FocusedEditorControl() ?? PrimaryEditor;
+                    ed?.FindNext(shift ? -1 : 1);
+                    return true;
+                }
+            }
+
             if (!ctrlOrCmd) return false;
 
             // Workbench Ctrl / Cmd Shortcuts
@@ -2568,7 +2585,7 @@ namespace codeLess.AvaloniaApp
         /// </summary>
         public bool ConfirmSaveOrDiscardDirtyTabs(IEnumerable<EditorTabBuffer> candidates, Action proceedAfterDecision = null)
         {
-            var dirty = (candidates ?? Enumerable.Empty<EditorTabBuffer>()).Where(t => t != null && t.IsDirty).ToList();
+            var dirty = (candidates ?? Enumerable.Empty<EditorTabBuffer>()).Where(UntitledFileDefaults.NeedsSavePrompt).ToList();
             if (dirty.Count == 0 || SuppressUnsavedPrompts) return true;
 
             if (UnsavedPromptOverride != null)
@@ -2587,12 +2604,20 @@ namespace codeLess.AvaloniaApp
             }
 
             // Show Unsaved Changes Modal
-            var view = AvaloniaDialogBuilder.BuildUnsavedChangesView(dirty, currentTheme, decision =>
+            var view = AvaloniaDialogBuilder.BuildUnsavedChangesView(dirty, currentTheme, async decision =>
             {
                 ModalHost.CloseModal();
                 if (decision == UnsavedPromptResult.SaveAll)
                 {
-                    foreach (var d in dirty) SaveBufferToDisk(d);
+                    foreach (var d in dirty)
+                    {
+                        // Untitled editors need a Save As dialog: finish it before closing / quitting, and stop if the
+                        // user cancels it (the text must not be thrown away behind an open dialog).
+                        bool ok = UntitledFileDefaults.IsUntitledLike(d) && StorageProvider != null && AvaloniaTerminalEmulatorControl.IsDesktopRuntime
+                            ? await PromptSaveAsAsync(d)
+                            : SaveBufferToDisk(d);
+                        if (!ok) return;
+                    }
                 }
                 else if (decision == UnsavedPromptResult.DontSave)
                 {
@@ -2762,24 +2787,52 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        private async Task PromptSaveAsAsync()
+        private Task<bool> PromptSaveAsAsync() => PromptSaveAsAsync(activeTab);
+
+        /// <summary>
+        /// Save As (also Save on an untitled editor): proposes "Untitled-N.&lt;ext&gt;" with the extension of the editor's
+        /// language / the workspace's main language, starting in the workspace folder. True when the file was saved.
+        /// </summary>
+        public async Task<bool> PromptSaveAsAsync(EditorTabBuffer tab)
         {
-            if (activeTab == null || StorageProvider == null) return;
-            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            if (tab == null || StorageProvider == null) return false;
+            bool untitled = UntitledFileDefaults.IsUntitledLike(tab);
+            string suggested = UntitledFileDefaults.SuggestSaveFileName(tab, workspaceRoot, workspaceFiles);
+            string ext = Path.GetExtension(suggested).TrimStart('.');
+            var options = new FilePickerSaveOptions
             {
                 Title = "Save File As — codeLess",
-                SuggestedFileName = activeTab.FileName
-            });
-            if (file != null)
+                SuggestedFileName = suggested,
+                DefaultExtension = string.IsNullOrEmpty(ext) ? null : ext,
+                ShowOverwritePrompt = true
+            };
+            try
             {
-                string p = file.TryGetLocalPath();
-                if (!string.IsNullOrEmpty(p))
-                {
-                    activeTab.FilePath = p;
-                    activeTab.FileName = Path.GetFileName(p);
-                    SaveBufferToDisk(activeTab);
-                }
+                string startDir = untitled || string.IsNullOrEmpty(tab.FilePath) ? workspaceRoot : Path.GetDirectoryName(tab.FilePath);
+                if (!string.IsNullOrEmpty(startDir) && Directory.Exists(startDir))
+                    options.SuggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(startDir);
             }
+            catch { }
+            var file = await StorageProvider.SaveFilePickerAsync(options);
+            string p = file?.TryGetLocalPath();
+            if (string.IsNullOrEmpty(p)) return false;
+            string oldPath = tab.FilePath;
+            tab.FilePath = p;
+            tab.FileName = Path.GetFileName(p);
+            tab.RelativePath = string.IsNullOrEmpty(workspaceRoot) ? tab.FileName : Path.GetRelativePath(workspaceRoot, p);
+            string chosenExt = Path.GetExtension(p).TrimStart('.');
+            if (!string.IsNullOrEmpty(chosenExt)) tab.Language = chosenExt.ToLowerInvariant();
+            tab.IsUntitled = false;
+            bool saved = SaveBufferToDisk(tab);
+            if (!saved && untitled) { tab.FilePath = oldPath; tab.IsUntitled = true; }
+            if (saved)
+            {
+                settings.AddRecentFile(p);
+                if (ReferenceEquals(tab, activeTab)) PrimaryEditor?.LoadBuffer(tab); // grammar / language for the new name
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+            }
+            return saved;
         }
 
         // Automated Screenshot Capture Suite (--screenshot-suite <dir>)

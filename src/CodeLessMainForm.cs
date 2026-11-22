@@ -1590,16 +1590,14 @@ namespace codeLess.Studio
 
         public EditorTabBuffer CreateNewUntitledTextTab()
         {
-            int untitledNum = 1;
-            while (openTabs.Any(t => string.Equals(t.FileName, "Untitled-" + untitledNum, StringComparison.OrdinalIgnoreCase)))
-                untitledNum++;
-            string name = "Untitled-" + untitledNum;
+            // VS Code: "Untitled-N"; the language follows the workspace's main language (saved with that extension).
+            string name = UntitledFileDefaults.NextUntitledName(openTabs.Select(t => t.FileName));
             EditorTabBuffer tab = new EditorTabBuffer
             {
                 FilePath = "",
                 RelativePath = name,
                 FileName = name,
-                Language = "txt",
+                Language = UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
                 Content = "",
                 SavedContent = "",
                 EolSequence = "\r\n",
@@ -1665,13 +1663,18 @@ namespace codeLess.Studio
             using (SaveFileDialog sfd = new SaveFileDialog())
             {
                 sfd.Title = "Save As — codeLess";
-                string defaultName = tab.FileName ?? "Untitled-1";
-                if (tab.IsUntitled && string.IsNullOrEmpty(Path.GetExtension(defaultName)))
-                    defaultName += ".txt";
+                string defaultName = UntitledFileDefaults.SuggestSaveFileName(tab, workspaceRoot, workspaceFiles);
+                string defaultExt = Path.GetExtension(defaultName).TrimStart('.');
                 sfd.FileName = defaultName;
-                if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
-                    sfd.InitialDirectory = workspaceRoot;
-                sfd.Filter = "All Files (*.*)|*.*";
+                string startDir = !tab.IsUntitled && !string.IsNullOrEmpty(tab.FilePath) ? Path.GetDirectoryName(tab.FilePath) : workspaceRoot;
+                if (!string.IsNullOrEmpty(startDir) && Directory.Exists(startDir))
+                    sfd.InitialDirectory = startDir;
+                if (!string.IsNullOrEmpty(defaultExt))
+                {
+                    sfd.DefaultExt = defaultExt;
+                    sfd.Filter = defaultExt.ToUpperInvariant() + " File (*." + defaultExt + ")|*." + defaultExt + "|All Files (*.*)|*.*";
+                }
+                else sfd.Filter = "All Files (*.*)|*.*";
                 if (sfd.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(sfd.FileName))
                 {
                     tab.FilePath = sfd.FileName;
@@ -3181,6 +3184,7 @@ if __name__ == '__main__':
             };
             ctrl.OnBufferModified += (buf) =>
             {
+                if (buf != null && buf.IsDirty && UntitledFileDefaults.IsEmptyUntitled(buf)) buf.IsDirty = false; // empty untitled: nothing to save (VS Code)
                 if (lspController != null) lspController.OnBufferModified(buf);
                 bool previewCleared = false;
                 if (buf != null && buf.IsPreview)
@@ -7981,7 +7985,7 @@ if __name__ == '__main__':
             if (lspController != null) lspController.SetWorkspaceRoot(rootDir);
             OnWorkspaceTrustFolderOpenedWin();
             terminalWorkingDir = rootDir;
-            SyncTerminalsToWorkingDirectory(rootDir);
+            FollowWorkspaceInTerminals(rootDir); // VS Code: terminals start in the newly opened folder
             settings.AddRecentWorkspace(rootDir);
             RebuildOpenRecentSubMenu();
             editorControl.SetRecentWorkspaces(settings.RecentWorkspaces);
@@ -8748,7 +8752,7 @@ if __name__ == '__main__':
 
         public bool ConfirmSaveOrDiscardDirtyBuffer(EditorTabBuffer tab)
         {
-            if (tab == null || !tab.IsDirty) return true;
+            if (!UntitledFileDefaults.NeedsSavePrompt(tab)) return true;
 
             DialogResult res;
             if (UnsavedPromptOverride != null)
@@ -8781,7 +8785,7 @@ if __name__ == '__main__':
         public bool ConfirmSaveOrDiscardAllDirtyBuffers(IEnumerable<EditorTabBuffer> tabs)
         {
             if (tabs == null) return true;
-            List<EditorTabBuffer> dirtyList = tabs.Where(t => t != null && t.IsDirty).ToList();
+            List<EditorTabBuffer> dirtyList = tabs.Where(UntitledFileDefaults.NeedsSavePrompt).ToList();
             if (dirtyList.Count == 0) return true;
 
             if (UnsavedPromptOverride != null)
@@ -9570,6 +9574,40 @@ if __name__ == '__main__':
             if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
                 return workspaceRoot;
             return ConPtyTerminalSession.GetDefaultHomeDirectory();
+        }
+
+        /// <summary>
+        /// File → Open Folder: idle shells restart in the new folder with a fresh environment (the old workspace's venv
+        /// is gone, the new one is activated), like VS Code's fresh terminals; a shell running a foreground job (dev
+        /// server, test run) is left untouched instead of having "cd" typed into the running program.
+        /// </summary>
+        public void FollowWorkspaceInTerminals(string targetDir)
+        {
+            if (string.IsNullOrEmpty(targetDir) || !Directory.Exists(targetDir)) return;
+            string resolved = Path.GetFullPath(targetDir);
+            terminalWorkingDir = resolved;
+            int busy = 0;
+            List<ConPtyTerminalSession> seen = new List<ConPtyTerminalSession>();
+            foreach (TerminalSessionState ts in terminalSessions)
+            {
+                if (ts == null || ts.TaskLabel != null) continue; // task terminals belong to their task
+                if (ts.ConPtySession == null) { ts.WorkingDir = resolved; continue; }
+                seen.Add(ts.ConPtySession);
+                string r = ts.ConPtySession.FollowWorkspaceFolder(resolved);
+                if (r == "busy") { busy++; continue; }
+                ts.WorkingDir = resolved;
+                if (r == "respawned") MaybeActivatePythonVenv(ts.ConPtySession);
+            }
+            if (splitConPtyTerminalControl != null && splitConPtyTerminalControl.Session != null && !seen.Contains(splitConPtyTerminalControl.Session))
+            {
+                string r = splitConPtyTerminalControl.Session.FollowWorkspaceFolder(resolved);
+                if (r == "busy") busy++;
+                else if (r == "respawned") MaybeActivatePythonVenv(splitConPtyTerminalControl.Session);
+            }
+            if (busy > 0 && statusLeftLabel != null)
+                statusLeftLabel.Text = busy == 1
+                    ? "A terminal is still running a command, so it stayed in the previous folder."
+                    : busy + " terminals are still running commands, so they stayed in the previous folder.";
         }
 
         public void SyncTerminalsToWorkingDirectory(string targetDir)
