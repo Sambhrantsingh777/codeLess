@@ -491,7 +491,7 @@ namespace codeLess.Avalonia.Tests
 
                 var tab = window.OpenFileInTab(largeFile, preview: false);
                 Assert.NotNull(tab);
-                Assert.True(tab.IsLargeFile);
+                Assert.False(tab.IsLargeFile); // QA #17: a 10,000-line file is an ordinary file (bracket matching, git markers stay on)
                 Assert.True(tab.Lines.Count >= 10000);
 
                 // Verify typing coalesced undo snapshots on a 10,000-line file executes rapidly (< 150ms for 20 characters)

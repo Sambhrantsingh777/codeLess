@@ -112,13 +112,14 @@ namespace codeLess.Avalonia.Tests
         {
             var (w, tab) = Open("page.html", "  ul>li.item$*2\nhello\n");
             tab.CursorLine = 0; tab.CursorCol = tab.Lines[0].Length;
+            Assert.Equal(2, tab.CustomTabSize); // indentation detected from the file (VS Code detectIndentation): 2 spaces
             w.SimulateShortcut(Key.Tab, KeyModifiers.None);
             Assert.Equal("  <ul>", tab.Lines[0]);
-            Assert.Equal("      <li class=\"item1\"></li>", tab.Lines[1]);
-            Assert.Equal("      <li class=\"item2\"></li>", tab.Lines[2]);
+            Assert.Equal("    <li class=\"item1\"></li>", tab.Lines[1]); // Emmet indents with the buffer's unit
+            Assert.Equal("    <li class=\"item2\"></li>", tab.Lines[2]);
             Assert.Equal("  </ul>", tab.Lines[3]);
             Assert.Equal(1, tab.CursorLine);
-            Assert.Equal("      <li class=\"item1\">".Length, tab.CursorCol); // first empty content
+            Assert.Equal("    <li class=\"item1\">".Length, tab.CursorCol); // first empty content
             tab.PerformUndo();
             Assert.Equal("  ul>li.item$*2", tab.Lines[0]);
 
@@ -204,7 +205,8 @@ namespace codeLess.Avalonia.Tests
 
             // folding the method keeps the class header but no longer pins the method
             tab.ScrollTopLine = 30;
-            canvas.FoldAtLine(5); // (FoldAtLine on an Allman-style header without "{" folds nothing: existing behaviour)
+            canvas.FoldAtLine(4); // the Allman header owns the "{" block (QA #13); a collapsed region is never pinned
+            Assert.Equal(85, tab.FoldedBlockRanges[4]);
             tab.ScrollTopLine = 3;
             RenderOnce(canvas);
             Assert.DoesNotContain(4, canvas.LastStickyLines);

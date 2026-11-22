@@ -547,13 +547,16 @@ namespace codeLess.Avalonia.Tests
                 window.PrimaryEditor.ShowMinimap = true;
                 Assert.True(window.PrimaryEditor.ShowMinimap);
 
-                // Code Folding via Ctrl+Shift+[ and Cmd+Shift+]
+                // Code Folding via Ctrl+Shift+[ and Cmd+Shift+]: the caret on the Allman "{" line folds the enclosing
+                // block, which belongs to its header line "namespace DemoApp" (QA #13); the caret moves to the header
                 tab.CursorLine = 2;
                 window.SimulateShortcut(Key.OemOpenBrackets, KeyModifiers.Control | KeyModifiers.Shift);
-                Assert.Contains(2, tab.FoldedBlockRanges.Keys);
+                Assert.Contains(1, tab.FoldedBlockRanges.Keys);
+                Assert.Equal(10, tab.FoldedBlockRanges[1]); // the closing "}" stays visible (VS Code)
+                Assert.Equal(1, tab.CursorLine);
 
                 window.SimulateShortcut(Key.OemCloseBrackets, KeyModifiers.Meta | KeyModifiers.Shift);
-                Assert.DoesNotContain(2, tab.FoldedBlockRanges.Keys);
+                Assert.DoesNotContain(1, tab.FoldedBlockRanges.Keys);
 
                 // Bracket matching jump (Ctrl+Shift+\ and Cmd+Shift+\)
                 tab.CursorLine = 2;

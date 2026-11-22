@@ -1824,7 +1824,7 @@ namespace codeLess.Studio
             {
                 buffer.SyncLinesFromContent();
             }
-            if (!buffer.IsLargeFile && (buffer.Content == null || buffer.Content.Length <= 512 * 1024))
+            if (!buffer.IsLargeFile)
             {
                 buffer.RefreshGutterDiff();
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buffer);
@@ -2067,7 +2067,7 @@ namespace codeLess.Studio
             if (CurrentBuffer == null) return;
             bool deferLargeAnalysis = CurrentBuffer.Lines != null && CurrentBuffer.Lines.Count > 350;
             CurrentBuffer.SyncContentFromLines(recomputeGutterDiff: !deferLargeAnalysis);
-            if (!deferLargeAnalysis && !CurrentBuffer.IsLargeFile && (CurrentBuffer.Content == null || CurrentBuffer.Content.Length <= 512 * 1024))
+            if (!deferLargeAnalysis && !CurrentBuffer.IsLargeFile)
             {
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
             }
@@ -2083,9 +2083,10 @@ namespace codeLess.Studio
                         var target = pendingAstBuffer;
                         pendingAstBuffer = null;
                         if (target == null || this.IsDisposed) return;
-                        if (target.Lines != null && target.Lines.Count <= 12000)
+                        if (target.Lines != null && !target.IsLargeFile)
                             target.RefreshGutterDiff();
-                        LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
+                        if (!target.IsLargeFile)
+                            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
                         if (ReferenceEquals(target, CurrentBuffer))
                         {
                             LayoutBreadcrumbButtons();
@@ -2867,6 +2868,8 @@ namespace codeLess.Studio
             public int ColStart;
             public int ColEnd;
             public bool IsContinuation;
+            /// <summary>Visual column where the row's text starts (the wrapped indent on continuation rows).</summary>
+            public int StartVcol;
         }
 
         private struct CursorHistoryState
@@ -3241,18 +3244,11 @@ namespace codeLess.Studio
             return Math.Max(24, (codeAreaRight - GutterWidth - 22) / Math.Max(6, CharWidth));
         }
 
+        /// <summary>Visual columns from <paramref name="colStart"/> to <paramref name="charCol"/> (real tab size, wide / astral characters).</summary>
         public int CharColToVisualCol(string lineText, int colStart, int charCol)
         {
-            if (string.IsNullOrEmpty(lineText) || charCol <= colStart) return 0;
-            int vis = 0;
-            int limit = Math.Min(lineText.Length, charCol);
-            for (int i = Math.Max(0, colStart); i < limit; i++)
-            {
-                vis += (lineText[i] == '\t') ? 4 : 1;
-            }
-            if (charCol > lineText.Length)
-                vis += (charCol - lineText.Length);
-            return vis;
+            if (charCol <= colStart) return 0;
+            return EditorTextLayout.VisualColumnFrom(lineText ?? "", colStart, charCol, TabWF(owner.CurrentBuffer), 0);
         }
 
         public Point GetCursorPixelPoint()
@@ -3263,9 +3259,10 @@ namespace codeLess.Studio
             for (int r = 0; r < lastPaintedRows.Count; r++)
             {
                 VisualRowEntry vre = lastPaintedRows[r];
-                if (vre.DocLine == buf.CursorLine && buf.CursorCol >= vre.ColStart && buf.CursorCol <= vre.ColEnd)
+                // at a soft break the caret belongs to the next row (VS Code); the line's last row also takes its end
+                if (vre.DocLine == buf.CursorLine && buf.CursorCol >= vre.ColStart && (buf.CursorCol < vre.ColEnd || vre.ColEnd >= curLineText.Length))
                 {
-                    int visCol = CharColToVisualCol(curLineText, vre.ColStart, buf.CursorCol);
+                    int visCol = SegVcol(curLineText, vre, buf.CursorCol);
                     int vx = GutterWidth + 8 + (visCol - (buf.WordWrap ? 0 : buf.ScrollLeftCol)) * CharWidth;
                     int vy = r * LineHeight + 4;
                     return new Point(vx, vy);
@@ -3282,38 +3279,58 @@ namespace codeLess.Studio
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
             buf.ClampCursor();
+            // VS Code: a caret moved into a collapsed region (Go to Line, find, undo) expands it
+            int guard = 0, hiddenBy;
+            while ((hiddenBy = HiddenByWF(buf, buf.CursorLine)) >= 0 && guard++ < 64) buf.FoldedLines.Remove(hiddenBy);
 
             int visLines = VisibleLinesCount;
             if (buf.CursorLine < buf.ScrollTopLine)
                 buf.ScrollTopLine = buf.CursorLine;
             else if (buf.CursorLine >= buf.ScrollTopLine + visLines - 1)
                 buf.ScrollTopLine = Math.Max(0, buf.CursorLine - visLines + 2);
+            int topHidden = HiddenByWF(buf, buf.ScrollTopLine);
+            if (topHidden >= 0) buf.ScrollTopLine = topHidden;
+
+            if (buf.WordWrap || (buf.FoldedLines != null && buf.FoldedLines.Count > 0))
+            {
+                // count screen rows (wrapped rows, folded regions skipped) instead of document lines
+                while (buf.ScrollTopLine < buf.CursorLine)
+                {
+                    int visualRows = 0;
+                    for (int dl = buf.ScrollTopLine; dl <= buf.CursorLine && dl < buf.Lines.Count; dl = NextVisibleLineWF(buf, dl))
+                        visualRows += WrapOfWF(buf, dl).RowCount;
+                    if (visualRows <= visLines - 1) break;
+                    buf.ScrollTopLine = NextVisibleLineWF(buf, buf.ScrollTopLine);
+                }
+                // and do not leave rows empty above when folds made the document shorter
+                while (buf.ScrollTopLine > 0)
+                {
+                    int prev = PrevVisibleLineWF(buf, buf.ScrollTopLine);
+                    if (prev < 0) break;
+                    int visualRows = 0;
+                    for (int dl = prev; dl <= buf.CursorLine && dl < buf.Lines.Count; dl = NextVisibleLineWF(buf, dl))
+                        visualRows += WrapOfWF(buf, dl).RowCount;
+                    if (visualRows > visLines - 1 || buf.CursorLine - prev > visLines * 4) break;
+                    if (buf.CursorLine >= buf.ScrollTopLine && buf.ScrollTopLine + visLines - 1 > buf.CursorLine) break; // already comfortably visible
+                    buf.ScrollTopLine = prev;
+                }
+            }
             KeepCaretOutOfStickyScrollWF(buf);
 
             if (buf.WordWrap)
             {
                 buf.ScrollLeftCol = 0;
-                int wrapCols = GetWrapCols();
-                while (buf.ScrollTopLine < buf.CursorLine)
-                {
-                    int visualRows = 0;
-                    for (int dl = buf.ScrollTopLine; dl <= buf.CursorLine && dl < buf.Lines.Count; dl++)
-                    {
-                        int lnLen = (buf.Lines[dl] ?? "").Length;
-                        visualRows += Math.Max(1, (lnLen + wrapCols - 1) / wrapCols);
-                    }
-                    if (visualRows <= visLines) break;
-                    buf.ScrollTopLine++;
-                }
                 return;
             }
 
+            // horizontal scrolling works in visual columns (tabs, wide characters) like the painter (QA #20)
             int codeWidthPx = Math.Max(100, this.Width - GutterWidth - (EffectiveShowMinimap ? MinimapWidth : 0) - 20);
             int visCols = Math.Max(10, codeWidthPx / CharWidth);
-            if (buf.CursorCol < buf.ScrollLeftCol)
-                buf.ScrollLeftCol = Math.Max(0, buf.CursorCol - 4);
-            else if (buf.CursorCol >= buf.ScrollLeftCol + visCols - 2)
-                buf.ScrollLeftCol = Math.Max(0, buf.CursorCol - visCols + 6);
+            int caretVis = EditorTextLayout.VisualColumn(buf.Lines[buf.CursorLine] ?? "", buf.CursorCol, TabWF(buf));
+            if (caretVis < buf.ScrollLeftCol)
+                buf.ScrollLeftCol = Math.Max(0, caretVis - 4);
+            else if (caretVis >= buf.ScrollLeftCol + visCols - 2)
+                buf.ScrollLeftCol = Math.Max(0, caretVis - visCols + 6);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -3341,7 +3358,9 @@ namespace codeLess.Studio
             using (Pen borderPen = new Pen(th.BorderSubtle))
                 g.DrawLine(borderPen, GutterWidth - 1, 0, GutterWidth - 1, this.Height);
 
-            bool showGutterDiff = !buf.IsLargeFile && totalLines <= 15000 && buf.ChangedLineCount > 0;
+            // QA #17: git change markers are precomputed per edit; drawing them costs nothing, so no extra line cap
+            bool showGutterDiff = !buf.IsLargeFile && buf.ChangedLineCount > 0;
+            EditorFoldingModel foldModel = FoldModelWF(buf, false); // cached per buffer version (QA #16)
 
             BeginNicetiesFrameWF(buf, visLines);
 
@@ -3349,7 +3368,7 @@ namespace codeLess.Studio
             int brLineA = -1, brColA = -1, brLineB = -1, brColB = -1;
             bool hasBracketMatch = NicetyBracketsActiveWF
                 ? TryNicetyBracketMatchWF(buf, out brLineA, out brColA, out brLineB, out brColB)
-                : ((!buf.IsLargeFile && totalLines <= 10000) &&
+                : (!buf.IsLargeFile &&
                    FindMatchingBracket(buf.Lines, buf.CursorLine, buf.CursorCol, out brLineA, out brColA, out brLineB, out brColB));
 
             int sLine, sCol, eLine, eCol;
@@ -3368,23 +3387,15 @@ namespace codeLess.Studio
                     : null;
 
                 string trimmedRight = fullLineText.TrimEnd();
-                bool isFoldableHeader = IsFoldableHeaderLine(buf.Lines, docLine);
+                bool isFoldableHeader = foldModel != null && foldModel.IsFoldable(docLine);
                 bool isFolded = buf.FoldedLines.Contains(docLine);
 
                 // Break line into 1+ visual segments when WordWrap is active
+                // VS Code word wrap (shared core layout): word-boundary breaks, continuation rows keep the indentation
                 List<VisualRowEntry> segs = new List<VisualRowEntry>();
-                if (!buf.WordWrap || isFolded || fullLineText.Length <= wrapCols)
-                {
-                    segs.Add(new VisualRowEntry { DocLine = docLine, ColStart = 0, ColEnd = fullLineText.Length, IsContinuation = false });
-                }
-                else
-                {
-                    for (int offset = 0; offset < fullLineText.Length; offset += wrapCols)
-                    {
-                        int endOff = Math.Min(fullLineText.Length, offset + wrapCols);
-                        segs.Add(new VisualRowEntry { DocLine = docLine, ColStart = offset, ColEnd = endOff, IsContinuation = offset > 0 });
-                    }
-                }
+                WrapLayout wl = (!buf.WordWrap || isFolded) ? WrapLayout.Single : WrapOfWF(buf, docLine);
+                for (int wr = 0; wr < wl.RowCount; wr++)
+                    segs.Add(new VisualRowEntry { DocLine = docLine, ColStart = wl.RowStarts[wr], ColEnd = wl.RowEnd(wr, fullLineText.Length), IsContinuation = wr > 0, StartVcol = wl.RowStartVcol(wr) });
 
                 foreach (VisualRowEntry seg in segs)
                 {
@@ -3469,8 +3480,8 @@ namespace codeLess.Studio
                             int mEnd = Math.Min(seg.ColEnd, sm.Col + sm.Length);
                             if (mEnd > mStart)
                             {
-                                int vis1 = CharColToVisualCol(fullLineText, seg.ColStart, mStart);
-                                int vis2 = CharColToVisualCol(fullLineText, seg.ColStart, mEnd);
+                                int vis1 = SegVcol(fullLineText, seg, mStart);
+                                int vis2 = SegVcol(fullLineText, seg, mEnd);
                                 int x1 = GutterWidth + 8 + Math.Max(0, vis1 - effScrollLeft) * CharWidth;
                                 int x2 = GutterWidth + 8 + Math.Max(0, vis2 - effScrollLeft) * CharWidth;
                                 if (x2 > x1)
@@ -3494,8 +3505,8 @@ namespace codeLess.Studio
                         int selEndCol = Math.Min(seg.ColEnd + (docLine < eLine ? 1 : 0), docLine == eLine ? eCol : fullLineText.Length + 1);
                         if (selEndCol > selStartCol)
                         {
-                            int vis1 = CharColToVisualCol(fullLineText, seg.ColStart, selStartCol);
-                            int vis2 = CharColToVisualCol(fullLineText, seg.ColStart, selEndCol);
+                            int vis1 = SegVcol(fullLineText, seg, selStartCol);
+                            int vis2 = SegVcol(fullLineText, seg, selEndCol);
                             int x1 = GutterWidth + 8 + Math.Max(0, vis1 - effScrollLeft) * CharWidth;
                             int x2 = GutterWidth + 8 + Math.Max(0, vis2 - effScrollLeft) * CharWidth;
                             if (x2 > x1)
@@ -3519,8 +3530,8 @@ namespace codeLess.Studio
                                 int ee = Math.Min(seg.ColEnd + (docLine < eeL ? 1 : 0), docLine == eeL ? eeC : fullLineText.Length + 1);
                                 if (ee > ss)
                                 {
-                                    int vis1 = CharColToVisualCol(fullLineText, seg.ColStart, ss);
-                                    int vis2 = CharColToVisualCol(fullLineText, seg.ColStart, ee);
+                                    int vis1 = SegVcol(fullLineText, seg, ss);
+                                    int vis2 = SegVcol(fullLineText, seg, ee);
                                     int x1 = GutterWidth + 8 + Math.Max(0, vis1 - effScrollLeft) * CharWidth;
                                     int x2 = GutterWidth + 8 + Math.Max(0, vis2 - effScrollLeft) * CharWidth;
                                     if (x2 > x1)
@@ -3541,7 +3552,7 @@ namespace codeLess.Studio
                     {
                         if (docLine == brLineA && brColA >= seg.ColStart && brColA < seg.ColEnd)
                         {
-                            int bx = GutterWidth + 8 + (CharColToVisualCol(fullLineText, seg.ColStart, brColA) - effScrollLeft) * CharWidth;
+                            int bx = GutterWidth + 8 + (SegVcol(fullLineText, seg, brColA) - effScrollLeft) * CharWidth;
                             using (SolidBrush bb = new SolidBrush(Color.FromArgb(55, th.AccentSecondary)))
                                 g.FillRectangle(bb, bx, y + 1, CharWidth, LineHeight - 2);
                             using (Pen bp = new Pen(Color.FromArgb(190, th.AccentSecondary), 1f))
@@ -3549,7 +3560,7 @@ namespace codeLess.Studio
                         }
                         if (docLine == brLineB && brColB >= seg.ColStart && brColB < seg.ColEnd)
                         {
-                            int bx = GutterWidth + 8 + (CharColToVisualCol(fullLineText, seg.ColStart, brColB) - effScrollLeft) * CharWidth;
+                            int bx = GutterWidth + 8 + (SegVcol(fullLineText, seg, brColB) - effScrollLeft) * CharWidth;
                             using (SolidBrush bb = new SolidBrush(Color.FromArgb(55, th.AccentSecondary)))
                                 g.FillRectangle(bb, bx, y + 1, CharWidth, LineHeight - 2);
                             using (Pen bp = new Pen(Color.FromArgb(190, th.AccentSecondary), 1f))
@@ -3557,14 +3568,13 @@ namespace codeLess.Studio
                         }
                     }
 
-                    string expandedSlice = lineSlice.IndexOf('\t') >= 0 ? lineSlice.Replace("\t", "    ") : lineSlice;
-                    int sliceVisLen = expandedSlice.Length;
+                    int sliceVisLen = SegVcol(fullLineText, seg, seg.ColEnd); // visual end of the row (tabs, wide chars, wrapped indent)
 
                     // Occurrences of the word under the caret / the selection (debounced)
-                    DrawOccurrencesWF(g, fullLineText, docLine, seg.ColStart, seg.ColEnd, y, effScrollLeft, codeAreaRight, th);
+                    DrawOccurrencesWF(g, fullLineText, docLine, seg.ColStart, seg.ColEnd, y, effScrollLeft, codeAreaRight, th, seg.StartVcol);
 
                     // Syntax Highlighted Code Slice
-                    DrawNicetyLineWF(g, buf, docLine, fullLineText, seg.ColStart, seg.ColEnd, y + 2, effScrollLeft, codeAreaRight, th);
+                    DrawNicetyLineWF(g, buf, docLine, fullLineText, seg.ColStart, seg.ColEnd, y + 2, effScrollLeft, codeAreaRight, th, seg.StartVcol);
 
                     // Inline annotations & diff pills only on final segment of the line
                     bool isLastSegOfLine = (seg.ColEnd == fullLineText.Length);
@@ -3627,7 +3637,7 @@ namespace codeLess.Studio
                         AstSymbolItem symOnLine = buf.Symbols.FirstOrDefault(s => s.Line == docLine + 1 && (s.Kind == "fn" || s.Kind == "class" || s.Kind == "struct" || s.Kind == "interface"));
                         if (symOnLine != null)
                         {
-                            int lensX = GutterWidth + 8 + (lineSlice.Length - effScrollLeft + 3) * CharWidth;
+                            int lensX = GutterWidth + 8 + (sliceVisLen - effScrollLeft + 3) * CharWidth;
                             int availW = codeAreaRight - lensX - 10;
                             if (availW >= 110)
                             {
@@ -3651,10 +3661,11 @@ namespace codeLess.Studio
                             int dCol = Math.Max(0, diag.Column - 1);
                             if (dCol >= seg.ColStart && dCol <= seg.ColEnd)
                             {
-                                int sqStartX = GutterWidth + 8 + Math.Max(0, (dCol - seg.ColStart) - effScrollLeft) * CharWidth;
-                                int sqWidth = Math.Max(CharWidth * 3, Math.Min(180, (lineSlice.Length - (dCol - seg.ColStart)) * CharWidth));
+                                int dVis = SegVcol(fullLineText, seg, dCol);
+                                int sqStartX = GutterWidth + 8 + Math.Max(0, dVis - effScrollLeft) * CharWidth;
+                                int sqWidth = Math.Max(CharWidth * 3, Math.Min(180, (sliceVisLen - dVis) * CharWidth));
                                 if (diag.IsLanguageServer && diag.EndColumn > diag.Column)
-                                    sqWidth = Math.Max(CharWidth, Math.Min(seg.ColEnd + 1, diag.EndColumn - 1) - dCol) * CharWidth; // exact LSP range
+                                    sqWidth = Math.Max(CharWidth, (SegVcol(fullLineText, seg, Math.Min(seg.ColEnd, diag.EndColumn - 1)) - dVis) * CharWidth); // exact LSP range
                                 Color sqColor = diag.Severity == "Error"
                                     ? Color.FromArgb(244, 63, 94)
                                     : (diag.Severity == "Warning" ? Color.FromArgb(251, 191, 36) : Color.FromArgb(56, 189, 248));
@@ -3663,7 +3674,7 @@ namespace codeLess.Studio
                         }
                         if (isLastSegOfLine && firstDiag != null && firstDiag.Severity != "Info" && !buf.WordWrap)
                         {
-                            int errLensX = GutterWidth + 8 + (lineSlice.Length - effScrollLeft + 3) * CharWidth;
+                            int errLensX = GutterWidth + 8 + (sliceVisLen - effScrollLeft + 3) * CharWidth;
                             int availErrW = codeAreaRight - errLensX - 10;
                             if (availErrW >= 90)
                             {
@@ -3681,7 +3692,7 @@ namespace codeLess.Studio
                     {
                         string[] ghostLines = buf.GhostText.Replace("\r\n", "\n").Split('\n');
                         string firstGhostLine = ghostLines[0];
-                        int ghostVisCol = CharColToVisualCol(fullLineText, seg.ColStart, buf.CursorCol);
+                        int ghostVisCol = SegVcol(fullLineText, seg, buf.CursorCol);
                         int ghostX = GutterWidth + 8 + (ghostVisCol - effScrollLeft) * CharWidth + 2;
                         if (ghostX < codeAreaRight - 40)
                         {
@@ -3718,7 +3729,7 @@ namespace codeLess.Studio
                         {
                             if (ec.CursorLine == docLine && ec.CursorCol >= seg.ColStart && ec.CursorCol <= seg.ColEnd)
                             {
-                                int ecVisCol = CharColToVisualCol(fullLineText, seg.ColStart, ec.CursorCol);
+                                int ecVisCol = SegVcol(fullLineText, seg, ec.CursorCol);
                                 int cx = GutterWidth + 8 + (ecVisCol - effScrollLeft) * CharWidth;
                                 if (cx >= GutterWidth && cx < codeAreaRight)
                                 {
@@ -3732,9 +3743,9 @@ namespace codeLess.Studio
                     // Folded Region Pill
                     if (isLastSegOfLine && isFolded)
                     {
-                        int foldEnd = FindFoldEndLine(buf.Lines, docLine);
+                        int foldEnd = Math.Max(docLine, FoldEndWF(buf, docLine)); // cached model, no block scan per repaint (QA #16)
                         int hiddenCount = Math.Max(1, foldEnd - docLine);
-                        int pillX = GutterWidth + 8 + (lineSlice.Length - effScrollLeft + 1) * CharWidth;
+                        int pillX = GutterWidth + 8 + (sliceVisLen - effScrollLeft + 1) * CharWidth;
                         using (SolidBrush fb = new SolidBrush(th.BgElevated))
                             g.FillRectangle(fb, pillX, y + 2, 118, LineHeight - 4);
                         TextRenderer.DrawText(g, string.Format("... {0} lines folded", hiddenCount), gutterFont, new Point(pillX + 6, y + 3), th.AccentPrimary, TextFormatFlags.NoPadding);
@@ -3918,113 +3929,33 @@ namespace codeLess.Studio
             return w;
         }
 
+        /// <summary>Whether a fold can start at <paramref name="lineIdx"/> (shared folding model, cached per buffer version).</summary>
         public bool IsFoldableHeaderLine(List<string> lines, int lineIdx)
         {
-            if (lines == null || lineIdx < 0 || lineIdx >= lines.Count - 1) return false;
-            string raw = lines[lineIdx] ?? "";
-            string trimmed = raw.Trim();
-            if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("//") || trimmed.StartsWith("#") || trimmed == "}" || trimmed == "};")
-                return false;
-            if (trimmed.EndsWith("{") || trimmed.EndsWith(":"))
-                return FindFoldEndLine(lines, lineIdx) > lineIdx;
-
-            int baseIndent = GetLineIndentWidth(raw);
-            for (int next = lineIdx + 1; next < lines.Count; next++)
+            EditorTabBuffer buf = owner.CurrentBuffer;
+            if (lines == null || lineIdx < 0 || lineIdx >= lines.Count) return false;
+            if (buf == null || !ReferenceEquals(lines, buf.Lines))
             {
-                string nextLn = lines[next] ?? "";
-                if (string.IsNullOrWhiteSpace(nextLn)) continue;
-                string nextTrim = nextLn.TrimStart();
-                int nextIndent = GetLineIndentWidth(nextLn);
-                if (nextIndent == baseIndent && nextTrim.StartsWith("{"))
-                    return FindFoldEndLine(lines, lineIdx) > lineIdx;
-                return nextIndent > baseIndent && FindFoldEndLine(lines, lineIdx) > lineIdx;
+                foreach (FoldRange r in EditorFoldingModel.ComputeFor(lines, buf != null ? buf.FilePath : null, 4)) if (r.Start == lineIdx) return true;
+                return false;
             }
-            return false;
+            EditorFoldingModel m = FoldModelWF(buf, true);
+            return m != null && m.IsFoldable(lineIdx);
         }
 
+        /// <summary>Last line hidden when <paramref name="startLine"/> is folded (startLine itself when it is not a fold header).</summary>
         public int FindFoldEndLine(List<string> lines, int startLine)
         {
-            if (lines == null || startLine < 0 || startLine >= lines.Count - 1) return startLine;
-            string header = lines[startLine] ?? "";
-            string headerTrim = header.TrimEnd();
-            int baseIndent = GetLineIndentWidth(header);
-
-            bool startsBraceBlock = headerTrim.EndsWith("{");
-            int braceSearchStart = startLine;
-            if (!startsBraceBlock)
+            EditorTabBuffer buf = owner.CurrentBuffer;
+            if (lines == null || startLine < 0 || startLine >= lines.Count) return startLine;
+            if (buf == null || !ReferenceEquals(lines, buf.Lines))
             {
-                for (int k = startLine + 1; k < lines.Count; k++)
-                {
-                    if (string.IsNullOrWhiteSpace(lines[k])) continue;
-                    if (GetLineIndentWidth(lines[k]) == baseIndent && lines[k].TrimStart().StartsWith("{"))
-                    {
-                        startsBraceBlock = true;
-                        braceSearchStart = k;
-                    }
-                    break;
-                }
+                foreach (FoldRange r in EditorFoldingModel.ComputeFor(lines, buf != null ? buf.FilePath : null, 4)) if (r.Start == startLine) return r.End;
+                return startLine;
             }
-
-            if (startsBraceBlock)
-            {
-                int depth = 0;
-                bool inBlockComment = false;
-                for (int i = braceSearchStart; i < lines.Count; i++)
-                {
-                    string ln = lines[i] ?? "";
-                    bool inStr = false;
-                    char strChar = '\0';
-                    for (int c = 0; c < ln.Length; c++)
-                    {
-                        char ch = ln[c];
-                        if (inBlockComment)
-                        {
-                            if (ch == '*' && c + 1 < ln.Length && ln[c + 1] == '/') { inBlockComment = false; c++; }
-                            continue;
-                        }
-                        if (!inStr)
-                        {
-                            if (ch == '/' && c + 1 < ln.Length && ln[c + 1] == '/') break;
-                            if (ch == '/' && c + 1 < ln.Length && ln[c + 1] == '*') { inBlockComment = true; c++; continue; }
-                        }
-                        if (ch == '"' || ch == '\'')
-                        {
-                            int bs = 0;
-                            for (int k = c - 1; k >= 0 && ln[k] == '\\'; k--) bs++;
-                            if ((bs % 2) == 0)
-                            {
-                                if (!inStr) { inStr = true; strChar = ch; continue; }
-                                else if (ch == strChar) { inStr = false; continue; }
-                            }
-                        }
-                        if (inStr) continue;
-
-                        if (ch == '{') depth++;
-                        else if (ch == '}')
-                        {
-                            depth--;
-                            if (depth == 0 && i > startLine)
-                                return i;
-                        }
-                    }
-                }
-            }
-
-            int lastBodyLine = startLine;
-            for (int i = startLine + 1; i < lines.Count; i++)
-            {
-                string ln = lines[i];
-                if (string.IsNullOrWhiteSpace(ln)) continue;
-                int ind = GetLineIndentWidth(ln);
-                if (ind <= baseIndent)
-                {
-                    if (ln.TrimStart().StartsWith("}") || ln.TrimStart().StartsWith("]"))
-                        return i;
-                    return Math.Max(startLine, lastBodyLine);
-                }
-                lastBodyLine = i;
-            }
-            return Math.Max(startLine, lastBodyLine);
+            EditorFoldingModel m = FoldModelWF(buf, true);
+            int e = m != null ? m.EndOf(startLine) : -1;
+            return e > startLine ? e : startLine;
         }
 
         public bool ToggleFoldAtLine(int lineIdx)
@@ -4055,18 +3986,7 @@ namespace codeLess.Studio
         private int VisualColToCharCol(string lineText, int colStart, int colEnd, int targetVisCol)
         {
             if (string.IsNullOrEmpty(lineText) || targetVisCol <= 0) return colStart;
-            int vis = 0;
-            int limit = Math.Min(lineText.Length, colEnd);
-            for (int i = colStart; i < limit; i++)
-            {
-                int step = (lineText[i] == '\t') ? 4 : 1;
-                if (vis + step > targetVisCol)
-                {
-                    return (targetVisCol - vis >= (step + 1) / 2) ? (i + 1) : i;
-                }
-                vis += step;
-            }
-            return limit;
+            return EditorTextLayout.CharIndexForVisualColumnInRange(lineText, colStart, colEnd, targetVisCol, TabWF(owner.CurrentBuffer), 0);
         }
 
         private void ScreenPointToLineCol(Point pt, out int line, out int col)
@@ -4076,27 +3996,26 @@ namespace codeLess.Studio
 
             int rowOffset = Math.Max(0, (pt.Y - 4) / LineHeight);
             int effScrollLeft = buf.WordWrap ? 0 : buf.ScrollLeftCol;
+            double vx = effScrollLeft + (double)(pt.X - GutterWidth - 8) / Math.Max(1, CharWidth);
+            int tab = TabWF(buf);
 
             if (lastPaintedRows.Count > 0)
             {
                 int clampedRow = Math.Min(rowOffset, lastPaintedRows.Count - 1);
                 VisualRowEntry seg = lastPaintedRows[clampedRow];
                 line = Math.Max(0, Math.Min(buf.Lines.Count - 1, seg.DocLine));
-                int segVisCol = effScrollLeft + (int)Math.Round((double)(pt.X - GutterWidth - 8) / CharWidth);
-                col = VisualColToCharCol(buf.Lines[line], seg.ColStart, seg.ColEnd, segVisCol);
+                string text = buf.Lines[line] ?? "";
+                col = EditorTextLayout.CharIndexForVisualColumnInRange(text, seg.ColStart, seg.ColEnd, vx, tab, seg.StartVcol);
+                // past the end of a continuation row: stay on that row (its boundary belongs to the next row)
+                if (seg.ColEnd < text.Length && col >= seg.ColEnd) col = Math.Max(seg.ColStart, seg.ColEnd - 1);
                 return;
             }
 
             int docLine = buf.ScrollTopLine;
             for (int r = 0; r < rowOffset && docLine < buf.Lines.Count - 1; r++)
-            {
-                if (buf.FoldedLines.Contains(docLine))
-                    docLine = FindFoldEndLine(buf.Lines, docLine);
-                docLine = Math.Min(buf.Lines.Count - 1, docLine + 1);
-            }
+                docLine = Math.Min(buf.Lines.Count - 1, NextVisibleLineWF(buf, docLine));
             line = Math.Max(0, Math.Min(buf.Lines.Count - 1, docLine));
-            int rawVisCol = effScrollLeft + (int)Math.Round((double)(pt.X - GutterWidth - 8) / CharWidth);
-            col = VisualColToCharCol(buf.Lines[line], 0, buf.Lines[line].Length, rawVisCol);
+            col = EditorTextLayout.CharIndexForVisualColumn(buf.Lines[line] ?? "", vx, tab);
         }
 
         private void PushCursorHistorySnapshot(EditorTabBuffer buf)
@@ -4269,6 +4188,9 @@ namespace codeLess.Studio
             this.Focus();
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
+            ResetPreferredColumnWF();
+            wfAutoCloseLine = -1;
+            buf.LastTypingUndoTick = 0;
 
             if (TryClickLineAnnotation(e)) return;
             if (e.Button == MouseButtons.Left && ClickStickyLineAt(e.Location)) return;
@@ -4708,8 +4630,8 @@ namespace codeLess.Studio
                     int s0 = Math.Max(linkHover.StartCol, vre.ColStart);
                     int s1 = Math.Min(Math.Min(linkHover.EndCol, text.Length), vre.ColEnd);
                     if (s1 <= s0) continue;
-                    int x0 = GutterWidth + 8 + (CharColToVisualCol(text, vre.ColStart, s0) - effScrollLeft) * CharWidth;
-                    int x1 = GutterWidth + 8 + (CharColToVisualCol(text, vre.ColStart, s1) - effScrollLeft) * CharWidth;
+                    int x0 = GutterWidth + 8 + (SegVcol(text, vre, s0) - effScrollLeft) * CharWidth;
+                    int x1 = GutterWidth + 8 + (SegVcol(text, vre, s1) - effScrollLeft) * CharWidth;
                     x0 = Math.Max(GutterWidth, x0);
                     if (x1 <= x0) continue;
                     int y = r * LineHeight + 4 + LineHeight - 3;
@@ -5216,41 +5138,38 @@ namespace codeLess.Studio
             this.Invalidate();
         }
 
+        /// <summary>
+        /// Indent / outdent the selected lines by one level of the buffer's indentation (QA #12): tab stops of the real tab
+        /// size, spaces or tabs per file; blank lines are not indented when several lines are selected; a selection
+        /// ending at column 0 does not include that line; caret and anchor follow the text.
+        /// </summary>
         public void IndentSelectionLines(bool indent)
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            buf.PushUndoSnapshot();
             int sLine, sCol, eLine, eCol;
             buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
             if (eLine > sLine && eCol == 0) eLine--;
-            string indentUnit = GetIndentUnit();
-            int maxRemSpaces = owner != null ? Math.Max(1, Math.Min(8, owner.TabSize)) : 4;
+            int tab = TabWF(buf);
+            bool spaces = SpacesWF(buf);
+            bool multi = eLine > sLine;
+            bool any = false;
             for (int l = sLine; l <= eLine && l < buf.Lines.Count; l++)
             {
                 string ln = buf.Lines[l] ?? "";
-                if (indent)
-                {
-                    buf.Lines[l] = indentUnit + ln;
-                    if (buf.HasSelection() && l == buf.SelectionAnchorLine) buf.SelectionAnchorCol += indentUnit.Length;
-                    if (l == buf.CursorLine) buf.CursorCol += indentUnit.Length;
-                }
-                else
-                {
-                    int removeSp = 0;
-                    if (ln.StartsWith("\t")) removeSp = 1;
-                    else
-                    {
-                        while (removeSp < maxRemSpaces && removeSp < ln.Length && ln[removeSp] == ' ') removeSp++;
-                    }
-                    if (removeSp > 0)
-                    {
-                        buf.Lines[l] = ln.Substring(removeSp);
-                        if (buf.HasSelection() && l == buf.SelectionAnchorLine) buf.SelectionAnchorCol = Math.Max(0, buf.SelectionAnchorCol - removeSp);
-                        if (l == buf.CursorLine) buf.CursorCol = Math.Max(0, buf.CursorCol - removeSp);
-                    }
-                }
+                if (indent && multi && ln.Trim().Length == 0) continue;
+                string nl = indent ? EditorIndentation.IndentLine(ln, tab, spaces) : EditorIndentation.OutdentLine(ln, tab, spaces);
+                if (nl == ln) continue;
+                if (!any) { buf.PushUndoSnapshot(); any = true; }
+                int oldWs = EditorIndentation.LeadingWhitespaceLength(ln);
+                int d = EditorIndentation.LeadingWhitespaceLength(nl) - oldWs;
+                buf.Lines[l] = nl;
+                if (buf.HasSelection() && l == buf.SelectionAnchorLine && !(indent && buf.SelectionAnchorCol == 0))
+                    buf.SelectionAnchorCol = buf.SelectionAnchorCol >= oldWs ? Math.Max(0, buf.SelectionAnchorCol + d) : Math.Min(buf.SelectionAnchorCol, oldWs + d);
+                if (l == buf.CursorLine)
+                    buf.CursorCol = buf.CursorCol >= oldWs ? Math.Max(0, buf.CursorCol + d) : (indent ? buf.CursorCol + d : Math.Min(buf.CursorCol, oldWs + d));
             }
+            if (!any) return;
             owner.NotifyBufferContentChanged();
             owner.UpdateCursorStatusLabel();
             this.Invalidate();
@@ -5562,8 +5481,9 @@ namespace codeLess.Studio
                     string ln = buf.Lines[lineIdx] ?? "";
                     if (sCol > 0)
                     {
-                        buf.Lines[lineIdx] = ln.Remove(sCol - 1, 1);
-                        newCol = sCol - 1;
+                        int prev = EditorTextLayout.PrevCharBoundary(ln, sCol);
+                        buf.Lines[lineIdx] = ln.Remove(prev, sCol - prev);
+                        newCol = prev;
                     }
                     else if (lineIdx > 0)
                     {
@@ -5611,7 +5531,7 @@ namespace codeLess.Studio
                     string ln = buf.Lines[lineIdx] ?? "";
                     if (sCol < ln.Length)
                     {
-                        buf.Lines[lineIdx] = ln.Remove(sCol, 1);
+                        buf.Lines[lineIdx] = ln.Remove(sCol, EditorTextLayout.NextCharBoundary(ln, sCol) - sCol);
                     }
                     else if (lineIdx + 1 < buf.Lines.Count)
                     {
@@ -5752,66 +5672,17 @@ namespace codeLess.Studio
                 }
                 else
                 {
-                    if (col < buf.Lines[line].Length) col++;
-                    else if (line + 1 < buf.Lines.Count) { line++; col = 0; }
+                    if (col < buf.Lines[line].Length) col = EditorTextLayout.NextCharBoundary(buf.Lines[line], col);
+                    else if (line + 1 < buf.Lines.Count) { line = NextVisibleLineWF(buf, line); if (line >= buf.Lines.Count) line = buf.Lines.Count - 1; col = 0; }
                 }
             }
             else if (key == Keys.Up)
             {
-                if (buf.WordWrap && col >= wrapCols)
-                {
-                    col -= wrapCols;
-                }
-                else if (line > 0)
-                {
-                    int segOffset = buf.WordWrap ? (col % wrapCols) : col;
-                    line--;
-                    if (buf.FoldedLines != null && buf.FoldedLines.Count > 0)
-                    {
-                        foreach (int fh in buf.FoldedLines.OrderByDescending(x => x))
-                        {
-                            if (fh < line && FindFoldEndLine(buf.Lines, fh) >= line)
-                            {
-                                line = fh;
-                                break;
-                            }
-                        }
-                    }
-                    string prevLn = buf.Lines[line] ?? "";
-                    if (buf.WordWrap && prevLn.Length > wrapCols)
-                    {
-                        int lastSegStart = ((prevLn.Length - 1) / wrapCols) * wrapCols;
-                        col = Math.Min(prevLn.Length, lastSegStart + segOffset);
-                    }
-                    else
-                    {
-                        col = Math.Min(prevLn.Length, segOffset);
-                    }
-                }
+                MoveVerticalWF(buf, ref line, ref col, -1); // visual rows (wrap / folds), sticky column (QA #11 / #20)
             }
             else if (key == Keys.Down)
             {
-                string curLn = buf.Lines[line] ?? "";
-                int maxSegIdx = (buf.WordWrap && curLn.Length > wrapCols) ? ((curLn.Length - 1) / wrapCols) : 0;
-                int curSegIdx = buf.WordWrap ? (col / wrapCols) : 0;
-                if (buf.WordWrap && curSegIdx < maxSegIdx)
-                {
-                    col = Math.Min(curLn.Length, col + wrapCols);
-                }
-                else if (line + 1 < buf.Lines.Count)
-                {
-                    int segOffset = buf.WordWrap ? (col % wrapCols) : col;
-                    if (buf.FoldedLines != null && buf.FoldedLines.Contains(line))
-                    {
-                        int foldEnd = FindFoldEndLine(buf.Lines, line);
-                        line = Math.Min(buf.Lines.Count - 1, foldEnd + 1);
-                    }
-                    else
-                    {
-                        line++;
-                    }
-                    col = Math.Min(buf.Lines[line].Length, segOffset);
-                }
+                MoveVerticalWF(buf, ref line, ref col, 1);
             }
             else if (key == Keys.Home)
             {
@@ -5883,19 +5754,15 @@ namespace codeLess.Studio
                 string ln = buf.Lines[lineIdx] ?? "";
                 sCol = Math.Max(0, Math.Min(ln.Length, sCol));
 
-                string indent = Regex.Match(ln, @"^[ \t]*").Value;
-                string before = ln.Substring(0, sCol);
-                string after = ln.Substring(sCol);
-                if (before.TrimEnd().EndsWith("{") || before.TrimEnd().EndsWith(":") || before.TrimEnd().EndsWith("("))
-                    indent += "    ";
+                int caretRow, caretCol;
+                string[] parts = EditorIndentation.SplitForEnter(ln, sCol, TabWF(buf), SpacesWF(buf), IsIndentBasedWF(buf), out caretRow, out caretCol);
+                buf.Lines[lineIdx] = parts[0];
+                for (int pi = 1; pi < parts.Length; pi++) buf.Lines.Insert(lineIdx + pi, parts[pi]);
 
-                buf.Lines[lineIdx] = before;
-                buf.Lines.Insert(lineIdx + 1, indent + after);
+                ShiftProcessedCarets(buf, processed, lineIdx - 1, parts.Length - 1);
 
-                ShiftProcessedCarets(buf, processed, lineIdx - 1, 1);
-
-                int newLine = lineIdx + 1;
-                int newCol = indent.Length;
+                int newLine = lineIdx + caretRow;
+                int newCol = caretCol;
                 if (cb.IsPrimary)
                 {
                     buf.CursorLine = newLine;
@@ -5924,6 +5791,13 @@ namespace codeLess.Studio
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
             caretBlinkOn = true;
+            // the sticky Up/Down column survives only vertical motions (VS Code)
+            if (e.KeyCode != Keys.Up && e.KeyCode != Keys.Down && e.KeyCode != Keys.PageUp && e.KeyCode != Keys.PageDown &&
+                e.KeyCode != Keys.ShiftKey && e.KeyCode != Keys.ControlKey && e.KeyCode != Keys.Menu)
+                ResetPreferredColumnWF();
+            if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Up || e.KeyCode == Keys.Down ||
+                e.KeyCode == Keys.Home || e.KeyCode == Keys.End || e.KeyCode == Keys.PageUp || e.KeyCode == Keys.PageDown)
+                buf.LastTypingUndoTick = 0; // moving the caret ends the typing undo group (VS Code)
             // Language-server popups / shortcuts get the first look (only when a server serves this file).
             if (PreviewKeyHandler != null && PreviewKeyHandler(e))
             {
@@ -6319,12 +6193,7 @@ namespace codeLess.Studio
                 }
                 else
                 {
-                    string curLine = buf.Lines[buf.CursorLine];
-                    string indent = Regex.Match(curLine, @"^[ \t]*").Value;
-                    string before = curLine.Substring(0, Math.Min(curLine.Length, buf.CursorCol));
-                    if (before.TrimEnd().EndsWith("{") || before.TrimEnd().EndsWith(":") || before.TrimEnd().EndsWith("("))
-                        indent += GetIndentUnit();
-                    ReplaceSelectionWithText("\n" + indent);
+                    InsertNewlineWF(buf); // indentation of the buffer, "{|}" split, trimAutoWhitespace (QA #12)
                 }
                 owner.NotifyBufferContentChanged();
                 EnsureCursorVisible();
@@ -6341,49 +6210,19 @@ namespace codeLess.Studio
                     this.Invalidate();
                     return;
                 }
-                buf.PushUndoSnapshot();
-                int sLine, sCol, eLine, eCol;
-                buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-                string indentUnit = GetIndentUnit();
-                int maxRemSpaces = owner != null ? Math.Max(1, Math.Min(8, owner.TabSize)) : 4;
-
-                if (e.Shift)
+                // QA #12: the buffer's tab size / insert spaces (detected, .editorconfig, settings), tab stops like VS Code
+                if (e.Shift || TabIndentsLinesWF(buf))
                 {
-                    for (int l = sLine; l <= eLine && l < buf.Lines.Count; l++)
-                    {
-                        string ln = buf.Lines[l] ?? "";
-                        int removeSp = 0;
-                        if (ln.StartsWith("\t")) removeSp = 1;
-                        else
-                        {
-                            while (removeSp < maxRemSpaces && removeSp < ln.Length && ln[removeSp] == ' ') removeSp++;
-                        }
-                        if (removeSp > 0)
-                        {
-                            buf.Lines[l] = ln.Substring(removeSp);
-                            if (l == buf.SelectionAnchorLine) buf.SelectionAnchorCol = Math.Max(0, buf.SelectionAnchorCol - removeSp);
-                            if (l == buf.CursorLine) buf.CursorCol = Math.Max(0, buf.CursorCol - removeSp);
-                        }
-                    }
+                    IndentSelectionLines(!e.Shift);
+                    return;
                 }
-                else if (buf.HasSelection() && (sLine != eLine || (sCol == 0 && eCol >= (buf.Lines[sLine] ?? "").Length && eCol > 0)))
-                {
-                    for (int l = sLine; l <= eLine && l < buf.Lines.Count; l++)
-                    {
-                        buf.Lines[l] = indentUnit + (buf.Lines[l] ?? "");
-                        if (l == buf.SelectionAnchorLine) buf.SelectionAnchorCol += indentUnit.Length;
-                        if (l == buf.CursorLine) buf.CursorCol += indentUnit.Length;
-                    }
-                }
-                else if (buf.HasMultiCursors)
-                {
-                    ReplaceAllCaretsText(indentUnit);
-                }
+                buf.PushUndoSnapshot(!buf.HasSelection() && !buf.HasMultiCursors);
+                if (buf.HasMultiCursors)
+                    ReplaceAllCaretsText(SpacesWF(buf) ? EditorIndentation.TabInsertText(buf.Lines[buf.CursorLine], buf.CursorCol, TabWF(buf), true) : "\t");
                 else
-                {
-                    ReplaceSelectionWithText(indentUnit);
-                }
+                    InsertTabWF(buf);
                 owner.NotifyBufferContentChanged();
+                EnsureCursorVisible();
                 this.Invalidate();
                 return;
             }
@@ -6409,19 +6248,9 @@ namespace codeLess.Studio
                     buf.SelectionAnchorCol = wCol;
                     ReplaceSelectionWithText("");
                 }
-                else if (buf.CursorCol > 0)
+                else
                 {
-                    string ln = buf.Lines[buf.CursorLine];
-                    buf.Lines[buf.CursorLine] = ln.Remove(buf.CursorCol - 1, 1);
-                    buf.CursorCol--;
-                }
-                else if (buf.CursorLine > 0)
-                {
-                    int prevLen = buf.Lines[buf.CursorLine - 1].Length;
-                    buf.Lines[buf.CursorLine - 1] += buf.Lines[buf.CursorLine];
-                    buf.Lines.RemoveAt(buf.CursorLine);
-                    buf.CursorLine--;
-                    buf.CursorCol = prevLen;
+                    BackspaceWF(buf); // auto-closed pair, tab stops, never splits an emoji (surrogate pair)
                 }
                 CompleteLinkedTagEditWF(buf, linkedTag);
                 owner.NotifyBufferContentChanged();
@@ -6455,14 +6284,7 @@ namespace codeLess.Studio
                 }
                 else
                 {
-                    string ln = buf.Lines[buf.CursorLine];
-                    if (buf.CursorCol < ln.Length)
-                        buf.Lines[buf.CursorLine] = ln.Remove(buf.CursorCol, 1);
-                    else if (buf.CursorLine + 1 < buf.Lines.Count)
-                    {
-                        buf.Lines[buf.CursorLine] += buf.Lines[buf.CursorLine + 1];
-                        buf.Lines.RemoveAt(buf.CursorLine + 1);
-                    }
+                    DeleteForwardWF(buf);
                 }
                 CompleteLinkedTagEditWF(buf, linkedTag);
                 owner.NotifyBufferContentChanged();
@@ -6533,22 +6355,20 @@ namespace codeLess.Studio
                 return;
             }
 
-            string closePair = null;
-            if (e.KeyChar == '{') closePair = "}";
-            else if (e.KeyChar == '(') closePair = ")";
-            else if (e.KeyChar == '[') closePair = "]";
-            else if (e.KeyChar == '"') closePair = "\"";
-            else if (e.KeyChar == '\'') closePair = "'";
-            else if (e.KeyChar == '`') closePair = "`";
+            ResetPreferredColumnWF();
+            string path = buf.FilePath ?? buf.FileName ?? "";
+            char closerChar = EditorAutoClosing.CloserFor(e.KeyChar, path);
+            string closePair = closerChar != '\0' ? closerChar.ToString() : null;
 
-            // Skip-over closing delimiter if next character is already that closing character
-            if (!buf.HasSelection() && (e.KeyChar == ')' || e.KeyChar == '}' || e.KeyChar == ']' || e.KeyChar == '"' || e.KeyChar == '\'' || e.KeyChar == '`'))
+            // Overtype the closer this editor auto-inserted, or the quote that closes the current string (VS Code "auto")
+            if (!buf.HasSelection() && (EditorAutoClosing.IsCloser(e.KeyChar) || EditorAutoClosing.IsQuote(e.KeyChar)))
             {
                 string curLn = buf.Lines[buf.CursorLine] ?? "";
-                if (buf.CursorCol < curLn.Length && curLn[buf.CursorCol] == e.KeyChar)
+                bool autoInserted = wfAutoCloseLine == buf.CursorLine && wfAutoCloseCol == buf.CursorCol;
+                if (EditorAutoClosing.ShouldOvertype(curLn, buf.CursorCol, e.KeyChar, autoInserted))
                 {
                     buf.CursorCol++;
-                    buf.SelectionAnchorCol = buf.CursorCol;
+                    if (autoInserted) wfAutoCloseLine = -1;
                     owner.UpdateCursorStatusLabel();
                     EnsureCursorVisible();
                     this.Invalidate();
@@ -6558,33 +6378,42 @@ namespace codeLess.Studio
 
             buf.PushUndoSnapshot(closePair == null);
 
-            if (closePair != null && buf.HasSelection())
+            string surroundOpen, surroundClose;
+            if (closePair != null && buf.HasSelection() && EditorAutoClosing.TryGetSurroundPair(e.KeyChar, path, out surroundOpen, out surroundClose))
             {
-                string selected = buf.GetSelectedText();
-                if (!selected.Contains("\n"))
+                // auto-surround (also multi-line selections), the selection stays on the wrapped text
+                int sLine, sCol, eLine, eCol;
+                buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
+                buf.Lines[eLine] = buf.Lines[eLine].Insert(Math.Min(eCol, buf.Lines[eLine].Length), surroundClose);
+                buf.Lines[sLine] = buf.Lines[sLine].Insert(Math.Min(sCol, buf.Lines[sLine].Length), surroundOpen);
+                bool forward = buf.CursorLine > buf.SelectionAnchorLine || (buf.CursorLine == buf.SelectionAnchorLine && buf.CursorCol >= buf.SelectionAnchorCol);
+                int newEndCol = eCol + (sLine == eLine ? surroundOpen.Length : 0);
+                if (forward)
                 {
-                    int sLine, sCol, eLine, eCol;
-                    buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-                    ReplaceSelectionWithText(e.KeyChar + selected + closePair);
-                    buf.SelectionAnchorLine = sLine;
-                    buf.SelectionAnchorCol = sCol + 1;
-                    buf.CursorLine = sLine;
-                    buf.CursorCol = sCol + 1 + selected.Length;
+                    buf.SelectionAnchorLine = sLine; buf.SelectionAnchorCol = sCol + surroundOpen.Length;
+                    buf.CursorLine = eLine; buf.CursorCol = newEndCol;
                 }
                 else
                 {
-                    ReplaceSelectionWithText(e.KeyChar.ToString());
+                    buf.SelectionAnchorLine = eLine; buf.SelectionAnchorCol = newEndCol;
+                    buf.CursorLine = sLine; buf.CursorCol = sCol + surroundOpen.Length;
                 }
+                wfAutoCloseLine = -1;
             }
-            else if (closePair != null && !buf.HasSelection())
+            else if (closePair != null && !buf.HasSelection() && EditorAutoClosing.ShouldAutoClose(buf.Lines[buf.CursorLine] ?? "", buf.CursorCol, e.KeyChar, path))
             {
                 ReplaceSelectionWithText(e.KeyChar + closePair);
                 buf.CursorCol--;
-                buf.SelectionAnchorCol = buf.CursorCol;
+                wfAutoCloseLine = buf.CursorLine;
+                wfAutoCloseCol = buf.CursorCol;
             }
             else
             {
+                bool before = !buf.HasSelection() && wfAutoCloseLine == buf.CursorLine && buf.CursorCol <= wfAutoCloseCol;
                 ReplaceSelectionWithText(e.KeyChar.ToString());
+                if (before) wfAutoCloseCol++;
+                else if (wfAutoCloseLine != buf.CursorLine) wfAutoCloseLine = -1;
+                if (EditorAutoClosing.IsCloser(e.KeyChar)) ReindentClosingBracketWF(buf);
             }
 
             owner.NotifyBufferContentChanged();
@@ -6651,6 +6480,8 @@ namespace codeLess.Studio
             }
         }
 
+        private string lastWholeLineCopyWF;
+
         private void PerformCopy()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
@@ -6658,6 +6489,7 @@ namespace codeLess.Studio
             string toCopy = buf.HasMultiCursors
                 ? GetMultiCursorClipboardText(buf)
                 : (buf.HasSelection() ? buf.GetSelectedText() : (buf.Lines[buf.CursorLine] + "\n"));
+            lastWholeLineCopyWF = (!buf.HasMultiCursors && !buf.HasSelection()) ? toCopy : null;
             if (!string.IsNullOrEmpty(toCopy)) SafeSetClipboardText(toCopy);
         }
 
@@ -6679,7 +6511,8 @@ namespace codeLess.Studio
             }
             else
             {
-                SafeSetClipboardText(buf.Lines[buf.CursorLine] + "\n");
+                lastWholeLineCopyWF = buf.Lines[buf.CursorLine] + "\n";
+                SafeSetClipboardText(lastWholeLineCopyWF);
                 if (buf.Lines.Count > 1) buf.Lines.RemoveAt(buf.CursorLine);
                 else buf.Lines[0] = "";
                 buf.ClampCursor();
@@ -6694,8 +6527,16 @@ namespace codeLess.Studio
             string clipText = SafeGetClipboardText();
             if (buf == null || string.IsNullOrEmpty(clipText)) return;
             buf.PushUndoSnapshot();
-            if (buf.HasMultiCursors) ReplaceAllCaretsText(clipText);
-            else ReplaceSelectionWithText(clipText);
+            string norm = clipText.Replace("\r\n", "\n").Replace("\r", "\n");
+            if (lastWholeLineCopyWF != null && norm == lastWholeLineCopyWF && !buf.HasMultiCursors && !buf.HasSelection())
+            {
+                // VS Code: a line copied without a selection is pasted above the caret line
+                string[] lines = norm.Substring(0, norm.Length - 1).Split('\n');
+                buf.Lines.InsertRange(buf.CursorLine, lines);
+                buf.CursorLine += lines.Length;
+            }
+            else if (buf.HasMultiCursors) ReplaceAllCaretsText(norm);
+            else ReplaceSelectionWithText(norm);
             owner.NotifyBufferContentChanged();
             EnsureCursorVisible();
             this.Invalidate();
@@ -6773,93 +6614,32 @@ namespace codeLess.Studio
             this.Invalidate();
         }
 
+        /// <summary>Toggle Line Comment (Ctrl+/) on the lines of every caret, shared with the Avalonia editor (VS Code rules, per language).</summary>
         public void ToggleCommentOnSelection()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            buf.PushUndoSnapshot();
-            string lang = (buf.Language ?? "").ToLowerInvariant();
-
+            List<int[]> ranges = new List<int[]>();
             int sLine, sCol, eLine, eCol;
             buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-
-            if (lang == "html" || lang == "htm" || lang == "xml" || lang == "css")
-            {
-                string openTag = (lang == "css") ? "/* " : "<!-- ";
-                string closeTag = (lang == "css") ? " */" : " -->";
-                string openToken = openTag.Trim();
-                string closeToken = closeTag.Trim();
-
-                bool allWrapped = true;
-                for (int i = sLine; i <= eLine && i < buf.Lines.Count; i++)
+            if (eLine > sLine && eCol == 0) eLine--;
+            ranges.Add(new int[] { sLine, eLine });
+            if (buf.ExtraCarets != null)
+                foreach (EditorCaret ec in buf.ExtraCarets)
                 {
-                    string tr = (buf.Lines[i] ?? "").Trim();
-                    if (tr.Length == 0 && sLine != eLine) continue;
-                    if (!tr.StartsWith(openToken, StringComparison.Ordinal) || !tr.EndsWith(closeToken, StringComparison.Ordinal))
-                        allWrapped = false;
+                    int a, b, c, d;
+                    ec.GetNormalizedRange(out a, out b, out c, out d);
+                    ranges.Add(new int[] { a, c });
                 }
-
-                for (int i = sLine; i <= eLine && i < buf.Lines.Count; i++)
+            buf.PushUndoSnapshot();
+            List<CommentEdit> edits = EditorComments.ToggleLineComments(buf, ranges);
+            if (edits == null || edits.Count == 0) return;
+            if (buf.ExtraCarets != null)
+                foreach (EditorCaret ec in buf.ExtraCarets)
                 {
-                    string ln = buf.Lines[i] ?? "";
-                    string tr = ln.TrimStart();
-                    if (tr.Length == 0 && sLine != eLine) continue;
-                    int ind = ln.Length - tr.Length;
-                    string indentStr = ln.Substring(0, ind);
-                    string body = tr.TrimEnd();
-                    if (allWrapped && body.StartsWith(openToken, StringComparison.Ordinal) && body.EndsWith(closeToken, StringComparison.Ordinal))
-                    {
-                        int removeOpen = body.StartsWith(openTag, StringComparison.Ordinal) ? openTag.Length : openToken.Length;
-                        int removeClose = body.EndsWith(closeTag, StringComparison.Ordinal) ? closeTag.Length : closeToken.Length;
-                        if (body.Length >= removeOpen + removeClose)
-                            buf.Lines[i] = indentStr + body.Substring(removeOpen, body.Length - removeOpen - removeClose);
-                    }
-                    else if (!allWrapped)
-                    {
-                        buf.Lines[i] = indentStr + openTag + body + closeTag;
-                    }
+                    ec.CursorCol = EditorComments.AdjustColumn(edits, ec.CursorLine, ec.CursorCol);
+                    if (ec.AnchorLine >= 0) ec.AnchorCol = EditorComments.AdjustColumn(edits, ec.AnchorLine, ec.AnchorCol);
                 }
-                buf.ClampCursor();
-                owner.NotifyBufferContentChanged();
-                this.Invalidate();
-                return;
-            }
-
-            string prefix = "// ";
-            if (lang == "py" || lang == "sh" || lang == "ps1" || lang == "yaml" || lang == "yml" || lang == "toml")
-                prefix = "# ";
-            string token = prefix.Trim();
-
-            bool allCommented = true;
-            int minIndent = int.MaxValue;
-            for (int i = sLine; i <= eLine && i < buf.Lines.Count; i++)
-            {
-                string ln = buf.Lines[i] ?? "";
-                string tr = ln.TrimStart();
-                if (tr.Length == 0) continue;
-                if (!tr.StartsWith(token)) allCommented = false;
-                int ind = ln.Length - tr.Length;
-                if (ind < minIndent) minIndent = ind;
-            }
-            if (minIndent == int.MaxValue) minIndent = 0;
-
-            for (int i = sLine; i <= eLine && i < buf.Lines.Count; i++)
-            {
-                string ln = buf.Lines[i] ?? "";
-                string tr = ln.TrimStart();
-                if (tr.Length == 0 && sLine != eLine) continue;
-                if (allCommented && tr.StartsWith(token))
-                {
-                    int idx = ln.IndexOf(token, StringComparison.Ordinal);
-                    int rem = ln.Substring(idx).StartsWith(prefix) ? prefix.Length : token.Length;
-                    buf.Lines[i] = ln.Remove(idx, rem);
-                }
-                else if (!allCommented)
-                {
-                    int insAt = Math.Min(minIndent, ln.Length);
-                    buf.Lines[i] = ln.Substring(0, insAt) + prefix + ln.Substring(insAt);
-                }
-            }
             buf.ClampCursor();
             owner.NotifyBufferContentChanged();
             this.Invalidate();
@@ -7085,28 +6865,14 @@ namespace codeLess.Studio
             ChangeAllOccurrences();
         }
 
+        /// <summary>Toggle Block Comment (Shift+Alt+A): language block tokens around the selection, or an empty block at the caret.</summary>
         public void ToggleBlockCommentOnSelection()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            if (!buf.HasSelection())
-                SelectWordAt(buf.CursorLine, buf.CursorCol);
-            string sel = buf.GetSelectedText();
-            string lang = (buf.Language ?? "").ToLowerInvariant();
-            string openTok = (lang == "html" || lang == "xml") ? "<!-- " : "/* ";
-            string closeTok = (lang == "html" || lang == "xml") ? " -->" : " */";
             buf.PushUndoSnapshot();
-            string trimmed = (sel ?? "").Trim();
-            if (trimmed.StartsWith(openTok.Trim()) && trimmed.EndsWith(closeTok.Trim()))
-            {
-                string inner = trimmed.Substring(openTok.Trim().Length);
-                inner = inner.Substring(0, Math.Max(0, inner.Length - closeTok.Trim().Length)).Trim();
-                ReplaceSelectionWithText(inner);
-            }
-            else
-            {
-                ReplaceSelectionWithText(openTok + sel + closeTok);
-            }
+            if (!EditorComments.ToggleBlockComment(buf)) return;
+            buf.ClampCursor();
             owner.NotifyBufferContentChanged();
             this.Invalidate();
         }

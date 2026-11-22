@@ -43,8 +43,7 @@ namespace codeLess.Studio
 
         private int NicetyTabSizeWF(EditorTabBuffer buf)
         {
-            if (buf != null && buf.CustomTabSize.HasValue && buf.CustomTabSize.Value > 0) return Math.Max(1, Math.Min(8, buf.CustomTabSize.Value));
-            return owner != null ? Math.Max(1, Math.Min(8, owner.TabSize)) : 4;
+            return TabWF(buf);
         }
 
         // ------------------------------------------------------------------ frame
@@ -196,30 +195,53 @@ namespace codeLess.Studio
             return true;
         }
 
-        /// <summary>Draws one visual row of a line (segment) from styled spans; tabs are 4 cells as everywhere in this canvas.</summary>
-        private void DrawNicetyLineWF(Graphics g, EditorTabBuffer buf, int docLine, string fullLineText, int segStart, int segEnd, int y, int effScrollLeft, int codeAreaRight, StudioTheme th)
+        /// <summary>
+        /// Draws one visual row of a line (segment) from styled spans on the shared cell grid (QA #20): tabs advance to the
+        /// next stop of the buffer's tab size, CJK / emoji take 2 cells, combining marks draw with their base character,
+        /// so text, caret and selection line up. Plain ASCII runs are drawn as one string.
+        /// </summary>
+        private void DrawNicetyLineWF(Graphics g, EditorTabBuffer buf, int docLine, string fullLineText, int segStart, int segEnd, int y, int effScrollLeft, int codeAreaRight, StudioTheme th, int startVcol = 0)
         {
             if (string.IsNullOrEmpty(fullLineText) || segEnd <= segStart) return;
             List<StyledSpan> spans = GetLineSpansWF(buf, docLine, fullLineText, th);
-            int vis = 0;           // visual columns from segStart up to 'pos'
+            int tab = TabWF(buf);
+            int vis = startVcol;   // absolute visual column of 'pos' within this row
             int pos = segStart;
             foreach (StyledSpan sp in spans)
             {
                 int s = Math.Max(sp.Start, segStart), e = Math.Min(sp.Start + sp.Length, segEnd);
                 if (e <= s) { if (sp.Start >= segEnd) break; continue; }
-                while (pos < s) { vis += fullLineText[pos] == '\t' ? 4 : 1; pos++; }
+                if (pos < s) { vis = EditorTextLayout.VisualColumnFrom(fullLineText, pos, s, tab, vis); pos = s; }
                 int x = GutterWidth + 8 + (vis - effScrollLeft) * CharWidth;
                 if (x > codeAreaRight) break;
-                string text = fullLineText.Substring(s, e - s);
-                int w = 0;
-                for (int k = 0; k < text.Length; k++) w += text[k] == '\t' ? 4 : 1;
-                if (x + w * CharWidth >= GutterWidth && text.Trim().Length > 0)
+                Font f = sp.Bold ? boldFont : (sp.Italic ? italicFont : regularFont);
+                if (EditorTextLayout.IsSimpleRun(fullLineText, s, e))
                 {
-                    if (text.IndexOf('\t') >= 0) text = text.Replace("\t", "    ");
-                    Font f = sp.Bold ? boldFont : (sp.Italic ? italicFont : regularFont);
-                    TextRenderer.DrawText(g, text, f, new Point(x, y), sp.Color, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                    int w = e - s;
+                    if (x + w * CharWidth >= GutterWidth)
+                    {
+                        string text = fullLineText.Substring(s, e - s);
+                        if (text.Trim().Length > 0)
+                            TextRenderer.DrawText(g, text, f, new Point(x, y), sp.Color, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                    }
+                    vis += w;
                 }
-                vis += w;
+                else
+                {
+                    for (int i = s; i < e; i++)
+                    {
+                        char ch = fullLineText[i];
+                        if (ch == '\t') { vis += tab - (vis % tab); continue; }
+                        int cells = EditorTextLayout.CellsForChar(fullLineText, i);
+                        int clusterEnd = i + ((char.IsHighSurrogate(ch) && i + 1 < e) ? 2 : 1);
+                        while (clusterEnd < e && fullLineText[clusterEnd] != '\t' && EditorTextLayout.CellsForChar(fullLineText, clusterEnd) == 0) clusterEnd++;
+                        int gx = GutterWidth + 8 + (vis - effScrollLeft) * CharWidth;
+                        if (gx + CharWidth * Math.Max(1, cells) >= GutterWidth && gx <= codeAreaRight && !char.IsWhiteSpace(ch))
+                            TextRenderer.DrawText(g, fullLineText.Substring(i, clusterEnd - i), f, new Point(gx, y), sp.Color, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                        vis += cells;
+                        i = clusterEnd - 1;
+                    }
+                }
                 pos = e;
             }
         }
@@ -312,8 +334,9 @@ namespace codeLess.Studio
             Invalidate();
         }
 
-        private void DrawOccurrencesWF(Graphics g, string fullLineText, int docLine, int segStart, int segEnd, int y, int effScrollLeft, int codeAreaRight, StudioTheme th)
+        private void DrawOccurrencesWF(Graphics g, string fullLineText, int docLine, int segStart, int segEnd, int y, int effScrollLeft, int codeAreaRight, StudioTheme th, int segStartVcol = 0)
         {
+            int tab = TabWF(owner.CurrentBuffer);
             if (wfOccTarget == null || string.IsNullOrEmpty(fullLineText) || fullLineText.Length > EditorOccurrences.MaxLineLengthForHighlight) return;
             List<OccurrenceMatch> matches = new List<OccurrenceMatch>();
             EditorOccurrences.FindInLine(fullLineText, docLine, wfOccTarget, wfOccWhole, true, matches);
@@ -325,8 +348,8 @@ namespace codeLess.Studio
                 {
                     int s = Math.Max(segStart, m.Col), e = Math.Min(segEnd, m.Col + m.Length);
                     if (e <= s) continue;
-                    int x1 = GutterWidth + 8 + (CharColToVisualCol(fullLineText, segStart, s) - effScrollLeft) * CharWidth;
-                    int x2 = GutterWidth + 8 + (CharColToVisualCol(fullLineText, segStart, e) - effScrollLeft) * CharWidth;
+                    int x1 = GutterWidth + 8 + (EditorTextLayout.VisualColumnFrom(fullLineText, segStart, s, tab, segStartVcol) - effScrollLeft) * CharWidth;
+                    int x2 = GutterWidth + 8 + (EditorTextLayout.VisualColumnFrom(fullLineText, segStart, e, tab, segStartVcol) - effScrollLeft) * CharWidth;
                     if (x2 <= GutterWidth || x1 >= codeAreaRight) continue;
                     x1 = Math.Max(GutterWidth, x1);
                     g.FillRectangle(fill, x1, y + 1, Math.Max(1, x2 - x1), LineHeight - 2);
@@ -364,6 +387,8 @@ namespace codeLess.Studio
             int maxLines = Math.Min(UiTokens.StickyScrollMaxLines, Math.Max(1, (Height / LineHeight) / 4));
             List<int> sticky = EditorStickyScroll.ComputeForViewport(buf.Lines, StickyDocLineAtRow, wfSession.Brackets, wfSession.Brackets.Profile,
                 LspSymbolsStore.GetScopeRanges(buf.FilePath), NicetyTabSizeWF(buf), maxLines);
+            // VS Code never pins a collapsed region's header (its body is not on screen)
+            if (buf.FoldedLines != null && buf.FoldedLines.Count > 0) sticky.RemoveAll(delegate (int l) { return buf.FoldedLines.Contains(l); });
             if (sticky.Count == 0) return;
             wfLastSticky = sticky;
             StudioTheme th = owner.Theme;

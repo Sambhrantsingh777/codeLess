@@ -51,7 +51,7 @@ namespace codeLess.AvaloniaApp
 
         private int NicetyTabSize(EditorTabBuffer buf)
         {
-            return Math.Max(1, DisplayTabSize);
+            return TabFor(buf);
         }
 
         // ------------------------------------------------------------------ per-frame state
@@ -180,7 +180,7 @@ namespace codeLess.AvaloniaApp
         private void DrawTokenRun(DrawingContext context, List<SyntaxTokenSpan> tokens, double codeBaseX, double y, int startVcol, double codeAreaRight)
         {
             int renderVcol = startVcol;
-            int tabStop = Math.Max(1, DisplayTabSize);
+            int tabStop = TabFor(Buffer);
             foreach (var tk in tokens)
             {
                 var tf = tk.IsBold ? CachedFontBold : (tk.IsItalic ? CachedFontItalic : CachedFontRegular);
@@ -303,9 +303,10 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
-        private void DrawOccurrenceHighlights(DrawingContext context, EditorTabBuffer buf, int docLine, string lineText, double y, double codeBaseX, double codeAreaRight)
+        private void DrawOccurrenceHighlights(DrawingContext context, EditorTabBuffer buf, EditorVisualRow vr, string lineText, double y, double codeBaseX, double codeAreaRight)
         {
             if (occurrenceTarget == null || string.IsNullOrEmpty(lineText) || lineText.Length > EditorOccurrences.MaxLineLengthForHighlight) return;
+            int docLine = vr.DocLine;
             var matches = new List<OccurrenceMatch>();
             EditorOccurrences.FindInLine(lineText, docLine, occurrenceTarget, occurrenceWholeWord, true, matches);
             if (matches.Count == 0) return;
@@ -313,8 +314,10 @@ namespace codeLess.AvaloniaApp
             var border = new Pen(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.WordHighlightBorder(Theme))), 1);
             foreach (var m in matches)
             {
-                double x0 = codeBaseX + ColX(buf, docLine, m.Col);
-                double x1 = codeBaseX + ColX(buf, docLine, m.Col + m.Length);
+                int s0 = Math.Max(m.Col, vr.Start), e0 = vr.IsLastRow ? m.Col + m.Length : Math.Min(m.Col + m.Length, vr.End);
+                if (e0 <= s0) continue;
+                double x0 = RowColX(buf, vr, s0, codeBaseX);
+                double x1 = RowColX(buf, vr, e0, codeBaseX);
                 if (x1 < GutterWidth || x0 > codeAreaRight) continue;
                 var r = new Rect(Math.Max(GutterWidth + 1, x0), y + 1, Math.Max(1, x1 - Math.Max(GutterWidth + 1, x0)), LineHeight - 2);
                 context.DrawRectangle(fill, border, r, 2, 2);
@@ -345,6 +348,8 @@ namespace codeLess.AvaloniaApp
             List<StickySymbolRange> symbols = LspSymbolsStore.GetScopeRanges(buf.FilePath);
             int maxLines = Math.Min(UiTokens.StickyScrollMaxLines, Math.Max(1, (int)(Bounds.Height / LineHeight) / 4));
             List<int> sticky = EditorStickyScroll.ComputeForViewport(lines, rowToDocLine, frameSession.Brackets, frameSession.Brackets.Profile, symbols, NicetyTabSize(buf), maxLines);
+            // VS Code never pins a collapsed region's header (its body is not on screen)
+            if (buf.FoldedBlockRanges.Count > 0) sticky.RemoveAll(l => buf.FoldedBlockRanges.ContainsKey(l));
             if (sticky.Count == 0) return;
             lastStickyLines = sticky;
             var bg = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.StickyScrollBackground(Theme)));
@@ -402,9 +407,10 @@ namespace codeLess.AvaloniaApp
         private void KeepCaretOutOfStickyScroll(EditorTabBuffer buf)
         {
             int n = lastStickyLines.Count;
-            if (!EditorNicetyOptions.StickyScroll || n == 0 || buf.FoldedBlockRanges.Count > 0) return;
-            if (buf.CursorLine >= buf.ScrollTopLine && buf.CursorLine < buf.ScrollTopLine + n)
-                buf.ScrollTopLine = Math.Max(0, buf.CursorLine - n);
+            if (!EditorNicetyOptions.StickyScroll || n == 0) return;
+            int cRow = CaretRowOf(buf, buf.CursorLine, buf.CursorCol, true);
+            int dist = RowDistance(buf, buf.ScrollTopLine, buf.ScrollTopWrapRow, buf.CursorLine, cRow, n + 1);
+            if (dist >= 0 && dist < n) ScrollByRows(buf, dist - n);
         }
 
         /// <summary>Clicks the sticky line under a canvas point (automation / tests); false when none is there.</summary>
@@ -420,7 +426,9 @@ namespace codeLess.AvaloniaApp
             int ws = 0;
             while (ws < t.Length && (t[ws] == ' ' || t[ws] == '\t')) ws++;
             buf.CursorCol = ws;
-            buf.ScrollTopLine = Math.Max(0, line - rowsAbove);
+            buf.ScrollTopLine = line;
+            buf.ScrollTopWrapRow = 0;
+            ScrollByRows(buf, -rowsAbove);
             owner.NotifyCaretMoved();
             InvalidateVisual();
         }
@@ -513,7 +521,7 @@ namespace codeLess.AvaloniaApp
             if (buf.CursorLine < 0 || buf.CursorLine >= buf.Lines.Count) return false;
             string line = buf.Lines[buf.CursorLine];
             bool inRule = syntax == EmmetSyntax.Css && EmmetExpander.IsInsideCssRule(buf.Lines, buf.CursorLine, buf.CursorCol);
-            string unit = (buf.CustomInsertSpaces ?? true) ? new string(' ', Math.Max(1, buf.CustomTabSize ?? DisplayTabSize)) : "\t";
+            string unit = EditorIndentation.Unit(TabFor(buf), EditorIndentation.EffectiveInsertSpaces(buf, InsertSpacesSetting));
             if (!EmmetExpander.TryExpand(line, buf.CursorCol, syntax, unit, inRule, out int start, out string expansion, out int caretOffset)) return false;
             buf.PushUndoSnapshot();
             buf.GhostTextSuggestion = "";

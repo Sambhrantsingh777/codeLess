@@ -1108,6 +1108,7 @@ namespace codeLess.Studio
         {
             if (buf == null || buf.IsLargeFileViewer) return;
             SaveActionOptions opts = SaveActionOptions.FromSettings(settings, backgroundSave || autoSaveDepthWin > 0);
+            EditorConfigResolver.ApplyBeforeSave(buf, opts); // end_of_line, charset, final newline / trailing whitespace (QA #12)
             if (!opts.Any) return;
             if (SaveActions.ApplyToBuffer(buf, opts))
             {
@@ -1133,8 +1134,8 @@ namespace codeLess.Studio
             List<LspTextEdit> edits = null;
             try
             {
-                int tab = buf.CustomTabSize.HasValue && buf.CustomTabSize.Value > 0 ? buf.CustomTabSize.Value : (settings.TabSize > 0 ? settings.TabSize : 4);
-                bool spaces = buf.CustomInsertSpaces.HasValue ? buf.CustomInsertSpaces.Value : settings.InsertSpaces;
+                int tab = EditorIndentation.EffectiveTabSize(buf, settings.TabSize);
+                bool spaces = EditorIndentation.EffectiveInsertSpaces(buf, settings.InsertSpaces);
                 using (CancellationTokenSource cts = new CancellationTokenSource(1500))
                 {
                     Task<List<LspTextEdit>> req = lspController.Manager.RequestFormattingAsync(path, null, tab, spaces, cts.Token);

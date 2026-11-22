@@ -111,7 +111,6 @@ namespace codeLess.Studio
 
         public HashSet<int> ProposedNewLines { get; } = new HashSet<int>();
         public Dictionary<int, List<string>> RemovedLineHistory { get; } = new Dictionary<int, List<string>>();
-        public Dictionary<int, int> FoldedBlockRanges { get; } = new Dictionary<int, int>();
         public HashSet<int> GutterDeletedAfterLine { get; } = new HashSet<int>();
 
         public bool HasPendingDiff =>

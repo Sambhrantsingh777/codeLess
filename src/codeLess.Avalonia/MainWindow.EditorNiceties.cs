@@ -102,6 +102,7 @@ namespace codeLess.AvaloniaApp
                     PrimaryEditor.Canvas.FlushOccurrenceHighlight();
                     await CaptureScreenshotAsync(outputDir, "r12_niceties_tsx.png");
                 }
+                await RunWrapAndFoldScreensAsync(outputDir, cs); // word wrap (QA #11) and Allman folding (QA #13)
             }
             catch (Exception ex) { LogSuiteError(outputDir, ex); }
         }

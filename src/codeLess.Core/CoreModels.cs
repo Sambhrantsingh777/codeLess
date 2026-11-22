@@ -617,11 +617,84 @@ namespace codeLess.Studio
         }
     }
 
+    /// <summary>
+    /// One undo / redo step. The entry on top of a stack holds the full line array (shared string references, no
+    /// text copy); older entries are compacted to a delta against the entry above them (changed lines only), so a
+    /// 50,000-line file costs a few hundred bytes per step instead of a full copy of the text.
+    /// </summary>
     public class BufferSnapshot
     {
-        public string Content;
         public int CursorLine;
         public int CursorCol;
+        internal string[] FullLines;
+        internal int DeltaPrefix;
+        internal int DeltaSuffix;
+        internal string[] DeltaMiddle;
+        private string cachedContent;
+
+        /// <summary>Full text of a top-of-stack snapshot (null for a compacted entry).</summary>
+        public string Content
+        {
+            get
+            {
+                if (FullLines == null) return null;
+                if (cachedContent == null) cachedContent = string.Join("\n", FullLines);
+                return cachedContent;
+            }
+            set
+            {
+                cachedContent = value ?? "";
+                FullLines = EditorTabBuffer.SplitNormalizedLines(cachedContent);
+                DeltaMiddle = null;
+            }
+        }
+
+        public bool IsCompacted { get { return FullLines == null; } }
+
+        internal long ApproxBytes
+        {
+            get
+            {
+                if (FullLines != null) return 32L + 8L * FullLines.Length;
+                long b = 48;
+                if (DeltaMiddle != null)
+                    for (int i = 0; i < DeltaMiddle.Length; i++) b += 8 + 2L * (DeltaMiddle[i] ?? "").Length;
+                return b;
+            }
+        }
+
+        /// <summary>Compacts this (full) snapshot to a delta against <paramref name="above"/> (the next state).</summary>
+        internal void CompactAgainst(string[] above)
+        {
+            if (FullLines == null || above == null) return;
+            string[] a = FullLines;
+            int n = a.Length, m = above.Length, min = Math.Min(n, m);
+            int p = 0;
+            while (p < min && (ReferenceEquals(a[p], above[p]) || string.Equals(a[p], above[p], StringComparison.Ordinal))) p++;
+            int s = 0;
+            while (s < min - p && (ReferenceEquals(a[n - 1 - s], above[m - 1 - s]) || string.Equals(a[n - 1 - s], above[m - 1 - s], StringComparison.Ordinal))) s++;
+            string[] mid = new string[n - p - s];
+            Array.Copy(a, p, mid, 0, mid.Length);
+            DeltaPrefix = p;
+            DeltaSuffix = s;
+            DeltaMiddle = mid;
+            FullLines = null;
+            cachedContent = null;
+        }
+
+        /// <summary>Rebuilds the full line array from a delta, given the state it was compacted against.</summary>
+        internal void ExpandFrom(string[] above)
+        {
+            if (FullLines != null || above == null || DeltaMiddle == null) return;
+            int p = Math.Min(DeltaPrefix, above.Length);
+            int s = Math.Min(DeltaSuffix, above.Length - p);
+            string[] res = new string[p + DeltaMiddle.Length + s];
+            Array.Copy(above, 0, res, 0, p);
+            Array.Copy(DeltaMiddle, 0, res, p, DeltaMiddle.Length);
+            Array.Copy(above, above.Length - s, res, p + DeltaMiddle.Length, s);
+            FullLines = res;
+            DeltaMiddle = null;
+        }
     }
 
     public class EditorCaret
@@ -684,7 +757,6 @@ namespace codeLess.Studio
         public string RelativePath;
         public string FileName;
         public string Language;
-        public string Content = "";
         public string SavedContent = "";
         public string GitHeadContent = null;
         public string PreDiffContent = null;
@@ -985,14 +1057,23 @@ namespace codeLess.Studio
 
         private void TrimUndoHistory()
         {
-            long approxBytes = (long)UndoStack.Count * Math.Max(1, (Content ?? "").Length) * 2;
-            if (UndoStack.Count <= MaxUndoSnapshots + 40 && approxBytes <= MaxUndoBytes) return;
-            int keep = MaxUndoSnapshots;
-            long perSnapshot = Math.Max(1L, (long)(Content ?? "").Length * 2);
-            if (perSnapshot * keep > MaxUndoBytes) keep = (int)Math.Max(20L, MaxUndoBytes / perSnapshot);
+            if (UndoStack.Count <= MaxUndoSnapshots + 40)
+            {
+                long approx = 0;
+                foreach (BufferSnapshot b in UndoStack) approx += b.ApproxBytes;
+                if (approx <= MaxUndoBytes) return;
+            }
             BufferSnapshot[] newestFirst = UndoStack.ToArray();
+            long budget = 0;
+            int keep = 0;
+            while (keep < newestFirst.Length && keep < MaxUndoSnapshots)
+            {
+                budget += newestFirst[keep].ApproxBytes;
+                if (budget > MaxUndoBytes && keep >= 20) break;
+                keep++;
+            }
             Stack<BufferSnapshot> trimmed = new Stack<BufferSnapshot>();
-            for (int i = Math.Min(keep, newestFirst.Length) - 1; i >= 0; i--) trimmed.Push(newestFirst[i]);
+            for (int i = keep - 1; i >= 0; i--) trimmed.Push(newestFirst[i]);
             UndoStack = trimmed;
         }
         public Stack<BufferSnapshot> RedoStack = new Stack<BufferSnapshot>();
@@ -1039,28 +1120,9 @@ namespace codeLess.Studio
             if (raw.IndexOf('\r') >= 0)
                 raw = raw.Replace("\r\n", "\n").Replace("\r", "\n");
             Content = raw;
-            if (raw.Length == 0)
-            {
-                Lines = new List<string> { "" };
-                IsLargeFile = false;
-                ClampCursor();
-                RefreshGutterDiff();
-                return;
-            }
-            var list = new List<string>(Math.Min(250000, Math.Max(16, raw.Length / 40)));
-            int start = 0;
-            int len = raw.Length;
-            for (int i = 0; i < len; i++)
-            {
-                if (raw[i] == '\n')
-                {
-                    list.Add(raw.Substring(start, i - start));
-                    start = i + 1;
-                }
-            }
-            list.Add(raw.Substring(start, len - start));
-            Lines = list;
-            IsLargeFile = list.Count > 2500 || raw.Length > 180 * 1024;
+            Lines = new List<string>(SplitNormalizedLines(raw));
+            OnLinesReplaced();
+            IsLargeFile = ComputeIsLargeFile(raw.Length);
             ClampCursor();
             if (!IsLargeFile)
                 RefreshGutterDiff();
@@ -1073,14 +1135,17 @@ namespace codeLess.Studio
             SyncContentFromLines(recomputeGutterDiff: true);
         }
 
+        /// <summary>
+        /// Call after editing <see cref="Lines"/>. Cheap (no full-text rebuild): the text is materialized lazily by
+        /// <see cref="Content"/>; dirty state is derived from the lines (O(1) for the usual single-line edit).
+        /// </summary>
         public void SyncContentFromLines(bool recomputeGutterDiff)
         {
             if (Lines == null || Lines.Count == 0)
                 Lines = new List<string> { "" };
-            Content = string.Join("\n", Lines);
-            IsLargeFile = Lines.Count > 2500 || Content.Length > 180 * 1024;
-            string normSaved = GetCachedNormalizedSaved();
-            IsDirty = !string.Equals(Content, normSaved, StringComparison.Ordinal);
+            MarkLinesChanged();
+            IsLargeFile = ComputeIsLargeFile(-1);
+            IsDirty = ComputeDirtyFromLines(CursorLine);
             if (recomputeGutterDiff && !IsLargeFile)
                 RefreshGutterDiff();
         }
@@ -1297,15 +1362,10 @@ namespace codeLess.Studio
                 RedoStack.Clear();
                 return;
             }
-            SyncContentFromLines(recomputeGutterDiff: false);
-            if (UndoStack.Count == 0 || UndoStack.Peek().Content != Content)
+            if (Lines == null || Lines.Count == 0) Lines = new List<string> { "" };
+            if (UndoStack.Count == 0 || !LinesEqual(UndoStack.Peek().FullLines, Lines))
             {
-                UndoStack.Push(new BufferSnapshot
-                {
-                    Content = Content,
-                    CursorLine = CursorLine,
-                    CursorCol = CursorCol
-                });
+                PushSnapshot(UndoStack, CaptureSnapshot());
                 RedoStack.Clear();
                 TrimUndoHistory();
             }
@@ -1326,17 +1386,8 @@ namespace codeLess.Studio
             if (UndoStack.Count == 0) return false;
             LastTypingUndoTick = 0;
             LastTypingUndoLine = -1;
-            SyncContentFromLines();
-            RedoStack.Push(new BufferSnapshot { Content = Content, CursorLine = CursorLine, CursorCol = CursorCol });
-            BufferSnapshot prev = UndoStack.Pop();
-            Content = prev.Content;
-            SyncLinesFromContent();
-            CursorLine = prev.CursorLine;
-            CursorCol = prev.CursorCol;
-            ClampCursor();
-            string normSaved = (SavedContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
-            IsDirty = !string.Equals(Content, normSaved, StringComparison.Ordinal);
-            RefreshGutterDiff();
+            PushSnapshot(RedoStack, CaptureSnapshot());
+            RestoreSnapshot(PopSnapshot(UndoStack));
             return true;
         }
 
@@ -1345,17 +1396,70 @@ namespace codeLess.Studio
             if (RedoStack.Count == 0) return false;
             LastTypingUndoTick = 0;
             LastTypingUndoLine = -1;
-            SyncContentFromLines();
-            UndoStack.Push(new BufferSnapshot { Content = Content, CursorLine = CursorLine, CursorCol = CursorCol });
-            BufferSnapshot next = RedoStack.Pop();
-            Content = next.Content;
-            SyncLinesFromContent();
-            CursorLine = next.CursorLine;
-            CursorCol = next.CursorCol;
+            PushSnapshot(UndoStack, CaptureSnapshot());
+            RestoreSnapshot(PopSnapshot(RedoStack));
+            return true;
+        }
+
+        /// <summary>Drops the newest undo step and restores it without recording a redo step (reject a staged change).</summary>
+        public bool PopUndoSnapshotAndRestore()
+        {
+            if (UndoStack.Count == 0) return false;
+            LastTypingUndoTick = 0;
+            LastTypingUndoLine = -1;
+            RestoreSnapshot(PopSnapshot(UndoStack));
+            return true;
+        }
+
+        private BufferSnapshot CaptureSnapshot()
+        {
+            BufferSnapshot s = new BufferSnapshot();
+            s.FullLines = Lines.ToArray();
+            s.CursorLine = CursorLine;
+            s.CursorCol = CursorCol;
+            return s;
+        }
+
+        private static void PushSnapshot(Stack<BufferSnapshot> stack, BufferSnapshot s)
+        {
+            if (stack.Count > 0)
+            {
+                BufferSnapshot top = stack.Peek();
+                if (top.FullLines != null) top.CompactAgainst(s.FullLines);
+            }
+            stack.Push(s);
+        }
+
+        private static BufferSnapshot PopSnapshot(Stack<BufferSnapshot> stack)
+        {
+            BufferSnapshot s = stack.Pop();
+            if (stack.Count > 0)
+            {
+                BufferSnapshot top = stack.Peek();
+                if (top.FullLines == null) top.ExpandFrom(s.FullLines);
+            }
+            return s;
+        }
+
+        private void RestoreSnapshot(BufferSnapshot s)
+        {
+            Lines = new List<string>(s.FullLines ?? new string[] { "" });
+            if (Lines.Count == 0) Lines.Add("");
+            CursorLine = s.CursorLine;
+            CursorCol = s.CursorCol;
+            MarkLinesChanged();
+            IsLargeFile = ComputeIsLargeFile(-1);
             ClampCursor();
-            string normSaved = (SavedContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
-            IsDirty = !string.Equals(Content, normSaved, StringComparison.Ordinal);
-            RefreshGutterDiff();
+            IsDirty = ComputeDirtyFromLines(CursorLine);
+            if (!IsLargeFile) RefreshGutterDiff();
+            else GutterDiffVersion++;
+        }
+
+        private static bool LinesEqual(string[] a, List<string> b)
+        {
+            if (a == null || b == null || a.Length != b.Count) return false;
+            for (int i = 0; i < a.Length; i++)
+                if (!ReferenceEquals(a[i], b[i]) && !string.Equals(a[i], b[i], StringComparison.Ordinal)) return false;
             return true;
         }
     }

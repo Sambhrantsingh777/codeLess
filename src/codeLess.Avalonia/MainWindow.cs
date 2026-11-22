@@ -246,7 +246,8 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrWhiteSpace(settings.ThemeId))
                 settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
-            AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(8, settings.TabSize));
+            AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(16, settings.TabSize <= 0 ? 4 : settings.TabSize));
+            AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
             EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
             InitNetworkPrivacy();
@@ -662,8 +663,8 @@ namespace codeLess.AvaloniaApp
                 Header = "_Edit",
                 ItemsSource = new object[]
                 {
-                    Mi("Undo", "Ctrl+Z", () => { if (activeTab != null) { activeTab.PerformUndo(); PrimaryEditor.Canvas.InvalidateVisual(); } }),
-                    Mi("Redo", "Ctrl+Y", () => { if (activeTab != null) { activeTab.PerformRedo(); PrimaryEditor.Canvas.InvalidateVisual(); } }),
+                    Mi("Undo", "Ctrl+Z", () => PrimaryEditor.Canvas.PerformUndoRedo(redo: false)),
+                    Mi("Redo", "Ctrl+Y", () => PrimaryEditor.Canvas.PerformUndoRedo(redo: true)),
                     new Separator(),
                     // These used to only focus the editor (no-op). This menu is the only menu bar on Linux.
                     Mi("Cut", "Ctrl+X", () => { PrimaryEditor.Canvas.Focus(); SimulateShortcut(Key.X, MacKeymap.PrimaryModifier); }),
@@ -2214,14 +2215,7 @@ namespace codeLess.AvaloniaApp
             };
 
             statusLnColBtn = MakeStatusBtn("Ln 1, Col 1", PromptGoToLineModal);
-            statusSpacesBtn = MakeStatusBtn("Spaces: 4", () =>
-            {
-                settings.TabSize = settings.TabSize == 4 ? 2 : 4;
-                AvaloniaVirtualEditorCanvas.DisplayTabSize = settings.TabSize;
-                PrimaryEditor?.Canvas?.InvalidateVisual();
-                SplitEditor?.Canvas?.InvalidateVisual();
-                UpdateStatusBar();
-            });
+            statusSpacesBtn = MakeStatusBtn("Spaces: 4", OpenIndentationPicker);
             statusEncodingBtn = MakeStatusBtn("UTF-8", () =>
             {
                 if (activeTab != null)
@@ -2803,6 +2797,7 @@ namespace codeLess.AvaloniaApp
                 IsPreviewTab = preview
             };
             tab.SyncLinesFromContent();
+            EditorIndentation.ApplyOnOpen(tab, settings); // .editorconfig, else detectIndentation (QA #12)
             if (!tab.IsLargeFile)
                 tab.RefreshGutterDiff();
             LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
@@ -3061,7 +3056,7 @@ namespace codeLess.AvaloniaApp
             UpdateStatusBar();
 
             // For large files on live desktop, coalesce Outline/Problems/AutoSave/GutterDiff rebuilds via 280ms idle debounce
-            if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime && buf.Lines != null && buf.Lines.Count > 250)
+            if (buf.Lines != null && buf.Lines.Count > AvaloniaVirtualEditorCanvas.DeferAnalysisLineThreshold)
             {
                 pendingDebouncedBuffer = buf;
                 if (debouncedUiSyncTimer == null)
@@ -3075,9 +3070,10 @@ namespace codeLess.AvaloniaApp
                         if (target == null) return;
                         if (settings.AutoSave && !string.IsNullOrEmpty(target.FilePath) && File.Exists(target.FilePath))
                             ScheduleAutoSave(target);
-                        if (!target.IsLargeFile || target.Lines.Count <= 12000)
+                        if (!target.IsLargeFile)
                             target.RefreshGutterDiff();
-                        LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
+                        if (!target.IsLargeFile)
+                            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
                         if (ReferenceEquals(target, activeTab))
                         {
                             RefreshOutlineAndProblems(target);
@@ -3393,9 +3389,9 @@ namespace codeLess.AvaloniaApp
                 int carets = PrimaryEditor.Canvas.TotalCursorCount;
                 string caretSuffix = carets > 1 ? $" ({carets} cursors)" : "";
                 statusLnColBtn.Content = new LiteralTextBlock($"Ln {activeTab.CursorLine + 1}, Col {activeTab.CursorCol + 1}{caretSuffix}");
-                statusSpacesBtn.Content = new LiteralTextBlock($"Spaces: {settings.TabSize}");
+                statusSpacesBtn.Content = new LiteralTextBlock(StatusIndentationText);
                 statusEncodingBtn.Content = new LiteralTextBlock(activeTab.HasBom ? "UTF-8 with BOM" : "UTF-8");
-                statusEolBtn.Content = new LiteralTextBlock(activeTab.EolSequence == "\n" ? "LF" : "CRLF");
+                statusEolBtn.Content = new LiteralTextBlock(activeTab.EolLabel);
                 statusLanguageBtn.Content = new LiteralTextBlock(MapLanguageDisplayName(activeTab.Language));
             }
             else
