@@ -495,8 +495,9 @@ namespace codeLess.Avalonia.Tests
             ctl.Continue();
             Assert.True(host.PumpUntil(() => ctl.State == DebugSessionState.Terminated, 5000));
             Assert.Equal(-1, buf.DebugStoppedLine);
+            // The adapter's `exited` event may be processed just after the state flips to Terminated.
+            Assert.True(host.PumpUntil(() => ctl.ConsoleText().Contains("exited with code 0"), 3000), ctl.ConsoleText());
             Assert.Contains("done", ctl.ConsoleText());
-            Assert.Contains("exited with code 0", ctl.ConsoleText());
         }
 
         [Fact]
