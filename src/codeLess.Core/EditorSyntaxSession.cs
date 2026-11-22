@@ -31,6 +31,7 @@ namespace codeLess.Studio
             LinkedTagEditing = s.EditorLinkedTagEditing;
             EmmetOnTab = s.EditorEmmetOnTab;
             TextMateHighlighting = s.EditorTextMateHighlighting;
+            EditorScrollOptions.ApplyFrom(s); // smooth scrolling / caret settings travel with the editor switches
         }
 
         public static void CopyTo(IdePersistentSettings s)
@@ -45,6 +46,7 @@ namespace codeLess.Studio
             s.EditorLinkedTagEditing = LinkedTagEditing;
             s.EditorEmmetOnTab = EmmetOnTab;
             s.EditorTextMateHighlighting = TextMateHighlighting;
+            EditorScrollOptions.CopyTo(s);
         }
     }
 
@@ -295,16 +297,38 @@ namespace codeLess.Studio
         /// </summary>
         public List<StyledSpan> GetTextMateSpans(IList<string> lines, int line, int firstVisibleLine, StudioTheme theme, long deadlineTicks, out bool isGuess)
         {
+            return GetTextMateSpans(lines, line, firstVisibleLine, theme, deadlineTicks, out isGuess, 0, int.MaxValue);
+        }
+
+        /// <summary>
+        /// As above, limited to the tokens overlapping [sliceStart, sliceEnd) (a horizontally windowed long line only
+        /// resolves the tokens on screen instead of thousands per frame). Spans keep their full extent.
+        /// </summary>
+        public List<StyledSpan> GetTextMateSpans(IList<string> lines, int line, int firstVisibleLine, StudioTheme theme, long deadlineTicks, out bool isGuess, int sliceStart, int sliceEnd)
+        {
             isGuess = false;
             if (textMate == null || lines == null || line < 0 || line >= lines.Count) return null;
             TmLineTokens toks = textMate.GetTokens(lines, line, firstVisibleLine, deadlineTicks, out isGuess);
             if (toks == null) return null;
             TextMateTheme tm = TextMateTheme.For(theme);
-            List<StyledSpan> spans = new List<StyledSpan>(toks.Count);
             int len = (lines[line] ?? "").Length;
-            for (int i = 0; i < toks.Count; i++)
+            int first = 0;
+            if (sliceStart > 0 && toks.Count > 0)
+            {
+                // last token starting at or before sliceStart (Starts is ascending)
+                int lo = 0, hi = toks.Count - 1;
+                while (lo < hi)
+                {
+                    int mid = (lo + hi + 1) >> 1;
+                    if (toks.Starts[mid] <= sliceStart) lo = mid; else hi = mid - 1;
+                }
+                first = lo;
+            }
+            List<StyledSpan> spans = new List<StyledSpan>(sliceStart > 0 || sliceEnd < len ? 64 : toks.Count);
+            for (int i = first; i < toks.Count; i++)
             {
                 int s = toks.Starts[i];
+                if (s >= sliceEnd) break;
                 int e = Math.Min(len, toks.EndOf(i));
                 if (e <= s) continue;
                 TmTokenStyle st = tm.Resolve(toks.Scopes[i]);

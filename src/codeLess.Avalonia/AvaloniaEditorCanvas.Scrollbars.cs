@@ -93,6 +93,7 @@ namespace codeLess.AvaloniaApp
             if (b == null) return;
             var idx = RowIndexFor(b);
             int line = idx.LineOfRow(Math.Max(0, Math.Min(idx.TotalRows - 1, row)), out int sub);
+            FinishScrollAnimations(b);
             b.ScrollTopLine = line;
             b.ScrollTopWrapRow = sub;
             NormalizeScroll(b);
@@ -195,7 +196,7 @@ namespace codeLess.AvaloniaApp
             }
             double x = w - ScrollbarWidth;
             vBarRect = new Rect(x, 0, ScrollbarWidth, h);
-            vGeom = EditorScrollbar.Vertical(0, h, idx.TotalRows, VisibleRowCount, top);
+            vGeom = EditorScrollbar.Vertical(0, h, idx.TotalRows, VisibleRowCount, TopRowExact(b)); // fractional: the slider moves with the pixels
             bool show = SliderShouldShow;
             IsScrollbarSliderShown = show && vGeom.Visible;
 
@@ -321,18 +322,21 @@ namespace codeLess.AvaloniaApp
             if (b == null || line < 0 || line >= b.Lines.Count) return;
             int z = DeletedZoneRows(b, line);
             if (z == 0) return;
-            NormalizeScroll(b);
-            int visRows = Bounds.Height > 0 ? Math.Max(1, (int)(Bounds.Height / LineHeight) - 1) : 30;
-            int d = RowDistance(b, b.ScrollTopLine, b.ScrollTopWrapRow, line, -z, visRows + 1);
-            if (d >= 0 && d + z < visRows) return;
-            if (d < 0 || z >= visRows) { b.ScrollTopLine = line; b.ScrollTopWrapRow = -z; ScrollByRows(b, -Math.Min(2, Math.Max(0, visRows - z - 1))); }
+            RunReveal(b, () =>
+            {
+                NormalizeScroll(b);
+                int visRows = Bounds.Height > 0 ? Math.Max(1, (int)(Bounds.Height / LineHeight) - 1) : 30;
+                int d = RowDistance(b, b.ScrollTopLine, b.ScrollTopWrapRow, line, -z, visRows + 1);
+                if (d >= 0 && d + z < visRows) return;
+                if (d < 0 || z >= visRows) { b.ScrollTopLine = line; b.ScrollTopWrapRow = -z; ScrollByRows(b, -Math.Min(2, Math.Max(0, visRows - z - 1))); }
+            }, animate: true);
             InvalidateVisual();
         }
 
         /// <summary>Whether the screen row at <paramref name="y"/> (last frame) is a read-only deleted row.</summary>
         internal bool IsDeletedRowAt(double y)
         {
-            int idx = (int)(y / LineHeight);
+            int idx = (int)Math.Floor((y + TopRowOffsetPx) / LineHeight);
             return idx >= 0 && idx < lastFrameRows.Count && lastFrameRows[idx].IsDeleted;
         }
 
@@ -354,7 +358,7 @@ namespace codeLess.AvaloniaApp
                     if (hit == EditorScrollbar.HitThumb) dragGrab = pt.Y - vGeom.ThumbStart;
                     else if (page && hit != EditorScrollbar.HitNone)
                     {
-                        ScrollByRows(b, hit == EditorScrollbar.HitBefore ? -Math.Max(1, VisibleRowCount - 1) : Math.Max(1, VisibleRowCount - 1));
+                        SmoothScrollRowsBy(b, hit == EditorScrollbar.HitBefore ? -Math.Max(1, VisibleRowCount - 1) : Math.Max(1, VisibleRowCount - 1));
                         NoteScrollActivity();
                         InvalidateVisual();
                         e.Handled = true;
@@ -362,7 +366,8 @@ namespace codeLess.AvaloniaApp
                     }
                     else
                     {
-                        ScrollToVisualRow((int)Math.Round(EditorScrollbar.ValueForJump(vGeom, pt.Y)));
+                        // a track click glides to the clicked spot; dragging from there follows the pointer 1:1
+                        AnimateTopRowTo(b, EditorScrollbar.ValueForJump(vGeom, pt.Y));
                         dragGrab = vGeom.ThumbLength / 2.0;
                     }
                     vDragging = true;
@@ -379,13 +384,13 @@ namespace codeLess.AvaloniaApp
                 else if (page)
                 {
                     double viewPx = Math.Max(1, CodeAreaRight - GutterWidth - 8);
-                    SetScrollLeft(b, b.ScrollLeftPx + (hit == EditorScrollbar.HitBefore ? -viewPx : viewPx));
+                    SmoothScrollLeftBy(b, hit == EditorScrollbar.HitBefore ? -viewPx : viewPx);
                     e.Handled = true;
                     return true;
                 }
                 else
                 {
-                    SetScrollLeft(b, EditorScrollbar.ValueForJump(hGeom, pt.X));
+                    SmoothScrollLeftBy(b, EditorScrollbar.ValueForJump(hGeom, pt.X) - b.ScrollLeftPx);
                     dragGrab = hGeom.ThumbLength / 2.0;
                 }
                 hDragging = true;
@@ -399,6 +404,7 @@ namespace codeLess.AvaloniaApp
 
         private void SetScrollLeft(EditorTabBuffer b, double px)
         {
+            hAnim.Finish();
             b.ScrollLeftPx = Math.Max(0, Math.Min(MaxScrollLeftPx(b), px));
             NoteScrollActivity();
             InvalidateVisual();
@@ -412,7 +418,10 @@ namespace codeLess.AvaloniaApp
             if (vDragging)
             {
                 double v = EditorScrollbar.ValueForThumbStart(vGeom, pt.Y - dragGrab);
-                ScrollToVisualRow((int)Math.Round(v));
+                FinishScrollAnimations(b);
+                SetTopRowExact(b, v); // pixel-precise slider drag
+                NoteScrollActivity();
+                InvalidateVisual();
                 return true;
             }
             if (hDragging)

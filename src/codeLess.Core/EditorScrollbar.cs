@@ -122,6 +122,8 @@ namespace codeLess.Studio
         private string foldKey;
 
         public bool IsIdentity { get { return prefix == null; } }
+        /// <summary>Incremented by every rebuild (a running scroll animation in rows is stale once it changes).</summary>
+        public int BuildCount;
 
         /// <summary>True when the index still describes the given document state.</summary>
         public bool Matches(object lines, int editVersion, int wrapColumns, int tab, string foldSignature)
@@ -147,6 +149,7 @@ namespace codeLess.Studio
         public void Build(IList<string> lines, int editVersion, int wrapColumns, int tab, Func<string, int> wrapRows,
                           ICollection<KeyValuePair<int, int>> folded, string foldSignature, IDictionary<int, int> rowsAboveLine)
         {
+            BuildCount++;
             linesRef = lines;
             version = editVersion;
             wrapCols = wrapColumns;

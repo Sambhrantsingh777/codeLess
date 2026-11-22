@@ -51,7 +51,7 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return null;
             int first = buf.ScrollTopLine;
             if (docLine < first) return null;
-            double y = 0;
+            double y = -TopRowOffsetPx;
             for (int l = first; l < docLine && y <= Bounds.Height; l++)
             {
                 if (buf.FoldedBlockRanges != null && buf.FoldedBlockRanges.TryGetValue(l, out int end)) { l = end; }

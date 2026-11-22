@@ -283,7 +283,7 @@ namespace codeLess.AvaloniaApp
         private EditorVisualRow RowAtY(double y)
         {
             var b = Buffer;
-            int idx = Math.Max(0, (int)(y / LineHeight));
+            int idx = Math.Max(0, (int)Math.Floor((y + TopRowOffsetPx) / LineHeight));
             var rows = BuildViewportRows(b, idx + 1);
             if (rows.Count == 0) return new EditorVisualRow { DocLine = 0, End = 0, IsLastRow = true };
             var hit = rows[Math.Min(idx, rows.Count - 1)];
@@ -405,6 +405,7 @@ namespace codeLess.AvaloniaApp
             NormalizeScroll(b);
             int cRow = CaretRowOf(b, b.CursorLine, b.CursorCol, true);
             int dist = RowDistance(b, b.ScrollTopLine, b.ScrollTopWrapRow, b.CursorLine, cRow, visRows + 1);
+            if (dist == 0 && b.ScrollTopFraction > 0) b.ScrollTopFraction = 0; // the caret row was partly scrolled out at the top
             if (dist < 0)
             {
                 b.ScrollTopLine = b.CursorLine;
@@ -419,8 +420,14 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        /// <summary>Scrolls a document line into view (rows / folds aware) without moving the caret.</summary>
+        /// <summary>Scrolls a document line into view (rows / folds aware) without moving the caret; animated when smooth scrolling is on.</summary>
         internal void RevealLine(EditorTabBuffer b, int line)
+        {
+            if (b == null || line < 0 || line >= b.Lines.Count) return;
+            RunReveal(b, () => RevealLineCore(b, line), animate: true);
+        }
+
+        private void RevealLineCore(EditorTabBuffer b, int line)
         {
             if (b == null || line < 0 || line >= b.Lines.Count) return;
             int visRows = Bounds.Height > 0 ? Math.Max(1, (int)(Bounds.Height / LineHeight) - 1) : 30;

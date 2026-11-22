@@ -11017,6 +11017,7 @@ if __name__ == '__main__':
                 ctrl.ShowMinimap = (ctrl == editorControl) ? settings.ShowMinimap : false;
                 ctrl.ShowBreadcrumbs = settings.ShowBreadcrumbs;
                 ctrl.EnableGhostCompletions = settings.EnableInlineGhostText;
+                ctrl.Canvas.ApplyCaretSettings(); // blink style / smooth caret / smooth scrolling
             }
             if (!lastAppliedGlobalWordWrap.HasValue || lastAppliedGlobalWordWrap.Value != settings.WordWrap)
             {

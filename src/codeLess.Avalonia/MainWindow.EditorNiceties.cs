@@ -16,9 +16,33 @@ namespace codeLess.AvaloniaApp
         /// <summary>Pushes the persisted switches into the editors and repaints them.</summary>
         internal void ApplyEditorNicetySettings()
         {
-            EditorNicetyOptions.ApplyFrom(settings);
-            PrimaryEditor?.Canvas?.InvalidateVisual();
-            SplitEditor?.Canvas?.InvalidateVisual();
+            EditorNicetyOptions.ApplyFrom(settings); // also EditorScrollOptions (smooth scrolling / caret)
+            PrimaryEditor?.Canvas?.ApplyCaretSettings();
+            SplitEditor?.Canvas?.ApplyCaretSettings();
+        }
+
+        /// <summary>Flips a smooth-scrolling / caret switch from the command palette and persists it.</summary>
+        private void ToggleEditorSmoothness(string name, Func<bool> get, Action<bool> set)
+        {
+            bool v = !get();
+            set(v);
+            EditorScrollOptions.CopyTo(settings);
+            try { settings.Save(); } catch { }
+            PrimaryEditor?.Canvas?.ApplyCaretSettings();
+            SplitEditor?.Canvas?.ApplyCaretSettings();
+            PrimaryEditor?.PublishStatus(name + (v ? ": on" : ": off"));
+        }
+
+        /// <summary>Cycles editor.cursorBlinking (blink, smooth, phase, expand, solid) from the command palette.</summary>
+        private void CycleCursorBlinking()
+        {
+            int i = Array.IndexOf(CaretBlink.Styles, CaretBlink.Normalize(EditorScrollOptions.CursorBlinking));
+            EditorScrollOptions.CursorBlinking = CaretBlink.Styles[(i + 1) % CaretBlink.Styles.Length];
+            EditorScrollOptions.CopyTo(settings);
+            try { settings.Save(); } catch { }
+            PrimaryEditor?.Canvas?.ApplyCaretSettings();
+            SplitEditor?.Canvas?.ApplyCaretSettings();
+            PrimaryEditor?.PublishStatus("Cursor blinking: " + EditorScrollOptions.CursorBlinking);
         }
 
         private void ToggleEditorNicety(string name, Func<bool> get, Action<bool> set)
@@ -122,6 +146,9 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Auto Close Tags", Execute = () => ToggleEditorNicety("Auto Close Tags", () => EditorNicetyOptions.AutoCloseTags, v => EditorNicetyOptions.AutoCloseTags = v) },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Linked Tag Editing", Execute = () => ToggleEditorNicety("Linked Tag Editing", () => EditorNicetyOptions.LinkedTagEditing, v => EditorNicetyOptions.LinkedTagEditing = v) },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Emmet Expansion on Tab", Execute = () => ToggleEditorNicety("Emmet on Tab", () => EditorNicetyOptions.EmmetOnTab, v => EditorNicetyOptions.EmmetOnTab = v) },
+                new PaletteEntryItem { Category = "View", Title = "Toggle Smooth Scrolling", Execute = () => ToggleEditorSmoothness("Smooth Scrolling", () => EditorScrollOptions.SmoothScrolling, v => EditorScrollOptions.SmoothScrolling = v) },
+                new PaletteEntryItem { Category = "View", Title = "Toggle Smooth Caret Animation", Execute = () => ToggleEditorSmoothness("Smooth Caret Animation", () => EditorScrollOptions.SmoothCaretAnimation, v => EditorScrollOptions.SmoothCaretAnimation = v) },
+                new PaletteEntryItem { Category = "View", Title = "Cycle Cursor Blinking Style", Execute = CycleCursorBlinking },
             };
         }
     }

@@ -28,6 +28,14 @@ namespace codeLess.Studio
                 case "nicety_autoclose": EditorNicetyOptions.AutoCloseTags = !EditorNicetyOptions.AutoCloseTags; break;
                 case "nicety_linked": EditorNicetyOptions.LinkedTagEditing = !EditorNicetyOptions.LinkedTagEditing; break;
                 case "nicety_emmet": EditorNicetyOptions.EmmetOnTab = !EditorNicetyOptions.EmmetOnTab; break;
+                case "nicety_smooth_scroll": EditorScrollOptions.SmoothScrolling = !EditorScrollOptions.SmoothScrolling; break;
+                case "nicety_smooth_caret": EditorScrollOptions.SmoothCaretAnimation = !EditorScrollOptions.SmoothCaretAnimation; break;
+                case "nicety_cursor_blinking":
+                    {
+                        int bi = Array.IndexOf(CaretBlink.Styles, CaretBlink.Normalize(EditorScrollOptions.CursorBlinking));
+                        EditorScrollOptions.CursorBlinking = CaretBlink.Styles[(bi + 1) % CaretBlink.Styles.Length];
+                        break;
+                    }
                 default: return false;
             }
             if (settings != null)
@@ -35,8 +43,8 @@ namespace codeLess.Studio
                 EditorNicetyOptions.CopyTo(settings);
                 try { settings.Save(); } catch { }
             }
-            if (editorControl != null) editorControl.Invalidate(true);
-            if (splitEditorControl != null) splitEditorControl.Invalidate(true);
+            if (editorControl != null) { editorControl.Canvas.ApplyCaretSettings(); editorControl.Invalidate(true); }
+            if (splitEditorControl != null) { splitEditorControl.Canvas.ApplyCaretSettings(); splitEditorControl.Invalidate(true); }
             return true;
         }
     }
@@ -56,6 +64,9 @@ namespace codeLess.Studio
             new[] { "Edit", "Edit: Toggle Auto Close Tags", "", "nicety_autoclose" },
             new[] { "Edit", "Edit: Toggle Linked Tag Editing", "", "nicety_linked" },
             new[] { "Edit", "Edit: Toggle Emmet Expansion on Tab", "", "nicety_emmet" },
+            new[] { "View", "View: Toggle Smooth Scrolling", "", "nicety_smooth_scroll" },
+            new[] { "View", "View: Toggle Smooth Caret Animation", "", "nicety_smooth_caret" },
+            new[] { "View", "View: Cycle Cursor Blinking Style", "", "nicety_cursor_blinking" },
         };
     }
 
@@ -94,6 +105,60 @@ namespace codeLess.Studio
             s.EditorLinkedTagEditing = boxes[7].Checked;
             s.EditorEmmetOnTab = boxes[8].Checked;
             EditorNicetyOptions.ApplyFrom(s);
+        }
+    }
+
+    /// <summary>
+    /// Scrolling / caret block of the WinForms Settings dialog (VS Code editor.smoothScrolling,
+    /// editor.cursorSmoothCaretAnimation, editor.cursorBlinking, editor.mouseWheelScrollSensitivity).
+    /// </summary>
+    public sealed class EditorSmoothnessSettingsBlockWin
+    {
+        public static readonly string[] BlinkNames = new string[] { "Blink", "Smooth (fade)", "Phase", "Expand", "Solid (no blinking)" };
+        public CheckBox SmoothScrollBox, SmoothCaretBox;
+        public CodeLessDropdown BlinkCombo;
+        public CodeLessDarkInputBox SensitivityInput;
+
+        public static EditorSmoothnessSettingsBlockWin Build(Panel body, IdePersistentSettings s, StudioTheme theme, Func<string, bool, int, int, CheckBox> addCheck, ref int y)
+        {
+            EditorSmoothnessSettingsBlockWin b = new EditorSmoothnessSettingsBlockWin();
+            b.SmoothScrollBox = addCheck("Smooth scrolling", s.EditorSmoothScrolling, 24, y);
+            b.SmoothCaretBox = addCheck("Smooth caret animation", s.EditorSmoothCaretAnimation, 380, y);
+            y += 30;
+            Label lbl = new Label { Location = new Point(24, y + 4), Size = new Size(210, 20), Text = "Cursor blinking:", Font = new Font("Segoe UI", 8.8f), ForeColor = theme.FgSecondary, UseMnemonic = false };
+            body.Controls.Add(lbl);
+            b.BlinkCombo = new CodeLessDropdown { Location = new Point(240, y), Size = new Size(180, 26), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 9.0f) };
+            b.BlinkCombo.ApplyTheme(theme);
+            foreach (string n in BlinkNames) b.BlinkCombo.Items.Add(n);
+            b.BlinkCombo.SelectedIndex = Math.Max(0, Array.IndexOf(CaretBlink.Styles, CaretBlink.Normalize(s.EditorCursorBlinking)));
+            body.Controls.Add(b.BlinkCombo);
+            y += 32;
+            Label lbl2 = new Label { Location = new Point(24, y + 4), Size = new Size(210, 20), Text = "Mouse wheel scroll sensitivity:", Font = new Font("Segoe UI", 8.8f), ForeColor = theme.FgSecondary, UseMnemonic = false };
+            body.Controls.Add(lbl2);
+            b.SensitivityInput = new CodeLessDarkInputBox
+            {
+                Location = new Point(240, y),
+                Size = new Size(90, 26),
+                Text = s.EditorMouseWheelScrollSensitivity.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+                Font = new Font("Consolas", 8.8f)
+            };
+            b.SensitivityInput.ApplyTheme(theme);
+            body.Controls.Add(b.SensitivityInput);
+            y += 32;
+            return b;
+        }
+
+        public void Apply(IdePersistentSettings s)
+        {
+            s.EditorSmoothScrolling = SmoothScrollBox.Checked;
+            s.EditorSmoothCaretAnimation = SmoothCaretBox.Checked;
+            int i = BlinkCombo.SelectedIndex;
+            s.EditorCursorBlinking = i >= 0 && i < CaretBlink.Styles.Length ? CaretBlink.Styles[i] : CaretBlink.Smooth;
+            double v;
+            string t = (SensitivityInput.Text ?? "").Trim().Replace(',', '.');
+            if (double.TryParse(t, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v))
+                s.EditorMouseWheelScrollSensitivity = EditorScrollOptions.ClampSensitivity(v, 1.0);
+            // ApplySettingsToEditors pushes them into EditorScrollOptions after saving
         }
     }
 }

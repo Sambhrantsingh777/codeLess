@@ -77,6 +77,7 @@ namespace codeLess.Studio
             EditorVisualRowIndex idx = RowIndexWF(buf);
             int sub;
             int line = idx.LineOfRow(Math.Max(0, Math.Min(idx.TotalRows - 1, row)), out sub);
+            FinishScrollAnimationsWF(buf);
             buf.ScrollTopLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, line));
             NoteScrollActivityWF();
             owner.DismissAutocomplete();
@@ -176,7 +177,7 @@ namespace codeLess.Studio
             int h = this.Height;
             int x = VScrollXWF;
             int visRows = Math.Max(1, h / Math.Max(1, LineHeight));
-            wfVGeom = EditorScrollbar.Vertical(0, h, idx.TotalRows, visRows, top);
+            wfVGeom = EditorScrollbar.Vertical(0, h, idx.TotalRows, visRows, TopRowExactWF(buf)); // fractional: moves with the pixels
             bool show = SliderShownWF;
 
             using (SolidBrush border = new SolidBrush(UiTokens.OverviewRulerBorder(th)))
@@ -273,13 +274,12 @@ namespace codeLess.Studio
                 if (hit == EditorScrollbar.HitThumb) wfDragGrab = e.Y - wfVGeom.ThumbStart;
                 else if (page && hit != EditorScrollbar.HitNone)
                 {
-                    ScrollLinesWF(buf, hit == EditorScrollbar.HitBefore ? -Math.Max(1, visRows - 1) : Math.Max(1, visRows - 1));
-                    Invalidate();
+                    SmoothScrollRowsWF(buf, hit == EditorScrollbar.HitBefore ? -Math.Max(1, visRows - 1) : Math.Max(1, visRows - 1));
                     return true;
                 }
                 else
                 {
-                    ScrollToVisualRowWF(buf, (int)Math.Round(EditorScrollbar.ValueForJump(wfVGeom, e.Y)));
+                    AnimateTopRowToWF(buf, EditorScrollbar.ValueForJump(wfVGeom, e.Y)); // a track click glides there
                     wfDragGrab = wfVGeom.ThumbLength / 2.0;
                 }
                 wfVDrag = true;
@@ -326,7 +326,11 @@ namespace codeLess.Studio
             if (buf == null) return false;
             if (wfVDrag)
             {
-                ScrollToVisualRowWF(buf, (int)Math.Round(EditorScrollbar.ValueForThumbStart(wfVGeom, e.Y - wfDragGrab)));
+                FinishScrollAnimationsWF(buf);
+                SetTopRowExactWF(buf, EditorScrollbar.ValueForThumbStart(wfVGeom, e.Y - wfDragGrab)); // pixel-precise drag
+                NoteScrollActivityWF();
+                owner.DismissAutocomplete();
+                Invalidate();
                 return true;
             }
             if (wfHDrag)

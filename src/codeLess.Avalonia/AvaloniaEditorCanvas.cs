@@ -205,6 +205,10 @@ namespace codeLess.AvaloniaApp
             var bodyOverlayGrid = new Grid();
             Canvas = new AvaloniaVirtualEditorCanvas(this);
             bodyOverlayGrid.Children.Add(Canvas);
+            // carets on their own layer right above the text (cheap blinking / smooth caret), hidden with the canvas
+            var caretLayer = Canvas.CaretOverlay;
+            caretLayer.Bind(IsVisibleProperty, Canvas.GetObservable(IsVisibleProperty));
+            bodyOverlayGrid.Children.Add(caretLayer);
 
             // Welcome Page Host
             recentFoldersPanel = new StackPanel { Spacing = 4 };
@@ -1648,7 +1652,6 @@ namespace codeLess.AvaloniaApp
         public List<ExtraCursorCaret> ExtraCursors { get; } = new List<ExtraCursorCaret>();
 
         private readonly DispatcherTimer blinkTimer;
-        private bool caretBlinkOn = true;
         private bool isMouseSelecting = false;
         private bool isMinimapDragging = false;
         private int hoveredLine = -1;
@@ -1685,28 +1688,61 @@ namespace codeLess.AvaloniaApp
             TextInputMethodClientRequested += (s, e) => e.Client = imeClient;
             global::Avalonia.Input.InputMethod.SetIsInputMethodEnabled(this, true);
 
-            blinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
-            blinkTimer.Tick += (s, e) =>
-            {
-                caretBlinkOn = !caretBlinkOn;
-                if (IsVisible) InvalidateVisual();
-            };
-            // Blink only while focused in an active, visible window; otherwise draw a steady caret and stay asleep.
-            blinkGate = new UiTimerGate(this, blinkTimer, requireFocus: true);
-            blinkGate.RunningChanged += () => { caretBlinkOn = true; InvalidateVisual(); };
+            blinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(CaretBlink.IntervalMs) };
+            blinkTimer.Tick += (s, e) => OnCaretBlinkTick();
+            // Blink only while focused in an active, visible window (and until VS Code's animated blink runs out);
+            // otherwise draw a steady caret and stay asleep.
+            blinkGate = new UiTimerGate(this, blinkTimer, requireFocus: true, wanted: () => CaretBlink.Animates(EditorScrollOptions.CursorBlinking) && !caretBlinkFinished);
+            blinkGate.RunningChanged += () => { caretBlinkResetMs = NowMs; caretOverlay?.InvalidateVisual(); };
             AddHandler(KeyDownEvent, (s, e) => { RestartCaretBlink(); BindUndoCaretSource(Buffer); }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
             AddHandler(TextInputEvent, (s, e) => { RestartCaretBlink(); BindUndoCaretSource(Buffer); }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
         }
 
         private readonly UiTimerGate blinkGate;
+        private double caretBlinkResetMs;
+        private bool caretBlinkFinished;
         public bool IsCaretBlinkTimerRunning => blinkTimer.IsEnabled;
-        public bool IsCaretShown => caretBlinkOn;
+        /// <summary>Whether the caret is (mostly) visible right now.</summary>
+        public bool IsCaretShown { get { GetCaretAppearance(out double o, out double sy); return o * sy >= 0.5; } }
 
-        /// <summary>Typing keeps the caret solid (VS Code): show it now and restart the blink interval.</summary>
+        /// <summary>Caret opacity / vertical scale for the current blink phase (solid while the blink timer sleeps).</summary>
+        public void GetCaretAppearance(out double opacity, out double scaleY)
+        {
+            opacity = 1; scaleY = 1;
+            if (!blinkTimer.IsEnabled) return;
+            CaretBlink.Evaluate(EditorScrollOptions.CursorBlinking, NowMs - caretBlinkResetMs, out opacity, out scaleY);
+        }
+
+        /// <summary>Any input shows the caret solid (VS Code) and restarts the blink cycle.</summary>
         private void RestartCaretBlink()
         {
-            caretBlinkOn = true;
-            if (blinkTimer.IsEnabled) { blinkTimer.Stop(); blinkTimer.Start(); }
+            caretBlinkResetMs = NowMs;
+            caretBlinkFinished = false;
+            blinkGate?.Update();
+            if (blinkTimer.IsEnabled) blinkTimer.Interval = TimeSpan.FromMilliseconds(CaretBlink.IntervalMs); // restarts the timer
+            caretOverlay?.InvalidateVisual();
+        }
+
+        /// <summary>Re-reads the caret settings (blink style, smooth caret) after they changed.</summary>
+        public void ApplyCaretSettings()
+        {
+            RestartCaretBlink();
+            InvalidateVisual();
+        }
+
+        private void OnCaretBlinkTick()
+        {
+            caretOverlay?.InvalidateVisual();
+            double next = CaretBlink.NextChangeMs(EditorScrollOptions.CursorBlinking, NowMs - caretBlinkResetMs);
+            if (next < 0)
+            {
+                caretBlinkFinished = true; // VS Code's animated blink ran out: solid caret, no more wake-ups until the next input
+                blinkGate.Update();
+                return;
+            }
+            // fading: ~60 Hz repaints of the caret layer only; holding: sleep until the next change
+            double ms = next <= 0 ? 16 : Math.Max(16, next);
+            if (Math.Abs(blinkTimer.Interval.TotalMilliseconds - ms) > 0.5) blinkTimer.Interval = TimeSpan.FromMilliseconds(ms);
         }
 
         public EditorTabBuffer Buffer => owner.CurrentBuffer;
@@ -1726,10 +1762,29 @@ namespace codeLess.AvaloniaApp
 
         public int TotalCursorCount => 1 + ExtraCursors.Count;
 
+        /// <summary>
+        /// Scrolls the primary caret into view. Animated (smooth scrolling) after navigation; snaps right after a text
+        /// edit so typing never waits for an animation.
+        /// </summary>
         public void EnsureCursorVisible()
         {
             var buf = Buffer;
             if (buf == null) return;
+            bool afterEdit = RevealFollowsEdit(buf);
+            RunReveal(buf, () => EnsureCursorVisibleCore(buf), animate: !afterEdit);
+        }
+
+        /// <summary>Scrolls the primary caret into view, animated or not (overrides the typing heuristic).</summary>
+        public void EnsureCursorVisible(bool animate)
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            RevealFollowsEdit(buf);
+            RunReveal(buf, () => EnsureCursorVisibleCore(buf), animate);
+        }
+
+        private void EnsureCursorVisibleCore(EditorTabBuffer buf)
+        {
             buf.ClampCursor();
             EnsureCaretRowVisible(buf);
             KeepCaretOutOfStickyScroll(buf);
@@ -1864,29 +1919,11 @@ namespace codeLess.AvaloniaApp
                 e.Handled = true;
                 return;
             }
-            double dy = e.Delta.Y;
-            double dx = e.Delta.X;
-            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift) && Math.Abs(dx) < 0.001) { dx = dy; dy = 0; } // Shift+wheel scrolls horizontally
-            // Fractional accumulation: truncating each small trackpad delta to 0 lines made scrolling dead/jerky.
-            wheelAccumY += -dy * 3;
-            int deltaLines = (int)wheelAccumY;
-            wheelAccumY -= deltaLines;
-            if (deltaLines != 0)
-            {
-                ScrollByRows(buf, deltaLines);
-                NoteScrollActivity();
-            }
-            if (Math.Abs(dx) > 0.001 && !buf.WordWrap) // no horizontal scrolling while wrapping (VS Code)
-            {
-                // the range covers the widest line of the whole document (it was measured on 400 lines below the top)
-                buf.ScrollLeftPx = Math.Max(0, Math.Min(MaxScrollLeftPx(buf), buf.ScrollLeftPx - dx * CharWidth * 3));
-                NoteScrollActivity();
-            }
+            HandleWheelScroll(buf, e); // pixel-precise / animated (AvaloniaEditorCanvas.Smooth.cs)
             InvalidateVisual();
             e.Handled = true;
         }
 
-        private double wheelAccumY;
         private double zoomAccum;
 
         // ---- Pointer cursor, Cmd/Ctrl+Click links, gutter selection and drag auto-scroll ---------------------
@@ -2176,7 +2213,7 @@ namespace codeLess.AvaloniaApp
                 // Glyph margin (left of the line numbers): toggle a breakpoint, like VS Code.
                 if (pt.X < EditorDebugHooks.GlyphMarginWidth && owner.RaiseBreakpointGutter(buf, docLine, false)) { e.Handled = true; return; }
                 // Git diff bar (rightmost gutter pixels): Stage / Revert / Diff popup, like VS Code's quick diff peek.
-                if (pt.X >= GutterWidth - 8 && owner.RaiseGutterDiffClicked(buf, docLine, new Rect(GutterWidth - 7, Math.Floor(pt.Y / LineHeight) * LineHeight, 7, LineHeight))) { e.Handled = true; return; }
+                if (pt.X >= GutterWidth - 8 && owner.RaiseGutterDiffClicked(buf, docLine, new Rect(GutterWidth - 7, Math.Floor((pt.Y + TopRowOffsetPx) / LineHeight) * LineHeight - TopRowOffsetPx, 7, LineHeight))) { e.Handled = true; return; }
                 // Fold chevron
                 if (pt.X >= GutterWidth - 18 && CanFoldLine(buf, docLine))
                 {
@@ -2193,7 +2230,7 @@ namespace codeLess.AvaloniaApp
                 SelectWholeLines(buf, anchor, docLine);
                 isGutterSelecting = true;
                 e.Pointer.Capture(this);
-                caretBlinkOn = true;
+                RestartCaretBlink();
                 owner.NotifyCaretMoved();
                 InvalidateVisual();
                 e.Handled = true;
@@ -2214,7 +2251,7 @@ namespace codeLess.AvaloniaApp
                 buf.CursorLine = docLine;
                 buf.CursorCol = docCol;
                 ApplyHitAffinity(buf);
-                caretBlinkOn = true;
+                RestartCaretBlink();
                 owner.NotifyCaretMoved();
                 ClearLinkHover();
                 InvalidateVisual();
@@ -2284,7 +2321,7 @@ namespace codeLess.AvaloniaApp
                 e.Pointer.Capture(this);
             }
 
-            caretBlinkOn = true;
+            RestartCaretBlink();
             owner.NotifyCaretMoved();
             UpdatePointerCursor(pt);
             InvalidateVisual();
@@ -2390,7 +2427,7 @@ namespace codeLess.AvaloniaApp
                 }
                 // Horizontal follow while dragging past the left / right edge.
                 if (!buf.WordWrap && (pt.X > CodeAreaRight - 8 || (pt.X < GutterWidth + 8 && buf.ScrollLeftPx > 0)))
-                    EnsureCursorVisible();
+                    EnsureCursorVisible(animate: false); // drag-scrolling follows the pointer directly
             }
             owner.NotifyCaretMoved();
             InvalidateVisual();
@@ -2892,11 +2929,12 @@ namespace codeLess.AvaloniaApp
             b.SyncContentFromLines(false);
         }
 
+        /// <summary>Scrolls by visual rows without moving the caret (Ctrl+Up/Down, Alt+PageUp/Down); animated when smooth scrolling is on.</summary>
         public void ScrollLines(int delta)
         {
             var buf = Buffer;
             if (buf == null) return;
-            ScrollByRows(buf, delta);
+            SmoothScrollRowsBy(buf, delta);
             InvalidateVisual();
         }
 
@@ -4316,6 +4354,7 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
 
             hunkActionHitBoxes.Clear();
+            renderFrameNo++;
             deferredOverlays.Clear();
             annotationHitBoxes.Clear();
             if (buf.ScrollTopLine != lastNotifiedScrollTop)
@@ -4360,8 +4399,8 @@ namespace codeLess.AvaloniaApp
 
             bool hasFolds = buf.FoldedBlockRanges.Count > 0;
             bool wrapping = buf.WordWrap;
-            if (wrapping && buf.ScrollLeftCol != 0) buf.ScrollLeftPx = 0;
-            else if (!wrapping && buf.ScrollLeftCol != 0 && Bounds.Width > GutterWidth + 40)
+            if (wrapping && buf.ScrollLeftPx > 0) buf.ScrollLeftPx = 0;
+            else if (!wrapping && buf.ScrollLeftPx > 0 && Bounds.Width > GutterWidth + 40)
             {
                 // a horizontal offset left over from another layout (narrower window, longer content before an edit,
                 // a file shown in a narrow split) never scrolls past the longest line: no text clipped on the left
@@ -4387,6 +4426,8 @@ namespace codeLess.AvaloniaApp
             int maxHorizCols = Math.Max(120, (int)((codeAreaRight - GutterWidth) / CharWidth) + 24);
             int tabStop = TabFor(buf);
             int caretRowIdx = CaretRowOf(buf, buf.CursorLine, buf.CursorCol, true);
+            // pixel-precise scrolling: rows start above the viewport by the fractional part of the top row
+            double rowOffsetPx = TopRowOffsetPx;
 
             // Code rows never paint past the text area (long tokens, ghost text and annotations used to show between the
             // minimap and the scroll bar); WinForms clips the same way.
@@ -4395,7 +4436,7 @@ namespace codeLess.AvaloniaApp
             {
                 var vr = rows[r];
                 int docLine = vr.DocLine;
-                double y = r * LineHeight;
+                double y = r * LineHeight - rowOffsetPx;
                 if (vr.IsDeleted) { DrawDeletedRow(context, buf, vr, y, codeBaseX, codeAreaRight); continue; } // read-only removed lines (QA #30)
                 string lineText = buf.Lines[docLine] ?? "";
                 bool isFoldedHeader = hasFolds && buf.FoldedBlockRanges.ContainsKey(docLine);
@@ -4451,14 +4492,8 @@ namespace codeLess.AvaloniaApp
                 // Gutter: line number, breakpoints and fold chevron on the first row; git bars on every row of the line
                 if (vr.IsFirstRow)
                 {
-                    var lnFt = new FormattedText(
-                        (docLine + 1).ToString(CultureInfo.InvariantCulture),
-                        CultureInfo.InvariantCulture,
-                        FlowDirection.LeftToRight,
-                        docLine == buf.CursorLine ? fontBold : fontRegular,
-                        FontSizePx - 1.5,
-                        docLine == buf.CursorLine ? textPriBrush : textSecBrush);
-                    context.DrawText(lnFt, new Point(Math.Max(4, GutterWidth - 22 - lnFt.Width), y + (LineHeight - lnFt.Height) / 2.0));
+                    var lnFt = LineNumberText(docLine, docLine == buf.CursorLine, fontRegular, fontBold, textPriBrush, textSecBrush);
+                    lnFt.Draw(context, new Point(Math.Max(4, GutterWidth - 22 - lnFt.Width), y + (LineHeight - lnFt.Height) / 2.0));
                     DrawDebugGutterGlyphs(context, buf, docLine, y);
                 }
 
@@ -4511,55 +4546,9 @@ namespace codeLess.AvaloniaApp
                 using (context.PushClip(textClip))
                 {
                     var tokens = GetNicetyTokens(buf, docLine, lineText, renderSliceStart, renderLineText);
-                    foreach (var tk in tokens)
-                    {
-                        var tf = tk.IsBold ? fontBold : (tk.IsItalic ? fontItalic : fontRegular);
-                        var brush = new SolidColorBrush(tk.Color);
-                        string t = tk.Text ?? "";
-                        bool simple = true;
-                        for (int ci = 0; ci < t.Length; ci++)
-                        {
-                            char ch = t[ci];
-                            if (ch == '\t' || ch >= '̀') { simple = false; break; }
-                        }
-                        if (simple)
-                        {
-                            // Fast path: plain monospace run, one FormattedText positioned on the grid.
-                            double x0 = codeBaseX + renderVcol * CharWidth;
-                            if (CaptureFrameTokens) LastFrameRunOrigins.Add((docLine, renderVcol, x0));
-                            double runW = t.Length * CharWidth;
-                            if (x0 + runW >= GutterWidth && x0 <= codeAreaRight)
-                            {
-                                var ft = new FormattedText(t, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, FontSizePx, brush);
-                                context.DrawText(ft, new Point(x0, y + (LineHeight - ft.Height) / 2.0));
-                            }
-                            renderVcol += t.Length;
-                        }
-                        else
-                        {
-                            // Tabs / wide / astral / combining characters: place each glyph cluster at its own cell.
-                            for (int ci = 0; ci < t.Length; ci++)
-                            {
-                                char ch = t[ci];
-                                if (ch == '\t') { renderVcol += tabStop - (renderVcol % tabStop); continue; }
-                                int cells = CellsForChar(t, ci);
-                                int clusterEnd = ci + ((char.IsHighSurrogate(ch) && ci + 1 < t.Length) ? 2 : 1);
-                                // combining marks / variation selectors / ZWJ sequences render with their base glyph
-                                while (clusterEnd < t.Length && t[clusterEnd] != '\t' && CellsForChar(t, clusterEnd) == 0) clusterEnd++;
-                                string glyph = t.Substring(ci, clusterEnd - ci);
-                                double gx0 = codeBaseX + renderVcol * CharWidth;
-                                if (gx0 + CharWidth * Math.Max(1, cells) >= GutterWidth && gx0 <= codeAreaRight && !char.IsLowSurrogate(ch))
-                                {
-                                    var gft = new FormattedText(glyph, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, tf, FontSizePx, brush);
-                                    context.DrawText(gft, new Point(gx0, y + (LineHeight - gft.Height) / 2.0));
-                                }
-                                ci = clusterEnd - 1;
-                                renderVcol += cells;
-                            }
-                        }
-                        curX = codeBaseX + renderVcol * CharWidth;
-                        if (curX > codeAreaRight + 40) break;
-                    }
+                    // shaped runs are cached per row (AvaloniaEditorCanvas.RenderCache.cs): scrolling shapes only new rows
+                    var shaped = GetRowTextRuns(docLine, vr.Row, false, lineText, renderSliceStart, renderVcol, tokens, tabStop);
+                    curX = DrawCachedRow(context, shaped, docLine, codeBaseX, y, codeAreaRight);
                 }
 
                 // Folded block placeholder pill (after the header's last row)
@@ -4694,22 +4683,8 @@ namespace codeLess.AvaloniaApp
                     }
                 }
 
-                // Primary Caret & Extra Multi-Cursors on this row
-                if (caretBlinkOn)
-                {
-                    if (isCaretRow && !IsImeComposing)
-                    {
-                        double cx = RowColX(buf, vr, buf.CursorCol, codeBaseX);
-                        context.FillRectangle(accentBrush, new Rect(cx, y + 2, 2.0, LineHeight - 4));
-                    }
-                    for (int eci = 0; eci < ExtraCursors.Count; eci++)
-                    {
-                        var ec = ExtraCursors[eci];
-                        if (ec.Line != docLine || CaretRowOf(buf, ec.Line, ec.Col, false) != vr.Row) continue;
-                        double ecx = RowColX(buf, vr, ec.Col, codeBaseX);
-                        context.FillRectangle(accentBrush, new Rect(ecx, y + 2, 2.0, LineHeight - 4));
-                    }
-                }
+                // carets (primary and extra) are painted by the caret overlay (AvaloniaCaretOverlay): blinking and the
+                // smooth caret animation repaint only that small layer, never the whole editor
             }
 
             foreach (var overlay in deferredOverlays) overlay();
@@ -4747,6 +4722,7 @@ namespace codeLess.AvaloniaApp
                 RenderMinimap(context, buf, MinimapLeft, MinimapWidth, h);
             }
             RenderScrollbars(context, buf, w, h);
+            TrimRenderCaches(maxRows);
         }
 
         /// <summary>Selections of the primary caret and every extra caret (single- and multi-line) on one screen row.</summary>
@@ -4889,7 +4865,7 @@ namespace codeLess.AvaloniaApp
             int visRows = Math.Max(1, (int)(h / LineHeight));
             if (lastFrameRows.Count > 0) visRows = Math.Max(1, lastFrameRows[lastFrameRows.Count - 1].DocLine - lastFrameRows[0].DocLine + 1);
             double trackH = Math.Min(h - 4, maxMmLines * 3.0);
-            double vpTop = ((double)buf.ScrollTopLine / totalLines) * Math.Max(10, trackH - 18);
+            double vpTop = ((buf.ScrollTopLine + buf.ScrollTopFraction) / totalLines) * Math.Max(10, trackH - 18);
             double vpH = Math.Max(20, ((double)visRows / totalLines) * trackH);
             var vpRect = new Rect(mmX + 1, Math.Min(h - vpH, vpTop), mmW - 2, Math.Min(h - vpTop, vpH));
             context.FillRectangle(

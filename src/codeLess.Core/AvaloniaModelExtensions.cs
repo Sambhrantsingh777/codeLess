@@ -115,10 +115,23 @@ namespace codeLess.Studio
             set => GhostText = string.IsNullOrEmpty(value) ? null : value;
         }
 
+        private double scrollLeftExactPx;
+        private int scrollLeftExactCol = -1;
+
+        /// <summary>
+        /// Horizontal scroll offset in pixels, kept exact (trackpads scroll by fractions of a character). The legacy
+        /// <see cref="ScrollLeftCol"/> follows it; assigning ScrollLeftCol directly gives a whole-column offset.
+        /// </summary>
         public double ScrollLeftPx
         {
-            get => ScrollLeftCol * 7.8;
-            set => ScrollLeftCol = Math.Max(0, (int)Math.Round(value / 7.8));
+            get => ScrollLeftCol == scrollLeftExactCol ? scrollLeftExactPx : ScrollLeftCol * 7.8;
+            set
+            {
+                double v = double.IsNaN(value) ? 0 : Math.Max(0, value);
+                ScrollLeftCol = Math.Max(0, (int)Math.Round(v / 7.8));
+                scrollLeftExactPx = v;
+                scrollLeftExactCol = ScrollLeftCol;
+            }
         }
 
         public HashSet<int> ProposedNewLines { get; } = new HashSet<int>();

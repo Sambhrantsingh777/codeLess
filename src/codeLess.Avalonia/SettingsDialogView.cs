@@ -177,8 +177,9 @@ namespace codeLess.AvaloniaApp
             var insertSpacesChk = AddCheck("Insert spaces when pressing Tab", settings.InsertSpaces, "editor.insertSpaces");
             var detectIndentChk = AddCheck("Detect indentation from the file's content and .editorconfig", settings.DetectIndentation, "editor.detectIndentation");
             var niceties = EditorNicetiesSettingsPanel.Build(settings, theme, AvaloniaColorHelper.ToAvColor(theme.TextPrimary));
+            var smoothness = EditorSmoothnessSettingsPanel.Build(settings, AvaloniaColorHelper.ToAvColor(theme.TextPrimary));
             var nicetyGrid = AddGrid();
-            foreach (var box in niceties.Boxes)
+            foreach (var box in niceties.Boxes.Concat(smoothness.Boxes))
             {
                 string text = box.Content as string ?? "";
                 box.Content = Wrapping(text);
@@ -186,6 +187,9 @@ namespace codeLess.AvaloniaApp
                 box.MinHeight = RowMinHeight;
                 AddToGrid(nicetyGrid, box, text);
             }
+            AddLabeled("Cursor Blinking", smoothness.BlinkCombo, "editor.cursorBlinking", "caret cursor blink smooth phase expand solid");
+            AddLabeled("Mouse Wheel Scroll Sensitivity", smoothness.SensitivityBox, "editor.mouseWheelScrollSensitivity", "scroll wheel trackpad speed");
+            AddLabeled("Fast Scroll Sensitivity (Alt)", smoothness.FastSensitivityBox, "editor.fastScrollSensitivity", "scroll wheel option alt speed");
 
             // ---------------------------------------------------------------- Files
             BeginSection("Files");
@@ -330,6 +334,7 @@ namespace codeLess.AvaloniaApp
                 settings.DetectIndentation = detectIndentChk.IsChecked == true;
                 settings.ShowMinimap = minimapChk.IsChecked == true;
                 niceties.Apply(settings);
+                smoothness.Apply(settings);
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
                 settings.OfflineMode = offlineChk.IsChecked == true;
                 settings.AutoCheckForUpdates = updateChk.IsChecked == true;

@@ -26,8 +26,9 @@ namespace codeLess.Studio
         {
             Action<EditorTabBuffer, int, Rectangle> h = GutterDiffClicked;
             if (h == null || !HasGutterDiffMarker(buf, line)) return false;
-            int row = Math.Max(0, (e.Y - 4) / Math.Max(1, LineHeight));
-            h(buf, line, new Rectangle(GutterWidth - 6, row * LineHeight + 4, 6, LineHeight));
+            int sub = TopSubPixelsWF(buf);
+            int row = Math.Max(0, (e.Y - 4 + sub) / Math.Max(1, LineHeight));
+            h(buf, line, new Rectangle(GutterWidth - 6, row * LineHeight + 4 - sub, 6, LineHeight));
             return true;
         }
 

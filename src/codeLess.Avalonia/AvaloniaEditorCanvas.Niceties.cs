@@ -158,7 +158,7 @@ namespace codeLess.AvaloniaApp
                 // lines longer than the TextMate limit (VS Code paints them plain) keep the fallback colors
                 if (EditorNicetyOptions.TextMateHighlighting && session.TextMate != null && !session.IsTooLongForTextMate(lineText))
                 {
-                    spans = session.GetTextMateSpans(buf.Lines, docLine, frameVisTop, Theme, frameTokenDeadline, out bool guess);
+                    spans = session.GetTextMateSpans(buf.Lines, docLine, frameVisTop, Theme, frameTokenDeadline, out bool guess, sliceStart, sliceStart + sliceLen);
                     if (spans != null) { LastFrameTextMateLines++; if (guess) frameHadGuesses = true; }
                 }
                 if (spans == null)
@@ -379,13 +379,14 @@ namespace codeLess.AvaloniaApp
                 var rowRect = new Rect(0, y, codeAreaRight, LineHeight);
                 context.FillRectangle(gutter, new Rect(0, y, GutterWidth, LineHeight));
                 context.FillRectangle(i == stickyHoverIndex ? hover : bg, new Rect(GutterWidth, y, Math.Max(0, codeAreaRight - GutterWidth), LineHeight));
-                var lnFt = new FormattedText((docLine + 1).ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedFontRegular, FontSizePx - 1.5, lnBrush);
-                context.DrawText(lnFt, new Point(Math.Max(4, GutterWidth - 22 - lnFt.Width), y + (LineHeight - lnFt.Height) / 2.0));
+                var lnFt = LineNumberText(docLine, false, CachedFontRegular, CachedFontRegular, lnBrush, lnBrush);
+                lnFt.Draw(context, new Point(Math.Max(4, GutterWidth - 22 - lnFt.Width), y + (LineHeight - lnFt.Height) / 2.0));
                 string text = lines[docLine] ?? "";
                 string slice = text.Length > 2000 ? text.Substring(0, 2000) : text;
                 var tokens = GetNicetyTokens(buf, docLine, text, 0, slice);
+                var shaped = GetRowTextRuns(docLine, 0, true, text, 0, 0, tokens, NicetyTabSize(buf)); // cached like the main rows
                 using (context.PushClip(new Rect(GutterWidth + 1, y, Math.Max(0, codeAreaRight - GutterWidth - 1), LineHeight)))
-                    DrawTokenRun(context, tokens, codeBaseX, y, 0, codeAreaRight);
+                    DrawCachedRow(context, shaped, docLine, codeBaseX, y, codeAreaRight, record: false);
                 stickyHitBoxes.Add((rowRect, docLine));
             }
             double bottom = sticky.Count * LineHeight;

@@ -157,6 +157,7 @@ $sourceFiles = @(
     "src\CodeLessEditorCanvas.Parity.cs",
     "src\CodeLessEditorCanvas.Layout.cs",
     "src\CodeLessEditorCanvas.Scrollbars.cs",
+    "src\CodeLessEditorCanvas.Smooth.cs",
     "src\CodeLessMainForm.Parity.cs",
     "src\CodeLessMainForm.EditorNiceties.cs",
     "src\LargeFileViewerWinForms.cs",

@@ -2999,6 +2999,7 @@ namespace codeLess.Studio
                     try { caretTimer.Stop(); caretTimer.Dispose(); } catch { }
                     caretTimer = null;
                 }
+                DisposeSmoothWF();
                 if (ctrlKChordTimer != null)
                 {
                     try { ctrlKChordTimer.Stop(); ctrlKChordTimer.Dispose(); } catch { }
@@ -3008,7 +3009,6 @@ namespace codeLess.Studio
             base.Dispose(disposing);
         }
         private readonly Stack<CursorHistoryState> cursorHistoryStack = new Stack<CursorHistoryState>();
-        private bool caretBlinkOn = true;
         private bool isDraggingSelection = false;
         private bool isDraggingGutterLineSelection = false;
         private int gutterDragAnchorLine = 0;
@@ -3196,19 +3196,12 @@ namespace codeLess.Studio
                 DisarmCtrlKChord();
             };
 
-            caretTimer = new Timer { Interval = 520 };
-            caretTimer.Tick += (s, e) =>
-            {
-                if (this.Focused)
-                {
-                    caretBlinkOn = !caretBlinkOn;
-                    this.Invalidate();
-                }
-            };
+            caretTimer = new Timer { Interval = (int)CaretBlink.IntervalMs };
+            caretTimer.Tick += (s, e) => OnCaretTimerTickWF(); // VS Code blink styles (CodeLessEditorCanvas.Smooth.cs)
             // Blink only while focused (the app losing activation or the window being minimized also removes focus).
-            this.GotFocus += (s, e) => { caretBlinkOn = true; if (caretTimer != null) caretTimer.Start(); this.Invalidate(); };
-            this.LostFocus += (s, e) => { if (caretTimer != null) caretTimer.Stop(); };
-            if (this.Focused) caretTimer.Start();
+            this.GotFocus += (s, e) => { RestartCaretBlinkWF(); this.Invalidate(); };
+            this.LostFocus += (s, e) => { if (caretTimer != null) caretTimer.Stop(); this.Invalidate(); };
+            if (this.Focused) RestartCaretBlinkWF();
         }
 
         public void ApplyTheme(StudioTheme th)
@@ -3388,21 +3381,41 @@ namespace codeLess.Studio
                 {
                     int visCol = SegVcol(curLineText, vre, buf.CursorCol);
                     int vx = GutterWidth + 8 + (visCol - (buf.WordWrap ? 0 : buf.ScrollLeftCol)) * CharWidth;
-                    int vy = r * LineHeight + 4;
+                    int vy = r * LineHeight + 4 - TopSubPixelsWF(buf);
                     return new Point(vx, vy);
                 }
             }
             int fullVisCol = CharColToVisualCol(curLineText, 0, buf.CursorCol);
             int x = GutterWidth + 8 + (fullVisCol - buf.ScrollLeftCol) * CharWidth;
-            int y = (buf.CursorLine - buf.ScrollTopLine) * LineHeight + 4;
+            int y = (buf.CursorLine - buf.ScrollTopLine) * LineHeight + 4 - TopSubPixelsWF(buf);
             return new Point(x, y);
         }
 
+        /// <summary>Scrolls the caret into view: animated after navigation, immediate right after an edit (typing never lags).</summary>
         public void EnsureCursorVisible()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
+            bool afterEdit = RevealFollowsEditWF(buf);
+            EditorTabBuffer b = buf;
+            RunRevealWF(b, delegate { EnsureCursorVisibleCoreWF(b); }, !afterEdit);
+        }
+
+        /// <summary>Scrolls the caret into view, animated or not.</summary>
+        public void EnsureCursorVisible(bool animate)
+        {
+            EditorTabBuffer buf = owner.CurrentBuffer;
+            if (buf == null) return;
+            RevealFollowsEditWF(buf);
+            EditorTabBuffer b = buf;
+            RunRevealWF(b, delegate { EnsureCursorVisibleCoreWF(b); }, animate);
+        }
+
+        private void EnsureCursorVisibleCoreWF(EditorTabBuffer buf)
+        {
             buf.ClampCursor();
+            // a caret on the (partly hidden) top line: show that line from its first row, whole
+            if (buf.CursorLine <= buf.ScrollTopLine) { wfSubRowLine = -1; buf.ScrollTopWrapRow = 0; buf.ScrollTopFraction = 0; }
             // VS Code: a caret moved into a collapsed region (Go to Line, find, undo) expands it
             int guard = 0, hiddenBy;
             while ((hiddenBy = HiddenByWF(buf, buf.CursorLine)) >= 0 && guard++ < 64) buf.FoldedLines.Remove(hiddenBy);
@@ -3457,9 +3470,9 @@ namespace codeLess.Studio
                 buf.ScrollLeftCol = Math.Max(0, caretVis - visCols + 6);
         }
 
-        protected override void OnPaint(PaintEventArgs e)
+        /// <summary>Paints everything except the carets (cached by OnPaint in CodeLessEditorCanvas.Smooth.cs).</summary>
+        private void PaintSceneWF(Graphics g)
         {
-            Graphics g = e.Graphics;
             StudioTheme th = owner.Theme;
             EditorTabBuffer buf = owner.CurrentBuffer;
 
@@ -3506,7 +3519,11 @@ namespace codeLess.Studio
                 if (buf.ScrollLeftCol > maxLeftCol) buf.ScrollLeftCol = maxLeftCol;
             }
             int screenRow = 0;
-            for (int docLine = buf.ScrollTopLine; docLine < totalLines && screenRow <= visLines; docLine++)
+            // pixel-precise scrolling: the first row starts above the top edge by the fractional part of the position,
+            // and a wrapped top line can start at one of its continuation rows
+            int topSubPx = TopSubPixelsWF(buf);
+            int skipTopRows = TopSubRowWF(buf);
+            for (int docLine = buf.ScrollTopLine; docLine < totalLines && screenRow <= visLines + 1; docLine++)
             {
                 string fullLineText = buf.Lines[docLine] ?? "";
 
@@ -3527,9 +3544,10 @@ namespace codeLess.Studio
 
                 foreach (VisualRowEntry seg in segs)
                 {
-                    if (screenRow > visLines) break;
+                    if (skipTopRows > 0) { skipTopRows--; continue; }
+                    if (screenRow > visLines + 1) break;
                     lastPaintedRows.Add(seg);
-                    int y = screenRow * LineHeight + 4;
+                    int y = screenRow * LineHeight + 4 - topSubPx;
                     string lineSlice = fullLineText.Substring(seg.ColStart, seg.ColEnd - seg.ColStart);
                     int effScrollLeft = buf.WordWrap ? 0 : buf.ScrollLeftCol;
 
@@ -3867,24 +3885,7 @@ namespace codeLess.Studio
                         }
                     }
 
-                    // Extra Multi-Cursors Caret Rendering inside this segment
-                    if (this.Focused && caretBlinkOn && buf.ExtraCarets != null)
-                    {
-                        foreach (EditorCaret ec in buf.ExtraCarets)
-                        {
-                            // a caret on a soft break belongs to the next row only (it was drawn on both rows)
-                            if (ec.CursorLine == docLine && ec.CursorCol >= seg.ColStart && (ec.CursorCol < seg.ColEnd || seg.ColEnd >= fullLineText.Length))
-                            {
-                                int ecVisCol = SegVcol(fullLineText, seg, ec.CursorCol);
-                                int cx = GutterWidth + 8 + (ecVisCol - effScrollLeft) * CharWidth;
-                                if (cx >= GutterWidth && cx < codeAreaRight)
-                                {
-                                    using (SolidBrush cb = new SolidBrush(th.AccentSecondary))
-                                        g.FillRectangle(cb, cx, y, 2, LineHeight - 2);
-                                }
-                            }
-                        }
-                    }
+                    // carets are painted over the cached scene by PaintCaretsWF (CodeLessEditorCanvas.Smooth.cs)
 
                     // Folded Region Pill
                     if (isLastSegOfLine && isFolded)
@@ -3903,16 +3904,7 @@ namespace codeLess.Studio
                 }
             }
 
-            // 3. Primary Caret Rendering + Multi-Line Ghost Text Preview (Cursor Tab)
-            if (this.Focused && caretBlinkOn)
-            {
-                Point caretPt = GetCursorPixelPoint();
-                if (caretPt.X >= GutterWidth && caretPt.X < codeAreaRight && caretPt.Y >= 0 && caretPt.Y < this.Height)
-                {
-                    using (SolidBrush caretBrush = new SolidBrush(th.AccentPrimary))
-                        g.FillRectangle(caretBrush, caretPt.X, caretPt.Y, 2, LineHeight - 2);
-                }
-            }
+            // 3. Multi-Line Ghost Text Preview (Cursor Tab); the carets are painted by PaintCaretsWF
 
             if (!string.IsNullOrEmpty(buf.GhostText) && buf.GhostLine == buf.CursorLine && buf.GhostText.Contains("\n"))
             {
@@ -4125,7 +4117,7 @@ namespace codeLess.Studio
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) { line = 0; col = 0; return; }
 
-            int rowOffset = Math.Max(0, (pt.Y - 4) / LineHeight);
+            int rowOffset = Math.Max(0, (pt.Y - 4 + TopSubPixelsWF(buf)) / LineHeight);
             int effScrollLeft = buf.WordWrap ? 0 : buf.ScrollLeftCol;
             double vx = effScrollLeft + (double)(pt.X - GutterWidth - 8) / Math.Max(1, CharWidth);
             int tab = TabWF(buf);
@@ -4742,7 +4734,7 @@ namespace codeLess.Studio
                     int x1 = GutterWidth + 8 + (SegVcol(text, vre, s1) - effScrollLeft) * CharWidth;
                     x0 = Math.Max(GutterWidth, x0);
                     if (x1 <= x0) continue;
-                    int y = r * LineHeight + 4 + LineHeight - 3;
+                    int y = r * LineHeight + 4 + LineHeight - 3 - TopSubPixelsWF(buf);
                     g.DrawLine(pen, x0, y, x1, y);
                 }
             }
@@ -4842,21 +4834,9 @@ namespace codeLess.Studio
                 return;
             }
 
-            if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift && !buf.WordWrap)
-            {
-                int colsDelta = e.Delta > 0 ? -6 : 6;
-                // range = the widest line of the whole document (it was the widest line on screen)
-                buf.ScrollLeftCol = Math.Max(0, Math.Min(MaxScrollLeftColWF(buf), buf.ScrollLeftCol + colsDelta));
-                NoteScrollActivityWF();
-                owner.DismissAutocomplete();
-                this.Invalidate();
-                return;
-            }
-
-            int linesDelta = e.Delta > 0 ? -3 : 3;
-            ScrollLinesWF(buf, linesDelta); // folded regions are skipped
+            // pixel-precise touchpad scrolling / animated wheel notches (CodeLessEditorCanvas.Smooth.cs)
+            HandleWheelWF(buf, e, (Control.ModifierKeys & Keys.Shift) == Keys.Shift);
             owner.DismissAutocomplete();
-            this.Invalidate();
         }
 
         private void ScrollFromMinimapY(int mouseY)
@@ -5834,7 +5814,7 @@ namespace codeLess.Studio
             base.OnKeyDown(e);
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            caretBlinkOn = true;
+            RestartCaretBlinkWF();
             // the sticky Up/Down column survives only vertical motions (VS Code)
             if (e.KeyCode != Keys.Up && e.KeyCode != Keys.Down && e.KeyCode != Keys.PageUp && e.KeyCode != Keys.PageDown &&
                 e.KeyCode != Keys.ShiftKey && e.KeyCode != Keys.ControlKey && e.KeyCode != Keys.Menu)
@@ -5956,16 +5936,14 @@ namespace codeLess.Studio
             {
                 e.SuppressKeyPress = true;
                 int delta = (e.KeyCode == Keys.Down) ? 1 : -1;
-                buf.ScrollTopLine = Math.Max(0, Math.Min(Math.Max(0, buf.Lines.Count - 1), buf.ScrollTopLine + delta));
-                this.Invalidate();
+                SmoothScrollRowsWF(buf, delta); // animated when smooth scrolling is on
                 return;
             }
             if (e.Alt && !e.Control && !e.Shift && (e.KeyCode == Keys.PageUp || e.KeyCode == Keys.PageDown))
             {
                 e.SuppressKeyPress = true;
                 int delta = (e.KeyCode == Keys.PageDown) ? Math.Max(1, VisibleLinesCount) : -Math.Max(1, VisibleLinesCount);
-                buf.ScrollTopLine = Math.Max(0, Math.Min(Math.Max(0, buf.Lines.Count - 1), buf.ScrollTopLine + delta));
-                this.Invalidate();
+                SmoothScrollRowsWF(buf, delta);
                 return;
             }
             if (e.Control && e.KeyCode == Keys.S) { e.SuppressKeyPress = true; owner.TriggerSaveShortcut(); return; }
