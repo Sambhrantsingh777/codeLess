@@ -5223,7 +5223,7 @@ if __name__ == '__main__':
                     tab.HasFinalNewline = fFinalNl;
                     tab.Content = disk;
                     tab.SavedContent = disk;
-                    tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, item.FilePath);
+                    tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, item.FilePath);
                     tab.SyncLinesFromContent();
                     tab.IsDirty = false;
                     tab.RefreshGutterDiff();
@@ -5350,7 +5350,7 @@ if __name__ == '__main__':
                 {
                     foreach (string fp in openTabPaths)
                     {
-                        headMap[fp] = LlmHarnessAndAgentEngine.GetGitHeadFileContent(snapRoot, fp);
+                        headMap[fp] = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(snapRoot, fp); // gutter = working tree vs index
                     }
                 }
                 Action applyGit = () =>
@@ -8703,7 +8703,7 @@ if __name__ == '__main__':
                     ? EditorTabBuffer.ReadFilePreservingMetadata(filePath, out fileEnc, out hasBom, out eol, out hasFinalNl)
                     : "";
                 string gitHeadContent = (!isLarge && File.Exists(filePath))
-                    ? LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, filePath)
+                    ? LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, filePath)
                     : null;
                 EditorTabBuffer tab = new EditorTabBuffer
                 {
@@ -9423,7 +9423,7 @@ if __name__ == '__main__':
                 buf.IsDeletedOnDisk = false;
                 buf.IsPreview = false;
                 if (!buf.IsLargeFile && buf.GitHeadContent == null && !string.IsNullOrEmpty(workspaceRoot))
-                    buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, buf.FilePath);
+                    buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, buf.FilePath);
                 buf.RefreshGutterDiff();
                 if (buf == activeTab)
                 {

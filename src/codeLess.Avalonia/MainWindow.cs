@@ -2682,7 +2682,7 @@ namespace codeLess.AvaloniaApp
 
             bool isLiveDesktop = AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
             string gitHead = (!isLiveDesktop && File.Exists(fullPath) && !string.IsNullOrEmpty(workspaceRoot))
-                ? LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, fullPath)
+                ? LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, fullPath)
                 : null;
 
             var tab = new EditorTabBuffer
@@ -2719,7 +2719,7 @@ namespace codeLess.AvaloniaApp
                 string capturedWs = workspaceRoot;
                 _ = Task.Run(() =>
                 {
-                    string head = LlmHarnessAndAgentEngine.GetGitHeadFileContent(capturedWs, fullPath);
+                    string head = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(capturedWs, fullPath); // gutter = working tree vs index
                     if (head != null)
                     {
                         Dispatcher.UIThread.Post(() =>

@@ -1383,6 +1383,7 @@ namespace codeLess.AvaloniaApp
         {
             currentGitEntries = entries ?? new List<GitStatusEntry>();
             bool noGit = string.IsNullOrEmpty(branch) || branch == "no-git";
+            if (!noGit) RefreshGutterBaselines(); // staging / commits change the index the gutter compares with
             scmBranchBanner.Text = noGit ? "No Git repository initialized" : $"Branch: {branch} ({currentGitEntries.Count} changed)";
             SetStatusBranch(noGit ? "no-git" : branch);
 
@@ -1738,7 +1739,7 @@ namespace codeLess.AvaloniaApp
             var tab = OpenFileInTab(fullPath, preview: false);
             if (tab != null && !string.IsNullOrEmpty(workspaceRoot))
             {
-                tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitHeadFileContent(workspaceRoot, fullPath);
+                tab.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, fullPath);
                 tab.RefreshGutterDiff();
                 PrimaryEditor.Canvas.InvalidateVisual();
             }

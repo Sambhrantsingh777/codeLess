@@ -1133,6 +1133,23 @@ namespace codeLess.Studio
 
         public static string GetGitHeadFileContent(string workspaceRoot, string filePath)
         {
+            return GetGitBlobFileContent(workspaceRoot, filePath, "HEAD:");
+        }
+
+        /// <summary>
+        /// Baseline of the editor's git gutter (VS Code quick diff): the file as staged in the index, so staged hunks
+        /// disappear from the gutter and only show as staged in Source Control. Falls back to HEAD when the index has
+        /// no stage-0 entry (merge conflict); null for untracked files and outside a repository.
+        /// </summary>
+        public static string GetGitQuickDiffBaseline(string workspaceRoot, string filePath)
+        {
+            string index = GetGitBlobFileContent(workspaceRoot, filePath, ":");
+            return index ?? GetGitBlobFileContent(workspaceRoot, filePath, "HEAD:");
+        }
+
+        /// <summary>Text of a blob via "git show &lt;revPrefix&gt;&lt;path&gt;" ("HEAD:" or ":" for the index).</summary>
+        private static string GetGitBlobFileContent(string workspaceRoot, string filePath, string revPrefix)
+        {
             if (string.IsNullOrEmpty(workspaceRoot) || string.IsNullOrEmpty(filePath) || !Directory.Exists(workspaceRoot))
                 return null;
             try
@@ -1164,7 +1181,7 @@ namespace codeLess.Studio
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = "git",
-                    Arguments = "show \"HEAD:" + rel + "\"",
+                    Arguments = "show \"" + revPrefix + rel + "\"",
                     WorkingDirectory = repoRoot,
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,

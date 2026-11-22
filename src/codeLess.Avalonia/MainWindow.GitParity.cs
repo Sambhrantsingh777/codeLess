@@ -762,6 +762,44 @@ namespace codeLess.AvaloniaApp
             });
         }
 
+        /// <summary>
+        /// Re-reads the git gutter baseline (the index, like VS Code's quick diff) of every open file after a git status
+        /// refresh, so a staged hunk leaves the gutter and a commit / checkout updates it. Off the UI thread on desktop.
+        /// </summary>
+        private void RefreshGutterBaselines()
+        {
+            string root = workspaceRoot;
+            var tabs = openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath) && !t.IsLargeFile && !t.IsLargeFileViewer && File.Exists(t.FilePath)).ToList();
+            if (tabs.Count == 0 || string.IsNullOrEmpty(root)) return;
+            Action<Dictionary<EditorTabBuffer, string>> apply = map =>
+            {
+                bool changed = false;
+                foreach (var kv in map)
+                {
+                    if (!openTabs.Contains(kv.Key) || string.Equals(kv.Key.GitHeadContent, kv.Value, StringComparison.Ordinal)) continue;
+                    kv.Key.GitHeadContent = kv.Value;
+                    kv.Key.RefreshGutterDiff();
+                    changed = true;
+                }
+                if (changed) { PrimaryEditor?.Canvas?.InvalidateVisual(); SplitEditor?.Canvas?.InvalidateVisual(); }
+            };
+            Func<Dictionary<EditorTabBuffer, string>> read = () =>
+            {
+                var map = new Dictionary<EditorTabBuffer, string>();
+                foreach (var t in tabs)
+                {
+                    try { map[t] = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(root, t.FilePath); } catch { }
+                }
+                return map;
+            };
+            if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime) { apply(read()); return; }
+            _ = Task.Run(() =>
+            {
+                var map = read();
+                Dispatcher.UIThread.Post(() => { if (string.Equals(root, workspaceRoot, PathKeyComparison)) apply(map); });
+            });
+        }
+
         private void AfterIndexChange(GitOperationResult res)
         {
             LastGitOperationResult = res;
