@@ -133,8 +133,15 @@ namespace codeLess.Avalonia.Tests
                     "live cwd: " + s.GetLiveWorkingDirectory());
                 Assert.Equal("same", s.FollowWorkspaceFolder(b));
 
+                // The respawned shell must be up (prompt, job control initialised) before the job starts; typing during
+                // its startup races with bash taking the terminal's foreground group.
+                s.WriteInput("echo READY_$((40+2))\r");
+                Assert.True(WaitUntil(() => s.Buffer.GetScrollbackAndScreenText(200).Contains("READY_42") && s.IsShellForegroundIdle(), 10000),
+                    s.Buffer.GetScrollbackAndScreenText(200));
                 s.WriteInput("sleep 20\r");
                 Assert.True(WaitUntil(() => !s.IsShellForegroundIdle(), 8000), "sleep never became the foreground job");
+                Thread.Sleep(200);
+                Assert.False(s.IsShellForegroundIdle()); // stably busy, not a startup blip
                 Assert.Equal("busy", s.FollowWorkspaceFolder(c));
                 Assert.True(File.Exists(Path.Combine(s.GetLiveWorkingDirectory() ?? "", "marker_b"))); // untouched
             }
