@@ -2756,6 +2756,7 @@ namespace codeLess.Studio
             RebuildOpenRecentSubMenu();
             fileMenu.DropDownItems.Add(recentSubMenu);
             fileMenu.DropDownItems.Add(CreateMenuItem("Add Folder to Workspace...", "", () => PromptAddFolderToWorkspaceDialog()));
+            fileMenu.DropDownItems.Add(CreateMenuItem("Remove Folder from Workspace...", "", () => PromptRemoveFolderFromWorkspace()));
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add(CreateMenuItem("Save", "Ctrl+S", () => { if (activeTab != null) SaveTabBufferUser(activeTab); }));
             fileMenu.DropDownItems.Add(CreateMenuItem("Save As...", "Ctrl+Shift+S", () => PromptSaveAsDialog()));
@@ -3835,6 +3836,8 @@ if __name__ == '__main__':
             ToolStripMenuItem expNewFolderItem = CreateMenuItem("New Folder...", "", () => PromptCreateNewFolder(GetSelectedExplorerDirectory()));
             ToolStripMenuItem expRenameItem = CreateMenuItem("Rename...", "F2", () => PromptRenameSelectedNode());
             ToolStripMenuItem expDeleteItem = CreateMenuItem("Delete", "Delete", () => PromptDeleteSelectedNode());
+            ToolStripMenuItem expRemoveRootItem = CreateMenuItem("Remove Folder from Workspace", "", () => RemoveFolderFromWorkspace(GetSelectedNodePath()));
+            ToolStripMenuItem expAddRootItem = CreateMenuItem("Add Folder to Workspace...", "", () => PromptAddFolderToWorkspaceDialog());
 
             explorerContextMenu.Items.AddRange(new ToolStripItem[]
             {
@@ -3857,13 +3860,20 @@ if __name__ == '__main__':
                 expNewFileItem,
                 expNewFolderItem,
                 expRenameItem,
-                expDeleteItem
+                expDeleteItem,
+                expRemoveRootItem,
+                expAddRootItem
             });
             explorerContextMenu.Opening += (s, e) =>
             {
                 string selPath = GetSelectedNodePath();
                 bool isFile = !string.IsNullOrEmpty(selPath) && File.Exists(selPath);
-                bool isRoot = string.IsNullOrEmpty(selPath) || string.Equals(selPath, workspaceRoot, StringComparison.OrdinalIgnoreCase);
+                // Every workspace root (also folders added with Add Folder to Workspace) is protected from rename / delete.
+                bool isRoot = string.IsNullOrEmpty(selPath) || IsWorkspaceRootFolder(selPath);
+                expRemoveRootItem.Visible = isRoot && !string.IsNullOrEmpty(selPath) && additionalWorkspaceFolders.Count > 0;
+                expAddRootItem.Visible = isRoot;
+                expRenameItem.Visible = !isRoot;
+                expDeleteItem.Visible = !isRoot;
                 expOpenItem.Visible = isFile;
                 expOpenSideItem.Visible = isFile;
                 expSelectCompareItem.Visible = isFile;
@@ -8001,7 +8011,11 @@ if __name__ == '__main__':
             IsWorkspaceLoading = true;
 
             if (!keepCurrentTabs)
+            {
+                // A different folder: its own remembered extra folders (VS Code-style), not the previous workspace's.
                 additionalWorkspaceFolders.Clear();
+                additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, rootDir));
+            }
             workspaceRoot = rootDir;
             if (lspController != null) lspController.SetWorkspaceRoot(rootDir);
             OnWorkspaceTrustFolderOpenedWin();
@@ -8302,6 +8316,7 @@ if __name__ == '__main__':
                 return;
 
             additionalWorkspaceFolders.Add(folderPath);
+            PersistWorkspaceFolders();
             AppendAdditionalFolderRootNode(folderPath);
             explorerTree.RebuildTreeLayout(true);
             try
@@ -8315,6 +8330,66 @@ if __name__ == '__main__':
                 }
             }
             catch { }
+        }
+
+        private void PersistWorkspaceFolders()
+        {
+            if (settings == null || string.IsNullOrEmpty(workspaceRoot)) return;
+            WorkspaceFolders.Store(settings, workspaceRoot, additionalWorkspaceFolders);
+            try { settings.Save(); } catch { }
+        }
+
+        public bool IsWorkspaceRootFolder(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            string p = path.TrimEnd('\\', '/');
+            if (!string.IsNullOrEmpty(workspaceRoot) && string.Equals(p, workspaceRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) return true;
+            return additionalWorkspaceFolders.Any(f => string.Equals(f.TrimEnd('\\', '/'), p, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Remove Folder from Workspace (Explorer root context menu / File menu / palette). Open editors from the folder
+        /// stay open (VS Code); removing the primary folder promotes the next one.
+        /// </summary>
+        public void RemoveFolderFromWorkspace(string folder)
+        {
+            string newPrimary;
+            List<string> newExtras;
+            if (!WorkspaceFolders.Remove(workspaceRoot, additionalWorkspaceFolders, folder, out newPrimary, out newExtras)) return;
+            if (newPrimary == null) return; // the only folder: File > Close Folder
+            bool primaryChanged = !string.Equals(newPrimary, workspaceRoot, StringComparison.OrdinalIgnoreCase);
+            if (primaryChanged && settings != null) WorkspaceFolders.Store(settings, workspaceRoot, new string[0]);
+            additionalWorkspaceFolders.Clear();
+            additionalWorkspaceFolders.AddRange(newExtras);
+            if (settings != null)
+            {
+                WorkspaceFolders.Store(settings, newPrimary, newExtras);
+                try { settings.Save(); } catch { }
+            }
+            string prefix = folder.TrimEnd('\\', '/') + "\\";
+            workspaceFiles.RemoveAll(f => f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            LoadWorkspace(newPrimary, false, true);
+            if (statusLeftLabel != null) statusLeftLabel.Text = "Removed '" + Path.GetFileName(folder.TrimEnd('\\', '/')) + "' from the workspace.";
+        }
+
+        /// <summary>Test hook for <see cref="PromptRemoveFolderFromWorkspace"/> (null = cancel).</summary>
+        public Func<List<string>, string> RemoveFolderPickerOverride;
+
+        public void PromptRemoveFolderFromWorkspace()
+        {
+            List<string> roots = new List<string>();
+            if (!string.IsNullOrEmpty(workspaceRoot)) roots.Add(workspaceRoot);
+            roots.AddRange(additionalWorkspaceFolders);
+            if (roots.Count < 2)
+            {
+                if (statusLeftLabel != null) statusLeftLabel.Text = "The workspace has only one folder (use File > Close Folder).";
+                return;
+            }
+            string pick = null;
+            if (RemoveFolderPickerOverride != null) pick = RemoveFolderPickerOverride(roots);
+            else if (Application.MessageLoop)
+                pick = ShowRootFolderPickDialog("Remove Folder from Workspace", "Select the folder to remove from the workspace:", roots);
+            if (!string.IsNullOrEmpty(pick)) RemoveFolderFromWorkspace(pick);
         }
 
         public void PromptAddFolderToWorkspaceDialog()
@@ -9626,9 +9701,15 @@ if __name__ == '__main__':
 
         private string ShowTerminalFolderPicker(List<string> roots)
         {
+            return ShowRootFolderPickDialog("New Terminal — Select Folder", "Select the folder for the new terminal:", roots);
+        }
+
+        /// <summary>Workspace folder pick list (number keys 1-9, Enter, Esc).</summary>
+        private string ShowRootFolderPickDialog(string title, string prompt, List<string> roots)
+        {
             using (Form dlg = new Form())
             {
-                dlg.Text = "New Terminal — Select Folder";
+                dlg.Text = title;
                 dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
                 dlg.StartPosition = FormStartPosition.CenterParent;
                 dlg.MinimizeBox = false;
@@ -9642,7 +9723,7 @@ if __name__ == '__main__':
                 dlg.BackColor = bg;
                 dlg.ForeColor = fg;
 
-                Label lbl = new Label { Text = "Select the folder for the new terminal:", Dock = DockStyle.Top, Height = 28, Padding = new Padding(10, 8, 10, 0), ForeColor = fg };
+                Label lbl = new Label { Text = prompt, Dock = DockStyle.Top, Height = 28, Padding = new Padding(10, 8, 10, 0), ForeColor = fg };
                 ListBox list = new ListBox
                 {
                     Dock = DockStyle.Fill,
@@ -10713,6 +10794,7 @@ if __name__ == '__main__':
             else if (cmdId == "new_project") PromptNewProjectWizard();
             else if (cmdId == "open_folder") PromptOpenFolderDialog();
             else if (cmdId == "add_folder_workspace") PromptAddFolderToWorkspaceDialog();
+            else if (cmdId == "remove_folder_workspace") PromptRemoveFolderFromWorkspace();
             else if (cmdId == "clone_repo") PromptCloneRepositoryDialog();
             else if (cmdId == "open_file") PromptOpenFileDialog();
             else if (cmdId == "new_file") PromptCreateNewFile(workspaceRoot);

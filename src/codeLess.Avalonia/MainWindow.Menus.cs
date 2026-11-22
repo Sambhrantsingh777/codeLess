@@ -67,6 +67,7 @@ namespace codeLess.AvaloniaApp
                 ["file.openFolder"] = () => _ = PromptOpenFolderDialogAsync(),
                 [WorkbenchMenuModel.OpenRecentId] = () => { var r = RecentFolders().FirstOrDefault(); if (r != null) LoadWorkspace(r); },
                 ["file.addFolder"] = () => _ = PromptAddFolderToWorkspaceAsync(),
+                ["file.removeFolder"] = PromptRemoveFolderFromWorkspace,
                 ["file.save"] = () => SaveActiveTab(),
                 ["file.saveAs"] = () => _ = PromptSaveAsAsync(),
                 ["file.saveAll"] = SaveAllTabs,

@@ -981,8 +981,18 @@ namespace codeLess.AvaloniaApp
                 _ = CopyPathToClipboardAsync(rel);
             }));
             items.Add(new Separator());
-            items.Add(MakeCtxItem("Rename...   (F2)", () => PromptRenameExplorerNode(node)));
-            items.Add(MakeCtxItem("Delete   (Move to Trash)", () => DeleteExplorerNodeToTrash(node)));
+            if (isDir && ExplorerTree.Nodes.Contains(node))
+            {
+                // A workspace root: VS Code offers Remove Folder from Workspace instead of rename / delete.
+                if (ExplorerTree.Nodes.Count > 1)
+                    items.Add(MakeCtxItem("Remove Folder from Workspace", () => RemoveFolderFromWorkspace(fullPath)));
+                items.Add(MakeCtxItem("Add Folder to Workspace...", () => _ = PromptAddFolderToWorkspaceAsync()));
+            }
+            else
+            {
+                items.Add(MakeCtxItem("Rename...   (F2)", () => PromptRenameExplorerNode(node)));
+                items.Add(MakeCtxItem("Delete   (Move to Trash)", () => DeleteExplorerNodeToTrash(node)));
+            }
 
             var menu = new ContextMenu { ItemsSource = items };
             menu.Open(ExplorerTree);
@@ -1816,12 +1826,19 @@ namespace codeLess.AvaloniaApp
                 return;
             }
 
+            ShowWorkspaceFolderPicker("terminal-folder-picker", "New Terminal", "Select the folder for the new terminal:", roots,
+                root => CreateNewTerminalSession(shellProfile, root));
+        }
+
+        /// <summary>VS Code-style workspace folder pick list (number keys 1-9, Up/Down, Esc).</summary>
+        private void ShowWorkspaceFolderPicker(string dialogId, string title, string prompt, List<string> roots, Action<string> onPick)
+        {
             Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
             Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
             var stack = new StackPanel { Spacing = 6 };
             stack.Children.Add(new TextBlock
             {
-                Text = "Select the folder for the new terminal:",
+                Text = prompt,
                 FontSize = 12.5,
                 Margin = new Thickness(0, 0, 0, 4),
                 Foreground = new SolidColorBrush(textPrimary)
@@ -1857,7 +1874,7 @@ namespace codeLess.AvaloniaApp
                 btn.Click += (s, e) =>
                 {
                     ModalHost.CloseModal();
-                    CreateNewTerminalSession(shellProfile, root);
+                    onPick(root);
                 };
                 buttons.Add(btn);
                 stack.Children.Add(btn);
@@ -1872,7 +1889,7 @@ namespace codeLess.AvaloniaApp
                 {
                     e.Handled = true;
                     ModalHost.CloseModal();
-                    CreateNewTerminalSession(shellProfile, roots[idx]);
+                    onPick(roots[idx]);
                     return;
                 }
                 if (e.Key == Key.Down || e.Key == Key.Up)
@@ -1883,7 +1900,7 @@ namespace codeLess.AvaloniaApp
                     e.Handled = true;
                 }
             }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
-            ModalHost.ShowModal("terminal-folder-picker", "New Terminal", stack, 520);
+            ModalHost.ShowModal(dialogId, title, stack, 520);
             MainUi.Post(() => buttons[0].Focus(), DispatcherPriority.Loaded);
         }
 
@@ -2515,6 +2532,8 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "File", Title = "Open File...", Shortcut = "Ctrl+O", Execute = () => _ = PromptOpenFileDialogAsync() },
                 new PaletteEntryItem { Category = "File", Title = "Open Folder...", Shortcut = "Ctrl+K Ctrl+O", Execute = () => _ = PromptOpenFolderDialogAsync() },
                 new PaletteEntryItem { Category = "File", Title = "Save", Shortcut = "Ctrl+S", Execute = () => SaveActiveTab() },
+                new PaletteEntryItem { Category = "Workspaces", Title = "Add Folder to Workspace...", Execute = () => _ = PromptAddFolderToWorkspaceAsync() },
+                new PaletteEntryItem { Category = "Workspaces", Title = "Remove Folder from Workspace...", Execute = PromptRemoveFolderFromWorkspace },
                 new PaletteEntryItem { Category = "File", Title = "Save As...", Shortcut = "Ctrl+Shift+S", Execute = () => _ = PromptSaveAsAsync() },
                 new PaletteEntryItem { Category = "File", Title = "Save All", Shortcut = "Ctrl+K S", Execute = SaveAllTabs },
                 new PaletteEntryItem { Category = "File", Title = "Revert File", Execute = RevertActiveTab },
@@ -2779,14 +2798,77 @@ namespace codeLess.AvaloniaApp
             if (res != null && res.Count > 0)
             {
                 string p = res[0].TryGetLocalPath();
-                if (!string.IsNullOrEmpty(p) && Directory.Exists(p))
-                {
-                    if (!additionalWorkspaceFolders.Contains(p, StringComparer.OrdinalIgnoreCase))
-                        additionalWorkspaceFolders.Add(p);
-                    LoadWorkspace(workspaceRoot, keepCurrentTabs: true);
-                }
+                if (!string.IsNullOrEmpty(p) && Directory.Exists(p)) AddFolderToWorkspace(p);
             }
         }
+
+        /// <summary>File → Add Folder to Workspace (remembered for this workspace, like VS Code).</summary>
+        public void AddFolderToWorkspace(string folder)
+        {
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return;
+            folder = Path.GetFullPath(folder).TrimEnd('\\', '/');
+            if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot)) { LoadWorkspace(folder); return; }
+            if (string.Equals(folder, workspaceRoot.TrimEnd('\\', '/'), PathKeyComparison) ||
+                additionalWorkspaceFolders.Any(f => string.Equals(f.TrimEnd('\\', '/'), folder, PathKeyComparison)))
+                return;
+            additionalWorkspaceFolders.Add(folder);
+            PersistWorkspaceFolders();
+            LoadWorkspace(workspaceRoot, keepCurrentTabs: true);
+        }
+
+        public IReadOnlyList<string> AdditionalWorkspaceFolders => additionalWorkspaceFolders;
+
+        private void PersistWorkspaceFolders()
+        {
+            WorkspaceFolders.Store(settings, workspaceRoot, additionalWorkspaceFolders);
+            try { settings.Save(); } catch { }
+        }
+
+        /// <summary>
+        /// Remove Folder from Workspace (Explorer root context menu / File menu / palette). Open editors from that folder
+        /// stay open, like VS Code; removing the primary folder promotes the next one.
+        /// </summary>
+        public void RemoveFolderFromWorkspace(string folder)
+        {
+            if (!WorkspaceFolders.Remove(workspaceRoot, additionalWorkspaceFolders, folder, out string newPrimary, out List<string> newExtras)) return;
+            if (newPrimary == null) return; // the only folder: use File → Close Folder
+            string name = Path.GetFileName(folder.TrimEnd('\\', '/'));
+            bool primaryChanged = !string.Equals(newPrimary, workspaceRoot, PathKeyComparison);
+            if (primaryChanged)
+            {
+                WorkspaceFolders.Store(settings, workspaceRoot, new string[0]); // forget the old grouping
+                additionalWorkspaceFolders.Clear();
+                additionalWorkspaceFolders.AddRange(newExtras);
+                WorkspaceFolders.Store(settings, newPrimary, newExtras);
+                try { settings.Save(); } catch { }
+                LoadWorkspace(newPrimary, keepCurrentTabs: true);
+            }
+            else
+            {
+                additionalWorkspaceFolders.Clear();
+                additionalWorkspaceFolders.AddRange(newExtras);
+                PersistWorkspaceFolders();
+                LoadWorkspace(workspaceRoot, keepCurrentTabs: true);
+            }
+            SetStatusMessage($"Removed '{name}' from the workspace.");
+        }
+
+        /// <summary>Workspaces: Remove Folder from Workspace... (asks which folder when there are several).</summary>
+        public void PromptRemoveFolderFromWorkspace()
+        {
+            var roots = GetWorkspaceRootFolders().ToList();
+            if (roots.Count < 2) { SetStatusMessage("The workspace has only one folder (use File → Close Folder)."); return; }
+            if (RemoveFolderPickerOverride != null)
+            {
+                string pick = RemoveFolderPickerOverride(roots);
+                if (!string.IsNullOrEmpty(pick)) RemoveFolderFromWorkspace(pick);
+                return;
+            }
+            ShowWorkspaceFolderPicker("remove-workspace-folder", "Remove Folder from Workspace", "Select the folder to remove from the workspace:", roots, RemoveFolderFromWorkspace);
+        }
+
+        /// <summary>Test hook for <see cref="PromptRemoveFolderFromWorkspace"/> (null = cancel).</summary>
+        public Func<List<string>, string> RemoveFolderPickerOverride;
 
         private Task<bool> PromptSaveAsAsync() => PromptSaveAsAsync(activeTab);
 

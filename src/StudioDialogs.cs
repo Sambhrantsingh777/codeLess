@@ -1085,6 +1085,10 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "close_editor"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("File", "File: Close Folder", "Ctrl+K F",
                 () => { SelectedCommandId = "close_folder"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Workspaces", "Workspaces: Add Folder to Workspace...", "",
+                () => { SelectedCommandId = "add_folder_workspace"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Workspaces", "Workspaces: Remove Folder from Workspace...", "",
+                () => { SelectedCommandId = "remove_folder_workspace"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("File", "File: Reopen Closed Editor", "Ctrl+Shift+T",
                 () => { SelectedCommandId = "reopen_closed_tab"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Edit", "Edit: Undo", "Ctrl+Z",

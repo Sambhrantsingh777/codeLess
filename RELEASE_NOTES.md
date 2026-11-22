@@ -33,6 +33,9 @@ that install themselves, and a long list of VS Code-parity fixes. Every change s
   `Untitled-1.cs` silently); new files take the workspace's language and Save As suggests its extension.
 - Opening a folder no longer opens a file by itself, and the Welcome tab can be closed with no files open (VS Code's
   empty editor with shortcuts appears).
+- **Remove Folder from Workspace** (right-click a root folder, File menu, or the command palette); added folders are
+  remembered for that workspace, no longer leak into other folders you open, and can no longer be renamed or deleted
+  from the tree by accident (Windows).
 - Terminals follow File → Open Folder (idle shells restart in the new folder with its venv; busy ones are left alone).
 - Windows: Node-based tools in folders with spaces (e.g. `C:\Users\John Smith`) now start.
 - Settings such as editor niceties and sticky scroll no longer reset on restart (macOS / Linux).

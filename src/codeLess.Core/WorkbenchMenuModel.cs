@@ -132,6 +132,7 @@ namespace codeLess.Studio
                 Display(C("file.openFolder", "Open Folder...", "Ctrl+K Ctrl+O")),
                 Sub("Open Recent", C(OpenRecentId, "Recent folders", null)),
                 C("file.addFolder", "Add Folder to Workspace...", null),
+                C("file.removeFolder", "Remove Folder from Workspace...", null),
                 Sep(),
                 C("file.save", "Save", "Ctrl+S"),
                 C("file.saveAs", "Save As...", "Ctrl+Shift+S"),

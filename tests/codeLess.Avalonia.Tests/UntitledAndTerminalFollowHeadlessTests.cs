@@ -200,5 +200,36 @@ namespace codeLess.Avalonia.Tests
                 w.SuppressUnsavedPrompts = true; w.Close();
             }
         }
+            [AvaloniaFact]
+        public void Added_Folders_Can_Be_Removed_Are_Remembered_And_Do_Not_Leak_Into_Other_Workspaces()
+        {
+            string main = Sub("mainws"), extra = Sub("extraws"), other = Sub("otherws");
+            File.WriteAllText(Path.Combine(extra, "e.txt"), "e");
+            var w = new MainWindow(main) { Width = 1200, Height = 800 };
+            w.Show();
+            try
+            {
+                w.AddFolderToWorkspace(extra);
+                Assert.Single(w.AdditionalWorkspaceFolders);
+                Assert.Equal(2, w.ExplorerTree.Nodes.Count);
+
+                // remembered: reopening the same folder brings the added folder back
+                w.LoadWorkspace(other);
+                Assert.Empty(w.AdditionalWorkspaceFolders); // not leaked into another workspace
+                w.LoadWorkspace(main);
+                Assert.Single(w.AdditionalWorkspaceFolders);
+
+                // File > Remove Folder from Workspace... picks the folder
+                w.RemoveFolderPickerOverride = roots => roots.First(r => r.EndsWith("extraws"));
+                w.PromptRemoveFolderFromWorkspace();
+                Assert.Empty(w.AdditionalWorkspaceFolders);
+                Assert.Single(w.ExplorerTree.Nodes);
+                w.LoadWorkspace(other);
+                w.LoadWorkspace(main);
+                Assert.Empty(w.AdditionalWorkspaceFolders); // the removal is remembered too
+                Assert.True(Directory.Exists(extra)); // removing never deletes anything
+            }
+            finally { w.SuppressUnsavedPrompts = true; w.Close(); }
+        }
     }
 }

@@ -2070,7 +2070,14 @@ namespace codeLess.AvaloniaApp
             int loadGen = ++workspaceLoadGeneration;
 
             sidebarProgressBar.StartProgress();
-            workspaceRoot = Path.GetFullPath(rootDir);
+            string newRoot = Path.GetFullPath(rootDir);
+            if (!keepCurrentTabs)
+            {
+                // A different folder: its own remembered extra folders, not the previous workspace's.
+                additionalWorkspaceFolders.Clear();
+                additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, newRoot));
+            }
+            workspaceRoot = newRoot;
             settings.AddRecentWorkspace(workspaceRoot);
             OnDebugWorkspaceChanged();
             LspOnWorkspaceChanged();
