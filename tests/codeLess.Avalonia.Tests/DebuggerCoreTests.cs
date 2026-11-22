@@ -493,7 +493,8 @@ namespace codeLess.Avalonia.Tests
             Assert.True(host.PumpUntil(() => ctl.Watches[0].Result != null && ctl.Watches[0].Result.Result == "43", 3000));
 
             ctl.Continue();
-            Assert.True(host.PumpUntil(() => ctl.State == DebugSessionState.Terminated, 5000));
+            // Decorations are cleared by the termination handler; wait for it instead of racing the state change.
+            Assert.True(host.PumpUntil(() => ctl.State == DebugSessionState.Terminated && buf.DebugStoppedLine == -1, 5000));
             Assert.Equal(-1, buf.DebugStoppedLine);
             // The adapter's `exited` event may be processed just after the state flips to Terminated.
             Assert.True(host.PumpUntil(() => ctl.ConsoleText().Contains("exited with code 0"), 3000), ctl.ConsoleText());

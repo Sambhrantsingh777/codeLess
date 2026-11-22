@@ -217,6 +217,8 @@ namespace codeLess.Studio
             public string Transcript = "";
             public Process ActiveProcess;
             public ConPtyTerminalSession ConPtySession;
+            /// <summary>Display label of the task owning this terminal (null for shells); task terminals stay open after exit.</summary>
+            public string TaskLabel;
         }
         private List<TerminalSessionState> terminalSessions = new List<TerminalSessionState>();
         private int activeTerminalSessionIndex = 0;
@@ -420,6 +422,7 @@ namespace codeLess.Studio
             BuildWorkbenchLayout();
             InitDebugWorkbench();
             InitDevTools();
+            InitWorkbenchParity();
             editorControl.ShowWelcomePage = IsWelcomeTabOpen;
             splitEditorControl.ShowWelcomePage = false;
             ApplySettingsToEditors();
@@ -1058,6 +1061,7 @@ namespace codeLess.Studio
                 }
             }
 
+            if (HandleParityKey(e)) return;
             if (HandleDevToolsKey(e)) return;
 
             if ((e.Control && e.Shift && e.KeyCode == Keys.P) || e.KeyCode == Keys.F1) // VS Code Command Palette (>)
@@ -1297,7 +1301,7 @@ namespace codeLess.Studio
             else if (e.Control && !e.Shift && !e.Alt && e.KeyCode == Keys.S) // Ctrl+S Save
             {
                 e.SuppressKeyPress = true;
-                if (activeTab != null) SaveTabBuffer(activeTab);
+                if (activeTab != null) SaveTabBufferUser(activeTab);
             }
             else if ((e.Control && e.KeyCode == Keys.W) || (e.Control && e.KeyCode == Keys.F4)) // VS Code Close Active Tab
             {
@@ -1693,16 +1697,8 @@ namespace codeLess.Studio
 
         public void RunBuildTaskInTerminal()
         {
-            if (!bottomDockPanel.Visible) ToggleBottomDockVisibility();
-            SwitchBottomDockTab("terminal");
-            string buildCmd = File.Exists(Path.Combine(workspaceRoot ?? "", "Compile.ps1"))
-                ? ".\\Compile.ps1"
-                : "dotnet build";
-            if (conPtyTerminalControl != null && conPtyTerminalControl.ActiveSession != null && conPtyTerminalControl.ActiveSession.IsRunning)
-            {
-                conPtyTerminalControl.ActiveSession.WriteCommand(buildCmd);
-            }
-            var _ = ExecuteTerminalCommandAsync(buildCmd);
+            // Tasks: Run Build Task (default build task, tasks.json or auto-detected npm / make / dotnet / cargo / go).
+            RunGroupTaskWin("build");
         }
 
         private void ToggleLeftSidebarVisibility()
@@ -1948,8 +1944,8 @@ namespace codeLess.Studio
             };
             statusLeftLabel.MouseEnter += (s, e) => { statusLeftLabel.BackColor = StatusItemHoverColor(); };
             statusLeftLabel.MouseLeave += (s, e) => { statusLeftLabel.BackColor = Color.Transparent; };
-            statusLeftLabel.Click += (s, e) => { leftSidebar.Visible = true; SwitchSidebarView("git"); RefreshGitSidebarStatus(); };
-            statusToolTip.SetToolTip(statusLeftLabel, "Source Control Branch / Workspace");
+            statusLeftLabel.Click += (s, e) => OpenBranchPickerWin();
+            statusToolTip.SetToolTip(statusLeftLabel, "Checkout Branch/Tag... (Source Control branch / workspace)");
 
             statusProblemsLabel = new Label
             {
@@ -2482,6 +2478,7 @@ namespace codeLess.Studio
                 statusLeftLabel.Location = new Point(leftX, 1);
                 leftX = statusLeftLabel.Right + 6;
             }
+            leftX = LayoutParitySyncItem(leftX);
             if (statusProblemsPanel != null && statusProblemsPanel.Visible)
             {
                 int pw = 66 + Math.Max(0, ((lastErrorCount > 9 ? 1 : 0) + (lastWarningCount > 9 ? 1 : 0)) * 7);
@@ -2778,14 +2775,14 @@ namespace codeLess.Studio
             fileMenu.DropDownItems.Add(recentSubMenu);
             fileMenu.DropDownItems.Add(CreateMenuItem("Add Folder to Workspace...", "", () => PromptAddFolderToWorkspaceDialog()));
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
-            fileMenu.DropDownItems.Add(CreateMenuItem("Save", "Ctrl+S", () => { if (activeTab != null) SaveTabBuffer(activeTab); }));
+            fileMenu.DropDownItems.Add(CreateMenuItem("Save", "Ctrl+S", () => { if (activeTab != null) SaveTabBufferUser(activeTab); }));
             fileMenu.DropDownItems.Add(CreateMenuItem("Save As...", "Ctrl+Shift+S", () => PromptSaveAsDialog()));
             fileMenu.DropDownItems.Add(CreateMenuItem("Save All", "Ctrl+K S", () => SaveAllDirtyTabs()));
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
 
             autoSaveMenuItem = CreateMenuItem("Auto Save", "", () =>
             {
-                settings.AutoSave = !settings.AutoSave;
+                settings.SetAutoSaveMode(settings.AutoSave ? IdePersistentSettings.AutoSaveOff : IdePersistentSettings.AutoSaveAfterDelay);
                 autoSaveMenuItem.Checked = settings.AutoSave;
                 settings.Save();
             });
@@ -3019,7 +3016,8 @@ namespace codeLess.Studio
             terminalMenu.DropDownItems.Add(CreateMenuItem("Focus Next Terminal", "Ctrl+PageDown", () => SwitchTerminalSessionByDelta(1)));
             terminalMenu.DropDownItems.Add(CreateMenuItem("Focus Previous Terminal", "Ctrl+PageUp", () => SwitchTerminalSessionByDelta(-1)));
             terminalMenu.DropDownItems.Add(new ToolStripSeparator());
-            terminalMenu.DropDownItems.Add(CreateMenuItem("Run Task...", "", () => RunBuildTaskInTerminal()));
+            terminalMenu.DropDownItems.Add(CreateMenuItem("Run Task...", "", () => ExecuteParityCommand("par_run_task")));
+            terminalMenu.DropDownItems.Add(CreateMenuItem("Terminate Task...", "", () => ExecuteParityCommand("par_terminate_task")));
             terminalMenu.DropDownItems.Add(CreateMenuItem("Run Build Task...", "Ctrl+Shift+B", () => RunBuildTaskInTerminal()));
             terminalMenu.DropDownItems.Add(CreateMenuItem("Run Active File", "", async () =>
             {
@@ -3192,7 +3190,7 @@ if __name__ == '__main__':
         private void WireEditorEvents(CodeLessEditorControl ctrl)
         {
             if (lspController != null) lspController.Attach(ctrl);
-            ctrl.OnSaveRequested += (buf) => SaveTabBuffer(buf);
+            ctrl.OnSaveRequested += (buf) => SaveTabBufferUser(buf);
             ctrl.OnRunFileRequested += async (buf) => await ExecuteActiveFileInTerminalAsync(buf);
             ctrl.OnCtrlKRequested += async (inst, buf) => await HandleCtrlKInlineEditAsync(inst, buf);
             ctrl.OnPinContextRequested += (buf) => AddContextPill("@" + buf.FileName);
@@ -5014,6 +5012,7 @@ if __name__ == '__main__':
             Action performCommit = () =>
             {
                 string msg = (gitCommitInput.Text ?? "").Trim();
+                if (TryParityCommitWin(msg)) return;
                 if (string.IsNullOrEmpty(msg))
                 {
                     statusLeftLabel.Text = "Please enter a commit message.";
@@ -5095,14 +5094,15 @@ if __name__ == '__main__':
             discardGitBtn.Click += (s, e) => DiscardSelectedGitFileChanges();
 
             gitBtnRow.Controls.AddRange(new Control[] { commitBtn, stageSelectedBtn, unstageSelectedBtn, refreshGitBtn, diffHeadBtn, discardGitBtn });
+            AddParityGitControls(gitBtnRow);
 
             ContextMenuStrip gitCtxMenu = new ContextMenuStrip { Renderer = new DarkStudioMenuRenderer(() => activeTheme) };
             gitCtxMenu.Items.Add("Open Diff vs HEAD", null, (s, e) => OpenSelectedGitFileDiff());
             gitCtxMenu.Items.Add("Open File in Editor", null, (s, e) =>
             {
-                int idx = gitStatusList.SelectedIndex;
-                if (idx >= 0 && idx < gitStatusItems.Count && File.Exists(gitStatusItems[idx].FilePath))
-                    OpenFileInTab(gitStatusItems[idx].FilePath);
+                GitFileStatus sel = GitListItemAt(gitStatusList.SelectedIndex);
+                if (sel != null && File.Exists(sel.FilePath))
+                    OpenFileInTab(sel.FilePath);
             });
             gitCtxMenu.Items.Add(new ToolStripSeparator());
             gitCtxMenu.Items.Add("+ Stage Selected File (git add)", null, (s, e) => StageOrUnstageSelectedGitFile(true));
@@ -5138,16 +5138,16 @@ if __name__ == '__main__':
         {
             if (gitStatusList == null) return;
             int idx = gitStatusList.SelectedIndex;
-            if (idx < 0 || idx >= gitStatusItems.Count)
+            GitFileStatus item = GitListItemAt(idx);
+            if (item == null)
             {
-                if (stage)
+                if (stage && idx < 0)
                 {
                     StageAllInAllRepos();
                     RefreshGitSidebarStatus();
                 }
                 return;
             }
-            GitFileStatus item = gitStatusItems[idx];
             string repo = GitRepoFor(item);
             string gitRel = GitRelFor(item);
             if (string.IsNullOrEmpty(repo)) return;
@@ -5168,9 +5168,8 @@ if __name__ == '__main__':
         public void DiscardSelectedGitFileChanges()
         {
             if (gitStatusList == null) return;
-            int idx = gitStatusList.SelectedIndex;
-            if (idx < 0 || idx >= gitStatusItems.Count) return;
-            GitFileStatus item = gitStatusItems[idx];
+            GitFileStatus item = GitListItemAt(gitStatusList.SelectedIndex);
+            if (item == null) return;
             if (!SuppressUnsavedPrompts &&
                 MessageBox.Show(this, "Discard uncommitted working tree changes in '" + item.RelativePath + "'?", "Confirm Git Discard", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
@@ -5232,9 +5231,15 @@ if __name__ == '__main__':
         {
             if (gitStatusList == null) return;
             int idx = gitStatusList.SelectedIndex;
-            if (idx < 0 || idx >= gitStatusItems.Count) return;
-
-            GitFileStatus item = gitStatusItems[idx];
+            GitFileStatus item = GitListItemAt(idx);
+            if (item == null) return;
+            if (GitListGroupAt(idx) == ScmGroup.Merge || GitListGroupAt(idx) == ScmGroup.Untracked)
+            {
+                // Conflicted / untracked files open in the editor (conflict lenses resolve them).
+                if (File.Exists(item.FilePath) && OpenFileInTab(item.FilePath) != null && GitListGroupAt(idx) == ScmGroup.Merge) ExecuteParityCommand("par_next_conflict");
+                return;
+            }
+            if (OpenScmDiffWin(item, GitListGroupAt(idx))) return;
             string fullPath = item.FilePath;
             if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath)) return;
 
@@ -5347,6 +5352,8 @@ if __name__ == '__main__':
                     if (gitRefreshPending) { gitRefreshPending = false; RefreshGitSidebarStatus(); }
                     if (gitStatusList == null || this.IsDisposed) return; // single-flight => results always arrive in order
                     gitStatusItems = items;
+                    gitListRows.Clear();
+                    RefreshBranchStatusWin();
                     if (explorerTree != null)
                     {
                         // Explorer M / U / A / D decorations keyed by full path (previously never populated).
@@ -5386,14 +5393,7 @@ if __name__ == '__main__':
                         gitStatusList.Items.Add("Working tree clean");
                         return;
                     }
-                    foreach (GitFileStatus g in items)
-                    {
-                        string stageTag = g.IsStaged ? "Staged " : "";
-                        string lineDiffSuffix = (g.AddedLines > 0 || g.RemovedLines > 0)
-                            ? string.Format(" (+{0} -{1})", g.AddedLines, g.RemovedLines)
-                            : "";
-                        gitStatusList.Items.Add(string.Format("[{0}{1}] {2}{3}", stageTag, g.StatusCode, g.RelativePath, lineDiffSuffix));
-                    }
+                    PopulateGroupedGitList(items);
                 };
                 if (this.IsHandleCreated && this.InvokeRequired)
                     this.BeginInvoke(applyGit);
@@ -7282,6 +7282,7 @@ if __name__ == '__main__':
                     WorkspaceDiagnostics.Add(d);
             }
 
+            AppendTaskProblemsWin(buf);
             if (problemsListBox != null)
             {
                 problemsListBox.Items.Clear();
@@ -9398,6 +9399,7 @@ if __name__ == '__main__':
             try
             {
                 internalSaveTimestamps[buf.FilePath] = DateTime.UtcNow;
+                ApplySaveParticipantsWin(buf, backgroundSave);
                 buf.WriteToDisk(buf.FilePath);
                 buf.IsUntitled = false;
                 buf.IsDeletedOnDisk = false;
@@ -10648,6 +10650,7 @@ if __name__ == '__main__':
                 return;
             }
             if (ExecuteDevToolsCommand(cmdId)) return;
+            if (ExecuteParityCommand(cmdId)) return;
             if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
@@ -10682,7 +10685,7 @@ if __name__ == '__main__':
             else if (cmdId == "new_text_file") CreateNewUntitledTextTab();
             else if (cmdId == "new_window") { try { Process.Start(Application.ExecutablePath); } catch { } }
             else if (cmdId == "close_folder") CloseFolderWorkspace();
-            else if (cmdId == "save_file") { if (activeTab != null) SaveTabBuffer(activeTab); }
+            else if (cmdId == "save_file") { if (activeTab != null) SaveTabBufferUser(activeTab); }
             else if (cmdId == "save_as") PromptSaveAsDialog();
             else if (cmdId == "save_all") SaveAllDirtyTabs();
             else if (cmdId == "revert_file") RevertActiveFile();
@@ -10976,6 +10979,7 @@ if __name__ == '__main__':
                     }
                     RefreshQuickVendorCombo();
                     ApplySettingsToEditors();
+                    ApplyParitySettingsWin();
                     statusLeftLabel.Text = "Saved settings";
                 }
                 else

@@ -786,7 +786,6 @@ namespace codeLess.AvaloniaApp
             var togglesRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
             togglesRow.Children.Add(wrapChk);
             togglesRow.Children.Add(minimapChk);
-            togglesRow.Children.Add(autoSaveChk);
             stack.Children.Add(togglesRow);
             stack.Children.Add(venvChk);
             stack.Children.Add(offlineChk);
@@ -798,6 +797,9 @@ namespace codeLess.AvaloniaApp
             stack.Children.Add(providerCombo);
             stack.Children.Add(modelBox);
             stack.Children.Add(apiKeyBox);
+
+            // Files (auto save, save actions) and source control sync options.
+            stack.Children.Add(ParitySettingsSection.Build(settings, theme, out var applyParity));
 
             var btnRow = new StackPanel
             {
@@ -840,6 +842,7 @@ namespace codeLess.AvaloniaApp
                 if (!string.IsNullOrWhiteSpace(modelBox.Text))
                     settings.ActiveModel = modelBox.Text.Trim();
                 settings.SetApiKeyForProvider(settings.ActiveProvider, (apiKeyBox.Text ?? "").Trim());
+                applyParity(settings);
 
                 onApplied?.Invoke(settings);
             };
@@ -848,7 +851,7 @@ namespace codeLess.AvaloniaApp
             btnRow.Children.Add(saveBtn);
             btnRow.Children.Add(closeBtn);
             stack.Children.Add(btnRow);
-            return stack;
+            return new ScrollViewer { Content = stack, MaxHeight = 640, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto };
         }
 
         public static Control BuildKeyboardShortcutsView(StudioTheme theme)

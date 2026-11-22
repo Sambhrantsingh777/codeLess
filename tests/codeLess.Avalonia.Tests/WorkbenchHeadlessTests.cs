@@ -76,6 +76,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.NotEmpty(window.HarnessEngine.IndexedChunks);
                 Assert.NotEmpty(window.HarnessEngine.WorkspaceSymbols);
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -120,6 +121,7 @@ namespace codeLess.Avalonia.Tests
                 window.CloseTab(tabA);
                 Assert.DoesNotContain(tabA, window.OpenTabs);
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -158,6 +160,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(window.ExecuteCommandPaletteAction("view.toggleTerminal"));
                 Assert.True(window.IsBottomPanelVisible);
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -182,6 +185,7 @@ namespace codeLess.Avalonia.Tests
                     Assert.Equal(theme.Id, window.CurrentTheme.Id);
                 }
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -207,6 +211,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.NotEmpty(results);
                 Assert.Contains(results, r => r.FilePath.EndsWith("Calculator.cs", StringComparison.OrdinalIgnoreCase));
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -258,6 +263,7 @@ namespace codeLess.Avalonia.Tests
                 window.HandleKeyShortcut(ctrlB);
                 Assert.True(window.IsSidebarVisible);
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -298,6 +304,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Contains("checked(a + b)", window.Editor.Text);
                 Assert.True(window.ChatHistoryItems.Count >= 4);
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -336,6 +343,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("\x1b[<64;15;8M", vt.EncodeMouseWheelSequence(true, 15, 8, false, false, false));
                 Assert.Equal("\x1b[<65;15;8M", vt.EncodeMouseWheelSequence(false, 15, 8, false, false, false));
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -444,6 +452,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("/v1/chat/completions", firstRequestPath);
                 Assert.Contains("checked(a + b)", window.Editor.Text);
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally
@@ -498,6 +507,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(sw.ElapsedMilliseconds < 250, $"Expected fast coalesced large-file edits, took {sw.ElapsedMilliseconds}ms");
                 Assert.Single(tab.UndoStack);
 
+                window.SuppressUnsavedPrompts = true; // a dirty buffer must not cancel Close() and leak the window
                 window.Close();
             }
             finally

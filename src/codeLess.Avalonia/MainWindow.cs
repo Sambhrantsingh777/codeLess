@@ -27,6 +27,10 @@ namespace codeLess.AvaloniaApp
         public string Title { get; set; } = "pwsh";
         public string ShellCommand { get; set; } = "";
         public AvaloniaTerminalEmulatorControl Control { get; set; }
+        /// <summary>Task terminals stay open after their process exits ("Terminal will be reused by tasks").</summary>
+        public bool KeepOpenOnExit { get; set; }
+        /// <summary>Display label of the task that owns this terminal (null for shells).</summary>
+        public string TaskLabel { get; set; }
     }
 
     public partial class MainWindow : Window
@@ -251,6 +255,7 @@ namespace codeLess.AvaloniaApp
 
             BuildWorkbenchLayout();
             InitializeDevTools();
+            InitializeWorkbenchParity();
             BuildNativeMacMenu();
             InitLanguageServers();
             ApplyTheme(currentTheme);
@@ -638,7 +643,7 @@ namespace codeLess.AvaloniaApp
                     Mi("Save As...", "Ctrl+Shift+S", () => _ = PromptSaveAsAsync()),
                     Mi("Save All", "Ctrl+K S", SaveAllTabs),
                     new Separator(),
-                    Mi("Auto Save", "", () => { settings.AutoSave = !settings.AutoSave; SetStatusMessage("Auto Save: " + (settings.AutoSave ? "On" : "Off")); }),
+                    Mi("Auto Save", "", () => { settings.SetAutoSaveMode(settings.AutoSave ? IdePersistentSettings.AutoSaveOff : IdePersistentSettings.AutoSaveAfterDelay); SetStatusMessage("Auto Save: " + (settings.AutoSave ? "On" : "Off")); }),
                     Mi("Preferences: Settings", "Ctrl+,", ShowSettingsModal),
                     Mi("Preferences: Keyboard Shortcuts", "Ctrl+K Ctrl+S", ShowKeyboardShortcutsModal),
                     Mi("Preferences: Color Theme", "Ctrl+K Ctrl+T", OpenThemePickerPalette),
@@ -1745,6 +1750,7 @@ namespace codeLess.AvaloniaApp
                 {
                     PrimaryEditor.GoToLine(activeTab.Diagnostics[idx].LineNumber);
                 }
+                else if (idx >= 0) TryNavigateTaskProblem(idx - (activeTab?.Diagnostics?.Count ?? 0));
             };
             bodyDeck.Children.Add(problemsListBox);
 
@@ -2158,7 +2164,9 @@ namespace codeLess.AvaloniaApp
 
             statusRemoteBtn = MakeStatusBarItem(new IconLabel("remote", "codeLess", 12, UiTokens.FontSmall, "><  "), () => OpenCommandPalette(">"), isRemoteBadge: true);
             ToolTip.SetTip(statusRemoteBtn, "codeLess — Show All Commands");
-            statusBranchBtn = MakeStatusBarItem(new IconLabel("branch", "main", 14, UiTokens.FontSmall, "⎇ "), () => SwitchSidebarView("git"));
+            statusBranchBtn = MakeStatusBarItem(new IconLabel("branch", "main", 14, UiTokens.FontSmall, "⎇ "), () => OpenBranchPicker());
+            statusSyncBtn = MakeStatusBtn("⟳", () => OnSyncStatusClicked());
+            statusSyncBtn.IsVisible = false;
             statusProblemsBtn = MakeStatusBarItem(new StatusProblemsContent(), () => SwitchBottomTab("problems"));
             statusMessageLabel = new TextBlock
             {
@@ -2181,6 +2189,7 @@ namespace codeLess.AvaloniaApp
 
             leftRow.Children.Add(statusRemoteBtn);
             leftRow.Children.Add(statusBranchBtn);
+            leftRow.Children.Add(statusSyncBtn);
             leftRow.Children.Add(statusProblemsBtn);
             Grid.SetColumn(leftRow, 0);
             grid.Children.Add(leftRow);
@@ -2357,6 +2366,7 @@ namespace codeLess.AvaloniaApp
             Color statusFg = AvaloniaColorHelper.ToAvColor(UiTokens.StatusBarForeground(theme));
             ApplyStatusBarTheme(theme);
             statusBranchBtn.Foreground = new SolidColorBrush(statusFg);
+            if (statusSyncBtn != null) statusSyncBtn.Foreground = new SolidColorBrush(statusFg);
             statusProblemsBtn.Foreground = new SolidColorBrush(statusFg);
             statusMessageLabel.Foreground = new SolidColorBrush(statusFg);
             statusChordLabel.Foreground = new SolidColorBrush(Color.FromRgb(250, 204, 21));
@@ -2847,6 +2857,7 @@ namespace codeLess.AvaloniaApp
         public void ActivateTab(EditorTabBuffer tab)
         {
             SweepClosedLargeFileTabs();
+            OnEditorFocusLeaving(activeTab, tab);
             // Remember where the caret was in the editor being left so Back returns there (not to where it was opened).
             if (!suppressNavRecord && !ReferenceEquals(activeTab, tab)) CaptureCurrentNavPosition();
             activeTab = tab;
@@ -2945,6 +2956,7 @@ namespace codeLess.AvaloniaApp
         public bool SaveActiveTab()
         {
             if (activeTab == null) return false;
+            if (TryFormatThenSave(activeTab)) return true;
             return SaveBufferToDisk(activeTab);
         }
 
@@ -2971,6 +2983,7 @@ namespace codeLess.AvaloniaApp
 
             try
             {
+                ApplySaveParticipants(tab);
                 tab.SyncContentFromLines();
                 tab.WriteFilePreservingMetadata(tab.FilePath);
                 tab.SavedContent = tab.Content;
@@ -3055,7 +3068,7 @@ namespace codeLess.AvaloniaApp
                         pendingDebouncedBuffer = null;
                         if (target == null) return;
                         if (settings.AutoSave && !string.IsNullOrEmpty(target.FilePath) && File.Exists(target.FilePath))
-                            SaveBufferToDisk(target);
+                            ScheduleAutoSave(target);
                         if (!target.IsLargeFile || target.Lines.Count <= 12000)
                             target.RefreshGutterDiff();
                         LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
@@ -3073,7 +3086,7 @@ namespace codeLess.AvaloniaApp
             else
             {
                 if (settings.AutoSave && !string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath))
-                    SaveBufferToDisk(buf);
+                    ScheduleAutoSave(buf);
                 RefreshOutlineAndProblems(buf);
             }
         }
@@ -3320,6 +3333,7 @@ namespace codeLess.AvaloniaApp
                     });
                 }
             }
+            AppendTaskProblemsForOtherFiles(probItems, tab, ref errCount, ref warnCount);
             if (probItems.Count == 0)
             {
                 probItems.Add(new LiteralTextBlock("No problems have been detected in the workspace.")

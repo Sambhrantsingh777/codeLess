@@ -18,6 +18,39 @@ namespace codeLess.Studio
         public bool IsAction;
         /// <summary>Feature payload (GitBlameLine, HttpRequestBlock, ...).</summary>
         public object Tag;
+        /// <summary>
+        /// Optional clickable parts drawn as "A | B | C" (merge-conflict lens). Canvases draw <see cref="GetSegmentParts"/>
+        /// and report the clicked part, whose <see cref="SegmentIndex"/> tells which one was chosen.
+        /// </summary>
+        public string[] Segments;
+        /// <summary>Index into the parent's Segments for a part; -1 for ordinary annotations.</summary>
+        public int SegmentIndex = -1;
+        public EditorLineAnnotation Parent;
+        private EditorLineAnnotation[] segmentParts;
+
+        /// <summary>Stable per-segment annotation objects (identity is kept so hover highlighting works per part).</summary>
+        public EditorLineAnnotation[] GetSegmentParts()
+        {
+            if (Segments == null) return null;
+            if (segmentParts == null || segmentParts.Length != Segments.Length)
+            {
+                segmentParts = new EditorLineAnnotation[Segments.Length];
+                for (int i = 0; i < Segments.Length; i++)
+                {
+                    EditorLineAnnotation p = new EditorLineAnnotation();
+                    p.Kind = Kind;
+                    p.Text = Segments[i];
+                    p.IsAction = IsAction;
+                    p.Tag = Tag;
+                    p.SegmentIndex = i;
+                    p.Parent = this;
+                    segmentParts[i] = p;
+                }
+            }
+            return segmentParts;
+        }
+
+        public const string SegmentSeparator = "  |  ";
     }
 
     /// <summary>Settings for the built-in developer tools (persisted with the rest of settings.json on both UIs).</summary>

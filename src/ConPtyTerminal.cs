@@ -2395,6 +2395,8 @@ namespace codeLess.Studio
 
         public event Action OutputReceived;
         public event Action<int> ProcessExited;
+        /// <summary>Raw output bytes as read from the PTY (reader thread); used by task problem matchers.</summary>
+        public Action<byte[], int> RawOutputTap;
 
         public static string GetDefaultHomeDirectory()
         {
@@ -2945,6 +2947,8 @@ namespace codeLess.Studio
 
                     int readCount = (int)rawCount;
                     Buffer.ProcessBytes(buf, readCount);
+                    Action<byte[], int> tap = RawOutputTap;
+                    if (tap != null) { try { tap(buf, readCount); } catch { } }
                     int nowTick = Environment.TickCount;
                     if (unchecked(nowTick - lastSnapshotTick) >= 250 || lastSnapshotTick == 0)
                     {
@@ -3135,6 +3139,8 @@ namespace codeLess.Studio
                     if (read <= 0 || gen != sessionGeneration || isDisposed) break;
 
                     Buffer.ProcessBytes(buf, read);
+                    Action<byte[], int> tap = RawOutputTap;
+                    if (tap != null) { try { tap(buf, read); } catch { } }
                     int nowTick = Environment.TickCount;
                     if (unchecked(nowTick - lastSnapshotTick) >= 250 || lastSnapshotTick == 0)
                     {
@@ -3214,6 +3220,8 @@ namespace codeLess.Studio
                     if (e.Data != null)
                     {
                         Buffer.ProcessText(e.Data + "\r\n");
+                        Action<byte[], int> tapOut = RawOutputTap;
+                        if (tapOut != null) { try { byte[] b = Encoding.UTF8.GetBytes(e.Data + "\n"); tapOut(b, b.Length); } catch { } }
                         SyncTranscriptSnapshot();
                         Action h = OutputReceived;
                         if (h != null) { try { h(); } catch { } }
@@ -3224,6 +3232,8 @@ namespace codeLess.Studio
                     if (e.Data != null)
                     {
                         Buffer.ProcessText("\x1b[91m" + e.Data + "\x1b[0m\r\n");
+                        Action<byte[], int> tapErr = RawOutputTap;
+                        if (tapErr != null) { try { byte[] b = Encoding.UTF8.GetBytes(e.Data + "\n"); tapErr(b, b.Length); } catch { } }
                         SyncTranscriptSnapshot();
                         Action h = OutputReceived;
                         if (h != null) { try { h(); } catch { } }

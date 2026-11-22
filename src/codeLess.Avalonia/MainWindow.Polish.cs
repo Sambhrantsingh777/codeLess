@@ -54,7 +54,7 @@ namespace codeLess.AvaloniaApp
             else statusBranchBtn.Content = new IconLabel("branch", text, 14, UiTokens.FontSmall, "⎇ ");
             // Like VS Code, the branch item only appears inside a repository.
             statusBranchBtn.IsVisible = !noGit;
-            ToolTip.SetTip(statusBranchBtn, noGit ? null : branch + " (Git branch) — open Source Control");
+            ToolTip.SetTip(statusBranchBtn, noGit ? null : branch + " (Git branch) — Checkout Branch/Tag...");
         }
 
         private void SetStatusProblems(int errors, int warnings)

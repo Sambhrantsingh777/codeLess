@@ -368,7 +368,7 @@ namespace codeLess.AvaloniaApp
         private void StartDebugConfiguration(DebugLaunchConfig cfg)
         {
             // Save the active file first (VS Code: debug.saveBeforeStart).
-            if (activeTab != null && activeTab.IsDirty && !activeTab.IsUntitled && !string.IsNullOrEmpty(activeTab.FilePath)) SaveActiveTab();
+            if (activeTab != null && activeTab.IsDirty && !activeTab.IsUntitled && !string.IsNullOrEmpty(activeTab.FilePath)) SaveBufferToDisk(activeTab);
             HideDebugNotification();
             btmDebugConsoleTabBtn.IsVisible = true;
             string console = DapJson.Str(cfg.Properties, "console") ?? (cfg.AdapterFamily == "python" ? "integratedTerminal" : "internalConsole");
@@ -574,7 +574,7 @@ namespace codeLess.AvaloniaApp
         {
             if (activeTab == null) return;
             if (string.IsNullOrEmpty(activeTab.FilePath)) { SetStatusMessage("Save the file first to run it."); return; }
-            if (activeTab.IsDirty) SaveActiveTab();
+            if (activeTab.IsDirty) SaveBufferToDisk(activeTab);
             SwitchBottomTab("terminal");
             EnsureInitialTerminalSession();
             RunCommandInTerminal(BuildPythonRunCommand(activeTab.FilePath, activeTerminalSession));

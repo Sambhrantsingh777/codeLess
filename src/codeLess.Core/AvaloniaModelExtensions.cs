@@ -386,6 +386,7 @@ namespace codeLess.Studio
                 Vendors = baseLoaded.Vendors ?? new List<SavedVendorEntry>()
             };
             loaded.CopyLanguageServerSettingsFrom(baseLoaded);
+            loaded.CopyWorkbenchParitySettingsFrom(baseLoaded);
             return loaded;
         }
     }

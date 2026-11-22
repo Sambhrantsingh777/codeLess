@@ -3398,6 +3398,7 @@ namespace codeLess.Studio
                             g.FillRectangle(gutterHl, 0, y, GutterWidth - 1, LineHeight);
                     }
                     if (buf.DebugStoppedLine == docLine) DrawDebugStoppedLineBackground(g, buf, y, codeAreaRight);
+                    DrawConflictLineBackground(g, buf, docLine, y, codeAreaRight);
 
                     // Staged AI Diff Line Tint
                     if (hunk != null)
@@ -4435,6 +4436,10 @@ namespace codeLess.Studio
             {
                 int clickedLine, dummyCol;
                 ScreenPointToLineCol(e.Location, out clickedLine, out dummyCol);
+                if (e.X >= GutterWidth - 7 && TryRaiseGutterDiffClick(buf, clickedLine, e))
+                {
+                    return; // git diff bar: Stage / Revert / Diff menu
+                }
                 if (e.X >= GutterWidth - 18)
                 {
                     ToggleFoldAtLine(clickedLine);

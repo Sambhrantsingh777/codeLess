@@ -205,7 +205,10 @@ namespace codeLess.Studio
 
         private EditorLineAnnotation DevProvideAnnotation(EditorTabBuffer buf, int line)
         {
-            if (buf == null || string.IsNullOrEmpty(buf.FilePath)) return null;
+            if (buf == null) return null;
+            EditorLineAnnotation parityAnn = ProvideParityAnnotationWin(buf, line);
+            if (parityAnn != null) return parityAnn;
+            if (string.IsNullOrEmpty(buf.FilePath)) return null;
             if (HttpFileParser.IsHttpFile(buf.FilePath))
             {
                 DevHttpDocument(buf);
@@ -299,6 +302,7 @@ namespace codeLess.Studio
         private void DevAnnotationClicked(CodeLessVirtualCanvas canvas, EditorTabBuffer buf, EditorLineAnnotation ann, Rectangle r)
         {
             if (ann == null) return;
+            if (HandleParityAnnotationClickWin(canvas, buf, ann)) return;
             HttpRequestBlock blk = ann.Tag as HttpRequestBlock;
             if (blk != null) { SendHttpRequest(buf, blk); return; }
             GitBlameLine bl = ann.Tag as GitBlameLine;

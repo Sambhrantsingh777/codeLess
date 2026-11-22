@@ -108,10 +108,12 @@ namespace codeLess.Studio
         {
             if (buf == null || buf.Diagnostics == null) return;
             List<DiagnosticItem> lsp = string.IsNullOrEmpty(buf.FilePath) ? new List<DiagnosticItem>() : Get(buf.FilePath);
+            // Task problem-matcher results (Run Task / Run Build Task) are external diagnostics too.
+            if (!string.IsNullOrEmpty(buf.FilePath)) lsp.AddRange(TaskProblemStore.Get(buf.FilePath));
             bool hadLsp = false;
-            foreach (DiagnosticItem d in buf.Diagnostics) if (d.IsLanguageServer) { hadLsp = true; break; }
+            foreach (DiagnosticItem d in buf.Diagnostics) if (d.IsLanguageServer || d.IsTaskProblem) { hadLsp = true; break; }
             if (!hadLsp && lsp.Count == 0) return;
-            List<DiagnosticItem> merged = buf.Diagnostics.Where(d => !d.IsLanguageServer).ToList();
+            List<DiagnosticItem> merged = buf.Diagnostics.Where(d => !d.IsLanguageServer && !d.IsTaskProblem).ToList();
             int lineCount = buf.Lines != null ? buf.Lines.Count : int.MaxValue;
             foreach (DiagnosticItem d in lsp)
             {

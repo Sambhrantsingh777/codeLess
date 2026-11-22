@@ -249,6 +249,7 @@ namespace codeLess.AvaloniaApp
             }
 
             if (HandleDevToolsShortcut(key, modifiers)) return true;
+            if (HandleParityShortcut(key, modifiers)) return true;
 
             // Escape closes open modal or command palette or Zen mode
             if (key == Key.Escape)
@@ -1017,7 +1018,7 @@ namespace codeLess.AvaloniaApp
 
             var menu = new ContextMenu
             {
-                ItemsSource = new object[]
+                ItemsSource = BuildParityEditorContextItems(tab).Concat(new object[]
                 {
                     MakeCtxItem($"✦ Inline AI Edit / Generate...   ({scK})", () => PrimaryEditor.ShowInlineAiBar()),
                     MakeCtxItem("✦ Explain Selection in AI Chat", () =>
@@ -1043,7 +1044,7 @@ namespace codeLess.AvaloniaApp
                     new Separator(),
                     MakeCtxItem("Select All", () => { tab.SelectAll(); PrimaryEditor.Canvas.InvalidateVisual(); }),
                     MakeCtxItem($"Command Palette...   ({scPal})", () => OpenCommandPalette(">"))
-                }
+                }).ToList()
             };
             menu.Open(PrimaryEditor.Canvas);
         }
@@ -1391,6 +1392,7 @@ namespace codeLess.AvaloniaApp
                 gitBtnTuple.Icon.BadgeCount = currentGitEntries.Count;
                 gitBtnTuple.Icon.InvalidateVisual();
             }
+            RefreshBranchStatusAsync();
 
             // Update Explorer tree git status badges
             ExplorerTree.GitStatusByFullPath.Clear();
@@ -1413,6 +1415,7 @@ namespace codeLess.AvaloniaApp
         private void RebuildScmListsUi()
         {
             if (scmStagedListStack == null || scmChangesListStack == null || currentTheme == null) return;
+            if (RebuildScmGroupsUi()) return;
             scmStagedListStack.Children.Clear();
             scmChangesListStack.Children.Clear();
 
@@ -1673,6 +1676,7 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrEmpty(workspaceRoot)) return false;
             string msg = overrideMessage ?? (scmCommitInput.Text ?? "").Trim();
+            if (TryCommitWithParityOptions(msg, out bool amendHandled)) return amendHandled;
             if (string.IsNullOrEmpty(msg))
             {
                 SetStatusMessage("Please enter a commit message.");
@@ -2135,10 +2139,7 @@ namespace codeLess.AvaloniaApp
 
         public void RunWorkspaceBuildInTerminal()
         {
-            SwitchBottomTab("terminal");
-            EnsureInitialTerminalSession();
-            activeTerminalSession?.Control?.WriteAutomatedInput("dotnet build --nologo\r");
-            AppendOutputLog("[Build] Triggered 'dotnet build --nologo' in terminal.");
+            RunBuildTask();
         }
 
         // AI Agent & Composer Workflows
@@ -2531,6 +2532,8 @@ namespace codeLess.AvaloniaApp
             };
             all.AddRange(BuildLanguageServerPaletteCommands());
             all.AddRange(BuildDevToolsPaletteCommands());
+            all.AddRange(BuildParityPaletteCommands());
+            all.AddRange(BuildTaskPaletteCommands());
             return all;
         }
 
@@ -2602,6 +2605,7 @@ namespace codeLess.AvaloniaApp
                     ApplyTheme(StudioTheme.GetById(updated.ThemeId), persistSetting: true);
                     PrimaryEditor.ShowMinimap = updated.ShowMinimap;
                     PrimaryEditor.Canvas.FontSizePx = updated.FontSize;
+                    ApplyGitParitySettings();
                     UpdateStatusBar();
                 },
                 () => ModalHost.CloseModal());

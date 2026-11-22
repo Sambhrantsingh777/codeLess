@@ -1117,6 +1117,8 @@ namespace codeLess.Studio
                             RepoRoot = repo,
                             RepoRelativePath = repoRel,
                             StatusCode = xy.Trim(),
+                            IndexStatus = x,
+                            WorkTreeStatus = y,
                             IsStaged = x != ' ' && x != '?',
                             AddedLines = addLines,
                             RemovedLines = delLines

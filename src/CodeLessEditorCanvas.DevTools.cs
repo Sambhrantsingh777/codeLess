@@ -38,16 +38,17 @@ namespace codeLess.Studio
             Func<EditorTabBuffer, int, EditorLineAnnotation> provider = LineAnnotationProvider;
             if (provider == null || buf == null) return;
             if (docLine == buf.CursorLine && !string.IsNullOrEmpty(buf.GhostText) && buf.GhostLine == docLine) return;
-            if (buf.Diagnostics != null && buf.Diagnostics.Any(d => d.Line == docLine + 1 && d.Severity != "Info")) return;
             EditorLineAnnotation ann;
             try { ann = provider(buf, docLine); } catch { ann = null; }
             if (ann == null || string.IsNullOrEmpty(ann.Text)) return;
+            if (ann.Segments == null && buf.Diagnostics != null && buf.Diagnostics.Any(d => d.Line == docLine + 1 && d.Severity != "Info")) return;
             StudioTheme th = owner.Theme;
             int x = GutterWidth + 8 + (sliceVisLen - effScrollLeft + 3) * CharWidth;
             if (sliceVisLen == 0) x = GutterWidth + 8 + (ann.IsAction ? 0 : CharWidth);
             if (x < GutterWidth + 4) x = GutterWidth + 4;
             int avail = codeAreaRight - x - 10;
             if (avail < 60) return;
+            if (ann.Segments != null) { DrawSegmentedAnnotation(g, ann, docLine, x, y, codeAreaRight); return; }
             bool hot = ReferenceEquals(ann, hoveredLineAnnotation) || (hoveredLineAnnotation != null && hoveredLineAnnotation.Tag != null && ReferenceEquals(hoveredLineAnnotation.Tag, ann.Tag));
             Color c = ann.IsAction
                 ? Color.FromArgb(hot ? 255 : 210, th.AccentPrimary)

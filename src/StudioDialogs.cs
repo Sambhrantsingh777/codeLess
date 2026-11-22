@@ -1255,6 +1255,11 @@ namespace codeLess.Studio
                 string devId = dev[3];
                 addCmd(dev[0], dev[1], dev[2], () => { SelectedCommandId = devId; this.DialogResult = DialogResult.OK; this.Close(); });
             }
+            foreach (string[] par in CodeLessMainForm.ParityPaletteCommands)
+            {
+                string parId = par[3];
+                addCmd(par[0], par[1], par[2], () => { SelectedCommandId = parId; this.DialogResult = DialogResult.OK; this.Close(); });
+            }
             addCmd("Arena", "Launch Multi-Harness Parallel Arena (Race 2 Harnesses Side-by-Side)", "",
                 () => { SelectedCommandId = "open_arena"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Architecture", "Open Interactive Live Code & Dependency Map", "",
@@ -2741,6 +2746,7 @@ namespace codeLess.Studio
         public CheckBox ActivatePythonEnvBox;
         public CheckBox OfflineModeBox;
         public CodeLessDarkInputBox ExcludedFoldersInput;
+        public ParitySettingsBlockWin ParityBlock;
 
         // AI Section controls
         public CodeLessDropdown ProviderCombo;
@@ -2919,7 +2925,9 @@ namespace codeLess.Studio
             ActivatePythonEnvBox = addCheck("Activate Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, 380, y);
             y += 24;
             OfflineModeBox = addCheck("Offline Mode (block all non-local network requests)", settings.OfflineMode, 24, y);
+            AutoSaveBox.Visible = false; // superseded by the files.autoSave mode below
             y += 28;
+            ParityBlock = ParitySettingsBlockWin.Build(body, settings, activeTheme, ref y);
             addLabel("Excluded Folders (files.exclude):", y);
             ExcludedFoldersInput = new CodeLessDarkInputBox
             {
@@ -3179,6 +3187,7 @@ namespace codeLess.Studio
                 settings.DefaultEditModel = origEditModel;
                 settings.AiTemperature = origTemp;
                 settings.PrivacyMode = origPrivacy;
+                if (ParityBlock != null) ParityBlock.Revert(settings);
                 settings.Save();
                 if (OnSettingsLiveChanged != null)
                     OnSettingsLiveChanged(settings);
@@ -3219,6 +3228,7 @@ namespace codeLess.Studio
             settings.ShowMinimap = MinimapBox.Checked;
             settings.EnableInlineGhostText = GhostTextBox.Checked;
             settings.AutoSave = AutoSaveBox.Checked;
+            if (ParityBlock != null) ParityBlock.Apply(settings);
             settings.RequireAgentToolApproval = AgentApprovalBox.Checked;
             if (ShowWelcomeBox != null)
                 settings.ShowWelcomeOnStartup = ShowWelcomeBox.Checked;

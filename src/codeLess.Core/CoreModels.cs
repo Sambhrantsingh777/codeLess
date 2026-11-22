@@ -1473,6 +1473,9 @@ namespace codeLess.Studio
         public string FilePath;
         public string RelativePath;
         public string StatusCode; // "M", "A", "??", "D"
+        /// <summary>Porcelain X (index) and Y (work tree) status letters; ' ' when unchanged.</summary>
+        public char IndexStatus = ' ';
+        public char WorkTreeStatus = ' ';
         /// <summary>Top-level directory of the repository owning this entry (outer or nested repo).</summary>
         public string RepoRoot;
         /// <summary>Path relative to RepoRoot with '/' separators; pass this to git commands run in RepoRoot.</summary>

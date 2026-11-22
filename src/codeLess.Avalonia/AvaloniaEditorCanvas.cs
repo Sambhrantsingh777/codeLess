@@ -2143,6 +2143,8 @@ namespace codeLess.AvaloniaApp
             {
                 // Glyph margin (left of the line numbers): toggle a breakpoint, like VS Code.
                 if (pt.X < EditorDebugHooks.GlyphMarginWidth && owner.RaiseBreakpointGutter(buf, docLine, false)) { e.Handled = true; return; }
+                // Git diff bar (rightmost gutter pixels): Stage / Revert / Diff popup, like VS Code's quick diff peek.
+                if (pt.X >= GutterWidth - 8 && owner.RaiseGutterDiffClicked(buf, docLine, new Rect(GutterWidth - 7, Math.Floor(pt.Y / LineHeight) * LineHeight, 7, LineHeight))) { e.Handled = true; return; }
                 // Fold chevron
                 if (pt.X >= GutterWidth - 18 && CanFoldLine(buf, docLine))
                 {
@@ -4212,6 +4214,7 @@ namespace codeLess.AvaloniaApp
                     context.FillRectangle(lineHlBrush, new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, LineHeight));
                 }
                 if (buf.DebugStoppedLine == docLine) DrawDebugStoppedLineBackground(context, buf, y, codeAreaRight);
+                DrawConflictLineBackground(context, buf, docLine, y, codeAreaRight);
 
                 // Proposed inline diff highlight & per-hunk Accept/Reject pills
                 bool isProposedDiffLine = buf.ProposedNewLines != null && buf.ProposedNewLines.Contains(docLine);
@@ -4382,7 +4385,11 @@ namespace codeLess.AvaloniaApp
                         double ax = codeBaseX + ColX(buf, docLine, lineText.Length) + CharWidth * 3;
                         if (lineText.Length == 0) ax = codeBaseX + CharWidth * (ann.IsAction ? 0 : 1);
                         if (ax < GutterWidth + 4) ax = GutterWidth + 4;
-                        if (ax < codeAreaRight - 40)
+                        if (ax < codeAreaRight - 40 && ann.Segments != null)
+                        {
+                            DrawSegmentedAnnotation(context, ann, docLine, ax, y, codeAreaRight);
+                        }
+                        else if (ax < codeAreaRight - 40)
                         {
                             bool hot = ReferenceEquals(ann, hoveredAnnotation) || (hoveredAnnotation != null && hoveredAnnotation.Tag != null && ReferenceEquals(hoveredAnnotation.Tag, ann.Tag));
                             IBrush annBrush = ann.IsAction

@@ -209,7 +209,10 @@ namespace codeLess.AvaloniaApp
 
         private EditorLineAnnotation ProvideLineAnnotation(EditorTabBuffer buf, int line)
         {
-            if (buf == null || string.IsNullOrEmpty(buf.FilePath)) return null;
+            if (buf == null) return null;
+            var parityAnn = ProvideParityAnnotation(buf, line);
+            if (parityAnn != null) return parityAnn;
+            if (string.IsNullOrEmpty(buf.FilePath)) return null;
             if (HttpFileParser.IsHttpFile(buf.FilePath))
             {
                 var doc = GetHttpDocument(buf);
@@ -312,6 +315,7 @@ namespace codeLess.AvaloniaApp
         private void OnLineAnnotationClicked(AvaloniaEditorControl editor, EditorTabBuffer buf, EditorLineAnnotation ann, int line, Rect rect)
         {
             if (ann == null) return;
+            if (HandleParityAnnotationClick(editor, buf, ann, line, rect)) return;
             if (ann.Kind == EditorLineAnnotation.KindCodeLens && ann.Tag is HttpRequestBlock blk)
             {
                 SendHttpRequest(buf, blk);
