@@ -857,12 +857,13 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("3.12.3 ('custom')", info.DisplayLabel);
                 PythonVenvActivator.SelectedEnvironmentOverride = root => root == ws ? info.EnvPath : null;
                 string cmd = PythonVenvActivator.ResolveActivationCommand(ws, ws, "/bin/zsh", "zsh", null, false);
-                Assert.Equal(" source " + Path.Combine(info.EnvPath, "bin", "activate"), cmd);
+                // quoted only when the path needs it for a POSIX shell (e.g. Windows backslashes, spaces)
+                Assert.Equal(" source " + PythonVenvActivator.QuotePosix(Path.Combine(info.EnvPath, "bin", "activate")), cmd);
                 // conda prefix -> conda activate
                 t.File("conda/x/conda-meta/history", "");
                 string condaPrefix = Path.Combine(t.Path, "conda", "x");
                 PythonVenvActivator.SelectedEnvironmentOverride = root => root == ws ? condaPrefix : null;
-                Assert.Equal(" conda activate " + condaPrefix, PythonVenvActivator.ResolveActivationCommand(ws, ws, "/bin/bash", "bash", null, false));
+                Assert.Equal(" conda activate " + PythonVenvActivator.QuotePosix(condaPrefix), PythonVenvActivator.ResolveActivationCommand(ws, ws, "/bin/bash", "bash", null, false));
             }
             finally
             {
