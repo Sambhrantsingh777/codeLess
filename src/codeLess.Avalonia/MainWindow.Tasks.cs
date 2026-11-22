@@ -201,13 +201,13 @@ namespace codeLess.AvaloniaApp
             string header = "\x1b[1m> Executing task: " + exec.CommandLine + " <\x1b[0m\r\n\r\n";
             string termCmd = TaskConfiguration.BuildTerminalCommandLine(exec.CommandLine, exec.Env, IsWindowsHost, IsWindowsHost ? null : ConPtyTerminalSession.GetUserUnixShell());
             bool started = false;
-            try { started = term.Control.StartShell(exec.Cwd, termCmd); } catch { started = false; }
+            // The problem matcher, exit handler and header are attached before the process starts: a task that fails
+            // immediately used to lose its first output (and errors) before RawOutputTap was set (QA #7).
+            var hooks = new PtyStartHooks { RawOutputTap = exec.OnOutputBytes, ProcessExited = code => exec.OnExited(code), InitialText = header };
+            try { started = term.Control.StartShell(exec.Cwd, termCmd, hooks); } catch { started = false; }
             var session = term.Control.Session;
             if (started && session != null)
             {
-                session.RawOutputTap = exec.OnOutputBytes;
-                try { session.Buffer.ProcessText(header); } catch { }
-                session.ProcessExited += code => exec.OnExited(code);
                 exec.Terminate = () => { try { term.Control.StopShell(notifyExit: false); } catch { } exec.WasTerminated = true; exec.OnExited(-1); };
                 if (!session.IsRunning) exec.OnExited(session.ExitCode);
             }

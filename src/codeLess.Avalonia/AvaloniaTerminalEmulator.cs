@@ -243,7 +243,10 @@ namespace codeLess.AvaloniaApp
         public static bool IsDesktopRuntime =>
             Application.Current?.ApplicationLifetime is global::Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
 
-        public bool StartShell(string workingDir, string customShellCommand = null)
+        public bool StartShell(string workingDir, string customShellCommand = null) => StartShell(workingDir, customShellCommand, null);
+
+        /// <summary>Starts the shell with <paramref name="hooks"/> attached before the process runs (tasks).</summary>
+        public bool StartShell(string workingDir, string customShellCommand, PtyStartHooks hooks)
         {
             StopShell(notifyExit: false);
             exitedNotified = false;
@@ -271,7 +274,7 @@ namespace codeLess.AvaloniaApp
 
             try
             {
-                Session = new ConPtyTerminalSession(ShellDisplayName, resolvedCmd, WorkingDirectory, cols, rows, IsLightTerminal);
+                Session = new ConPtyTerminalSession(ShellDisplayName, resolvedCmd, WorkingDirectory, cols, rows, IsLightTerminal, hooks);
                 // The session clamps its initial grid (min 20x6); if the laid-out canvas is smaller, sync the
                 // PTY winsize to what is actually rendered, since no further SizeChanged will arrive.
                 if (gridCanvas.Bounds.Height > 1)
@@ -300,7 +303,11 @@ namespace codeLess.AvaloniaApp
                     });
                 };
                 gridCanvas.InvalidateVisual();
-                return Session.IsRunning;
+                // A command that already finished (e.g. a task failing immediately) was still started: returning
+                // false made the task runner run it a second time through pipes. Report the missed exit instead.
+                if (Session.HasExited && !exitedNotified)
+                    Dispatcher.UIThread.Post(() => { if (!exitedNotified) { exitedNotified = true; SessionExited?.Invoke(this); } });
+                return true;
             }
             catch
             {

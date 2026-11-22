@@ -997,10 +997,13 @@ namespace codeLess.Studio
             AppendOutputLog("[Tasks] " + task.DisplayLabel + ": " + exec.CommandLine + "  (cwd " + exec.Cwd + ")");
 
             string termCmd = TaskConfiguration.BuildTerminalCommandLine(exec.CommandLine, exec.Env, windows, windows ? null : ConPtyTerminalSession.GetUserUnixShell());
-            ConPtyTerminalSession pty = new ConPtyTerminalSession("Task", termCmd, exec.Cwd, 100, 14, activeTheme != null && activeTheme.IsLight);
-            pty.RawOutputTap = exec.OnOutputBytes;
-            try { pty.Buffer.ProcessText("\x1b[1m> Executing task: " + exec.CommandLine + " <\x1b[0m\r\n\r\n"); } catch { }
-            pty.ProcessExited += delegate (int code) { exec.OnExited(code); };
+            // Problem matcher, exit handler and header attached before the process starts (QA #7: a task that fails
+            // immediately used to lose its first output before RawOutputTap was set).
+            PtyStartHooks hooks = new PtyStartHooks();
+            hooks.RawOutputTap = exec.OnOutputBytes;
+            hooks.ProcessExited = delegate (int code) { exec.OnExited(code); };
+            hooks.InitialText = "\x1b[1m> Executing task: " + exec.CommandLine + " <\x1b[0m\r\n\r\n";
+            ConPtyTerminalSession pty = new ConPtyTerminalSession("Task", termCmd, exec.Cwd, 100, 14, activeTheme != null && activeTheme.IsLight, hooks);
             exec.Terminate = delegate { exec.WasTerminated = true; try { pty.Dispose(); } catch { } exec.OnExited(-1); };
             if (pty.HasExited) exec.OnExited(pty.ExitCode);
             rt.Terminal = AttachTaskTerminalWin(task, pty, exec.Cwd);
