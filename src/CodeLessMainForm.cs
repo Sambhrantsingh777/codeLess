@@ -3070,7 +3070,8 @@ namespace codeLess.Studio
                 catch { }
             }));
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
-            helpMenu.DropDownItems.Add(CreateMenuItem("Multi-Harness Parallel Arena...", "", () => OpenMultiHarnessArenaDialog()));
+            helpMenu.DropDownItems.Add(CreateMenuItem("Best-of-N Arena (Compare Providers)...", "", () => OpenMultiHarnessArenaDialog()));
+            AddAgentTrustMenuItems(helpMenu);
             helpMenu.DropDownItems.Add(CreateMenuItem("Architecture & Dependency Map...", "", () => OpenArchitectureGraphDialog()));
             helpMenu.DropDownItems.Add(CreateMenuItem("Zero-RAM Time-Travel Checkpoints...", "", () => OpenTimeTravelCheckpointsDialog()));
             helpMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -6612,6 +6613,8 @@ if __name__ == '__main__':
                         });
                     }
                 }
+                histMenu.Items.Add(new ToolStripSeparator());
+                histMenu.Items.Add("Agent Timeline (Undo / Redo Turns)...", null, (ms, me) => OpenAgentTimelineDialogWin());
                 histMenu.Show(historyChatBtn, new Point(0, historyChatBtn.Height));
             };
 
@@ -6674,6 +6677,8 @@ if __name__ == '__main__':
             acceptAllFilesBtn.Height = 22;
             acceptAllFilesBtn.Click += (s, e) =>
             {
+                AgentChangeSet agentCs = agentTrustWin != null ? agentTrustWin.ActiveChangeSet : null;
+                if (agentCs != null) AcceptAgentChangeSetWin(agentCs, false); // writes + records the turn checkpoint
                 foreach (var t in openTabs)
                 {
                     t.DiffHunks.Clear();
@@ -6690,6 +6695,8 @@ if __name__ == '__main__':
             rejectAllFilesBtn.Height = 22;
             rejectAllFilesBtn.Click += (s, e) =>
             {
+                AgentChangeSet agentCs = agentTrustWin != null ? agentTrustWin.ActiveChangeSet : null;
+                if (agentCs != null) RejectAgentFilesWin(agentCs, agentCs.Files.Where(f => f.IsPending).ToList());
                 foreach (var t in openTabs)
                 {
                     if (t != editorControl.CurrentBuffer && t != splitEditorControl.CurrentBuffer)
@@ -7110,10 +7117,13 @@ if __name__ == '__main__':
             agentFeedControl.OpenAiSettingsRequested += () => OpenSettingsDialog();
             agentFeedControl.RestoreCheckpointRequested += (cpId) =>
             {
+                if (HandleTurnRestoreRequestWin(cpId)) return; // per-turn checkpoint: undo back to that message
                 var recentCps = TimeTravelCheckpointManager.ListCheckpoints();
-                if (recentCps.Count > 0)
+                // Restore the checkpoint of the clicked message (previously always the newest one).
+                var matchCp = recentCps.FirstOrDefault(c => c.Id == cpId);
+                if (matchCp != null)
                 {
-                    var cp = recentCps[0];
+                    var cp = matchCp;
                     string restored = TimeTravelCheckpointManager.RestoreFromCheckpoint(cp);
                     if (restored != null)
                     {
@@ -7159,6 +7169,7 @@ if __name__ == '__main__':
             rightDock.Controls.Add(composerCardPanel);
             rightDock.Controls.Add(modeHeader);
             rightDock.Controls.Add(chatTopBar);
+            InitAgentTrustWin(chatTopBar, newChatBtn);
         }
 
         public void RefreshChangesetReviewBar()
@@ -9401,7 +9412,9 @@ if __name__ == '__main__':
             {
                 internalSaveTimestamps[buf.FilePath] = DateTime.UtcNow;
                 ApplySaveParticipantsWin(buf, backgroundSave);
+                object agentSave = BeginAgentTrackedSaveWin(buf);
                 buf.WriteToDisk(buf.FilePath);
+                EndAgentTrackedSaveWin(agentSave, buf);
                 buf.IsUntitled = false;
                 buf.IsDeletedOnDisk = false;
                 buf.IsPreview = false;
@@ -10125,20 +10138,20 @@ if __name__ == '__main__':
             atMentionPopupFrame.Visible = false;
             lastUserQuery = prompt;
 
-            string cpId = null;
             if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
-            {
-                var cp = TimeTravelCheckpointManager.CreateDiskCheckpoint(activeTab.FilePath, activeTab.Content, "Pre-Prompt: " + prompt);
-                if (cp != null) cpId = cp.Id;
-            }
+                TimeTravelCheckpointManager.CreateDiskCheckpoint(activeTab.FilePath, activeTab.Content, "Pre-Prompt: " + prompt);
 
+            // Per-turn checkpoint: the message's Restore button undoes this turn and everything after it.
+            AgentTurnTracker turnTracker = BeginAgentTurnWin(prompt);
             if (agentFeedControl != null)
-                agentFeedControl.AddMessage(true, "You", "", prompt, null, null, cpId);
+                agentFeedControl.AddMessage(true, "You", "", prompt, null, null, turnTracker.TurnId);
 
             int vendorIdx = Math.Max(0, quickVendorCombo.SelectedIndex);
             ByokVendor vendor = aiEngine.Vendors[vendorIdx];
+            AgentTurnRequest turnReq = BuildAgentTurnRequestWin(prompt, currentAgentMode, vendor);
             if (!IsVendorConfigured(vendor))
             {
+                agentTrustWin.EndTurn(aiEngine, turnTracker);
                 if (agentFeedControl != null)
                     agentFeedControl.AddErrorCard("No AI provider configured", "No AI provider is configured for " + vendor.Name + ". Click 'Open AI Settings' to configure your API key or select a local Ollama endpoint.");
                 ShowToastNotification("No AI provider configured", "Configure an API key or local Ollama endpoint to use AI chat.", "Configure...", () => OpenByokConfigurationDialog());
@@ -10192,10 +10205,11 @@ if __name__ == '__main__':
                     attachedContextPills,
                     termLog
                 );
+                List<TurnFileChange> terminalChanges = await EndAgentTurnWin(turnTracker);
 
                 Action completeOnUi = () =>
                 {
-                    ApplyStagedTurnEdits(turn, prompt);
+                    PresentAgentTurnWin(turn, turnReq, turnTracker.TurnId, terminalChanges);
                     AppendTurnToChatAndTrace(turn, activeModelName);
                     if (turn.AssistantReply != null &&
                         (turn.AssistantReply.StartsWith("Vendor API Error", StringComparison.OrdinalIgnoreCase) ||
@@ -10224,6 +10238,7 @@ if __name__ == '__main__':
             finally
             {
                 aiEngine.OnStreamingChunk -= onChunk;
+                agentTrustWin.EndTurn(aiEngine, turnTracker); // no-op when already completed
                 Action cleanupOnUi = () =>
                 {
                     isAgentStreaming = false;
@@ -10306,17 +10321,10 @@ if __name__ == '__main__':
                 string filePath = kvp.Key;
                 string newContent = kvp.Value;
 
+                // New files are not created on disk before the user accepts them (they used to be written empty
+                // here); they are reviewed in the agent review panel and written on Accept.
                 if (!File.Exists(filePath))
-                {
-                    try
-                    {
-                        string dir = Path.GetDirectoryName(filePath);
-                        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                        File.WriteAllText(filePath, "");
-                        AfterExplorerFileOperation(filePath);
-                    }
-                    catch { }
-                }
+                    continue;
 
                 EditorTabBuffer tab = OpenFileInTab(filePath);
                 if (tab != null)
@@ -10573,22 +10581,8 @@ if __name__ == '__main__':
 
         private void OpenMultiHarnessArenaDialog()
         {
-            int vendorIdx = quickVendorCombo != null ? Math.Max(0, quickVendorCombo.SelectedIndex) : 0;
-            ByokVendor activeVendor = vendorIdx < aiEngine.Vendors.Count ? aiEngine.Vendors[vendorIdx] : aiEngine.Vendors[0];
-            if (!IsVendorConfigured(activeVendor))
-            {
-                ShowToastNotification("No AI provider configured", "Configure an API key or local Ollama endpoint before launching Multi-Harness Arena.", "Configure...", () => OpenByokConfigurationDialog());
-                return;
-            }
-            using (var dlg = new MultiHarnessArenaDialog(aiEngine, activeTab, activeVendor, activeTheme))
-            {
-                if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(dlg.WinningCodeToStage) && activeTab != null)
-                {
-                    TimeTravelCheckpointManager.CreateDiskCheckpoint(activeTab.FilePath, activeTab.Content, "Pre-Arena Winner: " + dlg.WinningHarnessLabel);
-                    editorControl.StageProposedContent(dlg.WinningCodeToStage, "[Arena Winner: " + dlg.WinningHarnessLabel + "]");
-                    RefreshTabStrip();
-                }
-            }
+            // Best-of-N across providers/models with verification (replaces the single-provider harness race).
+            OpenBestOfNDialogWin();
         }
 
         private void OpenArchitectureGraphDialog()
@@ -10653,6 +10647,7 @@ if __name__ == '__main__':
             if (ExecuteDevToolsCommand(cmdId)) return;
             if (ExecuteParityCommand(cmdId)) return;
             if (ExecuteEditorNicetyCommand(cmdId)) return;
+            if (ExecuteAgentTrustCommandWin(cmdId)) return;
             if (cmdId == "open_arena") OpenMultiHarnessArenaDialog();
             else if (cmdId == "open_arch_map") OpenArchitectureGraphDialog();
             else if (cmdId == "open_checkpoints") OpenTimeTravelCheckpointsDialog();
@@ -11595,6 +11590,7 @@ if __name__ == '__main__':
             rightDock.BackColor = theme.BgSidebar;
             multiFileChangesetBar.BackColor = UiTokens.WidgetBackground(theme);
             changesetSummaryLabel.ForeColor = theme.FgPrimary;
+            ApplyAgentReviewTheme();
             if (agentFeedControl != null) agentFeedControl.ApplyTheme(theme);
             if (atMentionPopupFrame != null) atMentionPopupFrame.BackColor = theme.AccentPrimary;
             if (atMentionList != null) atMentionList.ApplyTheme(theme);

@@ -2292,6 +2292,7 @@ namespace codeLess.AvaloniaApp
 
         private void HandleAgentDiffDecision(AvaloniaAgentFeedItem item, bool accepted)
         {
+            if (HandleAgentTrustDiffDecision(item, accepted)) { RefreshChangesetBanner(); return; }
             if (accepted)
                 PrimaryEditor.AcceptAllPendingDiffs();
             else
@@ -2535,6 +2536,7 @@ namespace codeLess.AvaloniaApp
             all.AddRange(BuildDevToolsPaletteCommands());
             all.AddRange(BuildParityPaletteCommands());
             all.AddRange(BuildTaskPaletteCommands());
+            all.AddRange(BuildAgentTrustPaletteCommands());
             return all;
         }
 
@@ -2627,44 +2629,9 @@ namespace codeLess.AvaloniaApp
 
         public void ShowMultiHarnessArenaModal()
         {
-            Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
-            Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
-            var stack = new StackPanel { Spacing = 10 };
-            stack.Children.Add(new TextBlock
-            {
-                Text = "⇄ Multi-Harness Arena — Side-by-Side Model Evaluation",
-                FontWeight = FontWeight.Bold,
-                FontSize = 13.5,
-                Foreground = new SolidColorBrush(textPrimary)
-            });
-            stack.Children.Add(new TextBlock
-            {
-                Text = "Compare two AI providers/models simultaneously on the same workspace task and verify both diffs against the test suite.",
-                FontSize = 12,
-                Foreground = new SolidColorBrush(textSecondary),
-                TextWrapping = TextWrapping.Wrap
-            });
-            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,12,*"), Margin = new Thickness(0, 6) };
-            grid.Children.Add(new Border
-            {
-                Padding = new Thickness(10),
-                CornerRadius = new CornerRadius(5),
-                BorderThickness = new Thickness(1),
-                BorderBrush = AvaloniaColorHelper.ToBrush(currentTheme.BorderSubtle),
-                Child = new TextBlock { Text = "Contender A: OpenAI • gpt-4o\nStatus: Ready", FontSize = 12, Foreground = new SolidColorBrush(textPrimary) }
-            });
-            var rightCard = new Border
-            {
-                Padding = new Thickness(10),
-                CornerRadius = new CornerRadius(5),
-                BorderThickness = new Thickness(1),
-                BorderBrush = AvaloniaColorHelper.ToBrush(currentTheme.BorderSubtle),
-                Child = new TextBlock { Text = "Contender B: Anthropic • claude-3-5-sonnet\nStatus: Ready", FontSize = 12, Foreground = new SolidColorBrush(textPrimary) }
-            };
-            Grid.SetColumn(rightCard, 2);
-            grid.Children.Add(rightCard);
-            stack.Children.Add(grid);
-            ModalHost.ShowModal("arena", "Multi-Harness Arena — codeLess", stack, 640);
+            // The old modal was a static mock-up ("Status: Ready" for two hard-coded models); the Arena now runs a real
+            // Best-of-N comparison with verification.
+            ShowBestOfNModal();
         }
 
         public void ShowAboutModal()
@@ -3148,12 +3115,13 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrWhiteSpace(prompt)) return "";
 
-            AgentFeed.AddMessage(new AvaloniaAgentFeedItem
+            var userItem = new AvaloniaAgentFeedItem
             {
                 Role = "user",
                 Content = prompt,
                 Timestamp = DateTime.Now
-            });
+            };
+            AgentFeed.AddMessage(userItem);
 
             var preferredVendor = aiEngine.Vendors.FirstOrDefault(v =>
                 string.Equals(v.Name, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase) ||
@@ -3173,10 +3141,22 @@ namespace codeLess.AvaloniaApp
             string wsSnapshot = workspaceRoot;
             var filesSnapshot = workspaceFiles.ToList();
             string termText = activeTerminalSession?.Control?.GetVisibleScreenText() ?? "";
-            var loopTask = Task.Run(() =>
+            var turnRequest = BuildAgentTurnRequest(prompt, mode, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText);
+            // Per-turn checkpoint: files changed by the turn's terminal commands are detected and recorded.
+            var tracker = agentTrust.BeginTurn(aiEngine, wsSnapshot, prompt);
+            userItem.TurnId = tracker.TurnId; // the message's Restore button undoes back to this turn
+            List<TurnFileChange> terminalChanges = null;
+            var loopTask = Task.Run(async () =>
             {
-                EnsureWorkspaceIndexed(); // lazy index: built on first AI use, off the UI thread
-                return aiEngine.RunAutonomousAgentLoopAsync(mode, prompt, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText);
+                try
+                {
+                    EnsureWorkspaceIndexed(); // lazy index: built on first AI use, off the UI thread
+                    return await aiEngine.RunAutonomousAgentLoopAsync(mode, prompt, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText).ConfigureAwait(false);
+                }
+                finally
+                {
+                    terminalChanges = agentTrust.EndTurn(aiEngine, tracker);
+                }
             });
             var turnResult = AvaloniaTerminalEmulatorControl.IsDesktopRuntime
                 ? await loopTask
@@ -3205,36 +3185,7 @@ namespace codeLess.AvaloniaApp
                 Content = turnResult.AssistantReply ?? ""
             });
 
-            if (turnResult.StagedFileContents != null && turnResult.StagedFileContents.Count > 0)
-            {
-                foreach (var kv in turnResult.StagedFileContents)
-                {
-                    if (activeTab != null && (string.IsNullOrEmpty(activeTab.FilePath) ||
-                        (!string.IsNullOrEmpty(kv.Key) && string.Equals(Path.GetFullPath(activeTab.FilePath), Path.GetFullPath(kv.Key), StringComparison.OrdinalIgnoreCase))))
-                    {
-                        PrimaryEditor.StageProposedDiffContent(kv.Value);
-                        RefreshChangesetBanner();
-                    }
-
-                    AgentFeed.AddMessage(new AvaloniaAgentFeedItem
-                    {
-                        Role = "diff_review",
-                        DiffFilePath = kv.Key,
-                        DiffAddedLines = Math.Max(1, activeTab?.ProposedNewLines?.Count ?? 1),
-                        DiffRemovedLines = Math.Max(1, activeTab?.RemovedLineHistory?.Values.Sum(v => v.Count) ?? 1),
-                        DiffStatus = "Pending",
-                        DiffPreviewText = kv.Value
-                    });
-                }
-            }
-            else
-            {
-                AgentFeed.AddMessage(new AvaloniaAgentFeedItem
-                {
-                    Role = "system",
-                    Content = $"Completed in {turnResult.ElapsedMs} ms"
-                });
-            }
+            await PresentAgentTurnAsync(turnResult, turnRequest, tracker.TurnId, terminalChanges);
 
             return turnResult.AssistantReply ?? "";
         }

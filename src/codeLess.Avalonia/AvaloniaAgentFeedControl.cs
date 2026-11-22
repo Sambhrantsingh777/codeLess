@@ -29,6 +29,17 @@ namespace codeLess.AvaloniaApp
         public string DiffStatus { get; set; } = "Pending"; // "Pending", "Accepted", "Rejected"
         public string ModelBadge { get; set; } = "";
         public DateTime Timestamp { get; set; } = DateTime.Now;
+
+        // Agent trust cards ("verification", "turn_checkpoint", "bestofn", "diff_review" backed by a change set).
+        public AgentChangeSet ChangeSet { get; set; }
+        public AgentChangeSetFile ChangeFile { get; set; }
+        public VerificationResult Verification { get; set; }
+        public bool IsRunning { get; set; }
+        public string ProgressText { get; set; } = "";
+        public List<string> ProgressLog { get; set; } = new List<string>();
+        public string TurnId { get; set; } = "";
+        public BestOfNRun BestOfN { get; set; }
+        public bool DetailsExpanded { get; set; }
     }
 
     public class AvaloniaAgentFeedControl : Grid
@@ -44,6 +55,8 @@ namespace codeLess.AvaloniaApp
         public event Action<AvaloniaAgentFeedItem, int> RestoreCheckpointRequested;
         public event Action<string> QuickPromptClicked;
         public event Action OpenSettingsRequested;
+        /// <summary>Renders agent-trust cards (MainWindow.AgentTrust.cs); null = default rendering.</summary>
+        public Func<AvaloniaAgentFeedItem, Control> CustomCardBuilder;
 
         public AvaloniaAgentFeedControl()
         {
@@ -164,6 +177,12 @@ namespace codeLess.AvaloniaApp
             {
                 var item = Items[idx];
                 int capturedIdx = idx;
+                Control custom = CustomCardBuilder?.Invoke(item);
+                if (custom != null)
+                {
+                    cardsStack.Children.Add(custom);
+                    continue;
+                }
 
                 if (string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase))
                 {
