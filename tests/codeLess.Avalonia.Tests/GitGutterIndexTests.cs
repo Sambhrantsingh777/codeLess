@@ -67,6 +67,34 @@ namespace codeLess.Avalonia.Tests
         }
     }
 
+    /// <summary>QA #10: the same merge-conflict / staging context-menu entries on both editors.</summary>
+    public class EditorScmContextItemsTests
+    {
+        [Fact]
+        public void ConflictUnderCaret_And_ChangesVsIndex_DecideTheEntries()
+        {
+            var conflict = new EditorTabBuffer { FilePath = "/r/a.txt", Content = "x\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> other\ny\n" };
+            conflict.SyncLinesFromContent();
+            conflict.CursorLine = 2;
+            var ids = EditorScmContextItems.Build(conflict).Where(e => !e.IsSeparator).Select(e => e.CommandId).ToList();
+            Assert.Equal(new[] { "par_accept_current", "par_accept_incoming", "par_accept_both", "par_compare" }, ids);
+            conflict.CursorLine = 0;
+            Assert.Empty(EditorScmContextItems.Build(conflict).Where(e => !e.IsSeparator));
+
+            var changed = new EditorTabBuffer { FilePath = "/r/b.txt", Content = "a\nB\n", SavedContent = "a\nB\n", GitHeadContent = "a\nb\n" };
+            changed.SyncLinesFromContent();
+            changed.RefreshGutterDiff();
+            ids = EditorScmContextItems.Build(changed).Where(e => !e.IsSeparator).Select(e => e.CommandId).ToList();
+            Assert.Equal(new[] { "par_stage_change", "par_stage_ranges", "par_revert_change" }, ids);
+
+            // Not in a repository (no index baseline): unsaved edits are not "changes" to stage.
+            var plain = new EditorTabBuffer { FilePath = "/tmp/c.txt", Content = "new\n", SavedContent = "old\n" };
+            plain.SyncLinesFromContent();
+            plain.RefreshGutterDiff();
+            Assert.Empty(EditorScmContextItems.Build(plain));
+        }
+    }
+
     [Collection("SequentialWorkbench")]
     public class GitGutterIndexHeadlessTests : IDisposable
     {

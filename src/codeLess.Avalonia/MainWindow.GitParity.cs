@@ -1152,23 +1152,29 @@ namespace codeLess.AvaloniaApp
         /// <summary>Editor context-menu items added when they apply (conflict under the caret, file in a repo).</summary>
         private List<object> BuildParityEditorContextItems(EditorTabBuffer tab)
         {
+            // Same entries as the Windows editor (EditorScmContextItems, shared).
             var items = new List<object>();
-            if (tab == null) return items;
-            if (GitConflictParser.BlockAt(ConflictDecorations.Blocks(tab), tab.CursorLine) != null)
+            foreach (var entry in EditorScmContextItems.Build(tab))
             {
-                items.Add(MakeCtxItem("Accept Current Change", () => AcceptConflictAtCursor(ConflictResolution.Current)));
-                items.Add(MakeCtxItem("Accept Incoming Change", () => AcceptConflictAtCursor(ConflictResolution.Incoming)));
-                items.Add(MakeCtxItem("Accept Both Changes", () => AcceptConflictAtCursor(ConflictResolution.Both)));
-                items.Add(MakeCtxItem("Compare Changes", () => CompareConflictAt(tab, tab.CursorLine)));
-                items.Add(new Separator());
-            }
-            if (!string.IsNullOrEmpty(tab.FilePath) && tab.ChangedLineCount > 0)
-            {
-                items.Add(MakeCtxItem("Stage Selected Ranges", StageSelectedRanges));
-                items.Add(MakeCtxItem("Revert Change at Cursor", RevertChangeAtCursor));
-                items.Add(new Separator());
+                if (entry.IsSeparator) { items.Add(new Separator()); continue; }
+                string id = entry.CommandId;
+                items.Add(MakeCtxItem(entry.Label, () => ExecuteScmContextCommand(tab, id)));
             }
             return items;
+        }
+
+        private void ExecuteScmContextCommand(EditorTabBuffer tab, string id)
+        {
+            switch (id)
+            {
+                case "par_accept_current": AcceptConflictAtCursor(ConflictResolution.Current); break;
+                case "par_accept_incoming": AcceptConflictAtCursor(ConflictResolution.Incoming); break;
+                case "par_accept_both": AcceptConflictAtCursor(ConflictResolution.Both); break;
+                case "par_compare": CompareConflictAt(tab, tab.CursorLine); break;
+                case "par_stage_change": StageChangeAt(tab, tab.CursorLine, tab.CursorLine, true); break;
+                case "par_stage_ranges": StageSelectedRanges(); break;
+                case "par_revert_change": RevertChangeAtCursor(); break;
+            }
         }
     }
 }

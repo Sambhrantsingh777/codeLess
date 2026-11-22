@@ -110,6 +110,9 @@ namespace codeLess.Studio
 
         // Events
         public event Action<EditorTabBuffer> OnSaveRequested;
+        /// <summary>Extra editor context-menu entries (merge conflicts, staging) and their command handler.</summary>
+        public Func<EditorTabBuffer, List<EditorContextEntry>> ContextEntriesProvider;
+        public Action<string> ContextCommandHandler;
         public event Action<EditorTabBuffer> OnRunFileRequested;
         public event Action<string, EditorTabBuffer> OnCtrlKRequested;
         public event Action<EditorTabBuffer> OnPinContextRequested;
@@ -3057,6 +3060,25 @@ namespace codeLess.Studio
             editorCtx.Opening += (s, e) =>
             {
                 EditorTabBuffer b = owner != null ? owner.CurrentBuffer : null;
+                // Merge-conflict / staging entries (shared EditorScmContextItems), rebuilt on every open.
+                for (int i = editorCtx.Items.Count - 1; i >= 0; i--)
+                    if (Equals(editorCtx.Items[i].Tag, "scm")) editorCtx.Items.RemoveAt(i);
+                if (owner != null && owner.ContextEntriesProvider != null && b != null)
+                {
+                    int at = 0;
+                    foreach (EditorContextEntry entry in owner.ContextEntriesProvider(b))
+                    {
+                        ToolStripItem item;
+                        if (entry.IsSeparator) item = new ToolStripSeparator();
+                        else
+                        {
+                            string id = entry.CommandId;
+                            item = CreateCanvasMenuItem(entry.Label, "", () => { if (owner.ContextCommandHandler != null) owner.ContextCommandHandler(id); });
+                        }
+                        item.Tag = "scm";
+                        editorCtx.Items.Insert(at++, item);
+                    }
+                }
                 bool hasSel = b != null && (b.HasSelection() || b.HasMultiCursors);
                 cutItem.Enabled = hasSel;
                 copyItem.Enabled = hasSel;

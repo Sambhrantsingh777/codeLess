@@ -3195,6 +3195,9 @@ if __name__ == '__main__':
             ctrl.OnSaveRequested += (buf) => SaveTabBufferUser(buf);
             // The editor's own Accept All / Reject All on an agent proposal = accept / reject that file (same as Avalonia).
             ctrl.OnDiffAllDecision += OnEditorDiffAllDecisionWin;
+            // Merge-conflict / staging entries in the editor context menu (QA #10, same entries as Avalonia).
+            ctrl.ContextEntriesProvider = b => ReferenceEquals(b, activeTab) ? EditorScmContextItems.Build(b) : new List<EditorContextEntry>(); // parity commands act on the active tab
+            ctrl.ContextCommandHandler = id => ExecuteParityCommand(id);
             ctrl.OnRunFileRequested += async (buf) => await ExecuteActiveFileInTerminalAsync(buf);
             ctrl.OnCtrlKRequested += async (inst, buf) => await HandleCtrlKInlineEditAsync(inst, buf);
             ctrl.OnPinContextRequested += (buf) => AddContextPill("@" + buf.FileName);
