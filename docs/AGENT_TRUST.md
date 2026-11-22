@@ -3,6 +3,23 @@
 Same behaviour on Windows (WinForms) and macOS/Linux (Avalonia); the logic lives in `src/codeLess.Core/Agent*.cs`.
 Nothing the agent proposes is written to your files until you accept it.
 
+## Reviewing proposals (both UIs)
+
+- **Inline review** (agent proposals opened in the editor, inline AI edits, code-block Apply): per-hunk **Accept** /
+  **Reject** and **Accept All** / **Reject All** in the editor. Hunks are always recomputed from the text the proposal
+  was compared with and the current buffer, so decisions compose in any order, **Reject** restores every removed line,
+  **Reject All** keeps hunks you already accepted, and your own edits during review are never lost. Rejects are undoable.
+- **One accept rule:** accepting puts the text in the editor. For an **agent change set** the accepted file is also
+  written to disk and recorded in the turn checkpoint (from the chat card, the review bar or the editor's Accept All);
+  per-hunk decisions only change the buffer until you save (the save is recorded too). Every **other inline proposal**
+  (inline AI edit, code-block Apply) stays in the buffer as an unsaved change, exactly like VS Code's inline chat:
+  Ctrl/Cmd+S or auto save writes it.
+- **Auto save never writes a proposal that is still under review**; it saves once you accept.
+- **Agent commands (`run_terminal`)** never write staged edits into your files: when the turn has staged edits, the
+  command runs in a temporary copy of the workspace with those edits applied (the same copy verification uses) and the
+  copy is deleted afterwards; files the command creates or changes in the copy are discarded (the model is told so).
+  Without staged edits the command runs in your workspace. One agent turn runs per chat at a time; Stop cancels it.
+
 ## Verification gate
 
 Setting: **Off** (default) / **Verify** / **Verify + Auto-Repair** — chat composer chip (Avalonia), Help ▸ Agent

@@ -338,6 +338,7 @@ namespace codeLess.Studio
         private void ReloadTabFromDiskWin(EditorTabBuffer tab)
         {
             if (tab == null || tab.IsDirty || string.IsNullOrEmpty(tab.FilePath)) return;
+            if (AutoSavePolicy.IsUnderReview(tab)) return; // an inline proposal is being reviewed against this text
             if (!File.Exists(tab.FilePath)) { tab.IsDeletedOnDisk = true; RefreshTabStrip(); return; }
             try
             {
