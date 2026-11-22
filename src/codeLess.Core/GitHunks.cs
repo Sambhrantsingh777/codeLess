@@ -374,26 +374,88 @@ namespace codeLess.Studio
     /// <summary>Index-level operations for hunks (runs git; call from a background thread).</summary>
     public static class GitHunkStaging
     {
-        /// <summary>Raw index content of a file (null when the file is not in the index, e.g. untracked).</summary>
+        private static readonly Dictionary<string, Encoding> blobEncodings = new Dictionary<string, Encoding>(StringComparer.Ordinal);
+
+        private static string EncKey(string repo, string rel) { return LspText.PathKey(repo ?? "") + "|" + (rel ?? ""); }
+
+        /// <summary>Encoding detected for the file's last index / HEAD read (UTF-8 when unknown): patches are written in it.</summary>
+        public static Encoding EncodingFor(string repo, string repoRelPath)
+        {
+            lock (blobEncodings)
+            {
+                Encoding e;
+                return blobEncodings.TryGetValue(EncKey(repo, repoRelPath), out e) ? e : new UTF8Encoding(false);
+            }
+        }
+
+        /// <summary>Decodes a blob with the editor's lossless detection (BOM / strict UTF-8 / Latin-1-ANSI) and remembers the encoding.</summary>
+        private static string DecodeBlob(string repo, string repoRelPath, byte[] bytes)
+        {
+            bool bom;
+            int bomLen;
+            Encoding enc = EditorTabBuffer.DetectFileEncoding(bytes, out bom, out bomLen);
+            lock (blobEncodings) { blobEncodings[EncKey(repo, repoRelPath)] = enc; }
+            return enc.GetString(bytes, bomLen, bytes.Length - bomLen);
+        }
+
+        /// <summary>Raw index content of a file (null when the file is not in the index, e.g. untracked). Decoded byte-exactly.</summary>
         public static string ReadIndexContent(string repo, string repoRelPath, out bool isBinary)
         {
             isBinary = false;
-            GitCommandResult r = GitProcess.Run(repo, new string[] { "show", ":" + repoRelPath }, 20000, CancellationToken.None, null, null);
-            if (!r.Success) return null;
-            if (r.Stdout.IndexOf('\0') >= 0) { isBinary = true; return null; }
-            return r.Stdout;
+            byte[] b = GitProcess.RunBytes(repo, new string[] { "cat-file", "blob", ":" + repoRelPath }, 20000);
+            if (b == null) return null;
+            int probe = Math.Min(b.Length, 8000);
+            bool utf16 = b.Length >= 2 && ((b[0] == 0xFF && b[1] == 0xFE) || (b[0] == 0xFE && b[1] == 0xFF));
+            if (!utf16) for (int i = 0; i < probe; i++) if (b[i] == 0) { isBinary = true; return null; }
+            return DecodeBlob(repo, repoRelPath, b);
         }
 
-        /// <summary>Applies a patch to the index only ("git apply --cached").</summary>
+        /// <summary>
+        /// True when git runs a filter (git-lfs, git-crypt, ...) for this path: the index holds the filtered form (an LFS
+        /// pointer), so a hunk computed against the working text can't be applied to it.
+        /// </summary>
+        public static bool IsFilteredPath(string repo, string repoRelPath)
+        {
+            GitCommandResult r = GitProcess.Run(repo, new string[] { "check-attr", "filter", "--", repoRelPath }, 10000, CancellationToken.None, null, null);
+            if (!r.Success) return false;
+            string o = r.Stdout.Trim();
+            int i = o.LastIndexOf(": ", StringComparison.Ordinal);
+            string v = i >= 0 ? o.Substring(i + 2).Trim() : "";
+            return v.Length > 0 && v != "unspecified" && v != "unset";
+        }
+
+        private static GitOperationResult Refuse(string message)
+        {
+            GitOperationResult res = new GitOperationResult();
+            res.Error = GitErrorKind.Other;
+            res.Message = message;
+            return res;
+        }
+
+        /// <summary>Applies a patch to the index only ("git apply --cached"), encoded like the file (UTF-8 by default).</summary>
         public static GitCommandResult ApplyToIndex(string repo, string patch, bool reverse)
+        {
+            return ApplyToIndex(repo, patch, reverse, new UTF8Encoding(false), false);
+        }
+
+        private static GitCommandResult ApplyToIndex(string repo, string patch, bool reverse, Encoding enc, bool zeroContext)
         {
             List<string> args = new List<string>();
             args.Add("apply");
             args.Add("--cached");
-            args.Add("--whitespace=nowarn");
             if (reverse) args.Add("--reverse");
+            if (zeroContext) args.Add("--unidiff-zero");
+            args.Add("--whitespace=nowarn");
             args.Add("-");
-            return GitProcess.Run(repo, args.ToArray(), 30000, CancellationToken.None, patch, null);
+            byte[] bytes;
+            try { bytes = EditorTabBuffer.EncodeTextStrict(patch, enc, false); }
+            catch (EncoderFallbackException)
+            {
+                GitCommandResult bad = new GitCommandResult();
+                bad.StartError = "The change contains characters that can't be stored in the file's encoding (" + enc.WebName + ").";
+                return bad;
+            }
+            return GitProcess.RunWithStdinBytes(repo, args.ToArray(), 30000, CancellationToken.None, bytes, null);
         }
 
         /// <summary>
@@ -408,15 +470,17 @@ namespace codeLess.Studio
                 none.Message = "Nothing to stage here.";
                 return none;
             }
+            if (IsFilteredPath(repo, repoRelPath)) return Refuse("Can't stage parts of a file that git filters (e.g. Git LFS); stage the whole file instead.");
+            Encoding enc = EncodingFor(repo, repoRelPath);
             bool crlf = (indexContent ?? "").IndexOf("\r\n", StringComparison.Ordinal) >= 0;
             string[] oldLines = GitHunkDiff.SplitForDiff(indexContent);
             string patch = GitHunkDiff.BuildPatch(repoRelPath, oldLines, hunks, 3, crlf);
-            GitCommandResult r = ApplyToIndex(repo, patch, false);
-            if (!r.Success)
+            GitCommandResult r = ApplyToIndex(repo, patch, false, enc, false);
+            if (!r.Success && string.IsNullOrEmpty(r.StartError))
             {
                 // Retry without context (handles whitespace-only context drift).
                 string patch0 = GitHunkDiff.BuildPatch(repoRelPath, oldLines, hunks, 0, crlf);
-                GitCommandResult r0 = GitProcess.Run(repo, new string[] { "apply", "--cached", "--unidiff-zero", "--whitespace=nowarn", "-" }, 30000, CancellationToken.None, patch0, null);
+                GitCommandResult r0 = ApplyToIndex(repo, patch0, false, enc, true);
                 if (r0.Success) r = r0;
             }
             return GitErrorClassifier.ToResult(r, "Stage", hunks.Count == 1 ? "Staged change (" + hunks[0].Summary + ")." : "Staged " + hunks.Count.ToString(CultureInfo.InvariantCulture) + " changes.");
@@ -442,16 +506,18 @@ namespace codeLess.Studio
         /// <summary>"Unstage Change": reverse-applies one HEAD-to-index hunk to the index.</summary>
         public static GitOperationResult UnstageHunk(string repo, string repoRelPath, string headContent, string indexContent, GitDiffHunk h)
         {
+            if (IsFilteredPath(repo, repoRelPath)) return Refuse("Can't unstage parts of a file that git filters (e.g. Git LFS); unstage the whole file instead.");
+            Encoding enc = EncodingFor(repo, repoRelPath);
             bool crlf = (indexContent ?? "").IndexOf("\r\n", StringComparison.Ordinal) >= 0;
             string[] headLines = GitHunkDiff.SplitForDiff(headContent ?? "");
             List<GitDiffHunk> one = new List<GitDiffHunk>();
             one.Add(h);
             string patch = GitHunkDiff.BuildPatch(repoRelPath, headLines, one, 3, crlf, true);
-            GitCommandResult r = ApplyToIndex(repo, patch, true);
-            if (!r.Success)
+            GitCommandResult r = ApplyToIndex(repo, patch, true, enc, false);
+            if (!r.Success && string.IsNullOrEmpty(r.StartError))
             {
                 string patch0 = GitHunkDiff.BuildPatch(repoRelPath, headLines, one, 0, crlf, true);
-                GitCommandResult r0 = GitProcess.Run(repo, new string[] { "apply", "--cached", "--reverse", "--unidiff-zero", "--whitespace=nowarn", "-" }, 30000, CancellationToken.None, patch0, null);
+                GitCommandResult r0 = ApplyToIndex(repo, patch0, true, enc, true);
                 if (r0.Success) r = r0;
             }
             return GitErrorClassifier.ToResult(r, "Unstage", "Unstaged change (" + h.Summary + ").");
@@ -460,8 +526,12 @@ namespace codeLess.Studio
         /// <summary>HEAD content of a file ("" when it does not exist in HEAD, e.g. a newly added file).</summary>
         public static string ReadHeadContent(string repo, string repoRelPath)
         {
-            GitCommandResult r = GitProcess.Run(repo, new string[] { "show", "HEAD:" + repoRelPath }, 20000, CancellationToken.None, null, null);
-            return r.Success ? r.Stdout : "";
+            byte[] b = GitProcess.RunBytes(repo, new string[] { "cat-file", "blob", "HEAD:" + repoRelPath }, 20000);
+            if (b == null) return "";
+            bool bom;
+            int bomLen;
+            Encoding enc = EditorTabBuffer.DetectFileEncoding(b, out bom, out bomLen);
+            return enc.GetString(b, bomLen, b.Length - bomLen);
         }
 
         /// <summary>

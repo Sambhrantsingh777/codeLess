@@ -661,6 +661,15 @@ namespace codeLess.AvaloniaApp
             Canvas.InvalidateVisual();
         }
 
+        /// <summary>The find regex (same pattern/options as <see cref="RecomputeFindMatches"/>) used to expand $1 in replacements.</summary>
+        private Regex BuildFindRegexForReplace()
+        {
+            string q = findInputBox.Text ?? "";
+            if (q.Length == 0 || !findUseRegex) return null;
+            try { return new Regex(q, findMatchCase ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2)); }
+            catch { return null; }
+        }
+
         public void FindNext(int step = 1)
         {
             if (FindMatches.Count == 0) RecomputeFindMatches();
@@ -691,9 +700,10 @@ namespace codeLess.AvaloniaApp
             var m = FindMatches[activeFindMatchIndex];
             CurrentBuffer.PushUndoSnapshot();
             string line = CurrentBuffer.Lines[m.Line];
-            CurrentBuffer.Lines[m.Line] = line.Substring(0, m.StartCol) + rep + line.Substring(m.StartCol + m.Length);
+            string expanded = WorkspaceSearchEngine.ExpandReplacementAt(line, BuildFindRegexForReplace(), m.StartCol, m.Length, rep, findUseRegex);
+            CurrentBuffer.Lines[m.Line] = line.Substring(0, m.StartCol) + expanded + line.Substring(m.StartCol + m.Length);
             CurrentBuffer.CursorLine = m.Line;
-            CurrentBuffer.CursorCol = m.StartCol + rep.Length;
+            CurrentBuffer.CursorCol = m.StartCol + expanded.Length;
             CurrentBuffer.ClearSelection();
             CurrentBuffer.SyncContentFromLines();
             CurrentBuffer.IsDirty = true;
@@ -713,6 +723,7 @@ namespace codeLess.AvaloniaApp
             string rep = replacement ?? (replaceInputBox.Text ?? "");
             int count = FindMatches.Count;
             CurrentBuffer.PushUndoSnapshot();
+            Regex repRx = findUseRegex ? BuildFindRegexForReplace() : null;
 
             for (int i = FindMatches.Count - 1; i >= 0; i--)
             {
@@ -720,7 +731,9 @@ namespace codeLess.AvaloniaApp
                 string line = CurrentBuffer.Lines[m.Line];
                 if (m.StartCol >= 0 && m.StartCol + m.Length <= line.Length)
                 {
-                    CurrentBuffer.Lines[m.Line] = line.Substring(0, m.StartCol) + rep + line.Substring(m.StartCol + m.Length);
+                    // Expand $1 / $& against the original line (matches are applied right-to-left, so earlier columns are untouched).
+                    string expanded = WorkspaceSearchEngine.ExpandReplacementAt(line, repRx, m.StartCol, m.Length, rep, findUseRegex);
+                    CurrentBuffer.Lines[m.Line] = line.Substring(0, m.StartCol) + expanded + line.Substring(m.StartCol + m.Length);
                 }
             }
             CurrentBuffer.ClearSelection();

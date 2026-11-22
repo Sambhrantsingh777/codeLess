@@ -46,7 +46,7 @@ namespace codeLess.Avalonia.Tests
             Init();
             string d = Path.Combine(Path.GetTempPath(), "cl-at-" + prefix + "-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(d);
-            return Path.GetFullPath(d);
+            return TestTrust.Trust(Path.GetFullPath(d)); // verification / git / terminal copies need a trusted folder
         }
 
         public static string Git(string dir, params string[] args)
@@ -118,19 +118,21 @@ namespace codeLess.Avalonia.Tests
                 string overlayRoot = ov.OverlayRoot;
                 try
                 {
-                    Assert.Equal("git-worktree", ov.Strategy);
+                    Assert.Equal("git-clone", ov.Strategy);
                     Assert.Equal("staged a\n", File.ReadAllText(Path.Combine(ov.OverlayWorkspace, "a.txt")));
                     Assert.Equal("untracked b\n", File.ReadAllText(Path.Combine(ov.OverlayWorkspace, "b.txt")));
                     Assert.False(File.Exists(Path.Combine(ov.OverlayWorkspace, "c.txt")));
                     Assert.Equal("brand new\n", File.ReadAllText(Path.Combine(ov.OverlayWorkspace, "src", "new.txt")));
                     string nm = Path.Combine(ov.OverlayWorkspace, "node_modules");
-                    Assert.True(VerificationOverlay.IsLink(nm));
                     Assert.True(File.Exists(Path.Combine(nm, "left-pad", "index.js")));
-                    Assert.Contains("node_modules", ov.LinkedFolders);
+                    // APFS / reflink: a private copy-on-write clone; elsewhere a shared link that is reported as such.
+                    if (ov.ClonedFolders.Contains("node_modules")) Assert.False(VerificationOverlay.IsLink(nm));
+                    else { Assert.True(VerificationOverlay.IsLink(nm)); Assert.Contains("node_modules", ov.SharedFolders); }
                     // The user's files are untouched.
                     Assert.Equal("uncommitted a\n", File.ReadAllText(Path.Combine(ws, "a.txt")));
                     Assert.False(File.Exists(Path.Combine(ws, "src", "new.txt")));
-                    Assert.Contains(Path.GetFileName(overlayRoot), AgentTrustTestEnv.Git(ws, "worktree", "list", "--porcelain"));
+                    // A private clone: nothing is registered in the user's repository.
+                    Assert.DoesNotContain(Path.GetFileName(overlayRoot), AgentTrustTestEnv.Git(ws, "worktree", "list", "--porcelain"));
                     Assert.Equal(Path.Combine(ws, "a.txt"), ov.MapToWorkspace(Path.Combine(ov.OverlayWorkspace, "a.txt")));
                 }
                 finally
@@ -420,7 +422,7 @@ namespace codeLess.Avalonia.Tests
                 var session = new List<string>();
                 var pass = verifier.Verify(ws, staged, session, CancellationToken.None, null);
                 Assert.Equal(VerificationStatus.Passed, pass.Status);
-                Assert.Equal("git-worktree", pass.Strategy);
+                Assert.Equal("git-clone", pass.Strategy);
                 Assert.Equal(".codeless/verify", pass.Source);
                 var fail = verifier.Verify(ws, new Dictionary<string, string> { { Path.Combine(ws, "a.txt"), "still broken\n" } }, session, CancellationToken.None, null);
                 Assert.Equal(VerificationStatus.Failed, fail.Status);

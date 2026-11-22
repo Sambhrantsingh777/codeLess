@@ -362,8 +362,7 @@ namespace codeLess.AvaloniaApp
                 lock (remoteImageCache) remoteImageCache.TryGetValue(img.Url, out cached);
                 if (cached != null) return MakeImage(cached, img);
                 string reason;
-                NetworkRequestScope scope;
-                if (!NetworkLedger.TryBegin(NetworkFeature, "GET", img.Url, out scope, out reason))
+                if (!NetworkLedger.Check(NetworkFeature, "GET", img.Url, out reason))
                 {
                     ((TextBlock)placeholder.Child).Text = "🖼 " + (string.IsNullOrEmpty(img.Text) ? "image" : img.Text) + " (remote image not loaded: Offline Mode)";
                     return placeholder;
@@ -374,19 +373,8 @@ namespace codeLess.AvaloniaApp
                 string url = img.Url;
                 Task.Run(async () =>
                 {
-                    byte[] data = null;
-                    try
-                    {
-                        using (var hc = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
-                        using (var resp = await hc.GetAsync(url).ConfigureAwait(false))
-                        {
-                            scope.Status = (int)resp.StatusCode;
-                            if (resp.IsSuccessStatusCode) data = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                            if (data != null) scope.AddReceived(data.Length);
-                        }
-                        scope.Complete();
-                    }
-                    catch (Exception ex) { scope.Fail(ex); }
+                    // Every redirect hop is checked against Offline Mode and recorded in the Network ledger.
+                    byte[] data = await Task.Run(() => LedgerHttp.DownloadBytes(NetworkFeature, url, 15000, 20 * 1024 * 1024)).ConfigureAwait(false);
                     if (data == null || data.Length > 20 * 1024 * 1024) return;
                     ui.Post(() =>
                     {

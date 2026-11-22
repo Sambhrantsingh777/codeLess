@@ -379,20 +379,16 @@ main();
             Dictionary<string, object> pkg = pkgPath != null ? ParseJsoncObject(File.ReadAllText(pkgPath)) : null;
             if (pkg == null) { LogHost("No valid package.json in " + dir); return null; }
             string id = JStr(pkg, "publisher", "local") + "." + JStr(pkg, "name", Path.GetFileName(dir));
-            string targetSub = Path.Combine(extensionsRootDir, id + "-" + JStr(pkg, "version", "1.0.0"));
+            // name / version come from an untrusted package.json: sanitize like InstallVsix and verify containment, so a
+            // version such as "1/../../x" can't make the copy land outside the extensions folder.
+            string targetSub = SafeExtensionFolder(extensionsRootDir, id, JStr(pkg, "version", "1.0.0"));
+            if (targetSub == null) { LogHost("Refusing to load " + dir + ": invalid extension name or version in package.json."); return null; }
             try
             {
                 if (!string.Equals(Path.GetFullPath(dir).TrimEnd('\\', '/'), Path.GetFullPath(targetSub).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
                 {
                     RemoveInstalledCopies(id, workbenchThemes);
-                    foreach (string f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
-                    {
-                        string rel = f.Substring(dir.TrimEnd('\\', '/').Length).TrimStart('\\', '/');
-                        string dest = Path.Combine(targetSub, rel);
-                        string destFolder = Path.GetDirectoryName(dest);
-                        if (!Directory.Exists(destFolder)) Directory.CreateDirectory(destFolder);
-                        File.Copy(f, dest, true);
-                    }
+                    CopyPluginTree(dir, targetSub, 0);
                 }
             }
             catch (Exception ex) { LogHost("Loading " + dir + " failed: " + ex.Message); }
@@ -639,7 +635,13 @@ main();
                 }
                 string id = JStr(pkg, "publisher", "local") + "." + JStr(pkg, "name", Path.GetFileNameWithoutExtension(vsixPath));
                 string ver = JStr(pkg, "version", "1.0.0");
-                string target = Path.Combine(extensionsRootDir, Regex.Replace(id + "-" + ver, @"[^A-Za-z0-9._-]+", "_"));
+                string target = SafeExtensionFolder(extensionsRootDir, id, ver);
+                if (target == null)
+                {
+                    statusMessage = "'" + Path.GetFileName(vsixPath) + "' has an invalid extension name or version.";
+                    LogHost(statusMessage);
+                    return null;
+                }
                 RemoveInstalledCopies(id, workbenchThemes);
                 if (Directory.Exists(target)) Directory.Delete(target, true);
                 Directory.Move(staging, target);
@@ -664,6 +666,45 @@ main();
         }
 
         /// <summary>Removes every installed copy (any version) of an extension and its themes / snippets.</summary>
+        /// <summary>
+        /// Folder for an extension inside <paramref name="root"/>: "publisher.name-version" with every character outside
+        /// [A-Za-z0-9._-] replaced, never starting with '.', and verified (full path) to be a direct child of the root.
+        /// Returns null when no safe folder name can be built.
+        /// </summary>
+        public static string SafeExtensionFolder(string root, string id, string version)
+        {
+            if (string.IsNullOrEmpty(root)) return null;
+            string name = Regex.Replace((id ?? "") + "-" + (version ?? ""), @"[^A-Za-z0-9._-]+", "_").Trim('.');
+            if (name.Length == 0 || name.StartsWith(".", StringComparison.Ordinal)) return null;
+            if (name.Length > 200) name = name.Substring(0, 200);
+            try
+            {
+                string fullRoot = Path.GetFullPath(root).TrimEnd('\\', '/');
+                string full = Path.GetFullPath(Path.Combine(fullRoot, name));
+                string parent = Path.GetDirectoryName(full);
+                if (parent == null || !string.Equals(parent.TrimEnd('\\', '/'), fullRoot, StringComparison.OrdinalIgnoreCase)) return null;
+                return full;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Copies a plugin folder; symlinks / junctions are skipped (no escaping the folder, no loops), depth is bounded.</summary>
+        private static void CopyPluginTree(string src, string dst, int depth)
+        {
+            if (depth > 32) return;
+            Directory.CreateDirectory(dst);
+            foreach (string f in Directory.GetFiles(src))
+            {
+                try { if (LlmHarnessAndAgentEngine.IsSymlinkOrJunction(f, File.GetAttributes(f))) continue; } catch { continue; }
+                File.Copy(f, Path.Combine(dst, Path.GetFileName(f)), true);
+            }
+            foreach (string d in Directory.GetDirectories(src))
+            {
+                try { if (LlmHarnessAndAgentEngine.IsSymlinkOrJunction(d, File.GetAttributes(d))) continue; } catch { continue; }
+                CopyPluginTree(d, Path.Combine(dst, Path.GetFileName(d)), depth + 1);
+            }
+        }
+
         private void RemoveInstalledCopies(string id, List<StudioTheme> workbenchThemes)
         {
             VsixExtensionPackage loaded = Extensions.FirstOrDefault(x => x.Id.Equals(id, StringComparison.OrdinalIgnoreCase) && x.IsInstalled && !string.IsNullOrEmpty(x.InstallPath));

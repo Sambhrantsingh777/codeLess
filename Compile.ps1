@@ -160,6 +160,7 @@ $sourceFiles = @(
     "src\LargeFileViewerWinForms.cs",
     "src\CodeLessMainForm.Smoke.cs",
     "src\CodeLessMainForm.AgentTrust.cs",
+    "src\WorkspaceTrustWinForms.cs",
     "src\CodeLessMainForm.cs"
 )
 

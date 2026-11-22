@@ -166,6 +166,8 @@ namespace codeLess.Studio
         /// <summary>Files changed on disk since the proposal (not written unless overwrite was requested).</summary>
         public readonly List<string> Conflicts = new List<string>();
         public readonly List<string> Errors = new List<string>();
+        /// <summary>Informational notes (e.g. a Latin-1 file saved as UTF-8 so the proposal's characters aren't lost).</summary>
+        public readonly List<string> Notes = new List<string>();
     }
 
     /// <summary>Writes accepted proposals to disk (encoding / line endings preserved) and records them in the turn checkpoint.</summary>
@@ -188,6 +190,17 @@ namespace codeLess.Studio
         /// </summary>
         public static void WriteTextLikeExisting(string path, string text)
         {
+            string note;
+            WriteTextLikeExisting(path, text, out note);
+        }
+
+        /// <summary>
+        /// <see cref="WriteTextLikeExisting(string, string)"/>; <paramref name="note"/> is set when the existing file's legacy
+        /// encoding couldn't represent the text and it was written as UTF-8 instead (nothing is replaced by '?').
+        /// </summary>
+        public static void WriteTextLikeExisting(string path, string text, out string note)
+        {
+            note = null;
             string dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
             string raw = text ?? "";
@@ -199,6 +212,14 @@ namespace codeLess.Studio
                 {
                     eol = raw.Contains("\r\n") ? "\r\n" : "\n";
                     finalNl = raw.EndsWith("\n");
+                }
+                Encoding before = enc;
+                string norm0 = (raw ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+                if (!EditorTabBuffer.CanEncodeLosslessly(norm0, enc) && !(enc is UTF8Encoding) && !(enc is UnicodeEncoding) && !(enc is UTF32Encoding))
+                {
+                    enc = new UTF8Encoding(false);
+                    bom = false;
+                    note = Path.GetFileName(path) + " was saved as UTF-8 (it was " + before.WebName + ", which can't hold some of the new characters).";
                 }
                 EditorTabBuffer.WriteFilePreservingMetadata(path, raw, enc, bom, eol, finalNl);
                 return;
@@ -219,7 +240,9 @@ namespace codeLess.Studio
             foreach (AgentChangeSetFile f in files.ToList())
             {
                 if (!f.IsPending) continue;
-                if (!LlmHarnessAndAgentEngine.IsPathInsideWorkspace(cs.WorkspaceRoot, f.FullPath))
+                // Symlink-aware check at write time too: a link created inside the workspace after the proposal was staged
+                // (e.g. by an approved terminal command) must not redirect the write outside it.
+                if (!LlmHarnessAndAgentEngine.IsPathInsideWorkspaceStrict(cs.WorkspaceRoot, f.FullPath))
                 {
                     res.Errors.Add(f.RelativePath + ": outside the workspace");
                     continue;
@@ -233,7 +256,9 @@ namespace codeLess.Studio
                 try
                 {
                     byte[] pre = File.Exists(f.FullPath) ? File.ReadAllBytes(f.FullPath) : null;
-                    WriteTextLikeExisting(f.FullPath, f.ProposedText);
+                    string note;
+                    WriteTextLikeExisting(f.FullPath, f.ProposedText, out note);
+                    if (note != null) res.Notes.Add(note);
                     byte[] post = File.ReadAllBytes(f.FullPath);
                     f.Status = "Accepted";
                     res.Written.Add(f.FullPath);

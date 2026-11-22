@@ -62,6 +62,9 @@ namespace codeLess.Studio
         }
 
         /// <summary>Blocks until a full message is read. Returns null at end of stream.</summary>
+        /// <summary>Largest accepted message body (64 MB); larger Content-Length values end the stream.</summary>
+        public const int MaxMessageBytes = 64 * 1024 * 1024;
+
         public string ReadMessage()
         {
             int contentLength = -1;
@@ -82,6 +85,8 @@ namespace codeLess.Studio
                         contentLength = len;
                 }
             }
+            // A corrupt / hostile header must not make us allocate gigabytes: treat oversized frames as a broken stream.
+            if (contentLength > MaxMessageBytes) return null;
             byte[] body = new byte[contentLength];
             int got = 0;
             while (got < contentLength)
@@ -197,8 +202,35 @@ namespace codeLess.Studio
             this.output = output;
         }
 
+        private readonly System.Collections.Concurrent.BlockingCollection<byte[]> outbox = new System.Collections.Concurrent.BlockingCollection<byte[]>();
+        private Thread writerThread;
+
+        /// <summary>
+        /// Writes queued frames on a dedicated thread: a debug adapter that stops reading stdin (hung, or a full pipe with
+        /// a large setBreakpoints) can't block the caller - usually the UI thread - like the old synchronous Write did.
+        /// </summary>
+        private void WriteLoop()
+        {
+            try
+            {
+                foreach (byte[] frame in outbox.GetConsumingEnumerable())
+                {
+                    output.Write(frame, 0, frame.Length);
+                    output.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                Shutdown("write failed: " + ex.Message);
+            }
+        }
+
         public void Start()
         {
+            writerThread = new Thread(WriteLoop);
+            writerThread.IsBackground = true;
+            writerThread.Name = "DapWriter";
+            writerThread.Start();
             dispatchThread = new Thread(DispatchLoop);
             dispatchThread.IsBackground = true;
             dispatchThread.Name = "DapDispatch";
@@ -349,11 +381,18 @@ namespace codeLess.Studio
             Action<string> tr = Trace;
             if (tr != null) { try { tr("--> " + json); } catch { } }
             byte[] bytes = DapMessageReader.Frame(json);
-            lock (writeLock)
+            if (writerThread == null)
             {
-                output.Write(bytes, 0, bytes.Length);
-                output.Flush();
+                // Not started (tests drive the client directly): write synchronously.
+                lock (writeLock)
+                {
+                    output.Write(bytes, 0, bytes.Length);
+                    output.Flush();
+                }
+                return;
             }
+            if (closed || outbox.IsAddingCompleted) throw new IOException("Debug adapter is not running");
+            outbox.Add(bytes);
         }
 
         public Task<DapResponse> SendRequestAsync(string command, object arguments)
@@ -383,6 +422,14 @@ namespace codeLess.Studio
             {
                 pending[mySeq] = tcs;
                 pendingCommands[mySeq] = command;
+            }
+            if (closed)
+            {
+                // Closed between the first check and the registration: Shutdown may already have drained `pending`.
+                bool mine;
+                lock (pendingLock) { mine = pending.Remove(mySeq); pendingCommands.Remove(mySeq); }
+                if (mine) tcs.TrySetResult(DapResponse.Failure(command, "Debug adapter is not running"));
+                return tcs.Task;
             }
             try { Write(m); }
             catch (Exception ex)
@@ -438,6 +485,7 @@ namespace codeLess.Studio
                 });
             }
             try { dispatchQueue.CompleteAdding(); } catch { }
+            try { outbox.CompleteAdding(); } catch { }
         }
 
         public void Dispose()

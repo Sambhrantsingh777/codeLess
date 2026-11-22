@@ -34,6 +34,7 @@ namespace codeLess.Avalonia.Tests
             settingsBackup = hadSettings ? File.ReadAllText(settingsPath) : null;
             dir = Path.Combine(Path.GetTempPath(), "codeLess_DevTools_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
+            TestTrust.Trust(dir); // workspace-local tools / git / tasks need a trusted folder
         }
 
         public void Dispose()

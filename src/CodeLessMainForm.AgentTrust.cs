@@ -12,7 +12,7 @@ namespace codeLess.Studio
 {
     /// <summary>
     /// Agent trust features on Windows (same behaviour as the Avalonia UI, shared logic in codeLess.Core):
-    /// verification gate in a temporary git worktree / copy with optional auto-repair, a review panel in the chat dock
+    /// verification gate in a private temporary git clone / copy with optional auto-repair, a review panel in the chat dock
     /// (per-file Accept / Reject, Accept All, Accept if Verified, Verify, Fix with AI, Stop), per-turn checkpoints with an
     /// Agent Timeline (Undo This Turn / Undo Back to Here / Redo, confirmation listing files and conflicts) and the
     /// Best-of-N Arena. Strict C# 5 (legacy csc).
@@ -495,6 +495,7 @@ namespace codeLess.Studio
                 total.Written.AddRange(r.Written);
                 foreach (string c in r.Conflicts) total.Conflicts.Add(c + " changed on disk since the proposal");
                 total.Errors.AddRange(r.Errors);
+                if (r.Notes.Count > 0 && agentFeedControl != null) agentFeedControl.AddMessage(false, "Review", "", string.Join(" ", r.Notes.ToArray()));
                 if (r.Written.Count > 0 && tab != null) ReloadTabFromDiskWin(tab);
             }
             if (total.Written.Count > 0)
@@ -843,7 +844,7 @@ namespace codeLess.Studio
                 NumericUpDown attempts = new NumericUpDown { Left = 332, Top = 110, Width = 50, Minimum = 1, Maximum = 5, Value = settings.EffectiveAgentRepairMaxAttempts };
                 Label l4 = new Label { Left = 400, Top = 112, Width = 80, Text = "Best-of-N:" };
                 NumericUpDown bestN = new NumericUpDown { Left = 482, Top = 110, Width = 50, Minimum = 2, Maximum = 4, Value = settings.EffectiveAgentBestOfNCount };
-                Label note = new Label { Left = 12, Top = 142, Width = 536, Height = 46, ForeColor = activeTheme.FgSecondary, Text = "Verification runs in a temporary git worktree (or a filtered copy) with the AI's staged edits applied; your files are never written. Repository-chosen commands ask for approval the first time." };
+                Label note = new Label { Left = 12, Top = 142, Width = 536, Height = 46, ForeColor = activeTheme.FgSecondary, Text = "Verification runs in a private temporary git clone (or a filtered copy) with the AI's staged edits applied; your files are never written. Repository-chosen commands ask for approval the first time." };
                 Button save = CreateHeaderButton("Save", new Point(388, 198), 76, true);
                 Button cancel = CreateHeaderButton("Cancel", new Point(472, 198), 76, false);
                 save.DialogResult = DialogResult.OK;

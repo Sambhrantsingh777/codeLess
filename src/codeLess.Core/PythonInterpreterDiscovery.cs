@@ -189,6 +189,9 @@ namespace codeLess.Studio
 
             bool hasWorkspace = !string.IsNullOrEmpty(workspaceRoot) && SafeDirExists(workspaceRoot);
             string projectName = hasWorkspace ? System.IO.Path.GetFileName(workspaceRoot.TrimEnd('/', '\\')) : "";
+            // Restricted Mode: interpreters that belong to the project (its venvs, its poetry / pipenv environments) are
+            // not offered - running them executes code the project controls. Global interpreters still are.
+            if (hasWorkspace && WorkspaceTrust.IsRestricted(workspaceRoot)) hasWorkspace = false;
 
             // 1. Workspace virtual environments (.venv first). uv projects keep theirs in .venv next to uv.lock.
             if (hasWorkspace)

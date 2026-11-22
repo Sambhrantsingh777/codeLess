@@ -942,37 +942,58 @@ namespace codeLess.Studio
 
         public TaskExecution RunTaskWin(TaskDefinition task)
         {
-            if (task == null) return null;
-            if (string.IsNullOrEmpty(workspaceRoot)) { ParityStatus("Open a folder to run tasks."); return null; }
-            SaveAllDirtyFileBuffersWin(false);
-            if (task.DependsOn.Count > 0)
-            {
-                List<TaskDefinition> all = LoadWorkspaceTasksWin();
-                List<TaskDefinition> deps = new List<TaskDefinition>();
-                foreach (string l in task.DependsOn)
-                {
-                    TaskDefinition d = TaskConfiguration.FindByLabel(all, l);
-                    if (d != null && d.Label != task.Label && d.DependsOn.Count == 0) deps.Add(d);
-                }
-                RunDependencyChainWin(deps, 0, task);
-                return null;
-            }
-            return StartTaskWin(task);
+            return RunTaskWin(task, null);
         }
 
-        private void RunDependencyChainWin(List<TaskDefinition> deps, int index, TaskDefinition final)
+        /// <summary>
+        /// Runs a task after its dependsOn graph (shared <see cref="TaskChainRunner"/>: sequence / parallel, composite and
+        /// background dependencies, race-free completion). <paramref name="completed"/> gets (success, message).
+        /// </summary>
+        public TaskExecution RunTaskWin(TaskDefinition task, Action<bool, string> completed)
         {
-            if (index >= deps.Count) { if (!string.IsNullOrEmpty(final.Command)) StartTaskWin(final); return; }
-            TaskExecution ex = StartTaskWin(deps[index]);
-            if (ex == null) { RunDependencyChainWin(deps, index + 1, final); return; }
-            ex.Exited += delegate (TaskExecution e)
+            if (task == null) { if (completed != null) completed(false, "No task."); return null; }
+            if (string.IsNullOrEmpty(workspaceRoot)) { ParityStatus("Open a folder to run tasks."); if (completed != null) completed(false, "Open a folder to run tasks."); return null; }
+            if (WorkspaceTrust.IsRestricted(workspaceRoot))
             {
-                ParityPost(delegate
+                // Restricted Mode: tasks run commands chosen by the workspace.
+                string msg = WorkspaceTrust.RestrictedMessage("Tasks");
+                ParityStatus(msg);
+                AppendOutputLog("[Tasks] " + msg);
+                if (completed != null) completed(false, msg);
+                return null;
+            }
+            SaveAllDirtyFileBuffersWin(false);
+            TaskExecution leafExec = null;
+            TaskDefinition root = task;
+            TaskChainRunner runner = new TaskChainRunner();
+            runner.LoadTasks = LoadWorkspaceTasksIncludingHiddenWin;
+            runner.StartLeaf = delegate (TaskDefinition t) { TaskExecution ex = StartTaskWin(t); if (ReferenceEquals(t, root)) leafExec = ex; return ex; };
+            runner.PostToUi = delegate (Action a) { ParityPost(a); };
+            runner.Run(task, delegate (bool ok, string msg)
+            {
+                if (!ok && msg != null)
                 {
-                    if (e.ExitCode == 0) RunDependencyChainWin(deps, index + 1, final);
-                    else ParityStatus("Task '" + final.Label + "' not started: dependency '" + deps[index].Label + "' failed.");
-                });
-            };
+                    ParityStatus("Task '" + root.Label + "': " + msg);
+                    AppendOutputLog("[Tasks] " + root.DisplayLabel + ": " + msg);
+                }
+                if (completed != null) completed(ok, msg);
+            });
+            return task.DependsOn.Count == 0 ? leafExec : null;
+        }
+
+        /// <summary>Runs the task with this label and its dependencies (preLaunchTask / postDebugTask).</summary>
+        public void RunTaskByLabelWin(string label, Action<bool, string> completed)
+        {
+            TaskDefinition task = TaskConfiguration.FindByLabel(LoadWorkspaceTasksIncludingHiddenWin(), label);
+            if (task == null) { if (completed != null) completed(false, "Could not find the task '" + label + "'."); return; }
+            RunTaskWin(task, completed);
+        }
+
+        private List<TaskDefinition> LoadWorkspaceTasksIncludingHiddenWin()
+        {
+            if (string.IsNullOrEmpty(workspaceRoot)) return new List<TaskDefinition>();
+            string err;
+            return TaskConfiguration.LoadAll(workspaceRoot, out err);
         }
 
         private TaskExecution StartTaskWin(TaskDefinition task)
@@ -1203,7 +1224,7 @@ namespace codeLess.Studio
                 case "par_create_branch": PromptCreateBranchWin(null); break;
                 case "par_fetch": RunGitOperationWin("Fetch", delegate (string r, CancellationToken ct, Action<string> p) { return GitRemoteOps.Fetch(r, false, false, ct, p); }, null, false); break;
                 case "par_fetch_prune": RunGitOperationWin("Fetch (Prune)", delegate (string r, CancellationToken ct, Action<string> p) { return GitRemoteOps.Fetch(r, false, true, ct, p); }, null, false); break;
-                case "par_pull": RunGitOperationWin("Pull", delegate (string r, CancellationToken ct, Action<string> p) { return GitRemoteOps.Pull(r, settings.GitRebaseWhenSync, ct, p); }, null, false); break;
+                case "par_pull": RunGitOperationWin("Pull", delegate (string r, CancellationToken ct, Action<string> p) { return GitRemoteOps.Pull(r, false, ct, p); }, null, false); break; // VS Code: plain Pull honours pull.rebase; rebaseWhenSync is for Sync
                 case "par_pull_rebase": RunGitOperationWin("Pull (Rebase)", delegate (string r, CancellationToken ct, Action<string> p) { return GitRemoteOps.Pull(r, true, ct, p); }, null, false); break;
                 case "par_push": RunGitOperationWin("Push", delegate (string r, CancellationToken ct, Action<string> p) { return GitRemoteOps.Push(r, ct, p); }, null, false); break;
                 case "par_sync": RunGitOperationWin("Sync", delegate (string r, CancellationToken ct, Action<string> p) { return GitRemoteOps.Sync(r, settings.GitRebaseWhenSync, ct, p); }, null, false); break;

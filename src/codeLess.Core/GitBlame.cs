@@ -239,6 +239,34 @@ namespace codeLess.Studio
             }
         }
 
+        /// <summary>
+        /// Bytes for "git blame --contents": the buffer text with the file's own line endings and encoding (+ BOM). git
+        /// compares them with the committed blob, so writing a CRLF / Latin-1 file as UTF-8 + LF made every line differ
+        /// ("Not Committed Yet") as soon as the buffer was dirty.
+        /// </summary>
+        public static byte[] EncodeLikeFile(string filePath, string content)
+        {
+            string text = (content ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            string eol = "\n";
+            Encoding enc = new UTF8Encoding(false);
+            bool bom = false;
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    bool finalNl;
+                    EditorTabBuffer.ReadFilePreservingMetadata(filePath, out eol, out enc, out bom, out finalNl);
+                    // Files without any line break report CRLF by default; keep LF for those.
+                    string raw = File.ReadAllText(filePath);
+                    if (raw.IndexOf('\n') < 0 && raw.IndexOf('\r') < 0) eol = "\n";
+                }
+            }
+            catch { }
+            if (eol != "\n") text = text.Replace("\n", eol);
+            try { return EditorTabBuffer.EncodeTextStrict(text, enc, bom); }
+            catch (EncoderFallbackException) { return new UTF8Encoding(false).GetBytes(text); }
+        }
+
         private void Compute(string filePath, string content, string key, bool isDirty, int caretLine0, int totalLines, int seq)
         {
             string repo = GitCli.FindRepoRoot(filePath);
@@ -292,7 +320,7 @@ namespace codeLess.Studio
                 if (isDirty)
                 {
                     tmp = Path.Combine(Path.GetTempPath(), "codeless-blame-" + Guid.NewGuid().ToString("N") + ".tmp");
-                    File.WriteAllText(tmp, content, new UTF8Encoding(false));
+                    File.WriteAllBytes(tmp, EncodeLikeFile(filePath, content));
                     args.Add("--contents");
                     args.Add(tmp);
                 }

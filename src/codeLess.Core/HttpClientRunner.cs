@@ -56,74 +56,59 @@ namespace codeLess.Studio
 
             Stopwatch sw = Stopwatch.StartNew();
             long sent = 0;
+            // Redirects are followed here, not by HttpClientHandler: every hop is checked against Offline Mode and recorded in
+            // the Network ledger before it is contacted (a loopback URL could otherwise bounce the request to any host).
             HttpClientHandler handler = new HttpClientHandler();
-            handler.AllowAutoRedirect = !req.NoRedirect;
+            handler.AllowAutoRedirect = false;
             handler.UseCookies = false;
             try { handler.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate; } catch { }
+            string method = (req.Method ?? "GET").ToUpperInvariant();
+            bool dropBody = false;
             using (CancellationTokenSource timeoutCts = new CancellationTokenSource())
             using (CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(userToken, timeoutCts.Token))
             using (HttpClient client = new HttpClient(handler))
             {
                 client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
                 timeoutCts.CancelAfter(Math.Max(1000, timeoutMs));
-                HttpRequestMessage msg = new HttpRequestMessage(new HttpMethod(req.Method ?? "GET"), uri);
-                string contentType = null;
-                List<HttpHeader> contentHeaders = new List<HttpHeader>();
-                foreach (HttpHeader h in req.Headers)
-                {
-                    if (string.Equals(h.Name, "Content-Type", StringComparison.OrdinalIgnoreCase)) { contentType = h.Value; continue; }
-                    if (string.Equals(h.Name, "Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (string.Equals(h.Name, "Host", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (IsContentHeader(h.Name)) { contentHeaders.Add(h); continue; }
-                    if (!msg.Headers.TryAddWithoutValidation(h.Name, h.Value)) contentHeaders.Add(h);
-                    sent += h.Name.Length + h.Value.Length + 4;
-                }
-                if (!string.IsNullOrEmpty(req.Body) || contentType != null)
-                {
-                    byte[] bodyBytes = Encoding.UTF8.GetBytes(req.Body ?? "");
-                    sent += bodyBytes.Length;
-                    ByteArrayContent content = new ByteArrayContent(bodyBytes);
-                    if (contentType != null) content.Headers.TryAddWithoutValidation("Content-Type", contentType);
-                    foreach (HttpHeader ch in contentHeaders) content.Headers.TryAddWithoutValidation(ch.Name, ch.Value);
-                    msg.Content = content;
-                }
-                sent += url.Length + 16;
                 try
                 {
-                    using (HttpResponseMessage resp = await client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false))
+                    for (int redirects = 0; ; redirects++)
                     {
-                        result.StatusCode = (int)resp.StatusCode;
-                        scope.Status = result.StatusCode;
-                        result.ReasonPhrase = resp.ReasonPhrase ?? "";
-                        result.HttpVersion = "HTTP/" + resp.Version.ToString();
-                        foreach (KeyValuePair<string, IEnumerable<string>> kv in resp.Headers)
-                            result.Headers.Add(new HttpHeader(kv.Key, string.Join(", ", kv.Value)));
-                        byte[] data = new byte[0];
-                        if (resp.Content != null)
+                        HttpRequestMessage msg = BuildMessage(req, method, uri, dropBody, redirects > 0 && !SameOrigin(new Uri(req.Url), uri), ref sent);
+                        sent += uri.AbsoluteUri.Length + 16;
+                        using (HttpResponseMessage resp = await client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false))
                         {
-                            foreach (KeyValuePair<string, IEnumerable<string>> kv in resp.Content.Headers)
-                                result.Headers.Add(new HttpHeader(kv.Key, string.Join(", ", kv.Value)));
-                            using (Stream s = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
-                            using (MemoryStream ms = new MemoryStream())
+                            int status = (int)resp.StatusCode;
+                            if (!req.NoRedirect && LedgerHttp.IsRedirectStatus(status) && redirects < LedgerHttp.MaxRedirects && resp.Headers.Location != null)
                             {
-                                byte[] buf = new byte[81920];
-                                long total = 0;
-                                int n;
-                                while ((n = await s.ReadAsync(buf, 0, buf.Length, linked.Token).ConfigureAwait(false)) > 0)
+                                string nextMethod = method;
+                                bool nextDrop;
+                                string next = LedgerHttp.ResolveRedirect(uri.AbsoluteUri, status, resp.Headers.Location.OriginalString, ref nextMethod, out nextDrop);
+                                if (next != null)
                                 {
-                                    total += n;
-                                    scope.AddReceived(n);
-                                    if (ms.Length < MaxDisplayBodyBytes) ms.Write(buf, 0, (int)Math.Min(n, MaxDisplayBodyBytes - ms.Length));
+                                    scope.AddSent(sent);
+                                    sent = 0;
+                                    scope.Complete(status, "Redirect to " + new Uri(next).Host);
+                                    result.Redirects.Add(status + " " + next);
+                                    NetworkRequestScope nextScope;
+                                    string blockedReason;
+                                    if (!NetworkLedger.TryBegin(LedgerFeature, nextMethod, next, out nextScope, out blockedReason))
+                                    {
+                                        result.Blocked = true;
+                                        result.Error = "Redirect blocked: " + blockedReason;
+                                        scope = null;
+                                        break;
+                                    }
+                                    scope = nextScope;
+                                    uri = new Uri(next);
+                                    method = nextMethod;
+                                    dropBody = dropBody || nextDrop;
+                                    continue;
                                 }
-                                result.BodyBytes = total;
-                                data = ms.ToArray();
                             }
-                            if (resp.Content.Headers.ContentType != null)
-                                result.ContentType = resp.Content.Headers.ContentType.ToString();
+                            await ReadResponseAsync(resp, result, scope, linked.Token).ConfigureAwait(false);
                         }
-                        result.Body = DecodeBody(data, result.ContentType);
-                        if (result.BodyBytes > data.Length)
-                            result.Body += "\n\n[codeLess: response truncated for display at " + (MaxDisplayBodyBytes / (1024 * 1024)) + " MB]";
+                        break;
                     }
                 }
                 catch (OperationCanceledException)
@@ -142,9 +127,82 @@ namespace codeLess.Studio
             }
             sw.Stop();
             result.ElapsedMs = sw.ElapsedMilliseconds;
-            scope.AddSent(sent);
-            scope.Complete(result.StatusCode, result.Cancelled ? "Cancelled" : (result.HasResponse ? "" : ShortNote(result.Error)));
+            if (scope != null)
+            {
+                scope.AddSent(sent);
+                scope.Complete(result.StatusCode, result.Cancelled ? "Cancelled" : (result.HasResponse ? "" : ShortNote(result.Error)));
+            }
             return result;
+        }
+
+        private static bool SameOrigin(Uri a, Uri b)
+        {
+            return a != null && b != null && string.Equals(a.Scheme, b.Scheme, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase) && a.Port == b.Port;
+        }
+
+        private static HttpRequestMessage BuildMessage(HttpResolvedRequest req, string method, Uri uri, bool dropBody, bool crossOrigin, ref long sent)
+        {
+            HttpRequestMessage msg = new HttpRequestMessage(new HttpMethod(method), uri);
+            string contentType = null;
+            List<HttpHeader> contentHeaders = new List<HttpHeader>();
+            foreach (HttpHeader h in req.Headers)
+            {
+                if (string.Equals(h.Name, "Content-Type", StringComparison.OrdinalIgnoreCase)) { contentType = h.Value; continue; }
+                if (string.Equals(h.Name, "Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
+                if (string.Equals(h.Name, "Host", StringComparison.OrdinalIgnoreCase)) continue;
+                // Like browsers / HttpClient: credentials don't follow a redirect to another origin.
+                if (crossOrigin && (string.Equals(h.Name, "Authorization", StringComparison.OrdinalIgnoreCase) || string.Equals(h.Name, "Cookie", StringComparison.OrdinalIgnoreCase))) continue;
+                if (IsContentHeader(h.Name)) { contentHeaders.Add(h); continue; }
+                if (!msg.Headers.TryAddWithoutValidation(h.Name, h.Value)) contentHeaders.Add(h);
+                sent += h.Name.Length + h.Value.Length + 4;
+            }
+            if (!dropBody && (!string.IsNullOrEmpty(req.Body) || contentType != null))
+            {
+                byte[] bodyBytes = Encoding.UTF8.GetBytes(req.Body ?? "");
+                sent += bodyBytes.Length;
+                ByteArrayContent content = new ByteArrayContent(bodyBytes);
+                if (contentType != null) content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+                foreach (HttpHeader ch in contentHeaders) content.Headers.TryAddWithoutValidation(ch.Name, ch.Value);
+                msg.Content = content;
+            }
+            return msg;
+        }
+
+        private static async Task ReadResponseAsync(HttpResponseMessage resp, HttpResponseResult result, NetworkRequestScope scope, CancellationToken token)
+        {
+            result.StatusCode = (int)resp.StatusCode;
+            scope.Status = result.StatusCode;
+            result.ReasonPhrase = resp.ReasonPhrase ?? "";
+            result.HttpVersion = "HTTP/" + resp.Version.ToString();
+            foreach (KeyValuePair<string, IEnumerable<string>> kv in resp.Headers)
+                result.Headers.Add(new HttpHeader(kv.Key, string.Join(", ", kv.Value)));
+            byte[] data = new byte[0];
+            if (resp.Content != null)
+            {
+                foreach (KeyValuePair<string, IEnumerable<string>> kv in resp.Content.Headers)
+                    result.Headers.Add(new HttpHeader(kv.Key, string.Join(", ", kv.Value)));
+                using (Stream s = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    byte[] buf = new byte[81920];
+                    long total = 0;
+                    int n;
+                    while ((n = await s.ReadAsync(buf, 0, buf.Length, token).ConfigureAwait(false)) > 0)
+                    {
+                        total += n;
+                        scope.AddReceived(n);
+                        if (ms.Length < MaxDisplayBodyBytes) ms.Write(buf, 0, (int)Math.Min(n, MaxDisplayBodyBytes - ms.Length));
+                    }
+                    result.BodyBytes = total;
+                    data = ms.ToArray();
+                }
+                if (resp.Content.Headers.ContentType != null)
+                    result.ContentType = resp.Content.Headers.ContentType.ToString();
+            }
+            result.Body = DecodeBody(data, result.ContentType);
+            if (result.BodyBytes > data.Length)
+                result.Body += "\n\n[codeLess: response truncated for display at " + (MaxDisplayBodyBytes / (1024 * 1024)) + " MB]";
         }
 
         private static string ShortNote(string error)

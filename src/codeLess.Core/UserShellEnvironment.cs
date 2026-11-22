@@ -86,7 +86,8 @@ namespace codeLess.Studio
             string shell = ConPtyTerminalSession.GetUserUnixShell();
             string leaf = Path.GetFileName(shell ?? "").ToLowerInvariant();
             string marker = "__CODELESS_ENV_" + Guid.NewGuid().ToString("N") + "__";
-            string script = "printf '%s' '" + marker + "'; /usr/bin/env; printf '%s' '" + marker + "'";
+            // NUL-separated (env -0) so multi-line values and empty lines inside values survive exactly; plain env as fallback.
+            string script = "printf '%s' '" + marker + "'; /usr/bin/env -0 2>/dev/null || /usr/bin/env; printf '%s' '" + marker + "'";
             // -i loads .zshrc/.bashrc (where nvm/pyenv usually live), -l loads the profile files.
             string args = (leaf == "sh" || leaf == "dash") ? "-l -c " : "-i -l -c ";
             if (leaf == "tcsh" || leaf == "csh") args = "-c ";
@@ -100,23 +101,22 @@ namespace codeLess.Studio
             psi.EnvironmentVariables["CODELESS_RESOLVING_ENVIRONMENT"] = "1";
             psi.EnvironmentVariables["TERM"] = "dumb"; // keep prompt/plugin frameworks quiet and non-interactive
 
+            psi.StandardOutputEncoding = new UTF8Encoding(false);
             using (Process p = Process.Start(psi))
             {
                 try { p.StandardInput.Close(); } catch { }
-                StringBuilder outBuf = new StringBuilder();
-                p.OutputDataReceived += delegate (object s, DataReceivedEventArgs e) { if (e.Data != null) lock (outBuf) outBuf.Append(e.Data).Append('\n'); };
+                // Raw read (not line events): keeps NUL separators and blank lines inside values.
+                System.Threading.Tasks.Task<string> outTask = p.StandardOutput.ReadToEndAsync();
                 p.ErrorDataReceived += delegate (object s, DataReceivedEventArgs e) { };
-                p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
                 if (!p.WaitForExit(timeoutMs))
                 {
-                    try { p.Kill(); } catch { }
+                    // The whole tree: plugin managers / gpg-agent prompts started by the rc files would otherwise linger.
+                    LanguageServerManager.KillProcessTree(p);
                     status = "timed out after " + timeoutMs + " ms (shell start-up files too slow)";
                     return null;
                 }
-                p.WaitForExit();
-                string text;
-                lock (outBuf) text = outBuf.ToString();
+                string text = outTask.Wait(3000) ? outTask.Result : "";
                 Dictionary<string, string> env = ParseEnvBlock(text, marker);
                 if (env == null || !env.ContainsKey("PATH"))
                 {
@@ -138,6 +138,16 @@ namespace codeLess.Studio
             if (b < 0) return null;
             string block = text.Substring(a + marker.Length, b - a - marker.Length);
             Dictionary<string, string> env = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (block.IndexOf('\0') >= 0)
+            {
+                // env -0: each NAME=value ends with NUL; values may contain newlines / blank lines verbatim.
+                foreach (string entry in block.Split('\0'))
+                {
+                    int eq0 = entry.IndexOf('=');
+                    if (eq0 > 0 && IsValidName(entry.Substring(0, eq0))) env[entry.Substring(0, eq0)] = entry.Substring(eq0 + 1);
+                }
+                return env;
+            }
             string lastKey = null;
             foreach (string raw in block.Split('\n'))
             {

@@ -26,6 +26,7 @@ namespace codeLess.Avalonia.Tests
             _settingsBackup = File.Exists(_settingsFilePath) ? File.ReadAllText(_settingsFilePath) : null;
             _root = Path.Combine(Path.GetTempPath(), "codeLess_Regress_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(_root);
+            TestTrust.Trust(_root); // workspace-local tools / git / tasks need a trusted folder
         }
 
         public void Dispose()
@@ -257,6 +258,7 @@ namespace codeLess.Avalonia.Tests
             _settingsBackup = File.Exists(_settingsFilePath) ? File.ReadAllText(_settingsFilePath) : null;
             _root = Path.Combine(Path.GetTempPath(), "codeLess_MR_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(_root);
+            TestTrust.Trust(_root); // workspace-local tools / git / tasks need a trusted folder
         }
 
         public void Dispose()

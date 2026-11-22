@@ -40,6 +40,7 @@ namespace codeLess.Avalonia.Tests
         {
             dir = Path.Combine(Path.GetTempPath(), "codeLess_dbgpy_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
+            TestTrust.Trust(dir); // workspace-local tools / git / tasks need a trusted folder
             string p = Path.Combine(dir, "sample.py");
             File.WriteAllText(p,
                 "def compute(n):\n" +            // 1

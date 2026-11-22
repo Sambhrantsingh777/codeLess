@@ -431,6 +431,7 @@ namespace codeLess.Studio
                     s = s.Substring(0, authStart) + authority.Substring(at + 1) + rest;
                 }
             }
+            s = RedactPathSecrets(s);
             if (query == null) return s;
             if (query.Length == 0) return s + "?";
             string[] pairs = query.Split('&');
@@ -448,6 +449,41 @@ namespace codeLess.Studio
                 else sb.Append(p);
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Masks secrets carried in the URL path (Telegram "/bot&lt;token&gt;/", Slack / Discord webhook tokens, signed CDN paths):
+        /// a segment of 24+ token characters ([A-Za-z0-9_-]) mixing letters and digits, or "bot&lt;id&gt;:&lt;token&gt;", becomes "***".
+        /// </summary>
+        public static string RedactPathSecrets(string urlWithoutQuery)
+        {
+            if (string.IsNullOrEmpty(urlWithoutQuery)) return urlWithoutQuery ?? "";
+            int scheme = urlWithoutQuery.IndexOf("://", StringComparison.Ordinal);
+            int pathStart = urlWithoutQuery.IndexOf('/', scheme > 0 ? scheme + 3 : 0);
+            if (pathStart < 0) return urlWithoutQuery;
+            string head = urlWithoutQuery.Substring(0, pathStart);
+            string[] segs = urlWithoutQuery.Substring(pathStart).Split('/');
+            for (int i = 0; i < segs.Length; i++)
+            {
+                string seg = segs[i];
+                if (seg.Length == 0) continue;
+                if (seg.StartsWith("bot", StringComparison.OrdinalIgnoreCase) && seg.IndexOf(':') > 3) { segs[i] = "bot***"; continue; }
+                if (LooksLikeSecretToken(seg)) segs[i] = "***";
+            }
+            return head + string.Join("/", segs);
+        }
+
+        private static bool LooksLikeSecretToken(string seg)
+        {
+            if (seg.Length < 24) return false;
+            int letters = 0, digits = 0;
+            foreach (char c in seg)
+            {
+                if (c >= '0' && c <= '9') digits++;
+                else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) letters++;
+                else if (c != '_' && c != '-') return false;
+            }
+            return letters >= 3 && digits >= 3;
         }
 
         public static string HostOf(string url)

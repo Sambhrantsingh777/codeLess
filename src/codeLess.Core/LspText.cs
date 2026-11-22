@@ -405,11 +405,17 @@ namespace codeLess.Studio
                 if (c == '$' && i + 1 < s.Length)
                 {
                     char n = s[i + 1];
-                    if (char.IsDigit(n))
+                    if (IsAsciiDigit(n))
                     {
                         int j = i + 1;
-                        while (j < s.Length && char.IsDigit(s[j])) j++;
-                        int idx = int.Parse(s.Substring(i + 1, j - i - 1), CultureInfo.InvariantCulture);
+                        while (j < s.Length && IsAsciiDigit(s[j])) j++;
+                        int idx;
+                        if (!int.TryParse(s.Substring(i + 1, j - i - 1), NumberStyles.None, CultureInfo.InvariantCulture, out idx))
+                        {
+                            sb.Append(s, i, j - i); // absurd tab stop number: keep it as literal text
+                            i = j;
+                            continue;
+                        }
                         if (!stops.ContainsKey(idx)) stops[idx] = new int[] { sb.Length, 0 };
                         i = j;
                         continue;
@@ -417,11 +423,20 @@ namespace codeLess.Studio
                     if (n == '{')
                     {
                         int j = i + 2;
-                        if (j < s.Length && char.IsDigit(s[j]))
+                        int parsedIdx = 0;
+                        int kEnd = j;
+                        while (kEnd < s.Length && IsAsciiDigit(s[kEnd])) kEnd++;
+                        bool validIdx = kEnd > j && int.TryParse(s.Substring(j, kEnd - j), NumberStyles.None, CultureInfo.InvariantCulture, out parsedIdx);
+                        if (kEnd > j && !validIdx)
                         {
-                            int k = j;
-                            while (k < s.Length && char.IsDigit(s[k])) k++;
-                            int idx = int.Parse(s.Substring(j, k - j), CultureInfo.InvariantCulture);
+                            sb.Append("${"); // overflowing tab stop number: literal text, keep scanning after "${"
+                            i = j;
+                            continue;
+                        }
+                        if (validIdx)
+                        {
+                            int k = kEnd;
+                            int idx = parsedIdx;
                             int start = sb.Length;
                             if (k < s.Length && s[k] == ':')
                             {
@@ -480,6 +495,11 @@ namespace codeLess.Studio
                 sb.Append(c);
                 i++;
             }
+        }
+
+        private static bool IsAsciiDigit(char c)
+        {
+            return c >= '0' && c <= '9';
         }
 
         private static string SplitFirstChoice(string choices)

@@ -131,6 +131,10 @@ namespace codeLess.Studio
         private readonly object gate = new object();
         private readonly List<AgentTurnRecord> turns = new List<AgentTurnRecord>();
         private TurnRestorePlan redoPlan; // inverse of the last undo
+        /// <summary>Turns this process removed: another window's copy of the timeline must not bring them back.</summary>
+        private readonly HashSet<string> removedTurnIds = new HashSet<string>(StringComparer.Ordinal);
+        /// <summary>Blobs younger than this are never garbage-collected (another window may have written them for a turn it hasn't saved yet).</summary>
+        public static TimeSpan BlobGcMinAge = TimeSpan.FromHours(2);
         private TurnRestorePlan undoOfRedo;
 
         public string WorkspaceRoot { get; private set; }
@@ -273,7 +277,7 @@ namespace codeLess.Studio
                 if (preH == postH) return;
                 AgentTurnRecord t = GetOrCreateTurn(turnId, label);
                 Merge(t, RelativePath(fullPath), preH, postH, false);
-                if (t.Files.Count == 0) turns.Remove(t);
+                if (t.Files.Count == 0) { turns.Remove(t); removedTurnIds.Add(t.Id); }
                 Trim();
                 Save();
             }
@@ -288,7 +292,7 @@ namespace codeLess.Studio
             {
                 AgentTurnRecord t = GetOrCreateTurn(turnId, label);
                 foreach (TurnFileChange c in changes) Merge(t, c.Path, c.PreHash, c.PostHash, c.PreUnavailable);
-                if (t.Files.Count == 0) turns.Remove(t);
+                if (t.Files.Count == 0) { turns.Remove(t); removedTurnIds.Add(t.Id); }
                 Trim();
                 Save();
             }
@@ -297,7 +301,7 @@ namespace codeLess.Studio
 
         private void Trim()
         {
-            while (turns.Count > MaxTurns) turns.RemoveAt(0);
+            while (turns.Count > MaxTurns) { removedTurnIds.Add(turns[0].Id); turns.RemoveAt(0); }
         }
 
         private void RaiseChanged()
@@ -512,11 +516,63 @@ namespace codeLess.Studio
 
         private string TimelinePath { get { return System.IO.Path.Combine(StoreDir, "timeline.json"); } }
 
+        /// <summary>
+        /// Exclusive cross-process lock on the store (two windows on the same folder): a lock file opened with
+        /// FileShare.None, retried for up to ~3 s. Null when it can't be taken (the save still proceeds).
+        /// </summary>
+        private FileStream AcquireStoreLock()
+        {
+            string lockPath = System.IO.Path.Combine(StoreDir, "timeline.lock");
+            for (int i = 0; i < 60; i++)
+            {
+                try { return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+                catch (IOException) { Thread.Sleep(50); }
+                catch { return null; }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Adds turns another window saved meanwhile (it keeps its own in-memory list) so this save doesn't drop them and
+        /// garbage collection doesn't delete their blobs. Our own copy of a turn wins; turns we removed stay removed.
+        /// </summary>
+        private void MergeTurnsFromDisk()
+        {
+            TurnRestorePlan ignored;
+            List<AgentTurnRecord> disk = ReadTimeline(out ignored);
+            if (disk.Count == 0) return;
+            HashSet<string> mine = new HashSet<string>(StringComparer.Ordinal);
+            foreach (AgentTurnRecord t in turns) mine.Add(t.Id);
+            bool added = false;
+            foreach (AgentTurnRecord t in disk)
+            {
+                if (mine.Contains(t.Id) || removedTurnIds.Contains(t.Id)) continue;
+                turns.Add(t);
+                added = true;
+            }
+            if (!added) return;
+            turns.Sort(delegate (AgentTurnRecord a, AgentTurnRecord b) { return a.CreatedUtc.CompareTo(b.CreatedUtc); });
+            while (turns.Count > MaxTurns) { removedTurnIds.Add(turns[0].Id); turns.RemoveAt(0); }
+        }
+
         private void Save()
         {
             try
             {
                 Directory.CreateDirectory(StoreDir);
+                using (FileStream storeLock = AcquireStoreLock())
+                {
+                    MergeTurnsFromDisk();
+                    WriteTimelineAndCollect();
+                }
+            }
+            catch { }
+        }
+
+        private void WriteTimelineAndCollect()
+        {
+            try
+            {
                 Dictionary<string, object> root = new Dictionary<string, object>();
                 root["workspace"] = WorkspaceRoot;
                 List<object> list = new List<object>();
@@ -568,13 +624,23 @@ namespace codeLess.Studio
 
         private void Load()
         {
+            TurnRestorePlan rp;
+            List<AgentTurnRecord> loaded = ReadTimeline(out rp);
+            turns.AddRange(loaded);
+            if (rp != null) redoPlan = rp;
+        }
+
+        private List<AgentTurnRecord> ReadTimeline(out TurnRestorePlan redo)
+        {
+            redo = null;
+            List<AgentTurnRecord> turns = new List<AgentTurnRecord>();
             try
             {
-                if (!File.Exists(TimelinePath)) return;
+                if (!File.Exists(TimelinePath)) return turns;
                 string err;
                 object root = DapJson.TryParse(File.ReadAllText(TimelinePath), out err);
                 List<object> list = DapJson.Arr(root, "turns");
-                if (list == null) return;
+                if (list == null) return turns;
                 foreach (object o in list)
                 {
                     AgentTurnRecord t = new AgentTurnRecord();
@@ -613,10 +679,11 @@ namespace codeLess.Studio
                             it.TargetHash = DapJson.Str(io, "target");
                             p.Items.Add(it);
                         }
-                    if (p.Items.Count > 0) redoPlan = p;
+                    if (p.Items.Count > 0) redo = p;
                 }
             }
             catch { }
+            return turns;
         }
 
         /// <summary>Deletes blobs no turn / redo record references (snapshot blobs of unchanged files, trimmed turns).</summary>
@@ -642,7 +709,8 @@ namespace codeLess.Studio
                         if (DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > TimeSpan.FromHours(1)) { try { File.Delete(f); } catch { } }
                         continue;
                     }
-                    if (!live.Contains(name)) { try { File.Delete(f); } catch { } }
+                    // Only old unreferenced blobs: a younger one may belong to a turn another window hasn't saved yet.
+                    if (!live.Contains(name) && DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > BlobGcMinAge) { try { File.Delete(f); } catch { } }
                 }
             }
             catch { }
@@ -924,6 +992,7 @@ namespace codeLess.Studio
         public static byte[] GitBlob(string repo, string rev, string path)
         {
             if (string.IsNullOrEmpty(rev)) return null;
+            if (GitSafety.BlockReason(repo, "cat-file") != null) return null; // Restricted Mode
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo("git", GitCli.JoinArgs(new string[] { "--no-optional-locks", "cat-file", "blob", rev + ":" + path }));

@@ -128,6 +128,8 @@ namespace codeLess.Studio
         public string NewFilePath;
         public bool Overwrite;
         public bool IgnoreIfExists;
+        /// <summary>delete: do nothing (instead of failing) when the file doesn't exist.</summary>
+        public bool IgnoreIfNotExists;
         public bool Recursive;
     }
 
@@ -196,6 +198,7 @@ namespace codeLess.Studio
                         object opts = LspJson.Get(dc, "options");
                         op.Overwrite = LspJson.GetBool(opts, "overwrite", false);
                         op.IgnoreIfExists = LspJson.GetBool(opts, "ignoreIfExists", false);
+                        op.IgnoreIfNotExists = LspJson.GetBool(opts, "ignoreIfNotExists", false);
                         op.Recursive = LspJson.GetBool(opts, "recursive", false);
                         if (kind == "rename")
                         {

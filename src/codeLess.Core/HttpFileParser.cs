@@ -266,6 +266,8 @@ namespace codeLess.Studio
         public bool Blocked;
         public bool Cancelled;
         public HttpResolvedRequest Request;
+        /// <summary>Redirect hops that were followed ("302 https://..."), each checked against Offline Mode and recorded.</summary>
+        public List<string> Redirects = new List<string>();
 
         public bool HasResponse { get { return StatusCode > 0; } }
 

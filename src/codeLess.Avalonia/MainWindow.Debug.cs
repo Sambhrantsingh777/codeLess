@@ -56,10 +56,12 @@ namespace codeLess.AvaloniaApp
         public string DebugNotificationText { get; private set; } = "";
         public string DebugNotificationInstallCommand { get; private set; }
 
-        private sealed class AvaloniaDebugHost : IDebugUiHost
+        private sealed class AvaloniaDebugHost : IDebugUiHost, IDebugTaskHost
         {
             private readonly MainWindow w;
             public AvaloniaDebugHost(MainWindow w) { this.w = w; }
+            /// <summary>launch.json preLaunchTask / postDebugTask through the shared task chain runner.</summary>
+            public void RunTaskByLabel(string label, Action<bool, string> completed) => w.RunTaskByLabel(label, completed);
             public void Post(Action action) => w.debugUiPost.Post(action);
             public Task<int?> RunInTerminalAsync(string title, string cwd, List<string> args, Dictionary<string, string> env) => Task.FromResult(w.RunDebuggeeInTerminal(title, cwd, args, env));
             public void RevealLocation(string path, int line)

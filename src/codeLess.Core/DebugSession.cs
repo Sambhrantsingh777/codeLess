@@ -207,7 +207,9 @@ namespace codeLess.Studio
         {
             try { if (Tcp != null) Tcp.Close(); } catch { }
             try { if (Output != null) Output.Dispose(); } catch { }
-            try { if (Process != null && !Process.HasExited) Process.Kill(); } catch { }
+            // Kill the whole tree: adapters start the debuggee as a child (debugpy launcher -> python, dlv -> program),
+            // which would otherwise be orphaned when the adapter crashes or "disconnect" didn't get through.
+            try { if (Process != null) LanguageServerManager.KillProcessTree(Process); } catch { }
             try { if (Process != null) Process.Dispose(); } catch { }
         }
     }

@@ -533,7 +533,7 @@ namespace codeLess.Studio
         /// </summary>
         public static Dictionary<string, object> PrepareLaunchArguments(DebugLaunchConfig config, DebugVariableContext ctx)
         {
-            Dictionary<string, object> args = Substitute(config.Properties, ctx);
+            Dictionary<string, object> args = Substitute(MergePlatformSection(config.Properties, TaskConfiguration.CurrentPlatformKey), ctx);
             string fam = config.AdapterFamily;
             if (!args.ContainsKey("name")) args["name"] = config.Name ?? "Debug";
             if (!args.ContainsKey("type")) args["type"] = config.Type;
@@ -559,7 +559,39 @@ namespace codeLess.Studio
             }
             args.Remove("preLaunchTask");
             args.Remove("postDebugTask");
+            args.Remove("windows");
+            args.Remove("osx");
+            args.Remove("linux");
             return args;
+        }
+
+        /// <summary>
+        /// launch.json platform sections ("windows" / "osx" / "linux"): their properties override the configuration's on
+        /// that platform (VS Code semantics; nested objects such as "env" are replaced, not merged).
+        /// </summary>
+        public static Dictionary<string, object> MergePlatformSection(Dictionary<string, object> props, string platformKey)
+        {
+            Dictionary<string, object> merged = new Dictionary<string, object>(StringComparer.Ordinal);
+            if (props == null) return merged;
+            foreach (KeyValuePair<string, object> kv in props)
+                if (kv.Key != "windows" && kv.Key != "osx" && kv.Key != "linux") merged[kv.Key] = kv.Value;
+            Dictionary<string, object> plat = DapJson.Obj(props, platformKey);
+            if (plat != null) foreach (KeyValuePair<string, object> kv in plat) merged[kv.Key] = kv.Value;
+            return merged;
+        }
+
+        /// <summary>preLaunchTask / postDebugTask label (platform section aware), or null. A task object ({ "task": label }) is accepted too.</summary>
+        public static string GetTaskLabel(DebugLaunchConfig config, string key)
+        {
+            if (config == null || config.Properties == null) return null;
+            Dictionary<string, object> merged = MergePlatformSection(config.Properties, TaskConfiguration.CurrentPlatformKey);
+            object v;
+            if (!merged.TryGetValue(key, out v) || v == null) return null;
+            string s = v as string;
+            if (s == null) s = DapJson.Str(v as Dictionary<string, object>, "task");
+            if (s == null) return null;
+            s = s.Trim();
+            return s.Length == 0 ? null : s;
         }
     }
 }

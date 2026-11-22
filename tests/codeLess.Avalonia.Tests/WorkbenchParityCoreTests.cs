@@ -18,6 +18,7 @@ namespace codeLess.Avalonia.Tests
         {
             Root = Path.Combine(Path.GetTempPath(), "codeless-parity-" + Guid.NewGuid().ToString("N").Substring(0, 10));
             Directory.CreateDirectory(Root);
+            TestTrust.Trust(Root); // workspace-local tools / git / tasks need a trusted folder
             Directory.CreateDirectory(Path.Combine(Root, "hooks"));
         }
 
@@ -183,7 +184,8 @@ namespace codeLess.Avalonia.Tests
         {
             Assert.Equal(new[] { "pull", "--progress", "--rebase" }, GitRemoteOps.BuildPullArgs(true, false));
             Assert.Equal(new[] { "pull", "--progress", "--no-rebase" }, GitRemoteOps.BuildPullArgs(false, false));
-            Assert.Equal(new[] { "pull", "--progress" }, GitRemoteOps.BuildPullArgs(true, true));
+            Assert.Equal(new[] { "pull", "--progress", "--rebase" }, GitRemoteOps.BuildPullArgs(true, true));
+            Assert.Equal(new[] { "pull", "--progress" }, GitRemoteOps.BuildPullArgs(false, true));
             Assert.Equal("origin", GitRemoteOps.PickPublishRemote(new List<string> { "upstream", "origin" }));
             Assert.Equal("fork", GitRemoteOps.PickPublishRemote(new List<string> { "fork" }));
             Assert.Null(GitRemoteOps.PickPublishRemote(new List<string> { "a", "b" }));
@@ -740,7 +742,8 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal(Path.GetFullPath("/ws/src"), TaskConfiguration.ResolveCwd(tasks[0], ctx));
             Assert.Equal("fast", TaskConfiguration.ResolveEnv(tasks[0], ctx)["MODE"]);
             Assert.Equal("'/usr/bin/my tool'", TaskConfiguration.BuildCommandLine(tasks[3], ctx, false));
-            Assert.Equal("\"/usr/bin/my tool\"", TaskConfiguration.BuildCommandLine(tasks[3], ctx, true));
+            // cmd.exe: quoted and caret-escaped, so & | % ( ) in paths can't split or expand the command.
+            Assert.Equal("^\"/usr/bin/my tool^\"", TaskConfiguration.BuildCommandLine(tasks[3], ctx, true));
             Assert.Equal("eslint .", TaskConfiguration.BuildCommandLine(tasks[1], ctx, false));
 
             string term = TaskConfiguration.BuildTerminalCommandLine("echo 'hi'", new Dictionary<string, string> { { "A", "b c" } }, false, "/bin/zsh");
@@ -753,6 +756,7 @@ namespace codeLess.Avalonia.Tests
         {
             string root = Path.Combine(Path.GetTempPath(), "codeless-tasks-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(root);
+            TestTrust.Trust(root); // workspace-local tools / git / tasks need a trusted folder
             try
             {
                 File.WriteAllText(Path.Combine(root, "package.json"), "{ \"scripts\": { \"build\": \"tsc -p .\", \"test\": \"jest\", \"lint\": \"eslint src\" } }");
@@ -967,6 +971,7 @@ namespace codeLess.Avalonia.Tests
             if (Path.DirectorySeparatorChar == '\\') return;
             string ws = Path.Combine(Path.GetTempPath(), "codeless-taskrun-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(ws);
+            TestTrust.Trust(ws); // workspace-local tools / git / tasks need a trusted folder
             try
             {
                 File.WriteAllText(Path.Combine(ws, "main.c"), "int main() { return 0 }\n");

@@ -18,23 +18,37 @@ namespace codeLess.Studio
         public int MaxCopyFiles = 40000;
         /// <summary>Skip single files larger than this in copy mode. Default 64 MB.</summary>
         public long MaxSingleFileBytes = 64L * 1024 * 1024;
-        /// <summary>Use "git worktree add" when the workspace is in a git repository with at least one commit.</summary>
+        /// <summary>
+        /// Use a private git clone (own refs, stash, config and hooks; objects shared read-only via alternates) when the
+        /// workspace is in a git repository with at least one commit. (Name kept for compatibility: no linked worktree is
+        /// created in the user's repository any more.)
+        /// </summary>
         public bool PreferGitWorktree = true;
+        /// <summary>
+        /// Give the copy its own copy-on-write clone of node_modules / .venv / ... (APFS clonefile on macOS, reflink on
+        /// Linux) so installs in the copy can't change the real folders. Falls back to a shared link when the file system
+        /// can't clone.
+        /// </summary>
+        public bool CloneDependencyFolders = true;
         public CancellationToken Cancellation = CancellationToken.None;
     }
 
     /// <summary>
     /// A temporary copy of the workspace with the staged (not yet accepted) agent edits applied, so a build/test can
     /// run without touching the user's files.
-    ///  - git repository: "git worktree add --detach" of HEAD (hooks and LFS smudge disabled), then the user's
-    ///    uncommitted changes (modified / added / untracked-not-ignored / deleted files) are copied over, then the
-    ///    staged edits are written.
+    ///  - git repository: a private clone ("git clone --shared --no-checkout", detached checkout of HEAD with hooks and
+    ///    LFS smudge disabled, remotes removed). It has its own refs, stash, config and hooks, so git commands in the copy
+    ///    (commit, branch -f, tag, stash, push) can't change the user's repository; nothing is registered in the user's
+    ///    repository (no linked worktree, no "git worktree prune"). Then the user's uncommitted changes (modified / added
+    ///    / untracked-not-ignored / deleted files) are copied over, then the staged edits are written.
     ///  - otherwise: the workspace tree is copied (APFS clones on macOS via File.Copy), skipping build outputs and VCS
     ///    folders, within <see cref="VerificationOverlayOptions"/> limits.
-    /// Dependency folders that are ignored and expensive to recreate (node_modules, .venv, venv, Pods, ...) are linked
-    /// (symlink on Unix, junction on Windows), never copied. Links are removed without following them.
-    /// Overlays live under ~/.codeless/verify-overlays with a marker file; <see cref="CleanupStale"/> removes overlays
-    /// left by a crashed process at the next start.
+    /// Dependency folders that are ignored and expensive to recreate (node_modules, .venv, venv, Pods, ...) get a
+    /// copy-on-write clone (macOS APFS clonefile, Linux reflink) when the file system supports it; otherwise they are
+    /// linked (symlink on Unix, junction on Windows) and reported in <see cref="SharedFolders"/> - writes there reach the
+    /// real folder, so the agent is told and package installs are refused in the copy. Links are removed without
+    /// following them. Overlays live under ~/.codeless/verify-overlays with a marker file; <see cref="CleanupStale"/>
+    /// removes overlays left by a crashed process at the next start.
     /// </summary>
     public sealed class VerificationOverlay : IDisposable
     {
@@ -45,11 +59,16 @@ namespace codeLess.Studio
         public string OverlayWorkspace;
         public string WorkspaceRoot;
         public string RepoRoot;
-        /// <summary>"git-worktree" or "copy".</summary>
+        /// <summary>"git-clone" (private clone of the repository) or "copy".</summary>
         public string Strategy = "";
         public int CopiedFiles;
         public long CopiedBytes;
+        /// <summary>Dependency folders linked to the real ones (shared: writes reach the user's folder). Same as <see cref="SharedFolders"/>.</summary>
         public readonly List<string> LinkedFolders = new List<string>();
+        /// <summary>Dependency folders that got a private copy-on-write clone (isolated).</summary>
+        public readonly List<string> ClonedFolders = new List<string>();
+        /// <summary>Dependency folders shared with the real workspace (could not be cloned on this file system).</summary>
+        public List<string> SharedFolders { get { return LinkedFolders; } }
         public readonly List<string> Notes = new List<string>();
         public long CreateMs;
         private bool disposed;
@@ -160,7 +179,11 @@ namespace codeLess.Studio
                     }
                 }
                 options.Cancellation.ThrowIfCancellationRequested();
+                ov.cloneDependencies = options.CloneDependencyFolders;
                 ov.LinkDependencyFolders();
+                if (ov.LinkedFolders.Count > 0)
+                    ov.Notes.Add("Shared with your real workspace (not copied): " + string.Join(", ", ov.LinkedFolders.ToArray()) +
+                                 ". Tools that write there (installs, caches) change your real folders.");
                 ov.ApplyStaged(stagedFiles, deletedFiles);
             }
             catch (OperationCanceledException)
@@ -184,23 +207,42 @@ namespace codeLess.Studio
             error = null;
             GitCommandResult head = GitProcess.Run(RepoRoot, new string[] { "rev-parse", "--verify", "-q", "HEAD" }, 15000, options.Cancellation, null, null);
             if (!head.Success || string.IsNullOrWhiteSpace(head.Stdout)) return false; // no commits yet: copy mode
-            // Older entries whose folder vanished would make "worktree add" fail.
-            GitProcess.Run(RepoRoot, new string[] { "worktree", "prune" }, 15000, options.Cancellation, null, null);
+            string sha = head.Stdout.Trim();
             string nullHooks = Path.DirectorySeparatorChar == '\\' ? "NUL" : "/dev/null";
-            GitCommandResult add = GitProcess.Run(RepoRoot, new string[]
+            // A private clone, not "git worktree add": a linked worktree shares refs, the stash, config and hooks with the
+            // user's repository, so "git stash" / "git branch -f" / "git tag" in the copy would change the real repo.
+            GitCommandResult clone = GitProcess.Run(RepoRoot, new string[]
+            {
+                "-c", "core.hooksPath=" + nullHooks,
+                "clone", "--shared", "--no-checkout", "--quiet", "--", RepoRoot, OverlayRoot
+            }, 10 * 60 * 1000, options.Cancellation, null, null);
+            if (clone.Cancelled) throw new OperationCanceledException();
+            if (!clone.Success || !Directory.Exists(Path.Combine(OverlayRoot, ".git")))
+            {
+                Notes.Add("git clone of the repository failed: " + FirstLine(clone.Stderr));
+                SafeDeleteTree(OverlayRoot);
+                return false;
+            }
+            GitCommandResult co = GitProcess.Run(OverlayRoot, new string[]
             {
                 "-c", "core.hooksPath=" + nullHooks,
                 "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false",
                 "-c", "advice.detachedHead=false",
-                "worktree", "add", "--detach", "--force", OverlayRoot, "HEAD"
+                "checkout", "--quiet", "--detach", "--force", sha
             }, 10 * 60 * 1000, options.Cancellation, null, null);
-            if (add.Cancelled) throw new OperationCanceledException();
-            if (!add.Success || !Directory.Exists(OverlayRoot))
+            if (co.Cancelled) throw new OperationCanceledException();
+            if (!co.Success)
             {
-                Notes.Add("git worktree add failed: " + FirstLine(add.Stderr));
+                Notes.Add("checkout in the verification copy failed: " + FirstLine(co.Stderr));
+                SafeDeleteTree(OverlayRoot);
                 return false;
             }
-            Strategy = "git-worktree";
+            // No remotes: "git push" / "git fetch" in the copy can't reach the user's repository (or anything else via it).
+            GitCommandResult remotes = GitProcess.Run(OverlayRoot, new string[] { "remote" }, 15000, options.Cancellation, null, null);
+            if (remotes.Success)
+                foreach (string rn in remotes.Stdout.Replace("\r", "").Split('\n'))
+                    if (rn.Trim().Length > 0) GitProcess.Run(OverlayRoot, new string[] { "remote", "remove", rn.Trim() }, 15000, options.Cancellation, null, null);
+            Strategy = "git-clone";
             string sub = RelativeTo(RepoRoot, WorkspaceRoot);
             OverlayWorkspace = string.IsNullOrEmpty(sub) ? OverlayRoot : Path.Combine(OverlayRoot, sub);
 
@@ -274,7 +316,7 @@ namespace codeLess.Studio
                 {
                     FileInfo fi;
                     try { fi = new FileInfo(f); } catch { continue; }
-                    if ((fi.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    if (LlmHarnessAndAgentEngine.IsSymlinkOrJunction(f, fi.Attributes)) continue;
                     if (fi.Length > options.MaxSingleFileBytes) { skippedLarge++; continue; }
                     if (CopiedFiles + 1 > options.MaxCopyFiles || CopiedBytes + fi.Length > options.MaxCopyBytes)
                     {
@@ -290,7 +332,7 @@ namespace codeLess.Studio
                 {
                     string name = Path.GetFileName(d);
                     if (skip.Contains(name)) continue;
-                    try { if ((new DirectoryInfo(d).Attributes & FileAttributes.ReparsePoint) != 0) continue; } catch { continue; }
+                    try { if (LlmHarnessAndAgentEngine.IsSymlinkOrJunction(d, new DirectoryInfo(d).Attributes)) continue; } catch { continue; }
                     stack.Push(d);
                 }
             }
@@ -299,6 +341,8 @@ namespace codeLess.Studio
         }
 
         /// <summary>Links ignored dependency folders (node_modules, .venv, ...) from the workspace, up to 3 levels deep.</summary>
+        private bool cloneDependencies = true;
+
         private void LinkDependencyFolders()
         {
             HashSet<string> deps = new HashSet<string>(LinkedDependencyFolders, StringComparer.OrdinalIgnoreCase);
@@ -316,7 +360,7 @@ namespace codeLess.Studio
                 {
                     string name = Path.GetFileName(d);
                     bool isLink;
-                    try { isLink = (new DirectoryInfo(d).Attributes & FileAttributes.ReparsePoint) != 0; } catch { continue; }
+                    try { isLink = LlmHarnessAndAgentEngine.IsSymlinkOrJunction(d, new DirectoryInfo(d).Attributes); } catch { continue; }
                     if (deps.Contains(name))
                     {
                         string rel = RelativeTo(WorkspaceRoot, d);
@@ -324,6 +368,11 @@ namespace codeLess.Studio
                         if (Directory.Exists(target) || File.Exists(target)) continue; // tracked in git: already there
                         string parent = Path.GetDirectoryName(target);
                         if (!Directory.Exists(parent)) continue;
+                        if (cloneDependencies && !isLink && TryCloneDirectoryCopyOnWrite(d, target))
+                        {
+                            ClonedFolders.Add(rel.Replace('\\', '/'));
+                            continue;
+                        }
                         if (CreateDirectoryLink(target, d)) LinkedFolders.Add(rel.Replace('\\', '/'));
                         continue;
                     }
@@ -363,10 +412,8 @@ namespace codeLess.Studio
             if (disposed) return;
             disposed = true;
             try { SafeDeleteTree(OverlayRoot); } catch { }
-            if (!string.IsNullOrEmpty(RepoRoot))
-            {
-                try { GitProcess.Run(RepoRoot, new string[] { "worktree", "prune" }, 15000, CancellationToken.None, null, null); } catch { }
-            }
+            // Nothing to unregister: the copy is a standalone clone. (Never "git worktree prune" the user's repository - it
+            // would also drop the metadata of the user's own worktrees whose folder is temporarily missing.)
             try { string m = MarkerPath(Id); if (File.Exists(m)) File.Delete(m); } catch { }
         }
 
@@ -459,9 +506,105 @@ namespace codeLess.Studio
             foreach (string repo in repos)
             {
                 if (!Directory.Exists(repo)) continue;
-                try { GitProcess.Run(repo, new string[] { "worktree", "prune" }, 15000, CancellationToken.None, null, null); } catch { }
+                try { RemoveCodelessWorktreeEntries(repo); } catch { }
             }
             return removed;
+        }
+
+        /// <summary>
+        /// Older codeLess versions registered verification copies as linked worktrees. Removes exactly those entries (admin
+        /// folders whose worktree path lies under <see cref="OverlaysRoot"/>) and nothing else - the user's own worktrees,
+        /// even ones whose folder is currently missing, are never touched.
+        /// </summary>
+        public static int RemoveCodelessWorktreeEntries(string repo)
+        {
+            int n = 0;
+            string common = WorkspaceIgnoreRules.ResolveGitCommonDir(repo);
+            if (common == null) return 0;
+            string wtDir = Path.Combine(common, "worktrees");
+            if (!Directory.Exists(wtDir)) return 0;
+            string overlays = TrimSep(SafeFull(OverlaysRoot));
+            foreach (string admin in Directory.GetDirectories(wtDir))
+            {
+                try
+                {
+                    string gitdirFile = Path.Combine(admin, "gitdir");
+                    if (!File.Exists(gitdirFile)) continue;
+                    string wtGit = File.ReadAllText(gitdirFile).Trim();       // <worktree>/.git
+                    string wtPath = TrimSep(SafeFull(Path.GetDirectoryName(wtGit) ?? ""));
+                    if (wtPath.Length <= overlays.Length || !wtPath.StartsWith(overlays + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                        !wtPath.StartsWith(overlays + "/", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (Directory.Exists(wtPath)) SafeDeleteTree(wtPath);
+                    SafeDeleteTree(admin);
+                    n++;
+                }
+                catch { }
+            }
+            return n;
+        }
+
+        // ---------------------------------------------------------------- dependency folders
+
+        [DllImport("libc", EntryPoint = "clonefile", SetLastError = true)]
+        private static extern int clonefile_native(byte[] src, byte[] dst, uint flags);
+
+        /// <summary>Test hook / kill switch for copy-on-write cloning.</summary>
+        public static bool CopyOnWriteDisabled;
+
+        /// <summary>
+        /// Private copy-on-write clone of a directory tree: APFS clonefile(2) on macOS (one call, no data copied), reflink
+        /// "cp --reflink=always" on Linux (btrfs / XFS / bcachefs). False (nothing left behind) when the file system can't.
+        /// </summary>
+        public static bool TryCloneDirectoryCopyOnWrite(string src, string dst)
+        {
+            if (CopyOnWriteDisabled || Path.DirectorySeparatorChar == '\\') return false;
+            try
+            {
+                if (RuntimeInformationIsMac())
+                {
+                    if (clonefile_native(CStr(src), CStr(dst), 0x0001 /* CLONE_NOFOLLOW */) == 0) return true;
+                    if (Directory.Exists(dst)) SafeDeleteTree(dst);
+                    return false;
+                }
+                ProcessStartInfo psi = new ProcessStartInfo("cp", GitCli.JoinArgs(new string[] { "-a", "--reflink=always", "--", src, dst }));
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                using (Process p = Process.Start(psi))
+                {
+                    if (p == null) return false;
+                    p.StandardOutput.ReadToEndAsync();
+                    p.StandardError.ReadToEndAsync();
+                    if (!p.WaitForExit(120000)) { LanguageServerManager.KillProcessTree(p); SafeDeleteTree(dst); return false; }
+                    if (p.ExitCode == 0 && Directory.Exists(dst)) return true;
+                }
+            }
+            catch { }
+            try { if (Directory.Exists(dst)) SafeDeleteTree(dst); } catch { }
+            return false;
+        }
+
+        private static bool RuntimeInformationIsMac()
+        {
+            return LspText.IsMacOS();
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex DependencyMutationRx = new System.Text.RegularExpressions.Regex(
+            @"(^|[;&|(]\s*|\s)(npm|pnpm|yarn|bun)\s+(i|install|add|remove|rm|uninstall|un|ci|update|up|upgrade|link|unlink|prune|dedupe)\b" +
+            @"|\bpip[0-9.]*\s+(install|uninstall)\b|\bpython[0-9.]*\s+-m\s+pip\s+(install|uninstall)\b" +
+            @"|\b(poetry|uv|pipenv)\s+(add|remove|install|sync|update|lock|pip)\b|\bpod\s+(install|update|deintegrate)\b" +
+            @"|\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+[^;&|]*(node_modules|\.venv|venv|Pods|bower_components|\.yarn)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// True when <paramref name="command"/> would install / remove packages or delete a dependency folder while this
+        /// copy shares such folders with the real workspace (the change would land in the user's real environment).
+        /// </summary>
+        public bool WouldModifySharedDependencies(string command)
+        {
+            if (LinkedFolders.Count == 0 || string.IsNullOrEmpty(command)) return false;
+            return DependencyMutationRx.IsMatch(command);
         }
 
         // ---------------------------------------------------------------- file system helpers
@@ -515,7 +658,8 @@ namespace codeLess.Studio
             {
                 if (Path.DirectorySeparatorChar == '\\')
                 {
-                    ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/d /c mklink /J " + GitCli.QuoteArg(link) + " " + GitCli.QuoteArg(target));
+                    ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/d /c mklink /J " + LanguageServerRegistry.CaretEscapeForCmd(LanguageServerRegistry.QuoteArgAlways(link)) + " " +
+                        LanguageServerRegistry.CaretEscapeForCmd(LanguageServerRegistry.QuoteArgAlways(target)));
                     psi.UseShellExecute = false;
                     psi.CreateNoWindow = true;
                     psi.RedirectStandardOutput = true;

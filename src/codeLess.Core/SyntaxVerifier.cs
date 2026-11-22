@@ -156,7 +156,7 @@ namespace codeLess.Studio
                     File.WriteAllText(tempPy, content ?? "", new UTF8Encoding(false));
                     int exitCode;
                     string output;
-                    if (TryRunSyntaxCheckProcess("python", "-m py_compile \"" + tempPy + "\"", 3000, out exitCode, out output))
+                    if (TryRunSyntaxCheckProcess("python", "-I -m py_compile \"" + tempPy + "\"", 3000, out exitCode, out output))
                     {
                         // Only real compiler diagnostics count: a non-zero exit without them (e.g. the Windows Store
                         // "python" alias stub printing "Python was not found", exit 9009) must not reject valid code.
@@ -230,7 +230,10 @@ namespace codeLess.Studio
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    // Never the workspace: "python -m" imports from the working directory, so a planted py_compile.py would
+                    // run. -I (isolated) also drops the cwd from sys.path and ignores PYTHON* variables.
+                    WorkingDirectory = Path.GetTempPath()
                 };
                 using (Process p = Process.Start(psi))
                 {
@@ -239,7 +242,7 @@ namespace codeLess.Studio
                     Task<string> errTask = p.StandardError.ReadToEndAsync();
                     if (!p.WaitForExit(timeoutMs))
                     {
-                        try { p.Kill(); } catch { }
+                        LanguageServerManager.KillProcessTree(p);
                         return false;
                     }
                     Task.WaitAll(new Task[] { outTask, errTask }, 1000);

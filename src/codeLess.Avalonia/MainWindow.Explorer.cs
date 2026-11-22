@@ -297,7 +297,12 @@ namespace codeLess.AvaloniaApp
                 w.Created += OnWorkspaceFsEvent;
                 w.Deleted += OnWorkspaceFsEvent;
                 w.Changed += OnWorkspaceFsEvent;
-                w.Renamed += (s, e) => { OnWorkspaceFsEvent(s, e); QueueFsChange(e.OldFullPath, structural: true); };
+                w.Renamed += (s, e) =>
+                {
+                    OnWorkspaceFsEvent(s, e);
+                    QueueFsChange(e.OldFullPath, structural: true);
+                    lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
+                };
                 w.Error += (s, e) =>
                 {
                     // Buffer overflow or inotify watch limit: fall back to one full refresh.
@@ -324,6 +329,9 @@ namespace codeLess.AvaloniaApp
 
         private void OnWorkspaceFsEvent(object sender, FileSystemEventArgs e)
         {
+            // Language servers that watch files (pyright, gopls, rust-analyzer) learn about git checkouts, agent writes etc.
+            lsp?.NotifyFileSystemChange(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
+                : e.ChangeType == WatcherChangeTypes.Changed ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
             QueueFsChange(e.FullPath, structural: e.ChangeType != WatcherChangeTypes.Changed);
         }
 

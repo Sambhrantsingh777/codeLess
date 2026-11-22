@@ -570,6 +570,8 @@ namespace codeLess.AvaloniaApp
                 summary.Written.AddRange(res.Written);
                 summary.Conflicts.AddRange(res.Conflicts.Select(c => c + " changed on disk since the proposal"));
                 summary.Errors.AddRange(res.Errors);
+                if (res.Notes.Count > 0)
+                    AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = string.Join(" ", res.Notes) });
                 if (res.Written.Count > 0 && tab != null) ReloadOpenTabIfChangedOnDisk(f.FullPath);
             }
             AfterAgentWrites(cs, summary);
@@ -1016,7 +1018,7 @@ namespace codeLess.AvaloniaApp
             stack.Children.Add(grid);
             stack.Children.Add(new TextBlock
             {
-                Text = "Verification runs in a temporary git worktree (or a filtered copy) with the AI's staged edits applied; your files are never written. Repository-chosen commands ask for approval the first time.",
+                Text = "Verification runs in a private temporary git clone (or a filtered copy) with the AI's staged edits applied; your files are never written. Repository-chosen commands ask for approval the first time.",
                 TextWrapping = TextWrapping.Wrap, FontSize = UiTokens.FontSmall, Foreground = WorkbenchStyles.B(currentTheme.FgSecondary)
             });
             var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8 };
@@ -1116,7 +1118,7 @@ namespace codeLess.AvaloniaApp
             if (item.IsRunning)
                 stack.Children.Add(new TextBlock { Text = item.ProgressText ?? "", FontSize = UiTokens.FontSmall, TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(fgSecondary) });
             if (v != null && !string.IsNullOrEmpty(v.CommandLine))
-                stack.Children.Add(new TextBlock { Text = v.CommandLine + "  ·  " + v.Source + (string.IsNullOrEmpty(v.Strategy) ? "" : "  ·  " + (v.Strategy == "git-worktree" ? "temporary git worktree" : "temporary copy")), FontSize = UiTokens.FontSmall, TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(fgSecondary) });
+                stack.Children.Add(new TextBlock { Text = v.CommandLine + "  ·  " + v.Source + (string.IsNullOrEmpty(v.Strategy) ? "" : "  ·  " + (v.Strategy == "git-clone" ? "temporary git clone" : "temporary copy")), FontSize = UiTokens.FontSmall, TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(fgSecondary) });
             if (v != null && !string.IsNullOrEmpty(v.Message))
                 stack.Children.Add(new TextBlock { Text = v.Message, FontSize = UiTokens.FontSmall, TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(fgPrimary) });
             if (v != null && v.Errors.Count > 0)

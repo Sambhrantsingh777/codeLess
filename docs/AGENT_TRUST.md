@@ -17,7 +17,8 @@ Nothing the agent proposes is written to your files until you accept it.
 - **Auto save never writes a proposal that is still under review**; it saves once you accept.
 - **Agent commands (`run_terminal`)** never write staged edits into your files: when the turn has staged edits, the
   command runs in a temporary copy of the workspace with those edits applied (the same copy verification uses) and the
-  copy is deleted afterwards; files the command creates or changes in the copy are discarded (the model is told so).
+  copy is deleted afterwards; files the command creates or changes in the copy are discarded (the model is told so,
+  including which dependency folders, if any, are shared with your real ones - see "The temporary copy").
   Without staged edits the command runs in your workspace. One agent turn runs per chat at a time; Stop cancels it.
 
 ## Verification gate
@@ -59,21 +60,44 @@ runs never execute without an answer.
 
 ### The temporary copy
 
-- **git repository** (with at least one commit): `git worktree add --detach` of HEAD with hooks and LFS smudge
-  disabled, then your uncommitted work (modified, added, untracked-not-ignored, deleted files) is copied over, then the
-  staged edits are written. Copied bytes are capped (300 MB). A workspace inside a bigger repo maps through the
-  subfolder.
+- **git repository** (with at least one commit): a private clone (`git clone --shared --no-checkout`, then a detached
+  checkout of HEAD with hooks and LFS smudge disabled, then its remotes are removed). The clone has its own refs, stash,
+  config and hooks: `git commit`, `git stash`, `git branch -f`, `git tag` or `git push` run in the copy can't change your
+  repository (the copy has no remotes), and nothing is registered in your repository (no linked worktree, and codeLess
+  never runs `git worktree prune` on it). Git objects are shared read-only through git's alternates mechanism, so the
+  clone is fast and small. Then your uncommitted work (modified, added, untracked-not-ignored, deleted files) is copied
+  over, then the staged edits are written. Copied bytes are capped (300 MB). A workspace inside a bigger repo maps
+  through the subfolder.
 - **otherwise**: a filtered copy of the tree (APFS clones on macOS), skipping `.git`, `bin`, `obj`, `target`, `dist`,
   `build`, `out`, caches; capped at 40 000 files / 300 MB, files over 64 MB skipped.
-- `node_modules`, `.venv`, `venv`, `Pods`, `bower_components`, `.yarn` (up to 3 levels deep) are linked, not copied
-  (symlink on macOS/Linux, junction on Windows). Links are always removed without following them.
+- `node_modules`, `.venv`, `venv`, `Pods`, `bower_components`, `.yarn` (up to 3 levels deep) get a **private
+  copy-on-write clone** where the file system supports it (APFS `clonefile` on macOS - instant, no data copied; reflink
+  on Linux btrfs / XFS). Installs or cache writes in the copy then stay in the copy. Where cloning isn't possible
+  (Windows, ext4, a workspace on another volume) the folder is **shared** with your real one through a link (symlink /
+  junction): the verification result and the agent are told so explicitly, and agent commands that would install or
+  remove packages (`npm install`, `pip install`, `poetry add`, `rm -rf node_modules`, ...) are refused in the copy while
+  a dependency folder is shared. Links are always removed without following them.
 - Copies live in `~/.codeless/verify-overlays/<id>` with a marker file and are deleted after each run; copies left by a
-  crash or kill are removed at the next start (and `git worktree prune` cleans the repository's worktree list).
+  crash or kill are removed at the next start. Worktree entries created by older codeLess versions are removed by their
+  exact path; your own worktrees are never touched.
 
 Limits: build outputs are not shared, so compiled projects build from scratch in the copy (package caches such as
 `~/.nuget`, `~/.cargo`, Go's module cache are shared); git submodules are not populated; LFS files are pointers unless
-modified locally; tools that write into linked folders (e.g. `node_modules/.cache`) write into your real folder; the
-copy is not a security sandbox — approval is the safety boundary.
+modified locally; on file systems without copy-on-write, tools that write into shared dependency folders (e.g.
+`node_modules/.cache`) write into your real folder; the copy is not a security sandbox - approval is the safety
+boundary, and in Restricted Mode (see [Workspace Trust](#workspace-trust)) verification doesn't run at all.
+
+## Workspace Trust
+
+When you open a folder for the first time, codeLess asks "Do you trust the authors of the files in this folder?"
+(**Trust Folder** / **Restricted Mode**, optionally trusting the parent folder). Decisions are remembered per folder in
+`workspace-trust.json` next to `settings.json`; Settings ▸ Workspace Trust (and the "Manage Workspace Trust" command)
+lists trusted folders and lets you revoke them. In **Restricted Mode** codeLess never runs anything from the workspace
+on its own: no language servers / interpreters installed in the project (`node_modules/.bin`, virtual environments), no
+language servers that execute project code by design (rust-analyzer, jdtls, C#), no tasks, no debugging, no agent
+verification, no venv auto-activation in new terminals, no git (repository config can run commands), and agent terminal
+commands always ask. Global language servers from PATH keep working. A "Restricted Mode" status-bar item and a banner
+offer **Manage**; trusting enables everything immediately, without a restart.
 
 ## Best-of-N
 

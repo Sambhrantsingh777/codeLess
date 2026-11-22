@@ -50,7 +50,55 @@ namespace codeLess.Studio
 
         public static GitCommandResult Run(string repo, string[] args, int timeoutMs, CancellationToken ct, string stdinText, Action<string> progress)
         {
+            return RunWithStdinBytes(repo, args, timeoutMs, ct, stdinText != null ? new UTF8Encoding(false).GetBytes(stdinText) : null, progress);
+        }
+
+        /// <summary>
+        /// Raw stdout bytes of a git command (null on failure / Restricted Mode). Used where the text encoding matters
+        /// (index / HEAD blobs of non-UTF-8 files).
+        /// </summary>
+        public static byte[] RunBytes(string repo, string[] args, int timeoutMs)
+        {
+            if (GitSafety.BlockReason(repo, args) != null) return null;
+            List<string> all = new List<string>();
+            all.Add("-c");
+            all.Add("core.quotepath=false");
+            all.AddRange(args);
+            Process p = null;
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo("git", GitCli.JoinArgs(all.ToArray()));
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.RedirectStandardInput = true;
+                if (!string.IsNullOrEmpty(repo) && Directory.Exists(repo)) psi.WorkingDirectory = repo;
+                psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+                GitSafety.Apply(psi, repo);
+                p = Process.Start(psi);
+                if (p == null) return null;
+                try { p.StandardInput.Close(); } catch { }
+                Process proc = p;
+                MemoryStream ms = new MemoryStream();
+                Thread t = new Thread(delegate () { try { proc.StandardOutput.BaseStream.CopyTo(ms); } catch { } });
+                Thread e = new Thread(delegate () { try { proc.StandardError.ReadToEnd(); } catch { } });
+                t.IsBackground = true; e.IsBackground = true;
+                t.Start(); e.Start();
+                if (!p.WaitForExit(timeoutMs <= 0 ? int.MaxValue : timeoutMs)) { KillTree(p); return null; }
+                t.Join(5000); e.Join(1000);
+                return p.ExitCode == 0 ? ms.ToArray() : null;
+            }
+            catch { return null; }
+            finally { if (p != null) { try { p.Dispose(); } catch { } } }
+        }
+
+        /// <summary><see cref="Run(string, string[], int, CancellationToken, string, Action{string})"/> with exact stdin bytes (patches in the file's encoding).</summary>
+        public static GitCommandResult RunWithStdinBytes(string repo, string[] args, int timeoutMs, CancellationToken ct, byte[] stdinBytes, Action<string> progress)
+        {
             GitCommandResult res = new GitCommandResult();
+            string blocked = GitSafety.BlockReason(repo, args);
+            if (blocked != null) { res.StartError = blocked; return res; }
             List<string> all = new List<string>();
             all.Add("-c");
             all.Add("core.quotepath=false");
@@ -70,6 +118,7 @@ namespace codeLess.Studio
                 psi.StandardErrorEncoding = new UTF8Encoding(false);
                 if (!string.IsNullOrEmpty(repo) && Directory.Exists(repo)) psi.WorkingDirectory = repo;
                 psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+                GitSafety.Apply(psi, repo);
                 // English messages so failures can be classified; LC_CTYPE is left alone so hooks keep their UTF-8 locale.
                 psi.EnvironmentVariables["LC_MESSAGES"] = "C";
                 psi.EnvironmentVariables["LANGUAGE"] = "C";
@@ -126,10 +175,9 @@ namespace codeLess.Studio
             errThread.Start();
             try
             {
-                if (stdinText != null)
+                if (stdinBytes != null)
                 {
-                    byte[] bytes = new UTF8Encoding(false).GetBytes(stdinText);
-                    p.StandardInput.BaseStream.Write(bytes, 0, bytes.Length);
+                    p.StandardInput.BaseStream.Write(stdinBytes, 0, stdinBytes.Length);
                     p.StandardInput.BaseStream.Flush();
                 }
                 p.StandardInput.Close();
@@ -695,6 +743,49 @@ namespace codeLess.Studio
 
         private static GitOperationResult Guarded(string repo, string remote, bool allRemotes, string op, Func<GitOperationResult> body)
         {
+            return Guarded(repo, remote, allRemotes, false, op, body);
+        }
+
+        /// <summary>
+        /// The remote "git push" (without arguments) talks to: branch.&lt;b&gt;.pushRemote, then remote.pushDefault, then the
+        /// branch's remote / the default remote - the same order git uses.
+        /// </summary>
+        public static string PushRemote(string repo)
+        {
+            GitBranchStatus st = GetBranchStatus(repo);
+            if (!string.IsNullOrEmpty(st.Branch))
+            {
+                GitCommandResult r = GitProcess.Run(repo, new string[] { "config", "--get", "branch." + st.Branch + ".pushRemote" }, 10000, CancellationToken.None, null, null);
+                if (r.Success && r.Stdout.Trim().Length > 0) return r.Stdout.Trim();
+            }
+            GitCommandResult d = GitProcess.Run(repo, new string[] { "config", "--get", "remote.pushDefault" }, 10000, CancellationToken.None, null, null);
+            if (d.Success && d.Stdout.Trim().Length > 0) return d.Stdout.Trim();
+            return DefaultRemote(repo);
+        }
+
+        /// <summary>Every URL a push to <paramref name="remote"/> contacts (remote.&lt;r&gt;.pushurl entries, else its url).</summary>
+        public static List<string> PushUrls(string repo, string remote)
+        {
+            List<string> list = new List<string>();
+            if (string.IsNullOrEmpty(remote)) return list;
+            GitCommandResult r = GitProcess.Run(repo, new string[] { "remote", "get-url", "--push", "--all", remote }, 10000, CancellationToken.None, null, null);
+            if (r.Success)
+                foreach (string l in r.Stdout.Replace("\r", "").Split('\n'))
+                    if (l.Trim().Length > 0) list.Add(l.Trim());
+            if (list.Count == 0)
+            {
+                string u = RemoteUrl(repo, remote);
+                if (u.Length > 0) list.Add(u);
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Offline Mode check + ledger entries for a network git operation. <paramref name="includePush"/> adds every URL the
+        /// push half contacts (pushurl / pushRemote / remote.pushDefault), which can differ from the fetch URL.
+        /// </summary>
+        private static GitOperationResult Guarded(string repo, string remote, bool allRemotes, bool includePush, string op, Func<GitOperationResult> body)
+        {
             List<string> names = new List<string>();
             if (allRemotes) names.AddRange(ListRemotes(repo));
             else
@@ -707,6 +798,16 @@ namespace codeLess.Studio
             {
                 string url = RemoteUrl(repo, n);
                 if (!IsLocalRemoteUrl(url)) urls.Add(LedgerUrl(url));
+            }
+            if (includePush)
+            {
+                string pr = string.IsNullOrEmpty(remote) ? PushRemote(repo) : remote;
+                foreach (string pu in PushUrls(repo, pr))
+                {
+                    if (IsLocalRemoteUrl(pu)) continue;
+                    string lu = LedgerUrl(pu);
+                    if (!urls.Contains(lu)) urls.Add(lu);
+                }
             }
             foreach (string u in urls)
             {
@@ -742,19 +843,33 @@ namespace codeLess.Studio
             return GitErrorClassifier.ToResult(r, "Fetch", "Fetched.");
         }
 
-        /// <summary>True when the user configured pull.rebase themselves (then plain "git pull" honours it).</summary>
+        /// <summary>
+        /// True when the user configured how pulls reconcile (pull.rebase, or branch.&lt;current&gt;.rebase which overrides it):
+        /// then a plain "git pull" honours their choice and codeLess must not force --no-rebase.
+        /// </summary>
         public static bool HasPullRebaseConfig(string repo)
         {
             GitCommandResult r = GitProcess.Run(repo, new string[] { "config", "--get", "pull.rebase" }, 10000, CancellationToken.None, null, null);
-            return r.Success && r.Stdout.Trim().Length > 0;
+            if (r.Success && r.Stdout.Trim().Length > 0) return true;
+            GitCommandResult b = GitProcess.Run(repo, new string[] { "symbolic-ref", "--quiet", "--short", "HEAD" }, 10000, CancellationToken.None, null, null);
+            string branch = b.Success ? b.Stdout.Trim() : "";
+            if (branch.Length == 0) return false;
+            GitCommandResult br = GitProcess.Run(repo, new string[] { "config", "--get", "branch." + branch + ".rebase" }, 10000, CancellationToken.None, null, null);
+            return br.Success && br.Stdout.Trim().Length > 0;
         }
 
+        /// <summary>
+        /// "git pull" arguments. An explicit rebase request (Pull (Rebase), git.rebaseWhenSync) always passes --rebase, like
+        /// VS Code. Otherwise the user's pull.rebase / branch.&lt;b&gt;.rebase decides; only when neither is configured do we pass
+        /// --no-rebase (git's historic merge default, avoiding the "divergent branches" error of git 2.27+).
+        /// </summary>
         public static string[] BuildPullArgs(bool rebase, bool userConfiguredPullRebase)
         {
             List<string> args = new List<string>();
             args.Add("pull");
             args.Add("--progress");
-            if (!userConfiguredPullRebase) args.Add(rebase ? "--rebase" : "--no-rebase");
+            if (rebase) args.Add("--rebase");
+            else if (!userConfiguredPullRebase) args.Add("--no-rebase");
             return args.ToArray();
         }
 
@@ -771,7 +886,7 @@ namespace codeLess.Studio
 
         public static GitOperationResult Push(string repo, CancellationToken ct, Action<string> progress)
         {
-            return Guarded(repo, null, false, "Push", delegate { return PushCore(repo, ct, progress); });
+            return Guarded(repo, null, false, true, "Push", delegate { return PushCore(repo, ct, progress); });
         }
 
         private static GitOperationResult PushCore(string repo, CancellationToken ct, Action<string> progress)
@@ -799,7 +914,7 @@ namespace codeLess.Studio
         public static GitOperationResult Publish(string repo, string remote, CancellationToken ct, Action<string> progress)
         {
             string target = string.IsNullOrEmpty(remote) ? PickPublishRemote(ListRemotes(repo)) : remote;
-            return Guarded(repo, target, false, "Publish", delegate { return PublishCore(repo, target, ct, progress); });
+            return Guarded(repo, target, false, true, "Publish", delegate { return PublishCore(repo, target, ct, progress); });
         }
 
         private static GitOperationResult PublishCore(string repo, string remote, CancellationToken ct, Action<string> progress)
@@ -832,7 +947,7 @@ namespace codeLess.Studio
         {
             GitBranchStatus st0 = GetBranchStatus(repo);
             if (!st0.IsDetached && !st0.HasUpstream) return Publish(repo, null, ct, progress);
-            return Guarded(repo, null, false, "Sync", delegate { return SyncCore(repo, rebase, ct, progress); });
+            return Guarded(repo, null, false, true, "Sync", delegate { return SyncCore(repo, rebase, ct, progress); });
         }
 
         private static GitOperationResult SyncCore(string repo, bool rebase, CancellationToken ct, Action<string> progress)
@@ -847,7 +962,8 @@ namespace codeLess.Studio
             }
             if (!st.HasUpstream) return PublishCore(repo, PickPublishRemote(ListRemotes(repo)), ct, progress);
             StringBuilder details = new StringBuilder();
-            GitCommandResult pull = GitProcess.Run(repo, BuildPullArgs(rebase, false), NetworkTimeoutMs, ct, null, progress);
+            // Honour the user's pull.rebase / branch.<b>.rebase like Pull does (VS Code passes --rebase only for rebaseWhenSync).
+            GitCommandResult pull = GitProcess.Run(repo, BuildPullArgs(rebase, HasPullRebaseConfig(repo)), NetworkTimeoutMs, ct, null, progress);
             details.AppendLine(pull.Combined);
             if (!pull.Success)
             {

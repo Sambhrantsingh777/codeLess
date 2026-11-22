@@ -353,6 +353,8 @@ namespace codeLess.Studio
         public static string ScheduleActivation(ConPtyTerminalSession session, string workspaceRoot)
         {
             if (session == null || !session.IsRunning) return null;
+            // Restricted Mode: "source .venv/bin/activate" runs a script from the untrusted workspace - never automatically.
+            if (WorkspaceTrust.IsRestricted(workspaceRoot)) return null;
             string shell = !string.IsNullOrEmpty(session.ShellExecutable) ? session.ShellExecutable : session.CommandLine;
             string cmd;
             try

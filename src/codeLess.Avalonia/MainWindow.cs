@@ -264,6 +264,7 @@ namespace codeLess.AvaloniaApp
             InitAgentTrust();
             BuildNativeMacMenu();
             InitLanguageServers();
+            InitializeWorkspaceTrust();
             ApplyTheme(currentTheme);
             InitDebugWorkbench();
 
@@ -1487,8 +1488,9 @@ namespace codeLess.AvaloniaApp
             Grid.SetColumn(splitEditorBorder, 1);
             editorSplitGrid.Children.Add(splitEditorBorder);
 
-            Grid.SetRow(editorSplitGrid, 1);
-            centerGrid.Children.Add(editorSplitGrid);
+            var editorWithTrustBanner = WrapWithRestrictedModeBanner(editorSplitGrid);
+            Grid.SetRow(editorWithTrustBanner, 1);
+            centerGrid.Children.Add(editorWithTrustBanner);
 
             // Row 2: Horizontal Splitter
             var btmSplitter = new GridSplitter
@@ -2096,6 +2098,7 @@ namespace codeLess.AvaloniaApp
             };
 
             leftRow.Children.Add(statusRemoteBtn);
+            leftRow.Children.Add(BuildRestrictedModeStatusItem());
             leftRow.Children.Add(statusBranchBtn);
             leftRow.Children.Add(statusSyncBtn);
             leftRow.Children.Add(statusProblemsBtn);
@@ -2380,6 +2383,7 @@ namespace codeLess.AvaloniaApp
             settings.AddRecentWorkspace(workspaceRoot);
             OnDebugWorkspaceChanged();
             LspOnWorkspaceChanged();
+            OnWorkspaceTrustFolderOpened();
 
             string folderName = Path.GetFileName(workspaceRoot.TrimEnd('\\', '/'));
             if (string.IsNullOrEmpty(folderName)) folderName = workspaceRoot;
