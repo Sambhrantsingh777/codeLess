@@ -1199,13 +1199,16 @@ namespace codeLess.Studio
                             try { p.StandardOutput.BaseStream.CopyTo(ms); } catch { }
                         });
                         Task<string> errTask = p.StandardError.ReadToEndAsync();
-                        if (!p.WaitForExit(2500))
+                        if (!p.WaitForExit(10000))
                         {
                             try { p.Kill(); } catch { }
                             return null;
                         }
-                        try { copyTask.Wait(1000); } catch { }
-                        if (p.ExitCode != 0)
+                        // The stdout copy must be complete: reading the buffer while it was still being filled
+                        // (busy machine) returned "" or a truncated file, and the gutter then marked every line as changed.
+                        bool copied = false;
+                        try { copied = copyTask.Wait(10000); } catch { copied = false; }
+                        if (!copied || p.ExitCode != 0)
                             return null;
                         byte[] bytes = ms.ToArray();
                         if (bytes.Length == 0)
