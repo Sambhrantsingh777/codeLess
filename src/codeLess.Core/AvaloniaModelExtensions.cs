@@ -475,7 +475,21 @@ namespace codeLess.Studio
                 string cur = rootDir;
                 while (!string.IsNullOrEmpty(cur))
                 {
-                    string headFile = Path.Combine(cur, ".git", "HEAD");
+                    string dotGit = Path.Combine(cur, ".git");
+                    string headFile = Path.Combine(dotGit, "HEAD");
+                    // Linked worktrees and submodules have a `.git` FILE ("gitdir: <path>") instead of a directory;
+                    // without this the walk continued to the parent repository and reported its branch.
+                    if (File.Exists(dotGit))
+                    {
+                        string pointer = File.ReadAllText(dotGit).Trim();
+                        const string gitdirPrefix = "gitdir:";
+                        if (pointer.StartsWith(gitdirPrefix, StringComparison.OrdinalIgnoreCase))
+                        {
+                            string gitDir = pointer.Substring(gitdirPrefix.Length).Trim();
+                            if (!Path.IsPathRooted(gitDir)) gitDir = Path.GetFullPath(Path.Combine(cur, gitDir));
+                            headFile = Path.Combine(gitDir, "HEAD");
+                        }
+                    }
                     if (File.Exists(headFile))
                     {
                         string raw = File.ReadAllText(headFile).Trim();
