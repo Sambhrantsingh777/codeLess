@@ -6,7 +6,7 @@ unless noted. Numbers are not rounded in our favour; where something was not mea
 
 **Machine:** Apple M3 (8 cores), 8 GB RAM, macOS 26.6.2, internal SSD, .NET SDK 8.0.428, Release build.
 The machine was not idle (other build jobs and a user VS Code window were running), so treat small differences as noise.
-**codeLess:** v3.3.0 (commit 3e4456d, Release, self-contained). **VS Code:** 1.147.0 (Electron 43.8.9), fresh
+**codeLess:** v3.3.1 (feature-identical build of commit 3e4456d, Release, self-contained). **VS Code:** 1.147.0 (Electron 43.8.9), fresh
 `--user-data-dir` / `--extensions-dir`, extensions disabled.
 
 ## Head-to-head: codeLess vs VS Code (measured 2026-11-22)

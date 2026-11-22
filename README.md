@@ -1,7 +1,7 @@
 # codeLess — Lightweight Native Agentic IDE & Multi-Harness Coding Workbench
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-3.3.0-0ea5e9.svg)](https://github.com/Sambhrantsingh777/codeLess/releases)
+[![Version](https://img.shields.io/badge/version-3.3.1-0ea5e9.svg)](https://github.com/Sambhrantsingh777/codeLess/releases)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-10b981.svg)](#installation--building-from-source)
 [![BYOK](https://img.shields.io/badge/AI-100%25%20BYOK%20%26%20Local%20Ollama-8b5cf6.svg)](#multi-profile-llm-harness--byok-providers)
 

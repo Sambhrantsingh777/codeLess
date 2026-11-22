@@ -1,4 +1,4 @@
-# codeLess v3.3.0
+# codeLess v3.3.1
 
 The biggest release yet: VS Code-level code intelligence and debugging without Electron, a trustworthy AI agent, and a
 quality pass that fixed well over a hundred bugs. Every feature ships on Windows, macOS and Linux.
