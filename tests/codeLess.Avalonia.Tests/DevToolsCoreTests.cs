@@ -219,6 +219,8 @@ namespace codeLess.Avalonia.Tests
         }
     }
 
+    // Toggles the global NetworkLedger.OfflineMode: must not run in parallel with other tests that read or set it.
+    [Collection("SequentialWorkbench")]
     public class HttpClientCoreTests
     {
         private const string Sample =

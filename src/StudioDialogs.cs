@@ -2743,6 +2743,7 @@ namespace codeLess.Studio
         public CheckBox AutoSaveBox;
         public CheckBox AgentApprovalBox;
         public CheckBox ShowWelcomeBox;
+        public CheckBox AutoUpdateCheckBox;
         public CheckBox ActivatePythonEnvBox;
         public CheckBox OfflineModeBox;
         public CodeLessDarkInputBox ExcludedFoldersInput;
@@ -2777,6 +2778,7 @@ namespace codeLess.Studio
             bool origWelcome = currentSettings.ShowWelcomeOnStartup;
             bool origActivateVenv = currentSettings.ActivatePythonEnvironmentInTerminal;
             bool origOffline = currentSettings.OfflineMode;
+            bool origAutoUpdate = currentSettings.AutoCheckForUpdates;
             string origExcluded = currentSettings.ExcludedFolders;
             string origAgentModel = currentSettings.DefaultAgentModel;
             string origAskModel = currentSettings.DefaultAskModel;
@@ -2925,6 +2927,7 @@ namespace codeLess.Studio
             ActivatePythonEnvBox = addCheck("Activate Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, 380, y);
             y += 24;
             OfflineModeBox = addCheck("Offline Mode (block all non-local network requests)", settings.OfflineMode, 24, y);
+            AutoUpdateCheckBox = addCheck("Check for updates automatically (once a day)", settings.AutoCheckForUpdates, 380, y);
             AutoSaveBox.Visible = false; // superseded by the files.autoSave mode below
             y += 28;
             ParityBlock = ParitySettingsBlockWin.Build(body, settings, activeTheme, ref y);
@@ -3124,6 +3127,7 @@ namespace codeLess.Studio
             AgentApprovalBox.CheckedChanged += (s, e) => liveApply();
             ShowWelcomeBox.CheckedChanged += (s, e) => liveApply();
             OfflineModeBox.CheckedChanged += (s, e) => liveApply();
+            AutoUpdateCheckBox.CheckedChanged += (s, e) => liveApply();
             ExcludedFoldersInput.TextChanged += (s, e) => liveApply();
             DefaultAgentModelCombo.SelectedIndexChanged += (s, e) => liveApply();
             DefaultAskModelCombo.SelectedIndexChanged += (s, e) => liveApply();
@@ -3181,6 +3185,7 @@ namespace codeLess.Studio
                 settings.ActivatePythonEnvironmentInTerminal = origActivateVenv;
                 settings.OfflineMode = origOffline;
                 NetworkLedger.SetOfflineMode(origOffline);
+                settings.AutoCheckForUpdates = origAutoUpdate;
                 settings.ExcludedFolders = origExcluded;
                 settings.DefaultAgentModel = origAgentModel;
                 settings.DefaultAskModel = origAskModel;
@@ -3232,6 +3237,8 @@ namespace codeLess.Studio
             settings.RequireAgentToolApproval = AgentApprovalBox.Checked;
             if (ShowWelcomeBox != null)
                 settings.ShowWelcomeOnStartup = ShowWelcomeBox.Checked;
+            if (AutoUpdateCheckBox != null)
+                settings.AutoCheckForUpdates = AutoUpdateCheckBox.Checked;
             if (ActivatePythonEnvBox != null)
                 settings.ActivatePythonEnvironmentInTerminal = ActivatePythonEnvBox.Checked;
             if (OfflineModeBox != null)

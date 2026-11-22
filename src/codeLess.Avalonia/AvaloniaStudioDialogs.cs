@@ -748,6 +748,7 @@ namespace codeLess.AvaloniaApp
             var venvChk = new CheckBox { Content = "Activate Python environment in new terminals", IsChecked = settings.ActivatePythonEnvironmentInTerminal, Foreground = new SolidColorBrush(textPrimary) };
             var excludedBox = new TextBox { Text = settings.ExcludedFolders ?? "" };
             var offlineChk = new CheckBox { Content = "Offline Mode (block all non-local network requests; local Ollama / LM Studio keep working)", IsChecked = NetworkLedger.OfflineMode, Foreground = new SolidColorBrush(textPrimary) };
+            var updateChk = new CheckBox { Content = "Check for updates automatically (once a day)", IsChecked = settings.AutoCheckForUpdates, Foreground = new SolidColorBrush(textPrimary) };
 
             var providers = LlmHarnessAndAgentEngine.GetAllProviderTemplates();
             string activeNormId = StudioSettings.NormalizeProviderId(settings.ActiveProvider);
@@ -789,6 +790,7 @@ namespace codeLess.AvaloniaApp
             stack.Children.Add(togglesRow);
             stack.Children.Add(venvChk);
             stack.Children.Add(offlineChk);
+            stack.Children.Add(updateChk);
 
             stack.Children.Add(WorkbenchStyles.SectionLabel("Excluded Workspace Folders (comma-separated)", theme));
             stack.Children.Add(excludedBox);
@@ -835,6 +837,7 @@ namespace codeLess.AvaloniaApp
                 settings.AutoSave = autoSaveChk.IsChecked == true;
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
                 settings.OfflineMode = offlineChk.IsChecked == true;
+                settings.AutoCheckForUpdates = updateChk.IsChecked == true;
                 NetworkLedger.SetOfflineMode(settings.OfflineMode);
                 settings.ExcludedFolders = (excludedBox.Text ?? "").Trim();
                 if (providerCombo.SelectedIndex >= 0 && providerCombo.SelectedIndex < providers.Count)
