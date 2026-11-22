@@ -60,22 +60,11 @@ namespace codeLess.AvaloniaApp
         private Button BuildNetworkStatusButton()
         {
             statusNetworkShield = new NetworkShieldIcon { VerticalAlignment = VerticalAlignment.Center };
-            statusNetworkText = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-            var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+            statusNetworkText = new TextBlock { FontSize = UiTokens.FontSmall, VerticalAlignment = VerticalAlignment.Center };
+            var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
             content.Children.Add(statusNetworkShield);
             content.Children.Add(statusNetworkText);
-            statusNetworkBtn = new Button
-            {
-                Content = content,
-                FontSize = 11,
-                Padding = new Thickness(7, 1),
-                Height = 24,
-                CornerRadius = new CornerRadius(0),
-                Background = Brushes.Transparent,
-                Foreground = Brushes.White,
-                BorderThickness = new Thickness(0)
-            };
-            statusNetworkBtn.Click += (s, e) => ShowNetworkActivity();
+            statusNetworkBtn = MakeStatusBarItem(content, ShowNetworkActivity);
 
             var menu = new ContextMenu();
             var showItem = new MenuItem { Header = "Show Network Activity" };
@@ -174,7 +163,7 @@ namespace codeLess.AvaloniaApp
             bool offline = NetworkLedger.OfflineMode;
             int sent = NetworkLedger.SessionRequestCount - NetworkLedger.SessionBlockedCount;
             statusNetworkText.Text = offline ? "Offline" : sent.ToString(CultureInfo.InvariantCulture);
-            var fg = AvaloniaColorHelper.ToBrush(currentTheme.StatusBarText);
+            var fg = AvaloniaColorHelper.ToBrush(UiTokens.StatusBarForeground(currentTheme));
             statusNetworkBtn.Foreground = fg;
             statusNetworkText.Foreground = fg;
             statusNetworkShield.Stroke = fg;

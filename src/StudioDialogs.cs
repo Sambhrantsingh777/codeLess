@@ -734,7 +734,7 @@ namespace codeLess.Studio
                 Location = new Point(402, 354),
                 Size = new Size(180, 34),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(16, 185, 129),
+                BackColor = Color.FromArgb(25, 120, 229),
                 ForeColor = Color.White,
                 UseMnemonic = false,
                 Font = new Font("Segoe UI Semibold", 9.0f, FontStyle.Bold),
@@ -983,7 +983,8 @@ namespace codeLess.Studio
             this.StartPosition = FormStartPosition.Manual;
             this.BackColor = currentTheme.BgSidebar;
             this.ForeColor = currentTheme.FgPrimary;
-            this.OuterFrameColor = currentTheme.AccentPrimary;
+            // Elevated quick-input widget: subtle 1 px frame instead of an accent outline (docs/UI_GUIDELINES.md).
+            this.OuterFrameColor = UiTokens.WidgetBorder(currentTheme);
 
             Panel headerWrap = new Panel
             {
@@ -1428,43 +1429,25 @@ namespace codeLess.Studio
                 Rectangle r = e.Bounds;
                 bool isSel = ((e.State & DrawItemState.Selected) == DrawItemState.Selected);
 
-                Color selBg = StudioTheme.Blend(currentTheme.BgSidebar, currentTheme.AccentPrimary, 0.18);
+                Color selBg = UiTokens.ListActiveSelection(currentTheme, currentTheme.BgSidebar);
                 using (SolidBrush bg = new SolidBrush(isSel ? selBg : currentTheme.BgSidebar))
                     g.FillRectangle(bg, r);
 
-                if (isSel)
-                {
-                    using (SolidBrush bar = new SolidBrush(currentTheme.AccentPrimary))
-                        g.FillRectangle(bar, r.X, r.Y, 3, r.Height);
-                }
-
-                // Category badge (wide enough to never truncate categories like Architecture / Time-Travel)
-                Color catColor = entry.RawText.StartsWith(">")
-                    ? currentTheme.AccentPrimary
-                    : (entry.Category == "SYM" ? currentTheme.TokenFunction : currentTheme.AccentSecondary);
+                // Category label: quiet secondary text (VS Code "File: New Text File"), no colored badge.
                 Rectangle catRect = new Rectangle(r.X + 10, r.Y + 6, 90, r.Height - 12);
-                using (SolidBrush cb = new SolidBrush(StudioTheme.Blend(isSel ? selBg : currentTheme.BgSidebar, catColor, 0.14)))
-                    g.FillRectangle(cb, catRect);
-                using (Pen cp = new Pen(StudioTheme.Blend(isSel ? selBg : currentTheme.BgSidebar, catColor, 0.45), 1f))
-                    g.DrawRectangle(cp, catRect);
-                using (Font cf = new Font("Consolas", 7.3f, FontStyle.Bold))
-                {
-                    TextRenderer.DrawText(g, entry.Category, cf, catRect, catColor,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-                }
+                TextRenderer.DrawText(g, entry.Category, resultsList.Font, catRect, currentTheme.FgSecondary,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
 
                 int shortcutW = 0;
                 if (!string.IsNullOrEmpty(entry.Shortcut) && entry.Category != entry.Shortcut)
                 {
-                    using (Font sf = new Font("Consolas", 7.8f, FontStyle.Bold))
+                    using (Font sf = new Font("Segoe UI", UiTokens.Pt(UiTokens.FontSmall - 1), FontStyle.Regular))
                     {
                         Size sz = TextRenderer.MeasureText(g, entry.Shortcut, sf);
-                        shortcutW = sz.Width + 16;
-                        Rectangle keyRect = new Rectangle(r.Right - shortcutW - 10, r.Y + 5, shortcutW, r.Height - 10);
-                        using (SolidBrush kb = new SolidBrush(currentTheme.BgElevated))
+                        shortcutW = sz.Width + 12;
+                        Rectangle keyRect = new Rectangle(r.Right - shortcutW - 10, r.Y + 6, shortcutW, r.Height - 12);
+                        using (SolidBrush kb = new SolidBrush(UiTokens.ButtonSecondaryBackground(currentTheme)))
                             g.FillRectangle(kb, keyRect);
-                        using (Pen kp = new Pen(currentTheme.BorderSubtle, 1f))
-                            g.DrawRectangle(kp, keyRect);
                         TextRenderer.DrawText(g, entry.Shortcut, sf, keyRect, currentTheme.FgSecondary,
                             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                     }

@@ -184,7 +184,8 @@ namespace codeLess.Studio
                 bool on = ReferenceEquals(d, active);
                 Panel tab = new Panel { Height = 30, Margin = new Padding(0), BackColor = on ? theme.BgEditor : theme.BgSidebar, Cursor = Cursors.Hand };
                 Label title = new Label { Text = d.Title, AutoSize = true, Font = new Font("Segoe UI", 9f), ForeColor = on ? theme.FgPrimary : theme.FgMuted, Location = new Point(10, 7), BackColor = Color.Transparent };
-                Label x = new Label { Text = "✕", AutoSize = true, Font = new Font("Segoe UI", 7.5f), ForeColor = theme.FgMuted, BackColor = Color.Transparent, Cursor = Cursors.Hand };
+                Label x = new Label { Text = "", AutoSize = false, Size = new Size(14, 14), ForeColor = on ? theme.FgSecondary : theme.FgMuted, BackColor = Color.Transparent, Cursor = Cursors.Hand };
+                x.Paint += (s, e) => CodeLessVectorIcons.DrawIcon(e.Graphics, "close", new Rectangle(1, 1, 12, 12), x.ForeColor, 1.3f);
                 tab.Controls.Add(title);
                 tab.Controls.Add(x);
                 int tw = Math.Min(220, TextRenderer.MeasureText(d.Title, title.Font).Width);

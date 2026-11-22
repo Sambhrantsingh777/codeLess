@@ -1526,9 +1526,9 @@ namespace codeLess.Studio
             UpdateWindowTitle();
             if (statusBar != null)
             {
-                statusBar.BackColor = ResolveStatusBarBackColor(activeTheme, false); // VS Code #68217a purple when no folder is open
-                statusLeftLabel.ForeColor = Color.White;
-                statusLeftLabel.Text = "";
+                statusBar.BackColor = ResolveStatusBarBackColor(activeTheme, false);
+                statusLeftLabel.ForeColor = activeTheme != null ? UiTokens.StatusBarForeground(activeTheme) : Color.White;
+                SetStatusHomeText("");
                 LayoutStatusBarItems();
             }
         }
@@ -1891,8 +1891,15 @@ namespace codeLess.Studio
             LayoutTopTitleBar();
 
             // 2. Bottom Status Bar (Separate Segoe UI 9f VS Code Status Bar Items with Hover Highlight & Tooltips)
-            statusBar = new Panel { Dock = DockStyle.Bottom, Height = 24 };
+            statusBar = new Panel { Dock = DockStyle.Bottom, Height = UiTokens.StatusBarHeight + UiTokens.DividerWidth };
+            statusBar.Paint += (s, e) =>
+            {
+                if (activeTheme == null) return;
+                using (Pen divider = new Pen(UiTokens.StatusBarBorder(activeTheme)))
+                    e.Graphics.DrawLine(divider, 0, 0, statusBar.Width, 0);
+            };
             ToolTip statusToolTip = new ToolTip();
+            statusMessageToolTip = statusToolTip;
 
             Func<string, string, Action<Control>, Label> createStatusItem = (initText, tipText, onClick) =>
             {
@@ -1908,7 +1915,7 @@ namespace codeLess.Studio
                     ForeColor = Color.White,
                     Text = initText
                 };
-                lbl.MouseEnter += (s, e) => { lbl.BackColor = Color.FromArgb(45, 255, 255, 255); };
+                lbl.MouseEnter += (s, e) => { lbl.BackColor = StatusItemHoverColor(); };
                 lbl.MouseLeave += (s, e) => { lbl.BackColor = Color.Transparent; };
                 if (onClick != null)
                     lbl.Click += (s, e) => onClick(lbl);
@@ -1939,7 +1946,7 @@ namespace codeLess.Studio
                     CodeLessVectorIcons.DrawIcon(e.Graphics, "git", new Rectangle(2, 3, 13, 13), statusLeftLabel.ForeColor, 1.35f);
                 }
             };
-            statusLeftLabel.MouseEnter += (s, e) => { statusLeftLabel.BackColor = Color.FromArgb(45, 255, 255, 255); };
+            statusLeftLabel.MouseEnter += (s, e) => { statusLeftLabel.BackColor = StatusItemHoverColor(); };
             statusLeftLabel.MouseLeave += (s, e) => { statusLeftLabel.BackColor = Color.Transparent; };
             statusLeftLabel.Click += (s, e) => { leftSidebar.Visible = true; SwitchSidebarView("git"); RefreshGitSidebarStatus(); };
             statusToolTip.SetToolTip(statusLeftLabel, "Source Control Branch / Workspace");
@@ -1963,7 +1970,7 @@ namespace codeLess.Studio
                 Cursor = Cursors.Hand,
                 BackColor = Color.Transparent
             };
-            statusProblemsPanel.MouseEnter += (s, e) => { statusProblemsPanel.BackColor = Color.FromArgb(45, 255, 255, 255); };
+            statusProblemsPanel.MouseEnter += (s, e) => { statusProblemsPanel.BackColor = StatusItemHoverColor(); };
             statusProblemsPanel.MouseLeave += (s, e) => { statusProblemsPanel.BackColor = Color.Transparent; };
             statusProblemsPanel.Click += (s, e) => { bottomDockPanel.Visible = true; SwitchBottomDockTab("problems"); };
             statusProblemsPanel.Paint += (s, e) =>
@@ -2182,6 +2189,7 @@ namespace codeLess.Studio
                     statusLeftLabel.Text = statusLeftLabel.Text.Replace("⎇", "").TrimStart();
                     return;
                 }
+                OnStatusLeftTextChanged();
                 statusLeftLabel.Invalidate();
                 LayoutStatusBarItems();
             };
@@ -2261,9 +2269,10 @@ namespace codeLess.Studio
             sidebarHeaderLabel = new Label
             {
                 Dock = DockStyle.Top,
-                Height = 28,
-                Padding = new Padding(12, 6, 8, 4),
-                Font = new Font("Segoe UI", 8.2f, FontStyle.Regular),
+                Height = UiTokens.ViewHeaderHeight,
+                Padding = new Padding(UiTokens.ViewPaddingX + 8, 0, 8, 0),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", UiTokens.Pt(UiTokens.FontHeader), FontStyle.Regular),
                 UseMnemonic = false,
                 Text = "EXPLORER"
             };
@@ -2273,7 +2282,7 @@ namespace codeLess.Studio
                 CodeLessVectorIcons.DrawIcon(
                     e.Graphics,
                     "more",
-                    new Rectangle(sidebarHeaderLabel.Width - 24, 6, 16, 16),
+                    new Rectangle(sidebarHeaderLabel.Width - 24, (sidebarHeaderLabel.Height - 16) / 2, 16, 16),
                     fg,
                     1.5f
                 );
@@ -2451,11 +2460,7 @@ namespace codeLess.Studio
                 Cursor = Cursors.Hand,
                 UseMnemonic = false
             };
-            lbl.MouseEnter += (s, e) =>
-            {
-                Color baseBg = statusBar != null ? statusBar.BackColor : Color.FromArgb(0, 122, 204);
-                lbl.BackColor = StudioTheme.Blend(baseBg, Color.White, 0.16);
-            };
+            lbl.MouseEnter += (s, e) => { lbl.BackColor = StatusItemHoverColor(); };
             lbl.MouseLeave += (s, e) => { lbl.BackColor = Color.Transparent; };
             if (onClick != null)
                 lbl.Click += (s, e) => onClick(lbl);
@@ -6183,15 +6188,15 @@ if __name__ == '__main__':
                 Color border = activeTheme != null ? activeTheme.BorderSubtle : Color.FromArgb(45, 52, 68);
                 Color fgPrimary = activeTheme != null ? activeTheme.FgPrimary : Color.FromArgb(226, 232, 240);
                 Color fgMuted = activeTheme != null ? activeTheme.FgMuted : Color.FromArgb(140, 152, 172);
-                Color selBg = activeTheme != null ? activeTheme.BgSelection : Color.FromArgb(30, 41, 59);
-                Color hovBg = activeTheme != null ? activeTheme.BgHover : Color.FromArgb(28, 34, 46);
+                Color selBg = activeTheme != null ? UiTokens.ListInactiveSelection(activeTheme, bg) : Color.FromArgb(30, 41, 59);
+                Color hovBg = activeTheme != null ? UiTokens.Hover(activeTheme, bg) : Color.FromArgb(28, 34, 46);
                 Color accent = activeTheme != null ? activeTheme.AccentPrimary : Color.FromArgb(56, 189, 248);
 
                 g.Clear(bg);
                 using (Pen lp = new Pen(border, 1f))
                     g.DrawLine(lp, 0, 0, 0, terminalTabsListPanel.Height);
 
-                int rowH = 26;
+                int rowH = UiTokens.ListRowHeight;
                 for (int i = 0; i < terminalSessions.Count; i++)
                 {
                     TerminalSessionState ts = terminalSessions[i];
@@ -6222,7 +6227,7 @@ if __name__ == '__main__':
                     string iconKind = (ts.ConPtySession != null && !string.IsNullOrEmpty(ts.ConPtySession.CustomIconKind))
                         ? ts.ConPtySession.CustomIconKind
                         : "terminal";
-                    CodeLessVectorIcons.DrawIcon(g, iconKind, new Rectangle(10, rowRect.Y + 5, 15, 15), iconCol, 1.35f);
+                    CodeLessVectorIcons.DrawIcon(g, iconKind, new Rectangle(10, rowRect.Y + (rowH - 15) / 2, 15, 15), iconCol, 1.35f);
 
                     int rightReserve = (isHov || isAct) ? 46 : 8;
                     Rectangle textRect = new Rectangle(30, rowRect.Y, Math.Max(30, terminalTabsListPanel.Width - 30 - rightReserve), rowH);
@@ -6237,8 +6242,8 @@ if __name__ == '__main__':
 
                     if (isHov || isAct)
                     {
-                        Rectangle splitIconRect = new Rectangle(terminalTabsListPanel.Width - 44, rowRect.Y + 5, 16, 16);
-                        Rectangle trashIconRect = new Rectangle(terminalTabsListPanel.Width - 22, rowRect.Y + 5, 16, 16);
+                        Rectangle splitIconRect = new Rectangle(terminalTabsListPanel.Width - 44, rowRect.Y + (rowH - 16) / 2, 16, 16);
+                        Rectangle trashIconRect = new Rectangle(terminalTabsListPanel.Width - 22, rowRect.Y + (rowH - 16) / 2, 16, 16);
                         CodeLessVectorIcons.DrawIcon(g, "split", splitIconRect, fgMuted, 1.25f);
                         CodeLessVectorIcons.DrawIcon(g, "trash", trashIconRect, isHov && hoveredTerminalTabTrash ? Color.FromArgb(248, 113, 113) : fgMuted, 1.3f);
                     }
@@ -6248,7 +6253,7 @@ if __name__ == '__main__':
                 {
                     int splitRowY = terminalSessions.Count * rowH;
                     Rectangle splitRect = new Rectangle(1, splitRowY, terminalTabsListPanel.Width - 1, rowH);
-                    CodeLessVectorIcons.DrawIcon(g, "terminal", new Rectangle(18, splitRect.Y + 5, 14, 14), fgMuted, 1.25f);
+                    CodeLessVectorIcons.DrawIcon(g, "terminal", new Rectangle(18, splitRect.Y + (rowH - 14) / 2, 14, 14), fgMuted, 1.25f);
                     TextRenderer.DrawText(
                         g,
                         "└ Split: " + (splitConPtyTerminalControl.Session.ShellName ?? "pwsh"),
@@ -6257,13 +6262,13 @@ if __name__ == '__main__':
                         fgMuted,
                         TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix
                     );
-                    CodeLessVectorIcons.DrawIcon(g, "trash", new Rectangle(terminalTabsListPanel.Width - 22, splitRect.Y + 5, 16, 16), fgMuted, 1.3f);
+                    CodeLessVectorIcons.DrawIcon(g, "trash", new Rectangle(terminalTabsListPanel.Width - 22, splitRect.Y + (rowH - 16) / 2, 16, 16), fgMuted, 1.3f);
                 }
             };
 
             terminalTabsListPanel.MouseMove += (s, e) =>
             {
-                int rowH = 26;
+                int rowH = UiTokens.ListRowHeight;
                 int idx = e.Y / rowH;
                 if (idx < 0 || idx >= terminalSessions.Count) idx = -1;
                 bool overTrash = idx >= 0 && e.X >= terminalTabsListPanel.Width - 25;
@@ -6285,7 +6290,7 @@ if __name__ == '__main__':
 
             terminalTabsListPanel.MouseDown += (s, e) =>
             {
-                int rowH = 26;
+                int rowH = UiTokens.ListRowHeight;
                 int idx = e.Y / rowH;
                 if (isTerminalSplit && idx == terminalSessions.Count)
                 {
@@ -6324,7 +6329,7 @@ if __name__ == '__main__':
 
             terminalTabsListPanel.MouseDoubleClick += (s, e) =>
             {
-                int rowH = 26;
+                int rowH = UiTokens.ListRowHeight;
                 int idx = e.Y / rowH;
                 if (idx >= 0 && idx < terminalSessions.Count && e.X < terminalTabsListPanel.Width - 46)
                 {
@@ -6863,20 +6868,23 @@ if __name__ == '__main__':
 
             sendPromptBtn = CreateHeaderButton("Send", new Point(284, 3), 68, true);
             sendPromptBtn.Height = 24;
+            // VS Code chat input: an accent send glyph on the composer background, not a filled button.
             sendPromptBtn.Paint += (s, e) =>
             {
-                Color bg = activeTheme != null ? activeTheme.AccentPrimary : sendPromptBtn.BackColor;
+                Color bg = composerFooter != null && composerFooter.BackColor.A == 255 ? composerFooter.BackColor
+                    : (activeTheme != null ? activeTheme.BgEditor : sendPromptBtn.BackColor);
+                Point mouse = sendPromptBtn.PointToClient(Control.MousePosition);
+                if (activeTheme != null && sendPromptBtn.ClientRectangle.Contains(mouse)) bg = UiTokens.Hover(activeTheme, bg);
                 e.Graphics.Clear(bg);
-                TextRenderer.DrawText(
-                    e.Graphics,
-                    "Send",
-                    sendPromptBtn.Font,
-                    new Rectangle(8, 0, Math.Max(20, sendPromptBtn.Width - 24), sendPromptBtn.Height),
-                    Color.White,
-                    TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding
-                );
-                CodeLessVectorIcons.DrawIcon(e.Graphics, "arrow-up", new Rectangle(sendPromptBtn.Width - 19, 6, 12, 12), Color.White, 1.45f);
+                Color fg = activeTheme != null ? activeTheme.AccentPrimary : Color.FromArgb(25, 120, 229);
+                int cx = sendPromptBtn.Width / 2, cy = sendPromptBtn.Height / 2;
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (Pen p = new Pen(fg, 1.5f) { LineJoin = System.Drawing.Drawing2D.LineJoin.Round })
+                    e.Graphics.DrawPolygon(p, new[] { new Point(cx - 7, cy - 6), new Point(cx + 7, cy), new Point(cx - 7, cy + 6), new Point(cx - 4, cy) });
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
             };
+            sendPromptBtn.MouseEnter += (s, e) => sendPromptBtn.Invalidate();
+            sendPromptBtn.MouseLeave += (s, e) => sendPromptBtn.Invalidate();
             sendPromptBtn.Click += async (s, e) => await SubmitAgentPromptAsync();
 
             stopPromptBtn = CreateHeaderButton("Stop", new Point(284, 3), 68, false);
@@ -6924,16 +6932,17 @@ if __name__ == '__main__':
             composerFooter.Resize += (s, e) =>
             {
                 int fw = composerFooter.Width;
-                int sendW = fw < 260 ? 58 : 64;
+                int stopW = fw < 260 ? 58 : 64;
+                int sendW = 30;
                 int modeW = 68;
                 sendPromptBtn.Location = new Point(fw - sendW, 3);
                 sendPromptBtn.Width = sendW;
-                stopPromptBtn.Location = sendPromptBtn.Location;
-                stopPromptBtn.Width = sendW;
+                stopPromptBtn.Location = new Point(fw - stopW, 3);
+                stopPromptBtn.Width = stopW;
                 composerModePillBtn.Location = new Point(0, 3);
                 composerModePillBtn.Width = modeW;
                 quickVendorCombo.Location = new Point(modeW + 3, 3);
-                quickVendorCombo.Width = Math.Max(90, sendPromptBtn.Left - (modeW + 6));
+                quickVendorCombo.Width = Math.Max(90, Math.Min(sendPromptBtn.Left, stopPromptBtn.Left) - (modeW + 6));
             };
 
             promptInputBox = new CodeLessDarkInputBox
@@ -8069,9 +8078,9 @@ if __name__ == '__main__':
             string fastGitBranch = ResolveFastGitBranch(rootDir);
             if (statusLeftLabel != null)
             {
-                statusLeftLabel.Text = (string.IsNullOrEmpty(fastGitBranch) || fastGitBranch == "no-git")
+                SetStatusHomeText((string.IsNullOrEmpty(fastGitBranch) || fastGitBranch == "no-git")
                     ? Path.GetFileName(rootDir)
-                    : string.Format("{0}  •  {1}", fastGitBranch, Path.GetFileName(rootDir));
+                    : string.Format("{0}  •  {1}", fastGitBranch, Path.GetFileName(rootDir)));
             }
 
             LastFirstTreePaintMs = swLoad.ElapsedMilliseconds;
@@ -9339,7 +9348,7 @@ if __name__ == '__main__':
 
             Button plusTabBtn = new Button
             {
-                Text = "+",
+                Text = "",
                 Size = new Size(32, 34),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = activeTheme.BgActivity,
@@ -9349,6 +9358,7 @@ if __name__ == '__main__':
                 Margin = new Padding(0)
             };
             plusTabBtn.FlatAppearance.BorderSize = 0;
+            plusTabBtn.Paint += (s, e) => CodeLessVectorIcons.DrawIcon(e.Graphics, "plus", new Rectangle((plusTabBtn.Width - 14) / 2, (plusTabBtn.Height - 14) / 2, 14, 14), plusTabBtn.ForeColor, 1.4f);
             plusTabBtn.Click += (s, e) =>
             {
                 if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot))
@@ -11354,15 +11364,59 @@ if __name__ == '__main__':
             }
         }
 
+        private ToolTip statusMessageToolTip;
+        private System.Windows.Forms.Timer statusMessageTimer;
+        private string statusHomeText = "";
+        private bool settingStatusHomeText;
+
+        private Color StatusItemHoverColor()
+        {
+            Color dbg;
+            if (activeTheme != null && TryGetDebugStatusBarColor(activeTheme, out dbg)) return StudioTheme.Blend(dbg, Color.White, 0.16);
+            return activeTheme != null ? UiTokens.StatusBarItemHover(activeTheme) : Color.FromArgb(60, 60, 60);
+        }
+
+        /// <summary>The resting text of the left status item (branch / workspace) that transient messages fall back to.</summary>
+        private void SetStatusHomeText(string text)
+        {
+            statusHomeText = text ?? "";
+            if (statusLeftLabel == null) return;
+            settingStatusHomeText = true;
+            try { statusLeftLabel.Text = statusHomeText; }
+            finally { settingStatusHomeText = false; }
+        }
+
+        /// <summary>
+        /// Transient status messages (e.g. "Saved", "Definition: ...") are ellipsized by the label, show their full text
+        /// in a tooltip and return to the branch / workspace text after UiTokens.StatusMessageTimeoutMs, like VS Code.
+        /// </summary>
+        private void OnStatusLeftTextChanged()
+        {
+            if (statusLeftLabel == null) return;
+            string t = statusLeftLabel.Text ?? "";
+            if (statusMessageToolTip != null)
+                statusMessageToolTip.SetToolTip(statusLeftLabel, t.Length > 0 ? t : "Source Control Branch / Workspace");
+            if (settingStatusHomeText || string.IsNullOrEmpty(statusHomeText) || t == statusHomeText) return;
+            if (statusMessageTimer == null)
+            {
+                statusMessageTimer = new System.Windows.Forms.Timer { Interval = UiTokens.StatusMessageTimeoutMs };
+                statusMessageTimer.Tick += (s, e) =>
+                {
+                    statusMessageTimer.Stop();
+                    SetStatusHomeText(statusHomeText);
+                };
+            }
+            statusMessageTimer.Stop();
+            statusMessageTimer.Start();
+        }
+
         public static Color ResolveStatusBarBackColor(StudioTheme theme, bool hasFolderOpen)
         {
             Color debugColor;
             if (TryGetDebugStatusBarColor(theme, out debugColor)) return debugColor;
-            if (theme == null)
-                return hasFolderOpen ? Color.FromArgb(0, 122, 204) : Color.FromArgb(104, 33, 122);
-            if (!hasFolderOpen)
-                return StudioTheme.Blend(Color.FromArgb(104, 33, 122), theme.BgActivity, theme.IsLight ? 0.12 : 0.28);
-            return StudioTheme.Blend(Color.FromArgb(0, 122, 204), theme.AccentPrimary, theme.IsLight ? 0.18 : 0.32);
+            // Slim, calm VS Code (Modern) status bar: neutral background, accent only for the left badge and while
+            // debugging (see UiTokens / docs/UI_GUIDELINES.md).
+            return UiTokens.StatusBarBackground(theme);
         }
 
         public void ApplyThemeToWorkbench(StudioTheme theme)
@@ -11413,10 +11467,12 @@ if __name__ == '__main__':
 
             bool hasFolderOpen = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot);
             statusBar.BackColor = ResolveStatusBarBackColor(theme, hasFolderOpen);
-            Color statusFg = Color.White;
+            Color dbgColor;
+            Color statusFg = TryGetDebugStatusBarColor(theme, out dbgColor) ? Color.White : UiTokens.StatusBarForeground(theme);
+            statusBar.Invalidate();
             statusLeftLabel.ForeColor = statusFg;
             if (statusProblemsLabel != null)
-                statusProblemsLabel.ForeColor = (activeTab != null && activeTab.Diagnostics.Count > 0) ? Color.FromArgb(255, 220, 220) : statusFg;
+                statusProblemsLabel.ForeColor = statusFg;
             if (statusProblemsPanel != null)
                 statusProblemsPanel.Invalidate();
             if (statusCursorLangLabel != null)
@@ -11530,8 +11586,8 @@ if __name__ == '__main__':
             extHostLogBox.ApplyTheme(theme);
 
             rightDock.BackColor = theme.BgSidebar;
-            multiFileChangesetBar.BackColor = StudioTheme.Blend(theme.BgSidebar, Color.FromArgb(16, 185, 129), 0.16);
-            changesetSummaryLabel.ForeColor = theme.IsLight ? Color.FromArgb(4, 120, 87) : Color.FromArgb(110, 231, 183);
+            multiFileChangesetBar.BackColor = UiTokens.WidgetBackground(theme);
+            changesetSummaryLabel.ForeColor = theme.FgPrimary;
             if (agentFeedControl != null) agentFeedControl.ApplyTheme(theme);
             if (atMentionPopupFrame != null) atMentionPopupFrame.BackColor = theme.AccentPrimary;
             if (atMentionList != null) atMentionList.ApplyTheme(theme);
@@ -11798,7 +11854,7 @@ if __name__ == '__main__':
                 };
                 Button closeToastBtn = new Button
                 {
-                    Text = "×",
+                    Text = "",
                     Location = new Point(312, 4),
                     Size = new Size(22, 20),
                     FlatStyle = FlatStyle.Flat,
@@ -11806,6 +11862,7 @@ if __name__ == '__main__':
                     Cursor = Cursors.Hand
                 };
                 closeToastBtn.FlatAppearance.BorderSize = 0;
+                closeToastBtn.Paint += (s, e) => CodeLessVectorIcons.DrawIcon(e.Graphics, "close", new Rectangle((closeToastBtn.Width - 12) / 2, (closeToastBtn.Height - 12) / 2, 12, 12), closeToastBtn.ForeColor, 1.4f);
                 closeToastBtn.Click += (s, e) => HideToastNotification();
                 toastMessageLabel = new Label
                 {

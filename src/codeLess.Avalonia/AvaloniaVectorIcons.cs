@@ -370,6 +370,221 @@ namespace codeLess.AvaloniaApp
                     ctx.DrawGeometry(new SolidColorBrush(Color.FromRgb(0, 104, 196)), null, rightGeo);
                     break;
                 }
+                case "remote":
+                {
+                    // "><" connection glyph drawn as two chevrons
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx - s * 0.80, cy - s * 0.50), false);
+                        gctx.LineTo(new Point(cx - s * 0.20, cy));
+                        gctx.LineTo(new Point(cx - s * 0.80, cy + s * 0.50));
+                        gctx.BeginFigure(new Point(cx + s * 0.80, cy - s * 0.50), false);
+                        gctx.LineTo(new Point(cx + s * 0.20, cy));
+                        gctx.LineTo(new Point(cx + s * 0.80, cy + s * 0.50));
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    break;
+                }
+                case "branch":
+                {
+                    double r = s * 0.22;
+                    var top = new Point(cx - s * 0.40, cy - s * 0.62);
+                    var bottom = new Point(cx - s * 0.40, cy + s * 0.62);
+                    var side = new Point(cx + s * 0.45, cy - s * 0.30);
+                    ctx.DrawEllipse(null, pen, top, r, r);
+                    ctx.DrawEllipse(null, pen, bottom, r, r);
+                    ctx.DrawEllipse(null, pen, side, r, r);
+                    ctx.DrawLine(pen, new Point(top.X, top.Y + r), new Point(bottom.X, bottom.Y - r));
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(side.X, side.Y + r), false);
+                        gctx.QuadraticBezierTo(new Point(side.X, cy + s * 0.25), new Point(bottom.X + r * 0.6, bottom.Y - r * 1.4));
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    break;
+                }
+                case "error":
+                {
+                    double r = s * 0.72;
+                    ctx.DrawEllipse(null, pen, new Point(cx, cy), r, r);
+                    double d = s * 0.30;
+                    ctx.DrawLine(pen, new Point(cx - d, cy - d), new Point(cx + d, cy + d));
+                    ctx.DrawLine(pen, new Point(cx + d, cy - d), new Point(cx - d, cy + d));
+                    break;
+                }
+                case "warning":
+                {
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx, cy - s * 0.78), false);
+                        gctx.LineTo(new Point(cx + s * 0.82, cy + s * 0.66));
+                        gctx.LineTo(new Point(cx - s * 0.82, cy + s * 0.66));
+                        gctx.EndFigure(true);
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    ctx.DrawLine(pen, new Point(cx, cy - s * 0.24), new Point(cx, cy + s * 0.18));
+                    ctx.DrawEllipse(fill, null, new Point(cx, cy + s * 0.42), s * 0.07, s * 0.07);
+                    break;
+                }
+                case "info":
+                {
+                    double r = s * 0.72;
+                    ctx.DrawEllipse(null, pen, new Point(cx, cy), r, r);
+                    ctx.DrawLine(pen, new Point(cx, cy - s * 0.08), new Point(cx, cy + s * 0.38));
+                    ctx.DrawEllipse(fill, null, new Point(cx, cy - s * 0.34), s * 0.07, s * 0.07);
+                    break;
+                }
+                case "pencil":
+                case "edit":
+                {
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx - s * 0.70, cy + s * 0.70), false);
+                        gctx.LineTo(new Point(cx - s * 0.62, cy + s * 0.32));
+                        gctx.LineTo(new Point(cx + s * 0.42, cy - s * 0.72));
+                        gctx.LineTo(new Point(cx + s * 0.72, cy - s * 0.42));
+                        gctx.LineTo(new Point(cx - s * 0.32, cy + s * 0.62));
+                        gctx.EndFigure(true);
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    ctx.DrawLine(pen, new Point(cx + s * 0.20, cy - s * 0.50), new Point(cx + s * 0.50, cy - s * 0.20));
+                    break;
+                }
+                case "chevron-up":
+                {
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx - s * 0.62, cy + s * 0.28), false);
+                        gctx.LineTo(new Point(cx, cy - s * 0.34));
+                        gctx.LineTo(new Point(cx + s * 0.62, cy + s * 0.28));
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    break;
+                }
+                case "arrow-up":
+                case "arrow-down":
+                {
+                    double dir = iconName.EndsWith("up", StringComparison.OrdinalIgnoreCase) ? -1 : 1;
+                    ctx.DrawLine(pen, new Point(cx, cy - s * 0.70 * dir), new Point(cx, cy + s * 0.70 * dir));
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx - s * 0.50, cy + s * 0.20 * dir), false);
+                        gctx.LineTo(new Point(cx, cy + s * 0.70 * dir));
+                        gctx.LineTo(new Point(cx + s * 0.50, cy + s * 0.20 * dir));
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    break;
+                }
+                case "replace":
+                case "replace-all":
+                {
+                    bool all = iconName.EndsWith("all", StringComparison.OrdinalIgnoreCase);
+                    ctx.DrawRectangle(null, pen, new Rect(cx - s * 0.75, cy - s * 0.70, s * 0.70, s * 0.62), 1, 1);
+                    if (all) ctx.DrawRectangle(null, pen, new Rect(cx - s * 0.75, cy + s * 0.12, s * 0.70, s * 0.58), 1, 1);
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx + s * 0.12, cy - s * 0.38), false);
+                        gctx.LineTo(new Point(cx + s * 0.55, cy - s * 0.38));
+                        gctx.LineTo(new Point(cx + s * 0.55, cy + s * 0.40));
+                        gctx.BeginFigure(new Point(cx + s * 0.30, cy + s * 0.16), false);
+                        gctx.LineTo(new Point(cx + s * 0.55, cy + s * 0.42));
+                        gctx.LineTo(new Point(cx + s * 0.80, cy + s * 0.16));
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    break;
+                }
+                case "copy":
+                {
+                    ctx.DrawRectangle(null, pen, new Rect(cx - s * 0.70, cy - s * 0.70, s * 1.0, s * 1.05), 1.5, 1.5);
+                    ctx.DrawRectangle(null, pen, new Rect(cx - s * 0.30, cy - s * 0.32, s * 1.0, s * 1.05), 1.5, 1.5);
+                    break;
+                }
+                case "ellipsis":
+                {
+                    double r = Math.Max(0.9, s * 0.10);
+                    ctx.DrawEllipse(fill, null, new Point(cx - s * 0.55, cy), r, r);
+                    ctx.DrawEllipse(fill, null, new Point(cx, cy), r, r);
+                    ctx.DrawEllipse(fill, null, new Point(cx + s * 0.55, cy), r, r);
+                    break;
+                }
+                case "clear-all":
+                {
+                    ctx.DrawLine(pen, new Point(cx - s * 0.75, cy - s * 0.50), new Point(cx + s * 0.20, cy - s * 0.50));
+                    ctx.DrawLine(pen, new Point(cx - s * 0.75, cy), new Point(cx + s * 0.05, cy));
+                    ctx.DrawLine(pen, new Point(cx - s * 0.75, cy + s * 0.50), new Point(cx - s * 0.10, cy + s * 0.50));
+                    double d = s * 0.22;
+                    ctx.DrawLine(pen, new Point(cx + s * 0.52 - d, cy + s * 0.25 - d), new Point(cx + s * 0.52 + d, cy + s * 0.25 + d));
+                    ctx.DrawLine(pen, new Point(cx + s * 0.52 + d, cy + s * 0.25 - d), new Point(cx + s * 0.52 - d, cy + s * 0.25 + d));
+                    break;
+                }
+                case "history":
+                {
+                    double r = s * 0.70;
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx - r, cy), false);
+                        gctx.ArcTo(new Point(cx + r, cy), new Size(r, r), 0, false, SweepDirection.Clockwise);
+                        gctx.ArcTo(new Point(cx - r * 0.70, cy + r * 0.70), new Size(r, r), 0, false, SweepDirection.Clockwise);
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    ctx.DrawLine(pen, new Point(cx, cy - s * 0.38), new Point(cx, cy));
+                    ctx.DrawLine(pen, new Point(cx, cy), new Point(cx + s * 0.28, cy + s * 0.20));
+                    break;
+                }
+                case "discard":
+                {
+                    double r = s * 0.62;
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx - r, cy - s * 0.05), false);
+                        gctx.ArcTo(new Point(cx + r * 0.2, cy + r), new Size(r, r), 0, true, SweepDirection.Clockwise);
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    ctx.DrawLine(pen, new Point(cx - r, cy - s * 0.05), new Point(cx - r - s * 0.20, cy - s * 0.32));
+                    ctx.DrawLine(pen, new Point(cx - r, cy - s * 0.05), new Point(cx - r + s * 0.30, cy - s * 0.25));
+                    break;
+                }
+                case "minus":
+                {
+                    ctx.DrawLine(pen, new Point(cx - s * 0.62, cy), new Point(cx + s * 0.62, cy));
+                    break;
+                }
+                case "send":
+                {
+                    var geo = new StreamGeometry();
+                    using (var gctx = geo.Open())
+                    {
+                        gctx.BeginFigure(new Point(cx - s * 0.75, cy - s * 0.70), true);
+                        gctx.LineTo(new Point(cx + s * 0.80, cy));
+                        gctx.LineTo(new Point(cx - s * 0.75, cy + s * 0.70));
+                        gctx.LineTo(new Point(cx - s * 0.45, cy));
+                        gctx.EndFigure(true);
+                    }
+                    ctx.DrawGeometry(null, pen, geo);
+                    break;
+                }
+                case "case-sensitive":
+                case "whole-word":
+                case "regex":
+                {
+                    string lower = iconName.ToLowerInvariant();
+                    string txt = lower == "case-sensitive" ? "Aa" : (lower == "whole-word" ? "ab" : ".*");
+                    var ft = new FormattedText(txt, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                        new Typeface("Inter, Segoe UI, sans-serif", FontStyle.Normal, FontWeight.SemiBold), Math.Max(8, bounds.Height * 0.66), fill);
+                    ctx.DrawText(ft, new Point(cx - ft.Width / 2.0, cy - ft.Height / 2.0));
+                    if (lower == "whole-word")
+                        ctx.DrawLine(new Pen(fill, 1), new Point(cx - ft.Width / 2.0 - 1, cy + ft.Height * 0.40), new Point(cx + ft.Width / 2.0 + 1, cy + ft.Height * 0.40));
+                    break;
+                }
                 case "check":
                 {
                     var geo = new StreamGeometry();
@@ -395,6 +610,14 @@ namespace codeLess.AvaloniaApp
         public Color BadgeBackground { get; set; } = Color.FromRgb(0, 122, 204);
         public Color BadgeForeground { get; set; } = Colors.White;
 
+        /// <summary>When true the glyph uses the inherited text foreground (e.g. of the hosting Button) instead of <see cref="IconColor"/>.</summary>
+        public bool FollowForeground { get; set; }
+
+        static VectorIconControl()
+        {
+            AffectsRender<VectorIconControl>(Avalonia.Controls.Documents.TextElement.ForegroundProperty);
+        }
+
         public VectorIconControl()
         {
             Width = 20;
@@ -405,7 +628,10 @@ namespace codeLess.AvaloniaApp
         public override void Render(DrawingContext context)
         {
             base.Render(context);
-            AvaloniaVectorIcons.DrawIcon(context, IconName, new Rect(0, 0, Bounds.Width, Bounds.Height), IconColor, StrokeWidth);
+            Color color = IconColor;
+            if (FollowForeground && Avalonia.Controls.Documents.TextElement.GetForeground(this) is ISolidColorBrush fb)
+                color = fb.Color;
+            AvaloniaVectorIcons.DrawIcon(context, IconName, new Rect(0, 0, Bounds.Width, Bounds.Height), color, StrokeWidth);
 
             if (BadgeCount > 0)
             {
@@ -480,6 +706,61 @@ namespace codeLess.AvaloniaApp
             double x = (Bounds.Width + barW) * phase - barW;
             context.FillRectangle(new SolidColorBrush(BarColor), new Rect(x, 0, barW, Bounds.Height));
         }
+    }
+
+    /// <summary>
+    /// Vector glyph + label used for status-bar items and section headers. <see cref="ToString"/> keeps the legacy
+    /// text form (e.g. "▾ OUTLINE", "⎇ main") so callers/tests reading Content.ToString() keep working.
+    /// </summary>
+    public class IconLabel : StackPanel
+    {
+        public VectorIconControl Icon { get; }
+        public TextBlock Label { get; }
+        public string LegacyPrefix { get; set; } = "";
+
+        public IconLabel(string icon, string text, double iconSize = 14, double fontSize = 12, string legacyPrefix = "")
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal;
+            Spacing = 4;
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center;
+            LegacyPrefix = legacyPrefix ?? "";
+            Icon = new VectorIconControl { IconName = icon, Width = iconSize, Height = iconSize, FollowForeground = true, StrokeWidth = 1.4f, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+            Label = new TextBlock { Text = text ?? "", FontSize = fontSize, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+            Icon.IsVisible = !string.IsNullOrEmpty(icon);
+            Children.Add(Icon);
+            Children.Add(Label);
+        }
+
+        public string Text
+        {
+            get => Label.Text ?? "";
+            set => Label.Text = value ?? "";
+        }
+
+        public override string ToString() => LegacyPrefix + (Label.Text ?? "");
+    }
+
+    /// <summary>
+    /// Collapsible section header ("▾ OUTLINE"): vector chevron + 11 px semibold uppercase label. Built from the
+    /// legacy text form, which <see cref="IconLabel.ToString"/> returns unchanged.
+    /// </summary>
+    public class SectionHeaderLabel : IconLabel
+    {
+        public bool IsExpanded { get; }
+
+        public SectionHeaderLabel(string legacyText)
+            : base(ChevronFor(legacyText), StripChevron(legacyText), 12, codeLess.Studio.UiTokens.FontHeader, PrefixFor(legacyText))
+        {
+            IsExpanded = !(legacyText ?? "").StartsWith("▸", StringComparison.Ordinal);
+            Spacing = 4;
+            Label.FontWeight = FontWeight.SemiBold;
+            Icon.StrokeWidth = 1.5f;
+        }
+
+        private static bool HasChevron(string t) => !string.IsNullOrEmpty(t) && (t.StartsWith("▾ ", StringComparison.Ordinal) || t.StartsWith("▸ ", StringComparison.Ordinal));
+        private static string ChevronFor(string t) => !HasChevron(t) ? "" : (t.StartsWith("▸", StringComparison.Ordinal) ? "chevron-right" : "chevron-down");
+        private static string StripChevron(string t) => HasChevron(t) ? t.Substring(2) : (t ?? "");
+        private static string PrefixFor(string t) => HasChevron(t) ? t.Substring(0, 2) : "";
     }
 
     public class LiteralTextBlock : TextBlock

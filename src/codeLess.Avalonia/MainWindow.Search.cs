@@ -93,27 +93,17 @@ namespace codeLess.AvaloniaApp
 
             // Row 1: [>] [ search box ............ Aa ab .* ]
             var findRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-            wsReplaceToggleBtn = new Button
-            {
-                Content = new LiteralTextBlock("▸"),
-                FontSize = 13,
-                Width = 18,
-                Padding = new Thickness(0),
-                Margin = new Thickness(0, 0, 3, 0),
-                VerticalAlignment = VerticalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Background = Brushes.Transparent
-            };
-            ToolTip.SetTip(wsReplaceToggleBtn, "Toggle Replace");
-            wsReplaceToggleBtn.Click += (s, e) => SetReplaceRowVisible(!IsWorkspaceReplaceVisible);
+            wsReplaceToggleBtn = WorkbenchStyles.IconButton("chevron-right", "Toggle Replace", () => SetReplaceRowVisible(!IsWorkspaceReplaceVisible), currentTheme, 18, 12);
+            wsReplaceToggleBtn.Height = UiTokens.ControlHeight;
+            wsReplaceToggleBtn.Margin = new Thickness(0, 0, 3, 0);
             findRow.Children.Add(wsReplaceToggleBtn);
 
-            workspaceSearchInput = new TextBox { Watermark = "Search", FontSize = 12, Padding = new Thickness(7, 4) };
+            workspaceSearchInput = new TextBox { Watermark = "Search", FontSize = UiTokens.FontUi, Padding = new Thickness(8, 3, 2, 3) };
             Grid.SetColumn(workspaceSearchInput, 1);
             findRow.Children.Add(workspaceSearchInput);
 
-            var toggleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(3, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            // VS Code: the option toggles sit inside the right edge of the query box.
+            var toggleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1, Margin = new Thickness(0, 0, 2, 0), VerticalAlignment = VerticalAlignment.Center };
             wsMatchCaseBtn = MakeSearchToggle("Aa", "Match Case");
             wsWholeWordBtn = MakeSearchToggle("ab", "Match Whole Word");
             wsRegexBtn = MakeSearchToggle(".*", "Use Regular Expression");
@@ -123,16 +113,16 @@ namespace codeLess.AvaloniaApp
             toggleRow.Children.Add(wsMatchCaseBtn);
             toggleRow.Children.Add(wsWholeWordBtn);
             toggleRow.Children.Add(wsRegexBtn);
-            Grid.SetColumn(toggleRow, 2);
-            findRow.Children.Add(toggleRow);
+            workspaceSearchInput.InnerRightContent = toggleRow;
             topStack.Children.Add(findRow);
 
             // Row 2 (collapsible): [ replace box ............ ] [Replace All]
             workspaceReplaceRow = new Grid { ColumnDefinitions = new ColumnDefinitions("21,*,Auto"), IsVisible = false };
-            workspaceReplaceInput = new TextBox { Watermark = "Replace", FontSize = 12, Padding = new Thickness(7, 4) };
+            workspaceReplaceInput = new TextBox { Watermark = "Replace", FontSize = UiTokens.FontUi, Padding = new Thickness(8, 3) };
             Grid.SetColumn(workspaceReplaceInput, 1);
             workspaceReplaceRow.Children.Add(workspaceReplaceInput);
-            wsReplaceAllBtn = new Button { Content = new LiteralTextBlock("Replace All"), FontSize = 11, Padding = new Thickness(8, 3), Margin = new Thickness(3, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            wsReplaceAllBtn = WorkbenchStyles.IconButton("replace-all", "Replace All", null, currentTheme);
+            wsReplaceAllBtn.Margin = new Thickness(3, 0, 0, 0);
             ToolTip.SetTip(wsReplaceAllBtn, "Replace All (in the files listed below)");
             wsReplaceAllBtn.Click += (s, e) => ConfirmAndReplaceAll();
             Grid.SetColumn(wsReplaceAllBtn, 2);
@@ -140,10 +130,10 @@ namespace codeLess.AvaloniaApp
             topStack.Children.Add(workspaceReplaceRow);
 
             // Rows 3/4: files to include / exclude
-            wsIncludeLabel = new TextBlock { Text = "files to include", FontSize = 10.5, Margin = new Thickness(21, 2, 0, 0) };
-            workspaceSearchIncludeInput = new TextBox { Watermark = "e.g. ./src, *.cs, src/**/*.ts", FontSize = 11.5, Padding = new Thickness(7, 3), Margin = new Thickness(21, 0, 0, 0) };
-            wsExcludeLabel = new TextBlock { Text = "files to exclude", FontSize = 10.5, Margin = new Thickness(21, 2, 0, 0) };
-            workspaceSearchExcludeInput = new TextBox { Watermark = "e.g. *.min.js, **/generated/**", FontSize = 11.5, Padding = new Thickness(7, 3), Margin = new Thickness(21, 0, 0, 0) };
+            wsIncludeLabel = new TextBlock { Text = "files to include", FontSize = UiTokens.FontSmall - 1, Margin = new Thickness(21, 2, 0, 0) };
+            workspaceSearchIncludeInput = new TextBox { Watermark = "e.g. ./src, *.cs, src/**/*.ts", FontSize = UiTokens.FontSmall, Padding = new Thickness(6, 3), Margin = new Thickness(21, 0, 0, 0) };
+            wsExcludeLabel = new TextBlock { Text = "files to exclude", FontSize = UiTokens.FontSmall - 1, Margin = new Thickness(21, 2, 0, 0) };
+            workspaceSearchExcludeInput = new TextBox { Watermark = "e.g. *.min.js, **/generated/**", FontSize = UiTokens.FontSmall, Padding = new Thickness(6, 3), Margin = new Thickness(21, 0, 0, 0) };
             topStack.Children.Add(wsIncludeLabel);
             topStack.Children.Add(workspaceSearchIncludeInput);
             topStack.Children.Add(wsExcludeLabel);
@@ -151,12 +141,12 @@ namespace codeLess.AvaloniaApp
 
             // Summary + actions
             var summaryRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 3, 0, 0) };
-            workspaceSearchSummary = new TextBlock { Text = "Type a query and press Enter to search across files.", FontSize = 11, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+            workspaceSearchSummary = new TextBlock { Text = "Type a query and press Enter to search across files.", FontSize = UiTokens.FontSmall, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) };
             summaryRow.Children.Add(workspaceSearchSummary);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1 };
-            actions.Children.Add(MakeSearchActionButton("⟳", "Refresh", () => ExecuteWorkspaceSearch()));
-            actions.Children.Add(MakeSearchActionButton("⊟", "Collapse / Expand All", ToggleCollapseAllSearchGroups));
-            actions.Children.Add(MakeSearchActionButton("✕", "Clear Search Results", ClearWorkspaceSearch));
+            actions.Children.Add(MakeSearchActionButton("refresh", "Refresh", () => ExecuteWorkspaceSearch()));
+            actions.Children.Add(MakeSearchActionButton("collapse-all", "Collapse / Expand All", ToggleCollapseAllSearchGroups));
+            actions.Children.Add(MakeSearchActionButton("clear-all", "Clear Search Results", ClearWorkspaceSearch));
             Grid.SetColumn(actions, 1);
             summaryRow.Children.Add(actions);
             topStack.Children.Add(summaryRow);
@@ -236,32 +226,19 @@ namespace codeLess.AvaloniaApp
 
         private static Button MakeSearchToggle(string label, string tip)
         {
-            var b = new Button
-            {
-                Content = new LiteralTextBlock(label),
-                FontSize = 10.5,
-                MinWidth = 24,
-                Padding = new Thickness(4, 2),
-                BorderThickness = new Thickness(1),
-                HorizontalContentAlignment = HorizontalAlignment.Center
-            };
-            ToolTip.SetTip(b, tip);
+            string icon = label == "Aa" ? "case-sensitive" : (label == "ab" ? "whole-word" : "regex");
+            var b = WorkbenchStyles.IconButton(icon, tip, null, null, 20, 14);
+            b.Classes.Remove("icon");
+            b.Classes.Add("toggle");
+            b.BorderThickness = new Thickness(1);
+            b.BorderBrush = Brushes.Transparent;
+            b.CornerRadius = new CornerRadius(3);
             return b;
         }
 
-        private static Button MakeSearchActionButton(string glyph, string tip, Action onClick)
+        private static Button MakeSearchActionButton(string icon, string tip, Action onClick)
         {
-            var b = new Button
-            {
-                Content = new LiteralTextBlock(glyph),
-                FontSize = 12,
-                Padding = new Thickness(5, 0),
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0)
-            };
-            ToolTip.SetTip(b, tip);
-            b.Click += (s, e) => onClick();
-            return b;
+            return WorkbenchStyles.IconButton(icon, tip, onClick, null, 22, 15);
         }
 
         private void UpdateSearchToggleVisuals()
@@ -269,7 +246,7 @@ namespace codeLess.AvaloniaApp
             if (currentTheme == null || wsMatchCaseBtn == null) return;
             void style(Button b, bool on)
             {
-                b.Background = on ? AvaloniaColorHelper.ToBrush(currentTheme.AccentPrimary, 70) : Brushes.Transparent;
+                b.Background = on ? WorkbenchStyles.B(UiTokens.ListActiveSelection(currentTheme, UiTokens.InputBackground(currentTheme))) : Brushes.Transparent;
                 b.BorderBrush = on ? AvaloniaColorHelper.ToBrush(currentTheme.AccentPrimary) : Brushes.Transparent;
                 b.Foreground = AvaloniaColorHelper.ToBrush(on ? currentTheme.TextPrimary : currentTheme.TextSecondary);
             }
@@ -296,7 +273,7 @@ namespace codeLess.AvaloniaApp
         public void SetReplaceRowVisible(bool visible)
         {
             workspaceReplaceRow.IsVisible = visible;
-            wsReplaceToggleBtn.Content = new LiteralTextBlock(visible ? "▾" : "▸");
+            if (wsReplaceToggleBtn.Content is VectorIconControl chev) { chev.IconName = visible ? "chevron-down" : "chevron-right"; chev.InvalidateVisual(); }
         }
 
         public void SetWorkspaceSearchFlags(bool? matchCase = null, bool? wholeWord = null, bool? useRegex = null)
@@ -590,21 +567,22 @@ namespace codeLess.AvaloniaApp
                 var badgeTb = new TextBlock { Text = badge, FontSize = 8.5, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(badgeColor), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 5, 0) };
                 Grid.SetColumn(badgeTb, 1);
                 grid.Children.Add(badgeTb);
-                var nameTb = new TextBlock { Text = fileName, FontSize = 12, FontWeight = FontWeight.SemiBold, Foreground = primary, VerticalAlignment = VerticalAlignment.Center };
+                var nameTb = new TextBlock { Text = fileName, FontSize = UiTokens.FontUi, FontWeight = FontWeight.Normal, Foreground = primary, VerticalAlignment = VerticalAlignment.Center };
                 Grid.SetColumn(nameTb, 2);
                 grid.Children.Add(nameTb);
                 string relDir = Path.GetDirectoryName((g.RelativePath ?? "").Replace('/', Path.DirectorySeparatorChar)) ?? "";
-                var dirTb = new TextBlock { Text = relDir.Replace('\\', '/'), FontSize = 11, Foreground = secondary, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 4, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+                var dirTb = new TextBlock { Text = relDir.Replace('\\', '/'), FontSize = UiTokens.FontSmall, Foreground = AvaloniaColorHelper.ToBrush(theme.FgMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 4, 0), TextTrimming = TextTrimming.CharacterEllipsis };
                 Grid.SetColumn(dirTb, 3);
                 grid.Children.Add(dirTb);
                 var countBadge = new Border
                 {
-                    Background = AvaloniaColorHelper.ToBrush(theme.AccentPrimary, 60),
-                    CornerRadius = new CornerRadius(8),
+                    Background = WorkbenchStyles.B(UiTokens.BadgeBackground(theme)),
+                    CornerRadius = new CornerRadius(9),
                     Padding = new Thickness(6, 0),
-                    Margin = new Thickness(0, 0, 4, 0),
+                    MinWidth = 18,
+                    Margin = new Thickness(0, 0, 6, 0),
                     VerticalAlignment = VerticalAlignment.Center,
-                    Child = new TextBlock { Text = g.Matches.Count.ToString(), FontSize = 10.5, Foreground = primary }
+                    Child = new TextBlock { Text = g.Matches.Count.ToString(), FontSize = UiTokens.FontBadge + 0.5, Foreground = primary, HorizontalAlignment = HorizontalAlignment.Center }
                 };
                 Grid.SetColumn(countBadge, 4);
                 grid.Children.Add(countBadge);
@@ -618,7 +596,7 @@ namespace codeLess.AvaloniaApp
             int pl = Math.Max(0, Math.Min(m?.PreviewMatchLength ?? 0, preview.Length - ps));
             var tb = new TextBlock
             {
-                FontSize = 12,
+                FontSize = UiTokens.FontUi,
                 Foreground = primary,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -630,8 +608,8 @@ namespace codeLess.AvaloniaApp
             {
                 tb.Inlines.Add(new Run(preview.Substring(ps, pl))
                 {
-                    Background = AvaloniaColorHelper.ToBrush(theme.AccentPrimary, 85),
-                    FontWeight = FontWeight.SemiBold
+                    // Same amber find-match highlight as the editor (VS Code findMatchHighlight), not a murky accent tint.
+                    Background = new SolidColorBrush(Color.FromArgb(theme.IsLight ? (byte)90 : (byte)80, 234, 179, 8))
                 });
             }
             if (ps + pl < preview.Length) tb.Inlines.Add(new Run(preview.Substring(ps + pl)));

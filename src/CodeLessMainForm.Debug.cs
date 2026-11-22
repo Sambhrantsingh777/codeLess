@@ -241,21 +241,39 @@ namespace codeLess.Studio
 
         private Label MakeDebugSectionHeader(string title, Control body)
         {
+            // Section header: drawn chevron + 11 px semibold uppercase title (no text-glyph chevrons).
             Label header = new Label
             {
                 Text = "▾ " + title,
                 Dock = DockStyle.Top,
-                Height = 22,
+                Height = UiTokens.SectionHeaderHeight,
                 Padding = new Padding(6, 4, 0, 0),
-                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Font = new Font("Segoe UI Semibold", UiTokens.Pt(UiTokens.FontHeader), FontStyle.Bold),
                 Cursor = Cursors.Hand,
                 UseMnemonic = false,
                 Tag = "debug_section"
+            };
+            header.Paint += (s, e) =>
+            {
+                e.Graphics.Clear(header.BackColor);
+                bool open = !(header.Text ?? "").StartsWith("▸", StringComparison.Ordinal);
+                Color fg = header.ForeColor;
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (Pen p = new Pen(fg, 1.5f))
+                {
+                    int cx = 12, cy = header.Height / 2;
+                    if (open) e.Graphics.DrawLines(p, new[] { new Point(cx - 4, cy - 2), new Point(cx, cy + 2), new Point(cx + 4, cy - 2) });
+                    else e.Graphics.DrawLines(p, new[] { new Point(cx - 2, cy - 4), new Point(cx + 2, cy), new Point(cx - 2, cy + 4) });
+                }
+                e.Graphics.SmoothingMode = SmoothingMode.Default;
+                TextRenderer.DrawText(e.Graphics, title.ToUpperInvariant(), header.Font, new Rectangle(22, 0, Math.Max(10, header.Width - 24), header.Height), fg,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             };
             header.Click += delegate
             {
                 body.Visible = !body.Visible;
                 header.Text = (body.Visible ? "▾ " : "▸ ") + title;
+                header.Invalidate();
             };
             return header;
         }
@@ -296,8 +314,9 @@ namespace codeLess.Studio
                     try { settings.Save(); } catch { }
                 }
             };
-            Button gear = new Button { Text = "⚙", Width = 26, Height = 24, FlatStyle = FlatStyle.Flat, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            Button gear = new Button { Text = "", Width = 26, Height = 24, FlatStyle = FlatStyle.Flat, Anchor = AnchorStyles.Top | AnchorStyles.Right };
             gear.FlatAppearance.BorderSize = 0;
+            gear.Paint += (s, e) => CodeLessVectorIcons.DrawIcon(e.Graphics, "gear", new Rectangle((gear.Width - 16) / 2, (gear.Height - 16) / 2, 16, 16), gear.ForeColor, 1.4f);
             gear.Click += delegate
             {
                 string p = DebugLaunchConfigurations.LaunchJsonPath(workspaceRoot);
@@ -867,7 +886,14 @@ namespace codeLess.Studio
             if (debugStatusBarActive != active)
             {
                 debugStatusBarActive = active;
-                if (statusBar != null) statusBar.BackColor = ResolveStatusBarBackColor(activeTheme, !string.IsNullOrEmpty(workspaceRoot));
+                if (statusBar != null)
+                {
+                    statusBar.BackColor = ResolveStatusBarBackColor(activeTheme, !string.IsNullOrEmpty(workspaceRoot));
+                    // White text on the orange debugging bar; the neutral token color otherwise.
+                    Color fg = active || activeTheme == null ? Color.White : UiTokens.StatusBarForeground(activeTheme);
+                    foreach (Control c in statusBar.Controls) c.ForeColor = fg;
+                    statusBar.Invalidate(true);
+                }
             }
             if (debugToolbarPanel != null)
             {

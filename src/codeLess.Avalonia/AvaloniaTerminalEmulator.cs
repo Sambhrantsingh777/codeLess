@@ -492,7 +492,7 @@ namespace codeLess.AvaloniaApp
         private readonly AvaloniaTerminalEmulatorControl owner;
         public const double DefaultCellW = 7.6;
         public const double CellH = 17.0;
-        public const double PadLeft = 10.0;
+        public const double PadLeft = 14.0;
         public const double PadTop = 6.0;
         private const double TermFontSize = 12.5;
 

@@ -263,10 +263,13 @@ namespace codeLess.AvaloniaApp
             var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
             var header = new Button
             {
-                Content = new LiteralTextBlock("▾ " + title) { FontSize = 10.5, FontWeight = FontWeight.Bold },
+                Content = new SectionHeaderLabel("▾ " + title),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(8, 4),
+                Padding = new Thickness(4, 0),
+                Height = UiTokens.SectionHeaderHeight,
+                MinHeight = 0,
+                VerticalContentAlignment = VerticalAlignment.Center,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0, 1, 0, 0),
                 CornerRadius = new CornerRadius(0)
@@ -275,7 +278,7 @@ namespace codeLess.AvaloniaApp
             header.Click += (s, e) =>
             {
                 host.IsVisible = !host.IsVisible;
-                header.Content = new LiteralTextBlock((host.IsVisible ? "▾ " : "▸ ") + title) { FontSize = 10.5, FontWeight = FontWeight.Bold, Foreground = header.Foreground };
+                header.Content = new SectionHeaderLabel((host.IsVisible ? "▾ " : "▸ ") + title);
             };
             headerGrid.Children.Add(header);
             if (actions != null)
@@ -559,7 +562,7 @@ namespace codeLess.AvaloniaApp
                         (frame.Name ?? "?", subtle ? C(theme.TextSecondary) : C(theme.TextPrimary), sel),
                         ("   " + loc, C(theme.TextSecondary), false)
                     }, () => ctl.SelectFrame(frame), frame.HasSource ? frame.SourcePath + ":" + frame.Line : null);
-                    if (sel) row.Background = new SolidColorBrush(C(theme.BgSelection), 0.6);
+                    if (sel) row.Background = WorkbenchStyles.B(UiTokens.ListActiveSelection(theme, theme.BgSidebar));
                     CallStackHost.Children.Add(row);
                 }
             }
@@ -602,13 +605,7 @@ namespace codeLess.AvaloniaApp
                 ToolTip.SetTip(tb, DebugBreakpointStore.Describe(bp) + (string.IsNullOrEmpty(bp.VerifyMessage) ? "" : "\n" + bp.VerifyMessage));
                 Grid.SetColumn(tb, 1);
                 g.Children.Add(tb);
-                var edit = new Button
-                {
-                    Content = new LiteralTextBlock("✎") { FontSize = 11, Foreground = new SolidColorBrush(C(theme.TextSecondary)) },
-                    Background = Brushes.Transparent, Padding = new Thickness(4, 0), BorderThickness = new Thickness(0)
-                };
-                ToolTip.SetTip(edit, "Edit Condition / Hit Count / Log Message");
-                edit.Click += (s, e) => EditBreakpointRequested?.Invoke(bp);
+                var edit = WorkbenchStyles.IconButton("pencil", "Edit Condition / Hit Count / Log Message", () => EditBreakpointRequested?.Invoke(bp), theme, 18, 13);
                 Grid.SetColumn(edit, 2);
                 g.Children.Add(edit);
                 var line = new TextBlock { Text = (bp.Line + 1).ToString(), FontSize = 11, Margin = new Thickness(4, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center, Foreground = new SolidColorBrush(C(theme.TextSecondary)) };

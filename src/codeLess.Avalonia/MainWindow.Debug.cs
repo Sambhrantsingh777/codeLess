@@ -158,17 +158,8 @@ namespace codeLess.AvaloniaApp
             // Status bar: Python interpreter item, left of the language mode (like VS Code).
             if (statusLanguageBtn?.Parent is StackPanel rightRow)
             {
-                statusPythonBtn = new Button
-                {
-                    Content = new LiteralTextBlock("Select Interpreter") { FontSize = 11 },
-                    FontSize = 11,
-                    Padding = new Thickness(7, 1),
-                    Height = 24,
-                    CornerRadius = new CornerRadius(0),
-                    Background = Brushes.Transparent,
-                    BorderThickness = new Thickness(0),
-                    IsVisible = false
-                };
+                statusPythonBtn = MakeStatusBarItem("Select Interpreter", null);
+                statusPythonBtn.IsVisible = false;
                 ToolTip.SetTip(statusPythonBtn, "Select Python Interpreter");
                 statusPythonBtn.Click += (s, e) => OpenPythonInterpreterPicker();
                 rightRow.Children.Insert(Math.Max(0, rightRow.Children.IndexOf(statusLanguageBtn)), statusPythonBtn);
@@ -238,7 +229,8 @@ namespace codeLess.AvaloniaApp
                 debugHoverBox.BorderBrush = AvaloniaColorHelper.ToBrush(theme.BorderSubtle);
                 debugHoverText.Foreground = AvaloniaColorHelper.ToBrush(theme.TextPrimary);
             }
-            if (statusPythonBtn != null) statusPythonBtn.Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(theme.StatusBarText));
+            if (statusPythonBtn != null) statusPythonBtn.Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.StatusBarForeground(theme)));
+            if (debugNotification != null) WorkbenchStyles.ThemeNotification(debugNotification, theme);
             UpdateDebugStatusBarColor();
         }
 
@@ -253,7 +245,7 @@ namespace codeLess.AvaloniaApp
             if (statusBarBorder == null || currentTheme == null) return;
             bool debugging = debugController != null && debugController.IsActive;
             IsStatusBarInDebugColor = debugging;
-            statusBarBorder.Background = debugging ? new SolidColorBrush(DebuggingStatusBarColor(currentTheme)) : AvaloniaColorHelper.ToBrush(currentTheme.StatusBarBg);
+            statusBarBorder.Background = debugging ? new SolidColorBrush(DebuggingStatusBarColor(currentTheme)) : AvaloniaColorHelper.ToBrush(UiTokens.StatusBarBackground(currentTheme));
             if (debugging)
             {
                 foreach (var b in new Control[] { statusBranchBtn, statusProblemsBtn, statusLnColBtn, statusSpacesBtn, statusEncodingBtn, statusEolBtn, statusLanguageBtn, statusAiModelBtn, statusPythonBtn })
@@ -262,7 +254,7 @@ namespace codeLess.AvaloniaApp
             }
             else
             {
-                var fg = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.StatusBarText));
+                var fg = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.StatusBarForeground(currentTheme)));
                 foreach (var b in new Control[] { statusBranchBtn, statusProblemsBtn, statusLnColBtn, statusSpacesBtn, statusEncodingBtn, statusEolBtn, statusLanguageBtn, statusAiModelBtn, statusPythonBtn })
                     if (b is TemplatedControl tc) tc.Foreground = fg;
                 if (statusMessageLabel != null) statusMessageLabel.Foreground = fg;
@@ -506,45 +498,18 @@ namespace codeLess.AvaloniaApp
             SetStatusMessage(message);
             if (editorSplitGrid == null) return;
             if (debugNotification != null) editorSplitGrid.Children.Remove(debugNotification);
-            var stack = new StackPanel { Spacing = 6 };
-            Color fg = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
-            Color fg2 = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
-            stack.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = new SolidColorBrush(fg) });
-            if (!string.IsNullOrEmpty(hint)) stack.Children.Add(new SelectableTextBlock { Text = hint, TextWrapping = TextWrapping.Wrap, FontSize = 11.5, Foreground = new SolidColorBrush(fg2) });
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
+            var buttons = new List<Button>();
             if (!string.IsNullOrEmpty(installCommand))
             {
-                var install = new Button
-                {
-                    Content = "Install in Terminal",
-                    Background = AvaloniaColorHelper.ToBrush(currentTheme.AccentPrimary),
-                    Foreground = Brushes.White,
-                    Padding = new Thickness(10, 3),
-                    FontSize = 12
-                };
+                var install = new Button { Content = "Install in Terminal" };
                 ToolTip.SetTip(install, installCommand);
                 install.Click += (s, e) => { HideDebugNotification(); RunCommandInTerminal(installCommand); };
-                buttons.Children.Add(install);
+                buttons.Add(install);
             }
-            var close = new Button { Content = "Close", Padding = new Thickness(10, 3), FontSize = 12 };
-            close.Click += (s, e) => HideDebugNotification();
-            buttons.Children.Add(close);
-            stack.Children.Add(buttons);
-            debugNotification = new Border
-            {
-                Child = stack,
-                Width = 380,
-                Padding = new Thickness(12, 10),
-                Margin = new Thickness(0, 0, 16, 16),
-                CornerRadius = new CornerRadius(4),
-                BorderThickness = new Thickness(1),
-                BorderBrush = AvaloniaColorHelper.ToBrush(currentTheme.BorderSubtle),
-                Background = AvaloniaColorHelper.ToBrush(currentTheme.FloatingBg),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                BoxShadow = new BoxShadows(new BoxShadow { OffsetY = 2, Blur = 10, Color = Color.FromArgb(100, 0, 0, 0) }),
-                ZIndex = 70
-            };
+            Control detail = string.IsNullOrEmpty(hint) ? null : new SelectableTextBlock { Text = hint, TextWrapping = TextWrapping.Wrap, FontSize = UiTokens.FontSmall };
+            debugNotification = WorkbenchStyles.BuildNotification(currentTheme, "error", new TextBlock { Text = message }, detail, buttons.ToArray(), true, HideDebugNotification);
+            debugNotification.Margin = new Thickness(0, 0, 12, 12);
+            debugNotification.ZIndex = 70;
             Grid.SetColumnSpan(debugNotification, 2);
             editorSplitGrid.Children.Add(debugNotification);
         }

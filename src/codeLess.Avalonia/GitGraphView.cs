@@ -56,7 +56,7 @@ namespace codeLess.AvaloniaApp
         protected override void DrawRow(DrawingContext ctx, int index, Rect r, bool selected)
         {
             var c = Commits[index];
-            if (selected) ctx.FillRectangle(AvaloniaColorHelper.ToBrush(Theme.BgSelection), r);
+            if (selected) ctx.FillRectangle(WorkbenchStyles.B(UiTokens.ListActiveSelection(Theme, Theme.BgEditor)), r);
             else if (index % 2 == 1) ctx.FillRectangle(AvaloniaColorHelper.ToBrush(Theme.BgHover, 40), r);
             double x = r.X + 8;
             double cy = r.Y + r.Height / 2;
@@ -133,8 +133,8 @@ namespace codeLess.AvaloniaApp
         public string RepoRoot { get; }
         public string FilePathFilter { get; }
         public GitGraphRowsControl List { get; } = new GitGraphRowsControl();
-        private readonly TextBox filterBox = new TextBox { Watermark = "Filter by message or author", FontSize = 12, MinWidth = 180, Height = 26, Padding = new Thickness(6, 3) };
-        private readonly CheckBox allBranches = new CheckBox { Content = "All branches", IsChecked = true, FontSize = 12, Margin = new Thickness(8, 0) };
+        private readonly TextBox filterBox = new TextBox { Watermark = "Filter by message or author", FontSize = UiTokens.FontUi, MinWidth = 200, Height = UiTokens.ControlHeight, Padding = new Thickness(8, 3) };
+        private readonly CheckBox allBranches = new CheckBox { Content = "All branches", IsChecked = true, FontSize = UiTokens.FontUi, Margin = new Thickness(10, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center };
         private readonly TextBlock statusText = new TextBlock { FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0) };
         private readonly Border toolbar;
         private readonly Border detailsBorder;
@@ -169,7 +169,7 @@ namespace codeLess.AvaloniaApp
             ColumnDefinitions = new ColumnDefinitions("*,4,320");
             List.ShowGraph = string.IsNullOrEmpty(repoRelativeFile);
 
-            var refreshBtn = new Button { Content = new VectorIconControl { IconName = "refresh", Width = 13, Height = 13 }, Width = 26, Height = 24, Padding = new Thickness(0), Background = Brushes.Transparent };
+            var refreshBtn = WorkbenchStyles.IconButton("refresh", null, null, null);
             ToolTip.SetTip(refreshBtn, "Refresh");
             refreshBtn.Click += (s, e) => Reload();
             var tg = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,*"), Margin = new Thickness(8, 4) };
@@ -285,7 +285,7 @@ namespace codeLess.AvaloniaApp
             }
             var hashRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
             hashRow.Children.Add(new SelectableTextBlock { Text = c.Hash, FontFamily = new FontFamily(DevToolsFonts.MonoFamily), FontSize = 11.5, Foreground = AvaloniaColorHelper.ToBrush(theme.FgSecondary), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxWidth = 220 });
-            var copy = new Button { Content = "Copy", FontSize = 10.5, Padding = new Thickness(6, 1) };
+            var copy = WorkbenchStyles.IconButton("copy", "Copy commit hash", null, theme, 22, 14);
             copy.Click += (s, e) => CopyToClipboard?.Invoke(c.Hash);
             hashRow.Children.Add(copy);
             detailsPanel.Children.Add(hashRow);
@@ -296,7 +296,7 @@ namespace codeLess.AvaloniaApp
             if (c.IsMerge) detailsPanel.Children.Add(Muted("Merge of " + string.Join(", ", c.Parents.Select(GitCli.ShortHash)) + " — files shown against the first parent"));
             var body = new SelectableTextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = AvaloniaColorHelper.ToBrush(theme.FgSecondary) };
             detailsPanel.Children.Add(body);
-            var filesHeader = new TextBlock { Text = "CHANGED FILES", FontSize = 11, FontWeight = FontWeight.Bold, Margin = new Thickness(0, 6, 0, 0), Foreground = AvaloniaColorHelper.ToBrush(theme.FgMuted) };
+            var filesHeader = new TextBlock { Text = "CHANGED FILES", FontSize = UiTokens.FontHeader, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 12, 0, 2), Foreground = AvaloniaColorHelper.ToBrush(theme.FgSecondary) };
             detailsPanel.Children.Add(filesHeader);
             var captured = c;
             Task.Run(() =>

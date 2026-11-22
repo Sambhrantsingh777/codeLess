@@ -141,12 +141,9 @@ namespace codeLess.AvaloniaApp
             titleText.Text = title;
             modeBtn = new Button { FontSize = 11, Padding = new Thickness(8, 2), Margin = new Thickness(4, 0), VerticalAlignment = VerticalAlignment.Center };
             modeBtn.Click += (s, e) => { Rows.SetMode(!Rows.SideBySide); UpdateHeader(); };
-            var prev = new Button { Content = "↑", FontSize = 11, Padding = new Thickness(8, 2), VerticalAlignment = VerticalAlignment.Center };
-            var next = new Button { Content = "↓", FontSize = 11, Padding = new Thickness(8, 2), Margin = new Thickness(4, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-            ToolTip.SetTip(prev, "Previous Change");
-            ToolTip.SetTip(next, "Next Change");
-            prev.Click += (s, e) => Rows.JumpChange(-1);
-            next.Click += (s, e) => Rows.JumpChange(1);
+            var prev = WorkbenchStyles.IconButton("arrow-up", "Previous Change", () => Rows.JumpChange(-1));
+            var next = WorkbenchStyles.IconButton("arrow-down", "Next Change", () => Rows.JumpChange(1));
+            next.Margin = new Thickness(2, 0, 8, 0);
             var hg = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto"), Margin = new Thickness(10, 0, 0, 0) };
             hg.Children.Add(titleText);
             Grid.SetColumn(statsText, 1); hg.Children.Add(statsText);
@@ -247,14 +244,15 @@ namespace codeLess.AvaloniaApp
 
         private static Button SmallButton(string text, string tip)
         {
-            var b = new Button { Content = text, FontSize = 11, Padding = new Thickness(8, 2), Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var b = new Button { Content = text, FontSize = UiTokens.FontSmall, Padding = new Thickness(8, 2), MinHeight = 22, Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             ToolTip.SetTip(b, tip);
             return b;
         }
 
         private Button TabButton(string text, string id)
         {
-            var b = new Button { Content = text, FontSize = 11, FontWeight = FontWeight.Bold, Padding = new Thickness(4, 4), Background = Brushes.Transparent, BorderThickness = new Thickness(0, 0, 0, 2) };
+            var b = new Button { Content = text, FontSize = UiTokens.FontHeader, FontWeight = FontWeight.Normal, Padding = new Thickness(6, 0), MinHeight = 0, VerticalAlignment = VerticalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Center, CornerRadius = new CornerRadius(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0, 0, 0, UiTokens.PanelTabIndicatorWidth) };
+            b.Classes.Add("paneltab");
             b.Click += (s, e) => { activeTab = id; Render(); };
             return b;
         }

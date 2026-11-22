@@ -134,34 +134,39 @@ namespace codeLess.AvaloniaApp
             };
             diffBannerSummaryText = new TextBlock
             {
-                Text = "Δ Proposed Changes",
-                FontWeight = FontWeight.SemiBold,
-                FontSize = 11.5,
+                Text = "Proposed Changes",
+                FontWeight = FontWeight.Normal,
+                FontSize = UiTokens.FontSmall,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            var prevHunkBtn = new Button { Content = "↑ Prev Hunk", FontSize = 11, Padding = new Thickness(8, 2), Margin = new Thickness(4, 2) };
-            var nextHunkBtn = new Button { Content = "↓ Next Hunk", FontSize = 11, Padding = new Thickness(8, 2), Margin = new Thickness(4, 2) };
+            var prevHunkBtn = WorkbenchStyles.IconButton("arrow-up", "Previous Change", null, currentTheme);
+            var nextHunkBtn = WorkbenchStyles.IconButton("arrow-down", "Next Change", null, currentTheme);
+            prevHunkBtn.Margin = new Thickness(2, 0);
+            nextHunkBtn.Margin = new Thickness(2, 0, 8, 0);
             var acceptAllBtn = new Button
             {
                 Name = "AcceptAllDiffBtn",
-                Content = "✓ Accept All (Ctrl+Enter)",
-                FontSize = 11,
-                FontWeight = FontWeight.SemiBold,
+                Content = "Accept All",
+                FontSize = UiTokens.FontSmall,
                 Padding = new Thickness(10, 2),
-                Margin = new Thickness(4, 2),
-                Background = new SolidColorBrush(Color.FromRgb(22, 163, 74)),
-                Foreground = Brushes.White
+                MinHeight = 22,
+                Margin = new Thickness(4, 0),
+                VerticalAlignment = VerticalAlignment.Center
             };
+            acceptAllBtn.Classes.Add("primary");
+            ToolTip.SetTip(acceptAllBtn, "Accept all proposed changes (Ctrl+Enter)");
             var rejectAllBtn = new Button
             {
                 Name = "RejectAllDiffBtn",
-                Content = "✕ Reject All (Esc)",
-                FontSize = 11,
+                Content = "Reject All",
+                FontSize = UiTokens.FontSmall,
                 Padding = new Thickness(10, 2),
-                Margin = new Thickness(4, 2),
-                Background = new SolidColorBrush(Color.FromRgb(185, 28, 28)),
-                Foreground = Brushes.White
+                MinHeight = 22,
+                Margin = new Thickness(2, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
             };
+            ToolTip.SetTip(rejectAllBtn, "Reject all proposed changes (Esc)");
+            diffBannerButtons = new[] { prevHunkBtn, nextHunkBtn, acceptAllBtn, rejectAllBtn };
             prevHunkBtn.Click += (s, e) => JumpDiffHunk(-1);
             nextHunkBtn.Click += (s, e) => JumpDiffHunk(1);
             acceptAllBtn.Click += (s, e) => AcceptAllPendingDiffs();
@@ -175,7 +180,7 @@ namespace codeLess.AvaloniaApp
 
             diffReviewBanner = new Border
             {
-                Height = 28,
+                Height = 30,
                 Child = diffGrid,
                 BorderThickness = new Thickness(0, 0, 0, 1),
                 IsVisible = false
@@ -276,12 +281,20 @@ namespace codeLess.AvaloniaApp
             breadcrumbBar.BorderBrush = AvaloniaColorHelper.ToBrush(theme.BorderSubtle);
 
             bool isLight = AvaloniaColorHelper.IsLightColor(theme.EditorBg);
-            diffReviewBanner.Background = new SolidColorBrush(isLight ? Color.FromRgb(224, 242, 254) : Color.FromRgb(22, 34, 52));
-            diffReviewBanner.BorderBrush = AvaloniaColorHelper.ToBrush(theme.AccentPrimary);
+            diffReviewBanner.Background = WorkbenchStyles.B(UiTokens.WidgetBackground(theme));
+            diffReviewBanner.BorderBrush = WorkbenchStyles.B(theme.BorderSubtle);
             diffBannerSummaryText.Foreground = AvaloniaColorHelper.ToBrush(theme.TextPrimary);
+            foreach (var b in diffBannerButtons)
+            {
+                if (b.Classes.Contains("icon")) WorkbenchStyles.ThemeIconButton(b, theme);
+                else if (b.Classes.Contains("primary")) WorkbenchStyles.StylePrimaryButton(b, theme);
+                else WorkbenchStyles.StyleSecondaryButton(b, theme);
+            }
 
-            findReplaceOverlay.Background = AvaloniaColorHelper.ToBrush(theme.FloatingBg);
-            findReplaceOverlay.BorderBrush = AvaloniaColorHelper.ToBrush(theme.BorderSubtle);
+            findReplaceOverlay.Background = WorkbenchStyles.B(UiTokens.WidgetBackground(theme));
+            findReplaceOverlay.BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(theme));
+            findReplaceOverlay.BoxShadow = WorkbenchStyles.WidgetShadow(theme);
+            UpdateFindToggleButtonStyles();
             inlineAiBar.Background = AvaloniaColorHelper.ToBrush(theme.FloatingBg);
             inlineAiBar.BorderBrush = AvaloniaColorHelper.ToBrush(theme.AccentPrimary);
 
@@ -358,8 +371,8 @@ namespace codeLess.AvaloniaApp
                 breadcrumbSegmentsPanel.Children.Add(new TextBlock
                 {
                     Text = parts[i],
-                    FontSize = 11.5,
-                    FontWeight = isLast ? FontWeight.SemiBold : FontWeight.Normal,
+                    FontSize = UiTokens.FontSmall,
+                    FontWeight = FontWeight.Normal,
                     Foreground = isLast ? priBrush : secBrush,
                     VerticalAlignment = VerticalAlignment.Center
                 });
@@ -371,24 +384,26 @@ namespace codeLess.AvaloniaApp
                 breadcrumbSegmentsPanel.Children.Add(new TextBlock
                 {
                     Text = "›",
-                    FontSize = 11.5,
-                    Foreground = secBrush,
+                    FontSize = UiTokens.FontSmall + 1,
+                    Foreground = AvaloniaColorHelper.ToBrush(currentTheme.FgMuted),
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(2, 0)
                 });
 
+                // VS Code breadcrumbs: symbols are plain secondary text, not accent-colored links.
                 var symBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"{activeSym.Kind}: {activeSym.Name} ▾")
+                    Content = new LiteralTextBlock($"{activeSym.Kind}: {activeSym.Name}")
                     {
-                        FontSize = 11,
-                        Foreground = accBrush
+                        FontSize = UiTokens.FontSmall
                     },
-                    FontSize = 11,
-                    Padding = new Thickness(6, 1),
+                    FontSize = UiTokens.FontSmall,
+                    Padding = new Thickness(4, 0),
+                    MinHeight = 18,
                     Background = Brushes.Transparent,
-                    Foreground = accBrush
+                    Foreground = secBrush
                 };
+                symBtn.Classes.Add("flat");
                 symBtn.Click += (s, e) => OpenBreadcrumbSymbolMenu(symBtn);
                 breadcrumbSegmentsPanel.Children.Add(symBtn);
             }
@@ -423,7 +438,7 @@ namespace codeLess.AvaloniaApp
             if (CurrentBuffer != null && CurrentBuffer.HasPendingDiff)
             {
                 int count = CurrentBuffer.ProposedNewLines != null ? CurrentBuffer.ProposedNewLines.Count : 0;
-                diffBannerSummaryText.Text = $"Δ {count} proposed line change(s) in {CurrentBuffer.FileName}";
+                diffBannerSummaryText.Text = count == 1 ? $"1 proposed change in {CurrentBuffer.FileName}" : $"{count} proposed changes in {CurrentBuffer.FileName}";
                 diffReviewBanner.IsVisible = true;
             }
             else
@@ -578,6 +593,7 @@ namespace codeLess.AvaloniaApp
             if (IsShowingLargeFile) { LargeFileViewer.ShowFind(); return; }
             findReplaceOverlay.IsVisible = true;
             replaceRowPanel.IsVisible = includeReplace;
+            UpdateFindToggleButtonStyles();
             if (CurrentBuffer != null && CurrentBuffer.HasSelection())
             {
                 string sel = CurrentBuffer.GetSelectedText();
@@ -765,46 +781,52 @@ namespace codeLess.AvaloniaApp
             out TextBox fBox, out TextBox rBox, out StackPanel rRow,
             out TextBlock cntLbl, out Button mcBtn, out Button wwBtn, out Button rxBtn)
         {
-            fBox = new TextBox { Watermark = "Find", Width = 175, FontSize = 12, Padding = new Thickness(6, 3) };
-            rBox = new TextBox { Watermark = "Replace", Width = 175, FontSize = 12, Padding = new Thickness(6, 3) };
+            // VS Code-style find widget: option toggles inside the input, vector glyph buttons, compact 24 px rows.
+            fBox = new TextBox { Watermark = "Find", Width = 230, FontSize = UiTokens.FontUi, Padding = new Thickness(8, 2, 2, 2), MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
+            rBox = new TextBox { Watermark = "Replace", Width = 230, FontSize = UiTokens.FontUi, Padding = new Thickness(8, 2, 6, 2), MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
             cntLbl = new TextBlock
             {
                 Text = "No results",
-                FontSize = 11,
-                Width = 68,
+                FontSize = UiTokens.FontSmall,
+                MinWidth = 64,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(6, 0)
+                Margin = new Thickness(8, 0, 4, 0)
             };
 
-            mcBtn = new Button { Content = "Aa", FontSize = 10.5, Padding = new Thickness(5, 2), Margin = new Thickness(2, 0) };
-            wwBtn = new Button { Content = "ab", FontSize = 10.5, Padding = new Thickness(5, 2), Margin = new Thickness(2, 0) };
-            rxBtn = new Button { Content = ".*", FontSize = 10.5, Padding = new Thickness(5, 2), Margin = new Thickness(2, 0) };
-            var prevBtn = new Button { Content = "↑", FontSize = 11, Padding = new Thickness(6, 2), Margin = new Thickness(2, 0) };
-            var nextBtn = new Button { Content = "↓", FontSize = 11, Padding = new Thickness(6, 2), Margin = new Thickness(2, 0) };
-            var toggleRepBtn = new Button { Content = "▾", FontSize = 11, Padding = new Thickness(5, 2), Margin = new Thickness(0, 0, 4, 0) };
-            var closeBtn = new Button { Content = "✕", FontSize = 11, Padding = new Thickness(6, 2), Margin = new Thickness(2, 0) };
+            mcBtn = WorkbenchStyles.IconButton("case-sensitive", "Match Case (Alt+C)", null, currentTheme, 20, 14);
+            wwBtn = WorkbenchStyles.IconButton("whole-word", "Match Whole Word (Alt+W)", null, currentTheme, 20, 14);
+            rxBtn = WorkbenchStyles.IconButton("regex", "Use Regular Expression (Alt+R)", null, currentTheme, 20, 14);
+            foreach (var tb in new[] { mcBtn, wwBtn, rxBtn }) { tb.Classes.Remove("icon"); tb.Classes.Add("toggle"); tb.BorderThickness = new Thickness(1); tb.BorderBrush = Brushes.Transparent; tb.CornerRadius = new CornerRadius(3); }
+            fBox.InnerRightContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1, Margin = new Thickness(0, 0, 2, 0), VerticalAlignment = VerticalAlignment.Center, Children = { mcBtn, wwBtn, rxBtn } };
+            var prevBtn = WorkbenchStyles.IconButton("arrow-up", "Previous Match (Shift+Enter)", null, currentTheme);
+            var nextBtn = WorkbenchStyles.IconButton("arrow-down", "Next Match (Enter)", null, currentTheme);
+            var toggleRepBtn = WorkbenchStyles.IconButton("chevron-right", "Toggle Replace", null, currentTheme, 18, 12);
+            toggleRepBtn.Height = 24;
+            toggleRepBtn.Margin = new Thickness(0, 0, 4, 0);
+            var closeBtn = WorkbenchStyles.IconButton("close", "Close (Escape)", null, currentTheme);
+            findToggleReplaceButton = toggleRepBtn;
+            findWidgetIconButtons = new[] { prevBtn, nextBtn, toggleRepBtn, closeBtn };
 
             var findRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
             findRow.Children.Add(toggleRepBtn);
             findRow.Children.Add(fBox);
-            findRow.Children.Add(mcBtn);
-            findRow.Children.Add(wwBtn);
-            findRow.Children.Add(rxBtn);
             findRow.Children.Add(cntLbl);
             findRow.Children.Add(prevBtn);
             findRow.Children.Add(nextBtn);
             findRow.Children.Add(closeBtn);
 
-            var repOneBtn = new Button { Content = "Replace", FontSize = 11, Padding = new Thickness(8, 2), Margin = new Thickness(4, 0) };
-            var repAllBtn = new Button { Content = "Replace All", FontSize = 11, Padding = new Thickness(8, 2), Margin = new Thickness(2, 0) };
+            var repOneBtn = WorkbenchStyles.IconButton("replace", "Replace (Enter)", null, currentTheme);
+            var repAllBtn = WorkbenchStyles.IconButton("replace-all", "Replace All (Ctrl+Alt+Enter)", null, currentTheme);
+            findWidgetReplaceButtons = new[] { repOneBtn, repAllBtn };
             rRow = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 2,
-                Margin = new Thickness(24, 4, 0, 0),
+                Margin = new Thickness(22, 4, 0, 0),
                 IsVisible = false
             };
             rRow.Children.Add(rBox);
+            rRow.Children.Add(new Border { Width = 6 });
             rRow.Children.Add(repOneBtn);
             rRow.Children.Add(repAllBtn);
 
@@ -870,7 +892,7 @@ namespace codeLess.AvaloniaApp
             rxBtn.Click += (s, e) => { findUseRegex = !findUseRegex; UpdateFindToggleButtonStyles(); RecomputeFindMatches(); };
             prevBtn.Click += (s, e) => FindNext(-1);
             nextBtn.Click += (s, e) => FindNext(1);
-            toggleRepBtn.Click += (s, e) => myRRow.IsVisible = !myRRow.IsVisible;
+            toggleRepBtn.Click += (s, e) => { myRRow.IsVisible = !myRRow.IsVisible; UpdateFindToggleButtonStyles(); };
             repOneBtn.Click += (s, e) => ReplaceCurrentMatch();
             repAllBtn.Click += (s, e) => ReplaceAllMatches();
             closeBtn.Click += (s, e) => HideFindBar();
@@ -880,21 +902,42 @@ namespace codeLess.AvaloniaApp
                 Child = stack,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 6, 86, 0),
-                Padding = new Thickness(8, 6),
-                CornerRadius = new CornerRadius(5),
-                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 0, 86, 0),
+                Padding = new Thickness(4, 5, 6, 5),
+                CornerRadius = new CornerRadius(0, 0, UiTokens.PopupRadius, UiTokens.PopupRadius),
+                BorderThickness = new Thickness(1, 0, 1, 1),
                 IsVisible = false,
                 ZIndex = 50
             };
         }
 
+        private Button[] diffBannerButtons = new Button[0];
+        private Button findToggleReplaceButton;
+        private Button[] findWidgetIconButtons = new Button[0];
+        private Button[] findWidgetReplaceButtons = new Button[0];
+
+        /// <summary>Option toggles: accent-tinted fill + 1 px accent border when on (VS Code inputOption.active*).</summary>
         private void UpdateFindToggleButtonStyles()
         {
-            Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
-            matchCaseBtn.Background = findMatchCase ? new SolidColorBrush(accent) : Brushes.Transparent;
-            wholeWordBtn.Background = findWholeWord ? new SolidColorBrush(accent) : Brushes.Transparent;
-            regexBtn.Background = findUseRegex ? new SolidColorBrush(accent) : Brushes.Transparent;
+            if (currentTheme == null) return;
+            var t = currentTheme;
+            void Style(Button b, bool on)
+            {
+                if (b == null) return;
+                b.Background = on ? WorkbenchStyles.B(UiTokens.ListActiveSelection(t, UiTokens.InputBackground(t))) : Brushes.Transparent;
+                b.BorderBrush = on ? WorkbenchStyles.B(t.AccentPrimary) : Brushes.Transparent;
+                WorkbenchStyles.ThemeIconButton(b, t, on);
+            }
+            Style(matchCaseBtn, findMatchCase);
+            Style(wholeWordBtn, findWholeWord);
+            Style(regexBtn, findUseRegex);
+            foreach (var b in findWidgetIconButtons) WorkbenchStyles.ThemeIconButton(b, t);
+            foreach (var b in findWidgetReplaceButtons) WorkbenchStyles.ThemeIconButton(b, t);
+            if (findToggleReplaceButton?.Content is VectorIconControl chev && replaceRowPanel != null)
+            {
+                chev.IconName = replaceRowPanel.IsVisible ? "chevron-down" : "chevron-right";
+                chev.InvalidateVisual();
+            }
         }
 
         private Border BuildInlineAiOverlay(out TextBox input)
@@ -1080,13 +1123,13 @@ namespace codeLess.AvaloniaApp
                 Name = "WelcomeTitleText",
                 Text = "codeLess",
                 FontSize = 28,
-                FontWeight = FontWeight.Bold
+                FontWeight = FontWeight.SemiBold
             });
             titleStack.Children.Add(new TextBlock
             {
                 Name = "WelcomeSubtitleText",
                 Text = "AI-First Polyglot IDE & Multi-Harness Engineering Workbench",
-                FontSize = 13.5
+                FontSize = UiTokens.FontUi + 1
             });
             heroRow.Children.Add(titleStack);
             mainStack.Children.Add(heroRow);
@@ -1094,13 +1137,13 @@ namespace codeLess.AvaloniaApp
             // Two-column Start / Recent + Walkthroughs (wider left column so Recent paths never clip)
             var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("1.36*,18,1.0*") };
 
-            var leftCol = new StackPanel { Spacing = 12 };
+            var leftCol = new StackPanel { Spacing = 6 };
             leftCol.Children.Add(new TextBlock
             {
                 Name = "StartHeader",
                 Text = "Start",
-                FontSize = 14,
-                FontWeight = FontWeight.SemiBold
+                FontSize = 15,
+                FontWeight = FontWeight.Normal
             });
 
             var startLinks = new (string Label, string Shortcut, string ActionId)[]
@@ -1115,18 +1158,20 @@ namespace codeLess.AvaloniaApp
             {
                 string act = sl.ActionId;
                 string sc = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform(sl.Shortcut);
+                // VS Code welcome: link-colored action, quiet shortcut hint beside it.
+                var linkRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+                linkRow.Children.Add(new LiteralTextBlock(sl.Label) { Name = "WelcomeActionLinkText", FontSize = UiTokens.FontUi });
+                linkRow.Children.Add(new LiteralTextBlock(sc) { Name = "WelcomeShortcutText", FontSize = UiTokens.FontSmall, VerticalAlignment = VerticalAlignment.Center });
                 var btn = new Button
                 {
-                    Content = new LiteralTextBlock($"{sl.Label}   ({sc})")
-                    {
-                        Name = "WelcomeActionLinkText",
-                        FontSize = 12.5
-                    },
-                    FontSize = 12.5,
+                    Content = linkRow,
+                    FontSize = UiTokens.FontUi,
                     Background = Brushes.Transparent,
-                    Padding = new Thickness(4, 3),
+                    Padding = new Thickness(4, 2),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
+                btn.Classes.Add("flat");
+                ToolTip.SetTip(btn, sl.Label.TrimEnd('.') + " (" + sc + ")");
                 btn.Click += (s, e) => WelcomeActionRequested?.Invoke(act);
                 leftCol.Children.Add(btn);
             }
@@ -1135,9 +1180,9 @@ namespace codeLess.AvaloniaApp
             {
                 Name = "RecentHeader",
                 Text = "Recent",
-                FontSize = 14,
-                FontWeight = FontWeight.SemiBold,
-                Margin = new Thickness(0, 8, 0, 0)
+                FontSize = 15,
+                FontWeight = FontWeight.Normal,
+                Margin = new Thickness(0, 14, 0, 0)
             });
             leftCol.Children.Add(recentFoldersPanel);
 
@@ -1146,29 +1191,35 @@ namespace codeLess.AvaloniaApp
             {
                 Name = "WalkthroughsHeader",
                 Text = "Walkthroughs",
-                FontSize = 14,
-                FontWeight = FontWeight.SemiBold
+                FontSize = 15,
+                FontWeight = FontWeight.Normal
             });
 
             var walkthroughs = new (string Title, string Desc, string ActionId)[]
             {
-                ("✦ Configure BYOK AI Providers & Keys", "Connect OpenAI, Anthropic, Gemini, DeepSeek, Groq, or local Ollama models.", "byok-dialog"),
-                ("✓ Autonomous Verification & Tool Harness", "Run tool-calling agents with build/test loops and inline diff previews.", "open-chat"),
-                ("◐ Customize Color Themes & Layout", "Switch between 11 built-in dark and light studio themes with live preview.", "theme-picker")
+                ("Configure BYOK AI Providers & Keys", "Connect OpenAI, Anthropic, Gemini, DeepSeek, Groq, or local Ollama models.", "byok-dialog"),
+                ("Autonomous Verification & Tool Harness", "Run tool-calling agents with build/test loops and inline diff previews.", "open-chat"),
+                ("Customize Color Themes & Layout", "Switch between 11 built-in dark and light studio themes with live preview.", "theme-picker")
             };
             foreach (var wt in walkthroughs)
             {
                 string act = wt.ActionId;
+                string icon = act == "byok-dialog" ? "sparkle" : (act == "open-chat" ? "check" : "gear");
                 var cardStack = new StackPanel { Spacing = 3 };
-                cardStack.Children.Add(new LiteralTextBlock(wt.Title) { FontWeight = FontWeight.SemiBold, FontSize = 12.2, TextWrapping = TextWrapping.Wrap });
-                cardStack.Children.Add(new LiteralTextBlock(wt.Desc) { Name = "WalkthroughDescText", FontSize = 11.5, TextWrapping = TextWrapping.Wrap });
+                var cardTitle = new Grid { ColumnDefinitions = new ColumnDefinitions("23,*") };
+                cardTitle.Children.Add(new VectorIconControl { Name = "WalkthroughIcon", IconName = icon, Width = 15, Height = 15, StrokeWidth = 1.5f, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center });
+                var cardTitleText = new LiteralTextBlock(wt.Title) { FontWeight = FontWeight.SemiBold, FontSize = UiTokens.FontUi, TextWrapping = TextWrapping.Wrap };
+                Grid.SetColumn(cardTitleText, 1);
+                cardTitle.Children.Add(cardTitleText);
+                cardStack.Children.Add(cardTitle);
+                cardStack.Children.Add(new LiteralTextBlock(wt.Desc) { Name = "WalkthroughDescText", FontSize = UiTokens.FontSmall, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(23, 0, 0, 0) });
                 var cardBtn = new Button
                 {
                     Content = cardStack,
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     HorizontalContentAlignment = HorizontalAlignment.Left,
-                    Padding = new Thickness(12, 9),
-                    CornerRadius = new CornerRadius(6)
+                    Padding = new Thickness(12, 10),
+                    CornerRadius = new CornerRadius(UiTokens.PopupRadius)
                 };
                 cardBtn.Click += (s, e) => WelcomeActionRequested?.Invoke(act);
                 rightCol.Children.Add(cardBtn);
@@ -1242,8 +1293,8 @@ namespace codeLess.AvaloniaApp
                 var leafTb = new LiteralTextBlock(leaf)
                 {
                     Name = "RecentLeafText",
-                    FontSize = 12,
-                    FontWeight = FontWeight.SemiBold,
+                    FontSize = UiTokens.FontUi,
+                    FontWeight = FontWeight.Normal,
                     Foreground = new SolidColorBrush(accent),
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 0, 8, 0)
@@ -1251,8 +1302,8 @@ namespace codeLess.AvaloniaApp
                 var pathTb = new LiteralTextBlock(displayPath)
                 {
                     Name = "RecentPathText",
-                    FontSize = 11.5,
-                    Foreground = new SolidColorBrush(textSecondary),
+                    FontSize = UiTokens.FontSmall,
+                    Foreground = AvaloniaColorHelper.ToBrush(currentTheme.FgMuted),
                     TextWrapping = TextWrapping.Wrap,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -1291,20 +1342,32 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (ctrl is TextBlock tb)
                 {
-                    if (tb.Name == "WelcomeSubtitleText" || tb.Name == "WalkthroughDescText" || tb.Name == "RecentPathText")
+                    if (tb.Name == "WelcomeSubtitleText" || tb.Name == "WalkthroughDescText")
                         tb.Foreground = new SolidColorBrush(textSecondary);
+                    else if (tb.Name == "RecentPathText" || tb.Name == "WelcomeShortcutText")
+                        tb.Foreground = AvaloniaColorHelper.ToBrush(currentTheme.FgMuted);
                     else if (tb.Name == "WelcomeActionLinkText" || tb.Name == "RecentLeafText")
                         tb.Foreground = new SolidColorBrush(accent);
                     else
                         tb.Foreground = new SolidColorBrush(textPrimary);
                 }
+                else if (ctrl is VectorIconControl vic && vic.Name == "WalkthroughIcon")
+                {
+                    vic.FollowForeground = false;
+                    vic.IconColor = accent;
+                    vic.InvalidateVisual();
+                }
                 else if (ctrl is Button btn)
                 {
-                    if (btn.Content is StackPanel)
+                    if (btn.Content is StackPanel sp && !btn.Classes.Contains("flat"))
                     {
-                        btn.Background = new SolidColorBrush(isLight ? Color.FromRgb(238, 242, 248) : Color.FromRgb(26, 28, 36));
+                        btn.Background = WorkbenchStyles.B(UiTokens.Blend(currentTheme.BgEditor, currentTheme.FgPrimary, isLight ? 0.03 : 0.035));
                         btn.BorderBrush = AvaloniaColorHelper.ToBrush(currentTheme.BorderSubtle);
                         btn.BorderThickness = new Thickness(1);
+                    }
+                    else if (btn.Content is StackPanel)
+                    {
+                        btn.Background = Brushes.Transparent;
                     }
                     else
                     {
@@ -1533,6 +1596,7 @@ namespace codeLess.AvaloniaApp
         private static readonly Typeface CachedFontBold = new Typeface(CodeMonoFont, FontStyle.Normal, FontWeight.Bold);
         private static readonly Typeface CachedFontItalic = new Typeface(CodeMonoFont, FontStyle.Italic, FontWeight.Normal);
         private static readonly Typeface CachedUiFontBold = new Typeface("Inter, Segoe UI, sans-serif", FontStyle.Normal, FontWeight.SemiBold);
+        private static readonly Typeface CachedUiFontRegular = new Typeface("Inter, Segoe UI, sans-serif", FontStyle.Normal, FontWeight.Normal);
 
         public bool ShowMinimap { get; set; } = true;
         public bool ColumnSelectionMode { get; set; } = false;
@@ -4160,13 +4224,14 @@ namespace codeLess.AvaloniaApp
                         double pillRight = codeAreaRight - 10;
                         var rejectRect = new Rect(pillRight - 58, y + 2, 54, LineHeight - 4);
                         var acceptRect = new Rect(rejectRect.X - 62, y + 2, 58, LineHeight - 4);
-                        context.DrawRectangle(new SolidColorBrush(Color.FromRgb(22, 163, 74)), null, acceptRect, 3, 3);
-                        context.DrawRectangle(new SolidColorBrush(Color.FromRgb(185, 28, 28)), null, rejectRect, 3, 3);
+                        // Calm per-hunk actions: primary (accent) Accept, secondary (neutral) Reject.
+                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonPrimaryBackground(Theme))), null, acceptRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
+                        context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonSecondaryBackground(Theme))), null, rejectRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
 
-                        var accFt = new FormattedText("✓ Accept", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, uiFontBold, 10, Brushes.White);
-                        var rejFt = new FormattedText("✕ Reject", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, uiFontBold, 10, Brushes.White);
-                        context.DrawText(accFt, new Point(acceptRect.X + 6, acceptRect.Y + 2));
-                        context.DrawText(rejFt, new Point(rejectRect.X + 6, rejectRect.Y + 2));
+                        var accFt = new FormattedText("Accept", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.OnAccent(Theme))));
+                        var rejFt = new FormattedText("Reject", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.FgPrimary)));
+                        context.DrawText(accFt, new Point(acceptRect.X + (acceptRect.Width - accFt.Width) / 2, acceptRect.Y + (acceptRect.Height - accFt.Height) / 2));
+                        context.DrawText(rejFt, new Point(rejectRect.X + (rejectRect.Width - rejFt.Width) / 2, rejectRect.Y + (rejectRect.Height - rejFt.Height) / 2));
 
                         hunkActionHitBoxes.Add((acceptRect, docLine, true));
                         hunkActionHitBoxes.Add((rejectRect, docLine, false));
