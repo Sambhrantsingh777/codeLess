@@ -369,19 +369,9 @@ namespace codeLess.Studio
                 return approved;
             };
 
-            this.aiEngine.OnExecuteTerminalCommandInConPty = (cmd) =>
-            {
-                string cwd = !string.IsNullOrEmpty(terminalWorkingDir) && Directory.Exists(terminalWorkingDir) ? terminalWorkingDir : workspaceRoot;
-                try
-                {
-                    if (conPtyTerminalControl != null && conPtyTerminalControl.ActiveSession != null && conPtyTerminalControl.ActiveSession.IsRunning)
-                    {
-                        conPtyTerminalControl.ActiveSession.WriteCommand(cmd);
-                    }
-                }
-                catch { }
-                return LlmHarnessAndAgentEngine.RunProcessCapture("powershell.exe", "-NoProfile -NonInteractive -Command \"" + cmd.Replace("\"", "\\\"") + "\"", cwd, 10000);
-            };
+            // Agent run_terminal commands run once, captured by the engine (proper quoting, the agent timeout, and a
+            // temporary workspace copy when edits are staged). The old hook also typed every command into the visible
+            // terminal, so each command ran twice.
 
             this.Text = "Welcome — codeLess";
             this.AllowDrop = true;

@@ -1419,6 +1419,12 @@ namespace codeLess.Studio
 
         public static string RunProcessCaptureWithExitCode(string fileName, string args, string workingDir, int timeoutMs, out int exitCode, out bool timedOut)
         {
+            return RunProcessCaptureWithExitCode(fileName, args, workingDir, timeoutMs, null, out exitCode, out timedOut);
+        }
+
+        /// <summary>Same, with extra environment variables for the child process (null = inherit only).</summary>
+        public static string RunProcessCaptureWithExitCode(string fileName, string args, string workingDir, int timeoutMs, IDictionary<string, string> extraEnv, out int exitCode, out bool timedOut)
+        {
             exitCode = -1;
             timedOut = false;
             try
@@ -1436,6 +1442,8 @@ namespace codeLess.Studio
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+                if (extraEnv != null)
+                    foreach (KeyValuePair<string, string> kv in extraEnv) psi.EnvironmentVariables[kv.Key] = kv.Value;
                 // Incremental, binary-clean capture (raw chars, no line splitting, so NUL-separated "git -z" output
                 // survives): with ReadToEndAsync a surviving grandchild (or "cmd &") that keeps the pipe open meant
                 // the read never completed and all output was lost on timeout. Huge output keeps its TAIL, where
@@ -1485,6 +1493,19 @@ namespace codeLess.Studio
             {
                 return "Error: " + ex.Message;
             }
+        }
+
+        /// <summary>
+        /// Caps tool output for the model, keeping the start (notes, the command's first lines) and the TAIL, where build
+        /// and test errors are (the old cap kept only the first 1600 characters, so the errors were cut off).
+        /// </summary>
+        public static string TrimToolOutputKeepingTail(string output, int maxChars)
+        {
+            if (output == null) return "";
+            if (output.Length <= maxChars || maxChars < 200) return output;
+            int head = maxChars / 4;
+            int tail = maxChars - head;
+            return output.Substring(0, head) + "\n…[" + (output.Length - head - tail) + " characters omitted]…\n" + output.Substring(output.Length - tail);
         }
 
         public static string StripAnsiCodes(string input)
@@ -3119,63 +3140,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         try { OnBeforeRunTerminal(cmd); } catch { }
                     }
 
-                    // Back up raw bytes (not decoded text) so the restore is byte-exact: re-encoding via
-                    // ReadAllText/WriteAllText would drop BOMs and corrupt UTF-16 / ANSI files.
-                    Dictionary<string, byte[]> diskBackups = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-                    List<string> newlyCreatedOnDisk = new List<string>();
-                    if (stagedFiles != null && stagedFiles.Count > 0)
-                    {
-                        foreach (var kv in stagedFiles)
-                        {
-                            try
-                            {
-                                if (!IsPathInsideWorkspace(workspaceRoot, kv.Key))
-                                    continue;
-                                if (File.Exists(kv.Key))
-                                    diskBackups[kv.Key] = File.ReadAllBytes(kv.Key);
-                                else
-                                    newlyCreatedOnDisk.Add(kv.Key);
-                                string dir = Path.GetDirectoryName(kv.Key);
-                                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                                    Directory.CreateDirectory(dir);
-                                File.WriteAllText(kv.Key, kv.Value, new UTF8Encoding(false));
-                            }
-                            catch { }
-                        }
-                    }
-
-                    string output;
-                    int exitCode = 0;
-                    bool timedOut = false;
-                    try
-                    {
-                        if (OnExecuteTerminalCommandInConPty != null)
-                        {
-                            output = OnExecuteTerminalCommandInConPty(cmd) ?? "";
-                        }
-                        else if (ConPtyNative.IsWindowsPlatform())
-                        {
-                            output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command " + QuoteProcessArgument(cmd), workspaceRoot, AgentTerminalTimeoutMs, out exitCode, out timedOut);
-                        }
-                        else
-                        {
-                            // Proper argv quoting: the old "-c \"...\"" with naive escaping mangled commands containing
-                            // backslash-quote sequences (sed/curl JSON) or a trailing backslash.
-                            string sh = ConPtyTerminalSession.GetUserUnixShell();
-                            output = RunProcessCaptureWithExitCode(sh, "-c " + QuoteProcessArgument(cmd), workspaceRoot, AgentTerminalTimeoutMs, out exitCode, out timedOut);
-                        }
-                    }
-                    finally
-                    {
-                        foreach (var kv in diskBackups)
-                        {
-                            try { File.WriteAllBytes(kv.Key, kv.Value); } catch { }
-                        }
-                        foreach (string created in newlyCreatedOnDisk)
-                        {
-                            try { if (File.Exists(created)) File.Delete(created); } catch { }
-                        }
-                    }
+                    // Staged edits are never written into the user's files: with staged edits the command runs in a
+                    // temporary copy of the workspace (LlmAgentEngine.Terminal.cs).
+                    int exitCode;
+                    bool timedOut;
+                    string output = RunAgentTerminalCommand(cmd, workspaceRoot, stagedFiles, out exitCode, out timedOut);
 
                     if (exitCode != 0 && !output.Contains("[EXIT_CODE:"))
                     {
@@ -3188,7 +3157,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         ToolName = "run_terminal",
                         Success = ok,
                         Summary = "Ran command: " + cmd + (exitCode != 0 ? " (exit " + exitCode + ")" : ""),
-                        Output = output.Length > 1600 ? output.Substring(0, 1600) : output
+                        Output = TrimToolOutputKeepingTail(output, 1600)
                     };
                 }
             }
