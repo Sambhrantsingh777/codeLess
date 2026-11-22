@@ -45,6 +45,12 @@ namespace codeLess.AvaloniaApp
         }
         public static string ScreenshotOutputPath { get; set; }
         public static string ScreenshotSuiteDir { get; set; }
+
+        /// <summary>Screenshot suite, benchmarks, smoke and self-test runs: no side effects on the machine (e.g. no server installs).</summary>
+        public static bool IsAutomationRun =>
+            !string.IsNullOrWhiteSpace(SmokeQuitReportPath) || !string.IsNullOrWhiteSpace(BenchmarkReportPath) || !string.IsNullOrWhiteSpace(IdleProbeReportPath) ||
+            !string.IsNullOrWhiteSpace(ScreenshotSuiteDir) || !string.IsNullOrWhiteSpace(ScreenshotOutputPath) || MainWindow.IsMonorepoBenchRequested ||
+            !string.IsNullOrWhiteSpace(BenchReadyPath) || !string.IsNullOrWhiteSpace(BenchOpenReportPath) || !string.IsNullOrWhiteSpace(NativeSelfTestReportPath);
         public static string SmokeQuitReportPath { get; set; }
         public static string NativeSelfTestReportPath { get; set; }
         public static string BenchmarkReportPath { get; set; }

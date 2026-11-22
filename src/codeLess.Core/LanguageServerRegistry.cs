@@ -450,7 +450,7 @@ namespace codeLess.Studio
                 r.Problem = "No built-in language server for " + languageId + ".";
                 return r;
             }
-            List<string> managedDirs = LanguageServerInstaller.ManagedSearchDirectories(managedRoot, d);
+            List<string> managedDirs = LanguageServerInstaller.ManagedSearchDirectories(managedRoot, d, true);
             foreach (LanguageServerCandidate c in d.Candidates)
             {
                 string exe = managedDirs.Count > 0 ? FindInDirs(c.Command, managedDirs) : null;

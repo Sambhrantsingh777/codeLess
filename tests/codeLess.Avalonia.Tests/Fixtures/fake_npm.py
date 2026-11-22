@@ -48,6 +48,12 @@ def main(argv):
     os.makedirs(bindir, exist_ok=True)
     count = 0
     for p in pkgs:
+        # like real npm: node_modules/<package>/package.json for every installed package
+        name = p[: p.index("@", 1)] if "@" in p[1:] else p
+        pkgdir = os.path.join(prefix, "node_modules", *name.split("/"))
+        os.makedirs(pkgdir, exist_ok=True)
+        with open(os.path.join(pkgdir, "package.json"), "w") as f:
+            f.write('{"name": "%s"}\n' % name)
         for b in BINS.get(p, []):
             if os.name == "nt":
                 with open(os.path.join(bindir, b + ".cmd"), "w") as f:

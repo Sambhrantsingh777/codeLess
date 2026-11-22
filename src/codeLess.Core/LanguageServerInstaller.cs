@@ -62,6 +62,10 @@ namespace codeLess.Studio
         public string WorkingDir;
         /// <summary>How the executable is shown in the copyable command ("npm" instead of /opt/homebrew/bin/npm).</summary>
         public string DisplayExe;
+        /// <summary>Arguments retried once when the step fails (e.g. an older csharp-ls for an older .NET SDK).</summary>
+        public string[] FallbackArgs;
+        /// <summary>Logged before the fallback run.</summary>
+        public string FallbackNote;
 
         public string ToDisplayString(bool windows)
         {
@@ -499,11 +503,23 @@ namespace codeLess.Studio
         }
 
         /// <summary>Folders inside the managed root that may hold this server's executables (checked before PATH).</summary>
-        public static List<string> ManagedSearchDirectories(string managedRoot, LanguageServerDefinition d)
+        /// <summary>Written into a package folder only after its install finished and was verified.</summary>
+        public const string CompleteMarkerFile = ".codeless-installed";
+
+        /// <summary>
+        /// Folders searched for a managed server. With <paramref name="requireComplete"/> (normal resolution), a package
+        /// folder without the completion marker (install interrupted: app quit, crash, cancel) is ignored, so a
+        /// half-installed server is reinstalled instead of being started and failing.
+        /// </summary>
+        /// <summary>Newest csharp-ls that installs with a .NET 8 SDK (verified 2026-11-23).</summary>
+        public const string CsharpLsNet8Version = "0.16.0";
+
+        public static List<string> ManagedSearchDirectories(string managedRoot, LanguageServerDefinition d, bool requireComplete)
         {
             List<string> dirs = new List<string>();
             if (string.IsNullOrEmpty(managedRoot) || d == null) return dirs;
             string pkg = Path.Combine(managedRoot, PackageIdFor(d));
+            try { if (requireComplete && !File.Exists(Path.Combine(pkg, CompleteMarkerFile))) return dirs; } catch { return dirs; }
             dirs.Add(Path.Combine(Path.Combine(pkg, "node_modules"), ".bin"));
             dirs.Add(Path.Combine(pkg, "bin"));
             dirs.Add(Path.Combine(Path.Combine(pkg, "venv"), LspText.IsWindows() ? "Scripts" : "bin"));
@@ -672,6 +688,14 @@ namespace codeLess.Studio
                         a.Add("--tool-path");
                         a.Add(toolDir);
                         s.Args = a.ToArray();
+                        if (Array.IndexOf(r.Packages, "csharp-ls") >= 0)
+                        {
+                            // csharp-ls 0.17+ is packaged for newer .NET SDKs (fails on .NET 8 with "DotnetToolSettings.xml
+                            // was not found"); 0.16.0 is the newest that installs and runs on .NET 8.
+                            List<string> fb = new List<string> { "tool", installed ? "update" : "install", "csharp-ls", "--version", CsharpLsNet8Version, "--tool-path", toolDir };
+                            s.FallbackArgs = fb.ToArray();
+                            s.FallbackNote = "The latest csharp-ls needs a newer .NET SDK; installing csharp-ls " + CsharpLsNet8Version + " (supports .NET 8).";
+                        }
                         s.Env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
                         s.Env["DOTNET_NOLOGO"] = "1";
                         steps.Add(s);
@@ -870,11 +894,25 @@ namespace codeLess.Studio
                     NetworkLedger.Record(LedgerFeature, "GET", plan.Recipe.NetworkUrl, 0, 0, error == null ? 200 : 0,
                         plan.Recipe.Via + " (separate process, bytes not measured)" + (error != null ? ": " + error : ""), sw.ElapsedMilliseconds);
                 }
+                if (error == null && plan.Recipe.Kind == LanguageServerInstallKind.Npm)
+                    error = MissingNpmPackages(plan.TargetDir, plan.Recipe.Packages);
                 if (error == null)
                 {
                     string exe = FindInstalledExecutable(d, plan.Recipe);
                     if (exe == null) error = "the install finished, but no " + string.Join(" / ", d.Candidates.Select(c => c.Command).Distinct().ToArray()) + " executable was found afterwards";
-                    else LogLine(job, "[" + d.DisplayName + "] Installed: " + exe);
+                    else
+                    {
+                        LogLine(job, "[" + d.DisplayName + "] Installed: " + exe);
+                        if (!plan.Recipe.InstallsOutsideManagedFolder)
+                        {
+                            try
+                            {
+                                File.WriteAllText(Path.Combine(plan.TargetDir, CompleteMarkerFile),
+                                    plan.Recipe.Via + " " + string.Join(" ", plan.Recipe.Packages) + " " + DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) + "\n");
+                            }
+                            catch (Exception mex) { error = "couldn't record the finished install (" + mex.Message + ")"; }
+                        }
+                    }
                 }
                 if (error != null)
                 {
@@ -922,15 +960,41 @@ namespace codeLess.Studio
                 LogLine(job, "$ " + step.ToDisplayString(PlatformIsWindows));
                 LanguageServerInstallJob j = job;
                 int code = Runner.Run(step, delegate (string line) { LogLine(j, "  " + line); }, ct, StepTimeoutMs);
+                if (code != 0 && step.FallbackArgs != null)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    LanguageServerInstallStep retry = new LanguageServerInstallStep();
+                    retry.Exe = step.Exe; retry.DisplayExe = step.DisplayExe; retry.Env = step.Env; retry.WorkingDir = step.WorkingDir;
+                    retry.Args = step.FallbackArgs;
+                    if (!string.IsNullOrEmpty(step.FallbackNote)) LogLine(job, step.FallbackNote);
+                    LogLine(job, "$ " + retry.ToDisplayString(PlatformIsWindows));
+                    code = Runner.Run(retry, delegate (string line) { LogLine(j, "  " + line); }, ct, StepTimeoutMs);
+                }
                 if (code != 0) return (step.DisplayExe ?? Path.GetFileName(step.Exe)) + " exited with code " + code;
             }
             return null;
         }
 
+        /// <summary>npm can exit 0 after a partial install (interrupted earlier run, flaky registry): every package must be there.</summary>
+        public static string MissingNpmPackages(string prefix, string[] packages)
+        {
+            List<string> missing = new List<string>();
+            foreach (string spec in packages ?? new string[0])
+            {
+                if (string.IsNullOrEmpty(spec)) continue;
+                string name = spec;
+                int at = spec.IndexOf('@', spec.StartsWith("@", StringComparison.Ordinal) ? 1 : 0);
+                if (at > 0) name = spec.Substring(0, at);
+                string pj = Path.Combine(Path.Combine(Path.Combine(prefix, "node_modules"), name.Replace('/', Path.DirectorySeparatorChar)), "package.json");
+                try { if (!File.Exists(pj)) missing.Add(name); } catch { missing.Add(name); }
+            }
+            return missing.Count == 0 ? null : "npm finished but these packages are missing: " + string.Join(", ", missing.ToArray());
+        }
+
         /// <summary>Path of the installed server (managed folder, or the normal search path for rustup); null when missing.</summary>
         public string FindInstalledExecutable(LanguageServerDefinition d, LanguageServerInstallRecipe recipe)
         {
-            List<string> dirs = ManagedSearchDirectories(ManagedRoot, d);
+            List<string> dirs = ManagedSearchDirectories(ManagedRoot, d, false);
             string[] exts = LspText.IsWindows() ? new string[] { ".exe", ".cmd", ".bat", "" } : new string[] { "" };
             foreach (LanguageServerCandidate c in d.Candidates)
                 foreach (string dir in dirs)

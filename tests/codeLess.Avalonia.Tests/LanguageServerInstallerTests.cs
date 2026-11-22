@@ -235,6 +235,24 @@ namespace codeLess.Avalonia.Tests
             Assert.EndsWith("bash-language-server", plan.ManualCommand);
         }
 
+        /// <summary>What a finished npm install leaves: node_modules/&lt;pkg&gt;/package.json for each requested package.</summary>
+        private static void NpmPackages(string prefix, params string[] names)
+        {
+            foreach (string n in names)
+            {
+                string d = Path.Combine(prefix, "node_modules", n);
+                Directory.CreateDirectory(d);
+                File.WriteAllText(Path.Combine(d, "package.json"), "{}");
+            }
+        }
+
+        /// <summary>A completed install (as the installer records it), for resolution tests.</summary>
+        private static void MarkComplete(string pkgDir)
+        {
+            Directory.CreateDirectory(pkgDir);
+            File.WriteAllText(Path.Combine(pkgDir, LanguageServerInstaller.CompleteMarkerFile), "test");
+        }
+
         private static string MakeExe(string dir, string name)
         {
             Directory.CreateDirectory(dir);
@@ -252,6 +270,9 @@ namespace codeLess.Avalonia.Tests
             Assert.False(before.FromManagedFolder);
 
             string managed = MakeExe(Path.Combine(root, "bash", "node_modules", ".bin"), "bash-language-server");
+            Assert.False(LanguageServerRegistry.Resolve("shellscript", null, empty, root).FromManagedFolder); // not finished yet
+            MarkComplete(Path.Combine(root, "bash"));
+            LanguageServerRegistry.ClearCache();
             var r = LanguageServerRegistry.Resolve("shellscript", null, empty, root);
             Assert.True(r.CanStart);
             Assert.True(r.FromManagedFolder);
@@ -260,8 +281,10 @@ namespace codeLess.Avalonia.Tests
 
             // Extracted release archive layout (<pkg>/<name_version>/bin) and a private venv are found too.
             string lua = MakeExe(Path.Combine(root, "lua", "lua-language-server-3.19.2", "bin"), "lua-language-server");
+            MarkComplete(Path.Combine(root, "lua"));
             Assert.Equal(lua, LanguageServerRegistry.Resolve("lua", null, empty, root).Executable);
             string venv = MakeExe(Path.Combine(root, "python", "venv", OperatingSystem.IsWindows() ? "Scripts" : "bin"), "basedpyright-langserver");
+            MarkComplete(Path.Combine(root, "python"));
             var py = LanguageServerRegistry.Resolve("python", null, empty, root);
             Assert.Equal(venv, py.Executable);
             Assert.Equal("basedpyright", py.DisplayName);
@@ -317,7 +340,7 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal(2, runner.Calls);
 
             // Success clears the memo.
-            runner.OnRun = (s, o, c) => { MakeExe(Path.Combine(root, "bash", "node_modules", ".bin"), "bash-language-server"); return 0; };
+            runner.OnRun = (s, o, c) => { MakeExe(Path.Combine(root, "bash", "node_modules", ".bin"), "bash-language-server"); NpmPackages(Path.Combine(root, "bash"), "bash-language-server"); return 0; };
             Assert.True(LanguageServerInstallKit.Wait(inst.Start(bash, true)).Success);
             Assert.True(inst.ShouldAutoInstall(bash, out _));
         }
@@ -357,6 +380,7 @@ namespace codeLess.Avalonia.Tests
                 gate.Wait(c);
                 MakeExe(Path.Combine(root, "vscode-langservers-extracted", "node_modules", ".bin"), "vscode-css-language-server");
                 MakeExe(Path.Combine(root, "vscode-langservers-extracted", "node_modules", ".bin"), "vscode-html-language-server");
+                NpmPackages(Path.Combine(root, "vscode-langservers-extracted"), "vscode-langservers-extracted");
                 return 0;
             };
             var inst = LanguageServerInstallKit.NewInstaller(root, probe, runner);
@@ -661,6 +685,50 @@ namespace codeLess.Avalonia.Tests
             var ser = new System.Web.Script.Serialization.JavaScriptSerializer();
             Assert.True(ser.Deserialize<IdePersistentSettings>("{\"TabSize\":4}").AutoInstallLanguageServers);
             Assert.False(ser.Deserialize<IdePersistentSettings>("{\"AutoInstallLanguageServers\":false}").AutoInstallLanguageServers);
+        }
+            [Fact]
+        public void Interrupted_Install_Is_Not_Resolved_Until_It_Completes()
+        {
+            var d = LanguageServerRegistry.Definitions.First(x => x.Id == "bash");
+            string pkg = Path.Combine(root, LanguageServerInstaller.PackageIdFor(d));
+            string bin = Path.Combine(pkg, "node_modules", ".bin");
+            Directory.CreateDirectory(bin);
+            File.WriteAllText(Path.Combine(bin, "bash-language-server"), "");
+            // e.g. codeLess quit mid-install: the shim exists but the install never finished
+            Assert.Empty(LanguageServerInstaller.ManagedSearchDirectories(root, d, true));
+            Assert.NotEmpty(LanguageServerInstaller.ManagedSearchDirectories(root, d, false)); // post-install verification
+            File.WriteAllText(Path.Combine(pkg, LanguageServerInstaller.CompleteMarkerFile), "npm bash-language-server");
+            Assert.Contains(bin, LanguageServerInstaller.ManagedSearchDirectories(root, d, true));
+        }
+
+        [Fact]
+        public void Npm_Partial_Install_Is_Detected()
+        {
+            string prefix = Path.Combine(root, "ts");
+            Directory.CreateDirectory(Path.Combine(prefix, "node_modules", "typescript-language-server"));
+            File.WriteAllText(Path.Combine(prefix, "node_modules", "typescript-language-server", "package.json"), "{}");
+            string err = LanguageServerInstaller.MissingNpmPackages(prefix, new[] { "typescript-language-server", "typescript@5" });
+            Assert.NotNull(err);
+            Assert.Contains("typescript", err);
+            Directory.CreateDirectory(Path.Combine(prefix, "node_modules", "typescript"));
+            File.WriteAllText(Path.Combine(prefix, "node_modules", "typescript", "package.json"), "{}");
+            Assert.Null(LanguageServerInstaller.MissingNpmPackages(prefix, new[] { "typescript-language-server", "typescript@5" }));
+            Directory.CreateDirectory(Path.Combine(prefix, "node_modules", "@scope", "pkg"));
+            File.WriteAllText(Path.Combine(prefix, "node_modules", "@scope", "pkg", "package.json"), "{}");
+            Assert.Null(LanguageServerInstaller.MissingNpmPackages(prefix, new[] { "@scope/pkg@1.2.3" }));
+        }
+
+        [Fact]
+        public void Csharp_Ls_Falls_Back_To_The_Net8_Version()
+        {
+            var probe = new LanguageServerInstallKit.FakeProbe();
+            var inst = LanguageServerInstallKit.NewInstaller(root, probe, null);
+            var recipe = new LanguageServerInstallRecipe { ServerId = "csharp", PackageId = "csharp", Kind = LanguageServerInstallKind.DotnetTool, Tool = "dotnet", Packages = new[] { "csharp-ls" } };
+            var steps = inst.BuildSteps(recipe, "/usr/local/share/dotnet/dotnet", Path.Combine(root, "csharp"));
+            Assert.Single(steps);
+            Assert.NotNull(steps[0].FallbackArgs);
+            Assert.Contains("--version", steps[0].FallbackArgs);
+            Assert.Contains(LanguageServerInstaller.CsharpLsNet8Version, steps[0].FallbackArgs);
         }
     }
 }

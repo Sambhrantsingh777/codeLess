@@ -27,7 +27,8 @@ namespace codeLess.AvaloniaApp
             if (lsp == null) return;
             var installer = LanguageServerInstallerOverride?.Invoke() ?? (AvaloniaTerminalEmulatorControl.IsDesktopRuntime ? LanguageServerInstaller.Shared : null);
             lsp.Installer = installer;
-            lsp.AutoInstallEnabled = () => settings == null || settings.AutoInstallLanguageServers;
+            // Automation (screenshot suite / benchmarks / smoke runs) never installs anything on the machine.
+            lsp.AutoInstallEnabled = () => (settings == null || settings.AutoInstallLanguageServers) && !App.IsAutomationRun;
             lsp.InstallOutput += line => AppendOutputLog("[Language Servers] " + line);
             lsp.InstallFinished += r =>
             {
