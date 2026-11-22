@@ -996,17 +996,21 @@ namespace codeLess.Studio
         }
 
         /// <summary>
-        /// Arguments for running a .cmd / .bat shim through cmd.exe: every token is quoted for CommandLineToArgvW and then
-        /// every cmd metacharacter ( ) % ! ^ " &lt; &gt; &amp; | is caret-escaped, so paths such as C:\Users\R&amp;D\... or
-        /// arguments with %VAR% / quotes reach the program literally instead of being split or expanded by cmd.
+        /// Arguments for running a .cmd / .bat shim through cmd.exe: <c>/d /s /c ""C:\path with space\npm.cmd" ^"arg^" ..."</c>.
+        /// The program path is wrapped in plain (unescaped) quotes: cmd must see real quotes to keep a path with spaces in
+        /// one token (a caret-escaped ^" is a literal character to cmd, so C:\Users\John Smith\...\npm.cmd would be split
+        /// at the space), and &amp; ( ) ^ inside real quotes are literal anyway (Windows paths can't contain quotes). Every
+        /// argument is quoted for CommandLineToArgvW and then every cmd metacharacter ( ) % ! ^ " &lt; &gt; &amp; | is
+        /// caret-escaped, so arguments with spaces, &amp;, %VAR% or quotes reach the program literally. /s strips only the
+        /// outer pair of quotes.
         /// </summary>
         public static string BuildCmdExeArguments(string exe, string[] args)
         {
             StringBuilder cmd = new StringBuilder();
-            cmd.Append(QuoteArgAlways(exe));
+            cmd.Append('"').Append((exe ?? "").Replace("\"", "")).Append('"');
             if (args != null)
-                foreach (string a in args) cmd.Append(' ').Append(QuoteArgAlways(a));
-            return "/d /s /c \"" + CaretEscapeForCmd(cmd.ToString()) + "\"";
+                foreach (string a in args) cmd.Append(' ').Append(CaretEscapeForCmd(QuoteArgAlways(a)));
+            return "/d /s /c \"" + cmd.ToString() + "\"";
         }
 
         /// <summary>Prefixes every cmd.exe metacharacter with '^'.</summary>

@@ -252,7 +252,10 @@ namespace codeLess.Avalonia.Tests
         public void LSP8_CmdShimArguments_QuoteAndCaretEscapeEverything()
         {
             string args = LanguageServerRegistry.BuildCmdExeArguments(@"C:\Users\R&D\AppData\Roaming\npm\pyright-langserver.cmd", new[] { "--stdio", "%PATH%", "a\"b" });
-            Assert.Equal("/d /s /c \"^\"C:\\Users\\R^&D\\AppData\\Roaming\\npm\\pyright-langserver.cmd^\" ^\"--stdio^\" ^\"^%PATH^%^\" ^\"a\\^\"b^\"\"", args);
+            // The program path sits in real quotes: cmd needs them to keep spaces in one token (& is literal inside them).
+            Assert.Equal("/d /s /c \"\"C:\\Users\\R&D\\AppData\\Roaming\\npm\\pyright-langserver.cmd\" ^\"--stdio^\" ^\"^%PATH^%^\" ^\"a\\^\"b^\"\"", args);
+            Assert.StartsWith("/d /s /c \"\"C:\\Users\\John Smith\\AppData\\Roaming\\npm\\npm.cmd\" ^\"install^\"",
+                LanguageServerRegistry.BuildCmdExeArguments(@"C:\Users\John Smith\AppData\Roaming\npm\npm.cmd", new[] { "install" }));
             Assert.Equal("\"C:\\dir\\\\\"", LanguageServerRegistry.QuoteArgAlways(@"C:\dir\"));
             Assert.Equal("^\"a b^\"", TaskConfiguration.QuoteWindows("a b"));
             Assert.Equal("^\"50^%^\"", TaskConfiguration.QuoteWindows("50%"));

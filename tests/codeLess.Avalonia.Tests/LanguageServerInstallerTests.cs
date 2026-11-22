@@ -578,6 +578,71 @@ namespace codeLess.Avalonia.Tests
         }
 
         [Fact]
+        public void Output_Listeners_Get_Every_Line_In_Order_Even_When_Subscribing_Late()
+        {
+            // The worker starts logging before callers subscribe (and callers join running jobs): nothing may be lost.
+            var probe = new LanguageServerInstallKit.FakeProbe();
+            probe.Tools["npm"] = Fake("npm");
+            var started = new ManualResetEventSlim(false);
+            var go = new ManualResetEventSlim(false);
+            var runner = new LanguageServerInstallKit.FakeRunner();
+            runner.OnRun = (s, o, c) =>
+            {
+                o("early line");
+                started.Set();
+                go.Wait(c);
+                for (int i = 0; i < 50; i++) o("late " + i);
+                return 1;
+            };
+            var inst = LanguageServerInstallKit.NewInstaller(root, probe, runner);
+            var job = inst.Start(Def("yaml"), true);
+            Assert.True(started.Wait(PerfBudget.Wait(10000)));
+            var first = new List<string>();
+            job.AddOutputListener(l => { lock (first) first.Add(l); });
+            go.Set();
+            var second = new List<string>();
+            LanguageServerInstallKit.Wait(job);
+            job.AddOutputListener(l => second.Add(l)); // after completion: full replay
+            lock (first)
+            {
+                Assert.StartsWith("[YAML] Installing via npm", first[0]);
+                Assert.StartsWith("$ npm install --prefix", first[1]);
+                Assert.Equal("  early line", first[2]);
+                for (int i = 0; i < 50; i++) Assert.Equal("  late " + i, first[3 + i]);
+                Assert.Equal(first, second);
+            }
+        }
+
+        [Fact]
+        public void Tool_In_A_Folder_With_Spaces_Apostrophes_And_Ampersands_Runs_With_Exact_Arguments()
+        {
+            // Windows: a .cmd tool runs through cmd.exe (the npm.cmd case); elsewhere a shell script.
+            string tools = Path.Combine(root, "Program Files & Co", "node js");
+            Directory.CreateDirectory(tools);
+            string tool;
+            if (OperatingSystem.IsWindows())
+            {
+                tool = Path.Combine(tools, "fake tool.cmd");
+                File.WriteAllText(tool, "@echo off\r\necho ARGS:%*\r\n");
+            }
+            else
+            {
+                tool = Path.Combine(tools, "fake tool");
+                File.WriteAllText(tool, "#!/bin/sh\nfor a in \"$@\"; do echo \"ARG:$a\"; done\n");
+                File.SetUnixFileMode(tool, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            string prefix = Path.Combine(root, "servers", "O'Brien & Sons", "bash");
+            var step = new LanguageServerInstallStep { Exe = tool, Args = new[] { "install", "--prefix", prefix, "pkg" }, WorkingDir = root };
+            var lines = new List<string>();
+            int code = new DefaultLanguageServerProcessRunner().Run(step, l => { lock (lines) lines.Add(l); }, CancellationToken.None, PerfBudget.Wait(30000));
+            Assert.True(code == 0, "exit " + code + ": " + string.Join("\n", lines));
+            if (OperatingSystem.IsWindows())
+                Assert.Contains(lines, l => l.Contains("ARGS:") && l.Contains("\"" + prefix + "\"") && l.Contains("install") && l.Contains("pkg"));
+            else
+                Assert.Equal(new[] { "ARG:install", "ARG:--prefix", "ARG:" + prefix, "ARG:pkg" }, lines);
+        }
+
+        [Fact]
         public void Status_Text_For_Installing_State()
         {
             var st = new LanguageServerStatus { LanguageId = "typescript", State = LanguageServerState.Installing, ServerName = "TypeScript" };

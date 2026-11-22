@@ -1139,10 +1139,10 @@ namespace codeLess.Studio
                 foreach (LanguageServerInstance i in InstancesOf(d)) i.AppendLog("[install] " + line);
                 Post(delegate { Action<string> e = InstallOutput; if (e != null) e(line); });
             };
-            job.Output += onOutput;
+            job.AddOutputListener(onOutput); // replays the lines logged before this subscription
             job.Task.ContinueWith(delegate (Task<LanguageServerInstallResult> t)
             {
-                job.Output -= onOutput;
+                job.RemoveOutputListener(onOutput);
                 lock (sync) { ownJobs.Remove(job); }
                 if (disposed) return;
                 OnInstallFinished(d, t.Result, userInitiated);

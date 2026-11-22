@@ -244,8 +244,9 @@ namespace codeLess.Studio
         public string Via { get; internal set; }
         public DateTime StartedUtc { get; internal set; }
 
-        /// <summary>One output line (raised on a worker thread).</summary>
-        public event Action<string> Output;
+        private readonly List<string> lines = new List<string>();
+        private readonly List<Action<string>> listeners = new List<Action<string>>();
+        private const int MaxReplayLines = 5000;
 
         public Task<LanguageServerInstallResult> Task { get { return tcs.Task; } }
         public bool IsCompleted { get { return tcs.Task.IsCompleted; } }
@@ -262,14 +263,37 @@ namespace codeLess.Studio
             lock (logLock) return log.ToString();
         }
 
-        internal void Log(string line)
+        /// <summary>
+        /// Subscribes to output lines (called on worker threads, in order). The job starts working before its callers can
+        /// subscribe (and later callers join a running job), so the lines logged so far are replayed first, atomically with
+        /// the subscription: no line is ever missed or duplicated, and the order is preserved.
+        /// </summary>
+        public void AddOutputListener(Action<string> listener)
         {
+            if (listener == null) return;
             lock (logLock)
             {
-                if (log.Length < 512 * 1024) log.Append(line ?? "").Append('\n');
+                foreach (string l in lines) { try { listener(l); } catch { } }
+                listeners.Add(listener);
             }
-            Action<string> h = Output;
-            if (h != null) { try { h(line ?? ""); } catch { } }
+        }
+
+        public void RemoveOutputListener(Action<string> listener)
+        {
+            lock (logLock) listeners.Remove(listener);
+        }
+
+        internal void Log(string line)
+        {
+            line = line ?? "";
+            // Listeners run under the lock: stdout and stderr lines arrive on different threads, and a listener must see
+            // them in exactly the order they were logged (and never concurrently with its replay).
+            lock (logLock)
+            {
+                if (log.Length < 512 * 1024) log.Append(line).Append('\n');
+                if (lines.Count < MaxReplayLines) lines.Add(line);
+                foreach (Action<string> h in listeners) { try { h(line); } catch { } }
+            }
         }
 
         internal void Complete(LanguageServerInstallResult r)
