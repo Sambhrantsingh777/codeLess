@@ -1,6 +1,7 @@
-# codeLess v3.3.2
+# codeLess v3.3.3
 
-A VS Code-parity release driven by bug reports from v3.3.1 on macOS. Every fix ships on Windows, macOS and Linux.
+A VS Code-parity release driven by bug reports from v3.3.1 on macOS (v3.3.2 was tagged but never published: a flaky
+test stopped its release build). Every fix ships on Windows, macOS and Linux.
 
 ## Fixed
 

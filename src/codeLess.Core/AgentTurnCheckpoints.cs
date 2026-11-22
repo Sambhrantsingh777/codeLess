@@ -153,13 +153,16 @@ namespace codeLess.Studio
             set { rootOverride = value; }
         }
 
-        public AgentTurnCheckpointStore(string workspaceRoot)
+        public AgentTurnCheckpointStore(string workspaceRoot) : this(workspaceRoot, null) { }
+
+        /// <summary>Store under an explicit root (tests use this instead of mutating the process-wide <see cref="CheckpointsRoot"/>).</summary>
+        public AgentTurnCheckpointStore(string workspaceRoot, string checkpointsRoot)
         {
             string ws = workspaceRoot ?? "";
             try { if (ws.Length > 0) ws = System.IO.Path.GetFullPath(ws).TrimEnd('\\', '/'); } catch { }
             WorkspaceRoot = ws;
             string key = AgentHash.Sha1Hex(Encoding.UTF8.GetBytes(ws.ToLowerInvariant())).Substring(0, 16);
-            StoreDir = System.IO.Path.Combine(CheckpointsRoot, key);
+            StoreDir = System.IO.Path.Combine(string.IsNullOrEmpty(checkpointsRoot) ? CheckpointsRoot : checkpointsRoot, key);
             BlobDir = System.IO.Path.Combine(StoreDir, "blobs");
             Load();
         }

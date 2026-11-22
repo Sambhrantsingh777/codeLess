@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# codeLess v3.3.2 — macOS App Bundle (.app & .dmg) Wrapper
+# codeLess v3.3.3 — macOS App Bundle (.app & .dmg) Wrapper
 # Delegates to root ./build-mac.sh (.NET 8 + Avalonia native macOS builder)
 # ==============================================================================
 set -euo pipefail

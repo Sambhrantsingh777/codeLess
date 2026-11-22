@@ -283,19 +283,19 @@ namespace codeLess.Avalonia.Tests
         [Fact]
         public void AGT3_TwoWindowsOnOneWorkspace_DontDropEachOthersTurnsOrBlobs()
         {
-            string oldRoot = AgentTurnCheckpointStore.CheckpointsRoot;
-            AgentTurnCheckpointStore.CheckpointsRoot = Path.Combine(root, "checkpoints");
+            // Explicit root: mutating the static CheckpointsRoot raced with AgentTrustCoreTests running in parallel.
+            string cpRoot = Path.Combine(root, "checkpoints");
             try
             {
                 string ws = Path.Combine(root, "cpws");
                 Directory.CreateDirectory(ws);
                 string a = Path.Combine(ws, "a.txt"), b = Path.Combine(ws, "b.txt");
                 File.WriteAllText(a, "a0"); File.WriteAllText(b, "b0");
-                var w1 = new AgentTurnCheckpointStore(ws);
-                var w2 = new AgentTurnCheckpointStore(ws); // second window, loaded before w1 wrote anything
+                var w1 = new AgentTurnCheckpointStore(ws, cpRoot);
+                var w2 = new AgentTurnCheckpointStore(ws, cpRoot); // second window, loaded before w1 wrote anything
                 w1.RecordFileWrite("t1", "turn 1", a, Encoding.UTF8.GetBytes("a0"), Encoding.UTF8.GetBytes("a1"));
                 w2.RecordFileWrite("t2", "turn 2", b, Encoding.UTF8.GetBytes("b0"), Encoding.UTF8.GetBytes("b1"));
-                var reloaded = new AgentTurnCheckpointStore(ws);
+                var reloaded = new AgentTurnCheckpointStore(ws, cpRoot);
                 var ids = reloaded.Turns.Select(t => t.Id).ToList();
                 Assert.Contains("t1", ids);
                 Assert.Contains("t2", ids);
@@ -307,7 +307,7 @@ namespace codeLess.Avalonia.Tests
                         if (f.PostHash != null) Assert.True(File.Exists(Path.Combine(reloaded.BlobDir, f.PostHash)), "missing post blob of " + t.Id);
                     }
             }
-            finally { AgentTurnCheckpointStore.CheckpointsRoot = oldRoot; }
+            finally { }
         }
     }
 
