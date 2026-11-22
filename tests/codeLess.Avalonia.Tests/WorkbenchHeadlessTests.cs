@@ -70,8 +70,10 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(window.IsBottomPanelVisible);
                 Assert.False(window.IsCommandPaletteVisible);
                 Assert.NotNull(window.Editor);
-                Assert.NotEmpty(window.OpenTabs);
-                Assert.NotNull(window.ActiveTab);
+                // Like VS Code, opening a folder opens no file by itself (Welcome stays).
+                Assert.Empty(window.OpenTabs);
+                Assert.Null(window.ActiveTab);
+                Assert.True(window.PrimaryEditor.IsWelcomePageVisible);
                 Assert.NotNull(window.CurrentTheme);
                 Assert.NotEmpty(window.HarnessEngine.IndexedChunks);
                 Assert.NotEmpty(window.HarnessEngine.WorkspaceSymbols);

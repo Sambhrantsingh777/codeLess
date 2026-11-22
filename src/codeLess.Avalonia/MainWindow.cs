@@ -2158,19 +2158,13 @@ namespace codeLess.AvaloniaApp
                 aiEngine.IndexWorkspace(workspaceRoot, workspaceFiles);
                 lock (workspaceIndexLock) { workspaceIndexState = 2; indexCandidateFiles = new List<string>(workspaceFiles); }
                 if (!noGit) RefreshGitStatus();
-                if (!keepCurrentTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
-                    OpenFileInTab(workspaceFiles[0], preview: true);
                 UpdateWindowTitle();
                 UpdateStatusBar();
                 sidebarProgressBar.StopProgress();
                 return;
             }
 
-            // Open first root file immediately if available so user sees code in < 5ms while indexing runs in background
-            if (!keepCurrentTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
-            {
-                OpenFileInTab(workspaceFiles[0], preview: true);
-            }
+            // Like VS Code, opening a folder opens no file by itself (Welcome or the empty editor stays; the user picks).
             UpdateWindowTitle();
             UpdateStatusBar();
 
@@ -2203,8 +2197,6 @@ namespace codeLess.AvaloniaApp
                     workspaceFiles.Clear();
                     workspaceFiles.AddRange(bgFiles);
                     ApplyGitEntriesToUi(fastBranch, bgGitEntries);
-                    if (!capturedKeepTabs && openTabs.Count == 0 && workspaceFiles.Count > 0)
-                        OpenFileInTab(workspaceFiles[0], preview: true);
                     AppendOutputLog($"[Workspace] Loaded '{folderName}' ({workspaceFiles.Count} files{(WorkspaceFileListCapped ? $", capped at {MaxIndexedWorkspaceFiles:N0}: Quick Open / indexing cover the first {MaxIndexedWorkspaceFiles:N0} files" : "")}).");
                     if (WorkspaceFileListCapped) SetStatusMessage($"Large workspace: indexed the first {MaxIndexedWorkspaceFiles:N0} files (node_modules, build output and .gitignore'd files are skipped).");
                     PerfWorkspaceLoadCompletions++;

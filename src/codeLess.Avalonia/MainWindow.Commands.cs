@@ -2897,6 +2897,11 @@ namespace codeLess.AvaloniaApp
             // 1. r10b_avalonia_welcome.png (Welcome tab active, Explorer tree visible, Terminal open, zero demo chat content)
             await PumpAndRenderAsync("r10b_avalonia_welcome.png");
 
+            // 1b. r14_empty_editor_watermark.png (Welcome closed with no files open: VS Code's empty editor group)
+            CloseWelcomeTab();
+            await PumpAndRenderAsync("r14_empty_editor_watermark.png");
+            OpenWelcomeTab();
+
             // 2. r10b_avalonia_explorer.png (Expand src folder in Explorer tree to show nested folders & file-type icons & indentation guides & expanded OUTLINE)
             if (ExplorerTree.Nodes.Count > 0)
             {

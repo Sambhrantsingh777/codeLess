@@ -139,8 +139,7 @@ namespace codeLess.Avalonia.Tests
             try
             {
                 Dispatcher.UIThread.RunJobs();
-                foreach (var t in w.OpenTabs.ToList()) w.CloseTab(t, forceWithoutPrompt: true); // startup may restore / open a file
-                w.OpenWelcomeTab();
+                Assert.Empty(w.OpenTabs); // opening a folder opens no file by itself (VS Code)
                 Assert.True(w.IsWelcomeTabOpen);
                 Assert.True(w.PrimaryEditor.IsWelcomePageVisible);
 
