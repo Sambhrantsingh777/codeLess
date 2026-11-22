@@ -198,9 +198,24 @@ namespace codeLess.AvaloniaApp
             workspaceSearchInput.KeyDown += (s, e) =>
             {
                 if (TryHandleWorkspaceSearchOptionKey(e)) { }
-                else if (e.Key == Key.Enter) { ExecuteWorkspaceSearch(); e.Handled = true; }
-                else if (e.Key == Key.Down && searchRows.Count > 0) { FocusSearchResults(); e.Handled = true; }
+                else if (e.Key == Key.Enter) { CommitSearchHistory(); ExecuteWorkspaceSearch(); e.Handled = true; }
+                else if (e.Key == Key.Down && searchRows.Count > 0) { CommitSearchHistory(); FocusSearchResults(); e.Handled = true; }
             };
+            // VS Code: Up walks back through earlier searches; Down walks forward while doing so (otherwise it still
+            // moves into the results). Tunnel: the TextBox would consume the arrows to move its caret.
+            workspaceSearchInput.AddHandler(KeyDownEvent, (s, e) =>
+            {
+                if (e.KeyModifiers != KeyModifiers.None) return;
+                var h = FindHistoryStore.Search;
+                string next = null;
+                if (e.Key == Key.Up) { next = h.Previous(workspaceSearchInput.Text ?? ""); e.Handled = true; }
+                else if (e.Key == Key.Down && h.IsNavigating) { next = h.Next(workspaceSearchInput.Text ?? ""); e.Handled = true; }
+                if (next == null) return;
+                lastSearchHistoryText = next;
+                workspaceSearchInput.Text = next;
+                workspaceSearchInput.CaretIndex = next.Length;
+            }, RoutingStrategies.Tunnel);
+            workspaceSearchInput.TextChanged += (s, e) => { if (!string.Equals(workspaceSearchInput.Text, lastSearchHistoryText, StringComparison.Ordinal)) FindHistoryStore.Search.ResetNavigation(); };
             workspaceReplaceInput.KeyDown += (s, e) =>
             {
                 if (TryHandleWorkspaceSearchOptionKey(e)) return;
@@ -753,8 +768,13 @@ namespace codeLess.AvaloniaApp
             return false;
         }
 
+        private string lastSearchHistoryText; // TextChanged fires after the setter: compare instead of a flag
+
+        private void CommitSearchHistory() => FindHistoryStore.Commit(FindHistoryStore.Search, workspaceSearchInput?.Text ?? "");
+
         private void ConfirmAndReplaceAll()
         {
+            CommitSearchHistory();
             string q = workspaceSearchInput.Text ?? "";
             if (q.Length == 0) return;
             if (!AvaloniaTerminalEmulatorControl.IsDesktopRuntime) { ExecuteWorkspaceReplaceAll(); return; }

@@ -1953,6 +1953,9 @@ namespace codeLess.Studio
         {
             try
             {
+                // Find / Replace / Search histories live in FindHistoryStore: a long-lived settings object must not write
+                // back the lists it loaded at startup over newer history.
+                FindHistoryStore.CopyInto(this);
                 string path = GetSettingsFilePath();
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 string json = ser.Serialize(this);

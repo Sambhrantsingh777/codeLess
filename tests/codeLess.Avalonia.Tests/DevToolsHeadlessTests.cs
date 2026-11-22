@@ -241,8 +241,12 @@ namespace codeLess.Avalonia.Tests
             var w = NewWindow();
             try
             {
-                Assert.True(w.IsLineBlameEnabled);
+                Assert.False(w.IsLineBlameEnabled); // off by default like VS Code (git.blame.editorDecoration.enabled)
                 var tab = w.OpenFileInTab(file, preview: false);
+                tab.CursorLine = 2; tab.CursorCol = 0;
+                Assert.Null(w.PrimaryEditor.LineAnnotationProvider(tab, 2)); // clicking a line shows no history by default
+                w.ToggleLineBlame(); // Git: Toggle Line Blame opts in
+                Assert.True(w.IsLineBlameEnabled);
                 tab.CursorLine = 2; tab.CursorCol = 0;
                 w.PrimaryEditor.Canvas.Focus();
                 w.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);

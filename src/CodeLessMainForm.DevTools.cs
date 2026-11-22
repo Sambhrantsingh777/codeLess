@@ -43,7 +43,7 @@ namespace codeLess.Studio
 
         public WinAuxPane DevToolsPane { get { return devAux; } }
         public GitBlameService BlameService { get { return devBlame; } }
-        public bool IsLineBlameEnabled { get { return !settings.DisableInlineGitBlame; } }
+        public bool IsLineBlameEnabled { get { return settings != null && settings.ShowInlineGitBlame; } }
 
         /// <summary>Palette entries: category, title, shortcut, command id.</summary>
         public static readonly string[][] DevToolsPaletteCommands = new string[][]
@@ -284,7 +284,7 @@ namespace codeLess.Studio
 
         public void ToggleLineBlame()
         {
-            settings.DisableInlineGitBlame = !settings.DisableInlineGitBlame;
+            settings.ShowInlineGitBlame = !settings.ShowInlineGitBlame;
             try { settings.Save(); } catch { }
             DevStatus("Inline git blame: " + (IsLineBlameEnabled ? "On" : "Off"));
             if (IsLineBlameEnabled) DevRequestBlame();

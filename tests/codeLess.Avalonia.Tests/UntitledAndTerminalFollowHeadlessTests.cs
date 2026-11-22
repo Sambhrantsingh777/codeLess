@@ -165,5 +165,41 @@ namespace codeLess.Avalonia.Tests
             }
             finally { w.SuppressUnsavedPrompts = true; w.Close(); }
         }
+            [AvaloniaFact]
+        public void Find_Box_Up_Arrow_Recalls_Previous_Searches()
+        {
+            string ws = Sub("findhist");
+            string f = Path.Combine(ws, "a.txt");
+            File.WriteAllText(f, "foo bar baz\n");
+            FindHistoryStore.DisablePersistence = true;
+            FindHistoryStore.ResetForTests();
+            var w = new MainWindow(ws) { Width = 1200, Height = 800 };
+            w.Show();
+            try
+            {
+                w.OpenFileInTab(f, preview: false);
+                Dispatcher.UIThread.RunJobs();
+                w.PrimaryEditor.ShowFindBar(false);
+                var box = w.PrimaryEditor.FindInputBox;
+                box.Text = "foo";
+                w.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+                box.Text = "bar";
+                w.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+                box.Text = "ba"; // typing something new
+                w.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
+                Assert.Equal("bar", box.Text);
+                w.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
+                Assert.Equal("foo", box.Text);
+                w.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+                w.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+                Assert.Equal("ba", box.Text); // back to what was being typed
+            }
+            finally
+            {
+                FindHistoryStore.ResetForTests();
+                FindHistoryStore.DisablePersistence = false;
+                w.SuppressUnsavedPrompts = true; w.Close();
+            }
+        }
     }
 }

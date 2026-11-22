@@ -442,6 +442,7 @@ namespace codeLess.Studio
             };
             closeFindBtn.Click += (s, e) =>
             {
+                CommitFindHistory(true);
                 findBar.Visible = false;
                 ActiveSearchMatches.Clear();
                 ActiveSearchMatchIndex = -1;
@@ -453,12 +454,20 @@ namespace codeLess.Studio
 
             findInput.TextChanged += (s, e) =>
             {
+                if (!applyingFindHistory) FindHistoryStore.Find.ResetNavigation();
                 UpdateSearchMatches(true);
             };
+            replaceInput.TextChanged += (s, e) => { if (!applyingFindHistory) FindHistoryStore.Replace.ResetNavigation(); };
 
             findInput.KeyDown += (s, e) =>
             {
                 if (TryHandleFindOptionKey(e)) { }
+                else if (!e.Alt && !e.Control && !e.Shift && (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down))
+                {
+                    // VS Code: Up / Down walk through earlier searches.
+                    e.SuppressKeyPress = true; e.Handled = true;
+                    NavigateFindHistory(findInput, FindHistoryStore.Find, e.KeyCode == Keys.Up);
+                }
                 else if (e.Alt && e.KeyCode == Keys.Enter)
                 {
                     e.SuppressKeyPress = true;
@@ -473,6 +482,7 @@ namespace codeLess.Studio
                 else if (e.KeyCode == Keys.Escape)
                 {
                     e.SuppressKeyPress = true;
+                    CommitFindHistory(true);
                     findBar.Visible = false;
                     ActiveSearchMatches.Clear();
                     ActiveSearchMatchIndex = -1;
@@ -484,6 +494,11 @@ namespace codeLess.Studio
             replaceInput.KeyDown += (s, e) =>
             {
                 if (TryHandleFindOptionKey(e)) { }
+                else if (!e.Alt && !e.Control && !e.Shift && (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down))
+                {
+                    e.SuppressKeyPress = true; e.Handled = true;
+                    NavigateFindHistory(replaceInput, FindHistoryStore.Replace, e.KeyCode == Keys.Up);
+                }
                 else if (e.Alt && e.KeyCode == Keys.Enter)
                 {
                     e.SuppressKeyPress = true;
@@ -504,6 +519,7 @@ namespace codeLess.Studio
                 else if (e.KeyCode == Keys.Escape)
                 {
                     e.SuppressKeyPress = true;
+                    CommitFindHistory(true);
                     findBar.Visible = false;
                     ActiveSearchMatches.Clear();
                     ActiveSearchMatchIndex = -1;
@@ -2295,8 +2311,31 @@ namespace codeLess.Studio
             findStatusLabel.Text = string.Format("{0} of {1}", matchIdx + 1, ActiveSearchMatches.Count);
         }
 
+        private bool applyingFindHistory;
+
+        /// <summary>Up = older search, Down = newer (past the newest: what was being typed).</summary>
+        private void NavigateFindHistory(CodeLessDarkInputBox box, InputHistory history, bool up)
+        {
+            string next = up ? history.Previous(box.Text ?? "") : history.Next(box.Text ?? "");
+            if (next == null) return;
+            applyingFindHistory = true;
+            try { box.Text = next; }
+            finally { applyingFindHistory = false; }
+            box.InnerBox.SelectionStart = next.Length;
+            box.InnerBox.SelectionLength = 0;
+        }
+
+        /// <summary>Remembers the find (and, when given, replace) text in the shared history.</summary>
+        private void CommitFindHistory(bool includeReplace)
+        {
+            if (findInput != null) FindHistoryStore.Commit(FindHistoryStore.Find, findInput.Text ?? "");
+            if (includeReplace && replaceInput != null && !string.IsNullOrEmpty(replaceInput.Text))
+                FindHistoryStore.Commit(FindHistoryStore.Replace, replaceInput.Text);
+        }
+
         public void FindNextOccurrence()
         {
+            CommitFindHistory(false);
             if (CurrentBuffer == null) return;
             string q = findInput.Text;
             if (string.IsNullOrEmpty(q) && CurrentBuffer.HasSelection())
@@ -2328,6 +2367,7 @@ namespace codeLess.Studio
 
         public void FindPreviousOccurrence()
         {
+            CommitFindHistory(false);
             if (CurrentBuffer == null) return;
             string q = findInput.Text;
             if (string.IsNullOrEmpty(q) && CurrentBuffer.HasSelection())
@@ -2364,6 +2404,7 @@ namespace codeLess.Studio
 
         private void ReplaceCurrentOccurrence()
         {
+            CommitFindHistory(true);
             string q = findInput.Text;
             if (string.IsNullOrEmpty(q) || CurrentBuffer == null) return;
             if (!CurrentBuffer.HasSelection())
@@ -2408,6 +2449,7 @@ namespace codeLess.Studio
 
         public void ReplaceAllOccurrences()
         {
+            CommitFindHistory(true);
             string q = findInput.Text;
             if (string.IsNullOrEmpty(q) || CurrentBuffer == null) return;
             UpdateSearchMatches(false);

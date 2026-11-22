@@ -49,7 +49,7 @@ namespace codeLess.AvaloniaApp
 
         public AuxPaneHost AuxPane => auxPane;
         public GitBlameService BlameService => blameService;
-        public bool IsLineBlameEnabled => settings != null && !settings.DisableInlineGitBlame;
+        public bool IsLineBlameEnabled => settings != null && settings.ShowInlineGitBlame;
         public bool IsFileBlameEnabled => fileBlameMode;
         public bool IsAuxPaneVisible => auxPane != null && auxPane.IsVisible;
         public Border BlameHoverCard => blameCard;
@@ -297,7 +297,7 @@ namespace codeLess.AvaloniaApp
 
         public void ToggleLineBlame()
         {
-            settings.DisableInlineGitBlame = !settings.DisableInlineGitBlame;
+            settings.ShowInlineGitBlame = !settings.ShowInlineGitBlame;
             try { settings.Save(); } catch { }
             SetStatusMessage("Inline git blame: " + (IsLineBlameEnabled ? "On" : "Off"));
             if (IsLineBlameEnabled) RequestBlameForActiveBuffer();

@@ -607,8 +607,31 @@ namespace codeLess.AvaloniaApp
             findInputBox.SelectAll();
         }
 
+        private string lastFindHistoryText, lastReplaceHistoryText;
+
+        /// <summary>Up = older search, Down = newer (past the newest: what was being typed). True when handled.</summary>
+        private bool TryNavigateFindHistory(TextBox box, InputHistory history, KeyEventArgs e)
+        {
+            if ((e.Key != Key.Up && e.Key != Key.Down) || e.KeyModifiers != KeyModifiers.None) return false;
+            string next = e.Key == Key.Up ? history.Previous(box.Text ?? "") : history.Next(box.Text ?? "");
+            if (next == null) return true; // nothing older / not navigating: swallow like VS Code
+            if (ReferenceEquals(box, findInputBox)) lastFindHistoryText = next; else lastReplaceHistoryText = next;
+            box.Text = next;
+            box.CaretIndex = next.Length;
+            box.SelectionStart = box.SelectionEnd = next.Length;
+            return true;
+        }
+
+        /// <summary>Remembers the current find (and replace) text in the history.</summary>
+        public void CommitFindHistory(bool includeReplace = false)
+        {
+            FindHistoryStore.Commit(FindHistoryStore.Find, findInputBox.Text ?? "");
+            if (includeReplace) FindHistoryStore.Commit(FindHistoryStore.Replace, replaceInputBox.Text ?? "");
+        }
+
         public void HideFindBar()
         {
+            if (findReplaceOverlay.IsVisible) CommitFindHistory(replaceRowPanel.IsVisible && !string.IsNullOrEmpty(replaceInputBox.Text));
             findReplaceOverlay.IsVisible = false;
             FindMatches.Clear();
             activeFindMatchIndex = -1;
@@ -773,6 +796,7 @@ namespace codeLess.AvaloniaApp
 
         public void FindNext(int step = 1)
         {
+            CommitFindHistory();
             if (FindMatches.Count == 0) RecomputeFindMatches();
             if (FindMatches.Count == 0 || CurrentBuffer == null) return;
 
@@ -790,6 +814,7 @@ namespace codeLess.AvaloniaApp
 
         public void ReplaceCurrentMatch(string replacement = null)
         {
+            if (replacement == null) CommitFindHistory(includeReplace: true);
             if (CurrentBuffer == null) return;
             if (FindMatches.Count == 0) RecomputeFindMatches();
             if (FindMatches.Count == 0) return;
@@ -820,6 +845,7 @@ namespace codeLess.AvaloniaApp
 
         public int ReplaceAllMatches(string replacement = null)
         {
+            if (replacement == null) CommitFindHistory(includeReplace: true);
             if (CurrentBuffer == null) return 0;
             if (FindMatches.Count == 0) RecomputeFindMatches();
             if (FindMatches.Count == 0) return 0;
@@ -923,7 +949,13 @@ namespace codeLess.AvaloniaApp
             var myRBox = rBox;
             var myRRow = rRow;
 
-            myFBox.TextChanged += (s, e) => RecomputeFindMatches();
+            // TextChanged is raised after the setter returns: compare with the text history put there instead of a flag.
+            myFBox.TextChanged += (s, e) => { if (!string.Equals(myFBox.Text, lastFindHistoryText, StringComparison.Ordinal)) FindHistoryStore.Find.ResetNavigation(); RecomputeFindMatches(); };
+            myRBox.TextChanged += (s, e) => { if (!string.Equals(myRBox.Text, lastReplaceHistoryText, StringComparison.Ordinal)) FindHistoryStore.Replace.ResetNavigation(); };
+            // VS Code: Up / Down in the find or replace box walk through earlier searches (tunnel: the TextBox would
+            // otherwise consume the arrows to move its caret).
+            myFBox.AddHandler(KeyDownEvent, (s, e) => { if (TryNavigateFindHistory(myFBox, FindHistoryStore.Find, e)) e.Handled = true; }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
+            myRBox.AddHandler(KeyDownEvent, (s, e) => { if (TryNavigateFindHistory(myRBox, FindHistoryStore.Replace, e)) e.Handled = true; }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
             myFBox.KeyDown += (s, e) =>
             {
                 bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);

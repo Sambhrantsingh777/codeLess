@@ -4220,11 +4220,27 @@ if __name__ == '__main__':
 
             runSearchBtn.Click += (s, e) => executeSearch();
             collapseAllBtn.Click += (s, e) => ToggleCollapseAllSearchGroupsWin();
+            bool applyingSearchHistoryWin = false;
+            searchInput.TextChanged += (s, e) => { if (!applyingSearchHistoryWin) FindHistoryStore.Search.ResetNavigation(); };
             searchInput.KeyDown += (s, e) =>
             {
-                if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; executeSearch(); }
+                bool plain = !e.Alt && !e.Control && !e.Shift;
+                // VS Code: Up walks back through earlier searches; Down walks forward while doing so.
+                if (plain && (e.KeyCode == Keys.Up || (e.KeyCode == Keys.Down && FindHistoryStore.Search.IsNavigating)))
+                {
+                    e.SuppressKeyPress = true; e.Handled = true;
+                    string next = e.KeyCode == Keys.Up ? FindHistoryStore.Search.Previous(searchInput.Text ?? "") : FindHistoryStore.Search.Next(searchInput.Text ?? "");
+                    if (next != null)
+                    {
+                        applyingSearchHistoryWin = true;
+                        try { searchInput.Text = next; } finally { applyingSearchHistoryWin = false; }
+                        searchInput.InnerBox.SelectionStart = next.Length;
+                    }
+                }
+                else if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; FindHistoryStore.Commit(FindHistoryStore.Search, searchInput.Text ?? ""); executeSearch(); }
                 else if (e.KeyCode == Keys.Down && searchRowsWin.Count > 0)
                 {
+                    FindHistoryStore.Commit(FindHistoryStore.Search, searchInput.Text ?? "");
                     e.SuppressKeyPress = true;
                     searchResultsList.Focus();
                     searchResultsList.SelectedIndex = searchRowsWin.Count > 1 && searchRowsWin[0].IsHeader ? 1 : 0;

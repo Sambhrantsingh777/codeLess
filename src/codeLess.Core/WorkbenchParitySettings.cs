@@ -84,6 +84,10 @@ namespace codeLess.Studio
             AutoSaveDelayMs = other.AutoSaveDelayMs;
             // Fields from other feature areas that the Avalonia settings loader did not copy before.
             DisableInlineGitBlame = other.DisableInlineGitBlame;
+            ShowInlineGitBlame = other.ShowInlineGitBlame;
+            FindHistory = other.FindHistory;
+            ReplaceHistory = other.ReplaceHistory;
+            SearchHistory = other.SearchHistory;
             HttpClientEnvironment = other.HttpClientEnvironment;
             HttpClientTimeoutSeconds = other.HttpClientTimeoutSeconds;
         }

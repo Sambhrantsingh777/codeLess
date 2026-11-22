@@ -56,8 +56,13 @@ namespace codeLess.Studio
     /// <summary>Settings for the built-in developer tools (persisted with the rest of settings.json on both UIs).</summary>
     public partial class IdePersistentSettings
     {
-        /// <summary>Inline (current line) git blame is on by default; this stores the opt-out.</summary>
+        /// <summary>Legacy opt-out from when inline blame was on by default (ignored; kept so old settings files load).</summary>
         public bool DisableInlineGitBlame { get; set; }
+        /// <summary>
+        /// Inline (current line) git blame. Off by default like VS Code (git.blame.editorDecoration.enabled); turned on with
+        /// "Git: Toggle Line Blame".
+        /// </summary>
+        public bool ShowInlineGitBlame { get; set; }
         /// <summary>Selected .http environment name ("" = none / $shared only).</summary>
         public string HttpClientEnvironment { get; set; }
         /// <summary>Request timeout in seconds for the HTTP client (0 = default 30 s).</summary>
