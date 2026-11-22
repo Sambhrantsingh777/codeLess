@@ -112,6 +112,9 @@ namespace codeLess.Studio
         private string scope;
         private int registryGeneration = -1;
         private bool grammarPending;
+        private FallbackTokenCache fallback;
+        private bool fallbackSynced;
+        private bool fallbackUsed;
 
         /// <summary>Lines whose start state the paint pass may compute synchronously before falling back to a guess.</summary>
         public static int SyncTokenizeBudgetMs = 12;
@@ -140,6 +143,49 @@ namespace codeLess.Studio
             if (lines == null) return;
             brackets.Sync(lines);
             if (textMate != null) textMate.Sync(lines);
+            fallbackSynced = false;
+        }
+
+        /// <summary>The fallback tokenizer cache (null until a line was painted without TextMate tokens).</summary>
+        public FallbackTokenCache Fallback { get { return fallback; } }
+
+        /// <summary>
+        /// Full-line fallback tokens (no grammar, or a line too long for the TextMate tokenizer), with the line-start
+        /// state of multi-line strings / comments and a per-line cache keyed by the line's text reference.
+        /// </summary>
+        public List<CodeToken> GetFallbackTokens(IList<string> lines, int line, string language, long deadlineTicks, out bool isGuess)
+        {
+            isGuess = false;
+            if (lines == null || line < 0 || line >= lines.Count) return null;
+            if (fallback == null || !string.Equals(fallback.Language, language ?? "", StringComparison.Ordinal))
+            {
+                fallback = new FallbackTokenCache(language);
+                fallbackSynced = false;
+            }
+            if (!fallbackSynced) { fallback.Sync(lines); fallbackSynced = true; }
+            fallbackUsed = true;
+            return fallback.GetTokens(lines, line, deadlineTicks, out isGuess);
+        }
+
+        /// <summary>Fallback spans covering exactly [sliceStart, sliceEnd) of the line (only the slice's tokens are styled).</summary>
+        public List<StyledSpan> GetFallbackSpans(IList<string> lines, int line, string language, StudioTheme theme, int sliceStart, int sliceEnd, bool colorOperators, long deadlineTicks, out bool isGuess)
+        {
+            List<CodeToken> toks = GetFallbackTokens(lines, line, language, deadlineTicks, out isGuess);
+            if (toks == null) return null;
+            return FallbackTokenStyles.SliceSpans(toks, (lines[line] ?? "").Length, sliceStart, sliceEnd, theme, colorOperators);
+        }
+
+        /// <summary>True when the TextMate tokenizer skips this line (longer than its limit; VS Code shows it plain).</summary>
+        public bool IsTooLongForTextMate(string text)
+        {
+            return textMate != null && text != null && text.Length > textMate.Grammar.MaxLineLength;
+        }
+
+        /// <summary>Known fallback line-start state (multi-line string / comment), or -1 when not computed.</summary>
+        public int FallbackStartState(int line)
+        {
+            if (fallback == null || line < 0 || line > fallback.ValidCount) return -1;
+            return fallback.StartStateOf(line);
         }
 
         private void ResolveGrammar()
@@ -184,6 +230,7 @@ namespace codeLess.Studio
             {
                 if (grammarPending) return true;
                 if (textMate != null && textMate.ValidCount < textMate.LineCount) return true;
+                if (fallbackUsed && fallback != null && fallback.ValidCount < fallback.LineCount) return true;
                 return false;
             }
         }
@@ -204,14 +251,23 @@ namespace codeLess.Studio
                 if (grammarPending) return false;
                 return hadGrammar != (textMate != null);
             }
-            if (textMate == null) return false;
+            bool fbRepaint = false;
+            if (fallbackUsed && fallback != null && fallback.ValidCount < buf.Lines.Count)
+            {
+                fallback.Sync(buf.Lines);
+                int fb0 = fallback.ValidCount;
+                fallback.EnsureValid(buf.Lines, buf.Lines.Count - 1, DeadlineFromNow(budgetMs));
+                int fb1 = fallback.ValidCount;
+                fbRepaint = fb0 <= visibleBottom && fb1 > fb0 && fb1 > visibleTop;
+            }
+            if (textMate == null) return fbRepaint;
             textMate.Sync(buf.Lines);
             int before = textMate.ValidCount;
             textMate.EnsureValid(buf.Lines, buf.Lines.Count - 1, DeadlineFromNow(budgetMs));
             int after = textMate.ValidCount;
             if (after >= textMate.LineCount && textMate.LineCount > 6000)
                 textMate.EvictDataOutside(Math.Max(0, visibleTop - 1500), visibleBottom + 1500);
-            return before <= visibleBottom && after > before && after > visibleTop;
+            return fbRepaint || (before <= visibleBottom && after > before && after > visibleTop);
         }
 
         /// <summary>

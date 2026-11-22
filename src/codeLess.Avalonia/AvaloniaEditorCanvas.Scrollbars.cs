@@ -287,9 +287,28 @@ namespace codeLess.AvaloniaApp
                 e = Math.Min(e, s + 2000);
             }
             if (e <= s) return;
-            var tokens = TokenizeLineForTheme(t.Substring(s, e - s), Theme, b.Language);
+            // whole-line tokens cut to the slice (a slice starting inside a string must not flip the quote parity)
+            var tokens = SliceTokensOfText(t, b.Language, s, e);
             using (context.PushClip(new Rect(GutterWidth + 1, y, Math.Max(0, codeAreaRight - GutterWidth - 1), LineHeight)))
                 DrawTokenRun(context, tokens, codeBaseX, y, startVcol, codeAreaRight);
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<string, List<CodeToken>> textTokenCache =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<string, List<CodeToken>>();
+
+        /// <summary>
+        /// Styled tokens for [s, e) of a line that is not part of the buffer (deleted rows): tokenized from the start of
+        /// the line once per string instance (cached by reference), then cut to the slice.
+        /// </summary>
+        internal List<SyntaxTokenSpan> SliceTokensOfText(string text, string language, int s, int e)
+        {
+            text ??= "";
+            var toks = textTokenCache.GetValue(text, x => FallbackTokenizer.Tokenize(x, language));
+            var spans = FallbackTokenStyles.SliceSpans(toks, text.Length, s, e, Theme, false);
+            var res = new List<SyntaxTokenSpan>(spans.Count);
+            foreach (var sp in spans)
+                res.Add(new SyntaxTokenSpan { Text = text.Substring(sp.Start, sp.Length), Color = AvaloniaColorHelper.ToAvColor(sp.Color), IsBold = sp.Bold, IsItalic = sp.Italic });
+            return res;
         }
 
         /// <summary>After navigating to a hunk: if its deleted zone starts above the viewport, scroll it into view (VS Code reveals the whole change).</summary>

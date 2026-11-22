@@ -24,11 +24,15 @@ javascriptreact.tmLanguage.json.gz source.js.jsx         microsoft/TypeScript-Tm
 csharp.tmLanguage.json.gz          source.cs             dotnet/csharp-tmLanguage (c2719309e91d2e26be21fce0ecaaca86c7b48ce4)       MIT, Copyright (c) .NET Foundation and Contributors
 ruby.tmLanguage.json.gz            source.ruby           Shopify/ruby-lsp (e044408a069f43c892143f19c389628eebffbd01)               MIT, Copyright (c) Shopify Inc.
 makefile.tmLanguage.json.gz        source.makefile       fadeevab/make.tmbundle (1d4c0b541959995db098df751ffc129da39a294b)         MIT, Copyright (c) Alexander Fadeev
+python.tmLanguage.json.gz          source.python         MagicStack/MagicPython (7d0f2b22a5ad8fccbd7341bc7b7a715169283044)         MIT, Copyright (c) 2014 GitHub Inc., Copyright (c) 2015-present MagicStack Inc.
+json.tmLanguage.json.gz            source.json           microsoft/vscode-JSON.tmLanguage (9bd83f1c252b375e957203f21793316203f61f70) MIT, Copyright (c) 2015 simonzack, zertosh, benvie
 
 Not bundled (non-MIT or unverified licence): HTML / Markdown-derived TextMate bundles (TextMate Bundle License),
-Lua, INI (TextMate Bundle License), Dockerfile (Apache-2.0), C/C++ (GPL-3.0), PHP (MIT AND Boost), Python
-(MagicPython: licence not verifiable offline), JSON. These languages keep the built-in tokenizer unless an installed
-VSIX extension contributes a grammar.
+Lua, INI (TextMate Bundle License), Dockerfile (Apache-2.0), C/C++ (GPL-3.0), PHP (MIT AND Boost). These languages
+keep the built-in tokenizer unless an installed VSIX extension contributes a grammar. Python and JSON were added after
+checking the MIT licence entries for magicstack/magicpython and microsoft/vscode-json.tmlanguage in VS Code's
+ThirdPartyNotices.txt (same pinned commits as above). Lines longer than the TextMate limit (20,000 characters, where
+VS Code stops highlighting) are colored by the built-in tokenizer.
 
 MIT License text (applies to every file above, with the copyright holders listed):
 

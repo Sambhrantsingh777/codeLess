@@ -45,6 +45,12 @@ namespace codeLess.AvaloniaApp
         public int LastFrameOccurrenceCount { get; private set; }
         /// <summary>Lines painted with TextMate tokens in the last frame (tests).</summary>
         public int LastFrameTextMateLines { get; private set; }
+        /// <summary>Lines painted with the (cached, multi-line aware) fallback tokenizer in the last frame (tests).</summary>
+        public int LastFrameFallbackLines { get; private set; }
+        /// <summary>Tests: record the styled tokens of every painted slice in <see cref="LastFrameTokens"/>.</summary>
+        public bool CaptureFrameTokens { get; set; }
+        /// <summary>Styled tokens painted in the last frame per (doc line, slice start) when <see cref="CaptureFrameTokens"/> is on.</summary>
+        public readonly List<(int DocLine, int SliceStart, List<SyntaxTokenSpan> Tokens)> LastFrameTokens = new List<(int, int, List<SyntaxTokenSpan>)>();
         public BracketPair ActiveBracketPair => activeBracketPair;
         public ActiveIndentGuide ActiveIndentGuideInfo => activeGuide;
         public EditorSyntaxSession SyntaxSession => Buffer == null ? null : EditorSyntaxSession.For(Buffer);
@@ -59,6 +65,8 @@ namespace codeLess.AvaloniaApp
         {
             LastFrameOccurrenceCount = 0;
             LastFrameTextMateLines = 0;
+            LastFrameFallbackLines = 0;
+            LastFrameTokens.Clear();
             frameHadGuesses = false;
             frameSession = EditorSyntaxSession.For(buf);
             frameSession.Prepare(buf);
@@ -133,28 +141,32 @@ namespace codeLess.AvaloniaApp
         private List<SyntaxTokenSpan> GetNicetyTokens(EditorTabBuffer buf, int docLine, string lineText, int sliceStart, string renderLineText)
         {
             var session = frameSession;
-            if (session == null) return TokenizeLineForTheme(renderLineText, Theme, buf.Language);
-            List<StyledSpan> spans = null;
-            if (EditorNicetyOptions.TextMateHighlighting && session.TextMate != null)
-            {
-                spans = session.GetTextMateSpans(buf.Lines, docLine, frameVisTop, Theme, frameTokenDeadline, out bool guess);
-                if (spans != null) { LastFrameTextMateLines++; if (guess) frameHadGuesses = true; }
-            }
             int sliceLen = renderLineText.Length;
-            if (spans == null)
+            List<StyledSpan> spans = null;
+            if (session == null)
             {
-                var builtin = TokenizeLineForTheme(renderLineText, Theme, buf.Language);
-                if (!EditorNicetyOptions.BracketPairColorization || !session.Brackets.Profile.Enabled) return builtin;
-                spans = new List<StyledSpan>(builtin.Count);
-                int pos = sliceStart;
-                foreach (var t in builtin)
-                {
-                    int len = (t.Text ?? "").Length;
-                    spans.Add(new StyledSpan(pos, len, System.Drawing.Color.FromArgb(t.Color.A, t.Color.R, t.Color.G, t.Color.B), t.IsBold, t.IsItalic));
-                    pos += len;
-                }
+                // no frame session: still tokenize the whole logical line, then cut the slice (quote parity)
+                spans = FallbackTokenStyles.SliceSpans(FallbackTokenizer.Tokenize(lineText, buf.Language), lineText.Length, sliceStart, sliceStart + sliceLen, Theme, false);
             }
-            if (EditorNicetyOptions.BracketPairColorization && session.Brackets.Profile.Enabled)
+            else
+            {
+                // lines longer than the TextMate limit (VS Code paints them plain) keep the fallback colors
+                if (EditorNicetyOptions.TextMateHighlighting && session.TextMate != null && !session.IsTooLongForTextMate(lineText))
+                {
+                    spans = session.GetTextMateSpans(buf.Lines, docLine, frameVisTop, Theme, frameTokenDeadline, out bool guess);
+                    if (spans != null) { LastFrameTextMateLines++; if (guess) frameHadGuesses = true; }
+                }
+                if (spans == null)
+                {
+                    // full-line tokens (cached per line, multi-line strings / comments carried over) cut to the slice:
+                    // tokenizing only the rendered slice flipped the quote parity when it started inside a string
+                    spans = session.GetFallbackSpans(buf.Lines, docLine, buf.Language, Theme, sliceStart, sliceStart + sliceLen, false, frameTokenDeadline, out bool fbGuess);
+                    if (spans != null) LastFrameFallbackLines++;
+                    if (fbGuess) frameHadGuesses = true;
+                }
+                if (spans == null) spans = FallbackTokenStyles.SliceSpans(FallbackTokenizer.Tokenize(lineText, buf.Language), lineText.Length, sliceStart, sliceStart + sliceLen, Theme, false);
+            }
+            if (session != null && EditorNicetyOptions.BracketPairColorization && session.Brackets.Profile.Enabled)
             {
                 var bd = session.Brackets.GetLine(buf.Lines, docLine, frameBracketDeadline);
                 spans = EditorSyntaxSession.ApplyBracketColors(spans, bd, Theme);
@@ -173,6 +185,7 @@ namespace codeLess.AvaloniaApp
                     IsItalic = sp.Italic
                 });
             }
+            if (CaptureFrameTokens) LastFrameTokens.Add((docLine, sliceStart, res));
             return res;
         }
 

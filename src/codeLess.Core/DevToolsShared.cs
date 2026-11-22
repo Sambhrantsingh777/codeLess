@@ -123,7 +123,15 @@ namespace codeLess.Studio
         {
             List<CodeToken> list = new List<CodeToken>();
             if (string.IsNullOrEmpty(line)) return list;
-            int i = 0, n = line.Length;
+            TokenizeRange(line, 0, line.Length, hashComments, slashComments, list);
+            return list;
+        }
+
+        /// <summary>Tokenizes line[from, to) into <paramref name="list"/> (token starts are line indices; no substring copies).</summary>
+        public static void TokenizeRange(string line, int from, int to, bool hashComments, bool slashComments, List<CodeToken> list)
+        {
+            if (string.IsNullOrEmpty(line) || list == null) return;
+            int i = Math.Max(0, from), n = Math.Min(line.Length, to);
             while (i < n)
             {
                 char c = line[i];
@@ -157,12 +165,14 @@ namespace codeLess.Studio
                 {
                     int s = i++;
                     while (i < n && (char.IsLetterOrDigit(line[i]) || line[i] == '_')) i++;
-                    string w = line.Substring(s, i - s);
+                    int wl = i - s;
+                    // keyword sets hold words of at most 10 characters: longer words need no substring / lookup
+                    string w = wl <= 12 ? line.Substring(s, wl) : null;
                     CodeTokenKind k = CodeTokenKind.Text;
-                    if (w[0] == '@' || w[0] == '$') k = CodeTokenKind.Keyword;
-                    else if (Control.Contains(w)) k = CodeTokenKind.Control;
-                    else if (Storage.Contains(w)) k = CodeTokenKind.Keyword;
-                    else if (Types.Contains(w) || (w.Length > 1 && char.IsUpper(w[0]) && !IsAllUpper(w))) k = CodeTokenKind.Type;
+                    if (c == '@' || c == '$') k = CodeTokenKind.Keyword;
+                    else if (w != null && Control.Contains(w)) k = CodeTokenKind.Control;
+                    else if (w != null && Storage.Contains(w)) k = CodeTokenKind.Keyword;
+                    else if ((w != null && Types.Contains(w)) || (wl > 1 && char.IsUpper(c) && !IsAllUpper(line, s, i))) k = CodeTokenKind.Type;
                     else if (i < n && line[i] == '(') k = CodeTokenKind.Function;
                     list.Add(new CodeToken(s, i - s, k));
                     continue;
@@ -176,7 +186,12 @@ namespace codeLess.Studio
                 if (i == o) i++;
                 list.Add(new CodeToken(o, i - o, CodeTokenKind.Operator));
             }
-            return list;
+        }
+
+        private static bool IsAllUpper(string s, int from, int to)
+        {
+            for (int k = from; k < to; k++) if (char.IsLetter(s[k]) && !char.IsUpper(s[k])) return false;
+            return true;
         }
 
         private static bool IsAllUpper(string w)

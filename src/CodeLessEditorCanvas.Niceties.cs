@@ -38,6 +38,8 @@ namespace codeLess.Studio
         public string CurrentOccurrenceTarget { get { return wfOccTarget; } }
         public int LastFrameOccurrenceCount { get; private set; }
         public int LastFrameTextMateLines { get; private set; }
+        /// <summary>Lines painted with the cached, multi-line aware fallback tokenizer in the last frame.</summary>
+        public int LastFrameFallbackLines { get; private set; }
         public BracketPair ActiveBracketPair { get { return wfPair; } }
         public ActiveIndentGuide ActiveIndentGuideInfo { get { return wfGuide; } }
 
@@ -51,6 +53,7 @@ namespace codeLess.Studio
         {
             LastFrameOccurrenceCount = 0;
             LastFrameTextMateLines = 0;
+            LastFrameFallbackLines = 0;
             wfHadGuesses = false;
             wfFrameSpans.Clear();
             wfSession = EditorSyntaxSession.For(buf);
@@ -104,55 +107,36 @@ namespace codeLess.Studio
         }
 
         // ------------------------------------------------------------------ tokens
-        private List<StyledSpan> GetLineSpansWF(EditorTabBuffer buf, int docLine, string fullLineText, StudioTheme th)
+        /// <summary>
+        /// Styled spans for [segStart, segEnd) of a line: TextMate spans of the whole line (cached per frame), or the
+        /// fallback tokenizer's cached whole-line tokens cut to the segment. Tokenizing only a wrapped segment or the
+        /// horizontally visible window flipped the quote parity when it started inside a string.
+        /// </summary>
+        private List<StyledSpan> GetLineSpansWF(EditorTabBuffer buf, int docLine, string fullLineText, StudioTheme th, int segStart, int segEnd)
         {
             List<StyledSpan> cached;
             if (wfFrameSpans.TryGetValue(docLine, out cached)) return cached;
             List<StyledSpan> spans = null;
             EditorSyntaxSession s = wfSession;
-            if (s != null && EditorNicetyOptions.TextMateHighlighting && s.TextMate != null)
+            bool cacheable = false;
+            if (s != null && EditorNicetyOptions.TextMateHighlighting && s.TextMate != null && !s.IsTooLongForTextMate(fullLineText))
             {
                 bool guess;
                 spans = s.GetTextMateSpans(buf.Lines, docLine, wfVisTop, th, wfTokenDeadline, out guess);
-                if (spans != null) { LastFrameTextMateLines++; if (guess) wfHadGuesses = true; }
+                if (spans != null) { LastFrameTextMateLines++; cacheable = true; if (guess) wfHadGuesses = true; }
             }
-            if (spans == null) spans = BuiltInSpansWF(fullLineText, buf.Language, th);
+            if (spans == null && s != null)
+            {
+                bool fbGuess;
+                spans = s.GetFallbackSpans(buf.Lines, docLine, buf.Language, th, segStart, segEnd, true, wfTokenDeadline, out fbGuess);
+                if (spans != null) LastFrameFallbackLines++;
+                if (fbGuess) wfHadGuesses = true;
+            }
+            if (spans == null) spans = FallbackTokenStyles.SliceSpans(FallbackTokenizer.Tokenize(fullLineText, buf.Language), fullLineText.Length, segStart, segEnd, th, true);
             if (s != null && EditorNicetyOptions.BracketPairColorization && s.Brackets.Profile.Enabled)
                 spans = EditorSyntaxSession.ApplyBracketColors(spans, s.Brackets.GetLine(buf.Lines, docLine, wfBracketDeadline), th);
-            wfFrameSpans[docLine] = spans;
+            if (cacheable) wfFrameSpans[docLine] = spans;
             return spans;
-        }
-
-        /// <summary>
-        /// Fallback highlighting (no TextMate grammar / large files): the shared language-aware FallbackTokenizer, so '#'
-        /// is a comment only where the language says so (C# #region, CSS #id and colors stay code).
-        /// </summary>
-        private List<StyledSpan> BuiltInSpansWF(string line, string language, StudioTheme th)
-        {
-            List<StyledSpan> list = new List<StyledSpan>();
-            if (string.IsNullOrEmpty(line)) return list;
-            int n = line.Length;
-            int limit = Math.Min(n, 20000);
-            string text = limit < n ? line.Substring(0, limit) : line;
-            foreach (CodeToken t in FallbackTokenizer.Tokenize(text, language))
-            {
-                Color col = th.FgPrimary;
-                bool bold = false, italic = false;
-                switch (t.Kind)
-                {
-                    case CodeTokenKind.Comment: col = th.TokenComment; italic = true; break;
-                    case CodeTokenKind.String: col = th.TokenString; break;
-                    case CodeTokenKind.Number: col = th.TokenNumber; break;
-                    case CodeTokenKind.Control: col = th.TokenControl; bold = true; break;
-                    case CodeTokenKind.Keyword: col = th.TokenKeyword; bold = true; break;
-                    case CodeTokenKind.Type: col = th.TokenType; break;
-                    case CodeTokenKind.Function: col = th.TokenFunction; break;
-                    case CodeTokenKind.Operator: col = th.TokenOperator; break;
-                }
-                list.Add(new StyledSpan(t.Start, t.Length, col, bold, italic));
-            }
-            if (limit < n) list.Add(new StyledSpan(limit, n - limit, th.FgPrimary, false, false));
-            return list;
         }
 
         private static bool IsAllUpper(string w)
@@ -169,8 +153,18 @@ namespace codeLess.Studio
         private void DrawNicetyLineWF(Graphics g, EditorTabBuffer buf, int docLine, string fullLineText, int segStart, int segEnd, int y, int effScrollLeft, int codeAreaRight, StudioTheme th, int startVcol = 0)
         {
             if (string.IsNullOrEmpty(fullLineText) || segEnd <= segStart) return;
-            List<StyledSpan> spans = GetLineSpansWF(buf, docLine, fullLineText, th);
             int tab = TabWF(buf);
+            if (!buf.WordWrap && segEnd - segStart > 2000)
+            {
+                // horizontally windowed: only the visible columns of a very long line are styled and drawn
+                int firstCol = Math.Max(0, effScrollLeft - 8);
+                int from = Math.Max(segStart, EditorTextLayout.CharIndexForVisualColumn(fullLineText, firstCol, tab));
+                int cols = Math.Max(120, (codeAreaRight - GutterWidth) / Math.Max(1, CharWidth) + 24);
+                if (from > segStart) { startVcol = EditorTextLayout.VisualColumn(fullLineText, from, tab); segStart = from; }
+                segEnd = Math.Min(segEnd, segStart + cols);
+                if (segEnd <= segStart) return;
+            }
+            List<StyledSpan> spans = GetLineSpansWF(buf, docLine, fullLineText, th, segStart, segEnd);
             int vis = startVcol;   // absolute visual column of 'pos' within this row
             int pos = segStart;
             foreach (StyledSpan sp in spans)

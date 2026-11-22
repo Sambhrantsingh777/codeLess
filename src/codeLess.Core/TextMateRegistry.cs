@@ -88,6 +88,8 @@ namespace codeLess.Studio
             new Bundled("csharp.tmLanguage.json.gz", "source.cs", "csharp", ".cs .csx .cake", ""),
             new Bundled("ruby.tmLanguage.json.gz", "source.ruby", "ruby", ".rb .rake .gemspec .ru .rbi .podspec", "Gemfile Rakefile Podfile Brewfile Guardfile Vagrantfile"),
             new Bundled("makefile.tmLanguage.json.gz", "source.makefile", "makefile", ".mk .mak", "Makefile makefile GNUmakefile OCamlMakefile"),
+            new Bundled("python.tmLanguage.json.gz", "source.python", "python", ".py .pyw .pyi .pyt .rpy .cpy .gyp .gypi .ipy", "SConstruct SConscript"),
+            new Bundled("json.tmLanguage.json.gz", "source.json", "json", ".json .jsonc .code-workspace .webmanifest .har .geojson .topojson .babelrc .eslintrc .jshintrc .jscsrc", ".babelrc .eslintrc .jshintrc .jscsrc .prettierrc .swcrc"),
         };
 
         private void RegisterBundled()

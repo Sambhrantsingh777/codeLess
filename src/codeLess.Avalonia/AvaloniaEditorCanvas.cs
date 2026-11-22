@@ -4727,7 +4727,8 @@ namespace codeLess.AvaloniaApp
                 char c0 = ln[firstNonWs];
                 char c1 = (firstNonWs + 1 < ln.Length) ? ln[firstNonWs + 1] : '\0';
                 IBrush barBrush = txBrush;
-                if (FallbackTokenizer.StartsWithLineComment(ln, firstNonWs, buf.Language))
+                if (FallbackTokenizer.StartsWithLineComment(ln, firstNonWs, buf.Language)
+                    || (frameSession != null && FallbackTokenizer.IsCommentState(frameSession.FallbackStartState(idx)))) // inside a /* */ block
                     barBrush = cmBrush;
                 else if (ln.IndexOf('(', firstNonWs, Math.Min(80, nonWsLen)) >= 0)
                     barBrush = fnBrush;
