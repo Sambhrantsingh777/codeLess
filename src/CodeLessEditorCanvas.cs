@@ -3846,7 +3846,7 @@ namespace codeLess.Studio
 
                     Color barColor = th.FgMuted;
                     string tr = ln.TrimStart();
-                    if (tr.StartsWith("//") || tr.StartsWith("#")) barColor = th.TokenComment;
+                    if (FallbackTokenizer.StartsWithLineComment(tr, buf.Language)) barColor = th.TokenComment;
                     else if (tr.StartsWith("public ") || tr.StartsWith("class ") || tr.StartsWith("def ") || tr.StartsWith("export ") || tr.StartsWith("fn ")) barColor = th.TokenKeyword;
                     else if (tr.Contains("(")) barColor = th.TokenFunction;
 

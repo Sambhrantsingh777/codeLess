@@ -115,6 +115,12 @@ namespace codeLess.Studio
 
         public static List<CodeToken> Tokenize(string line, bool hashComments)
         {
+            return Tokenize(line, hashComments, true);
+        }
+
+        /// <summary><paramref name="slashComments"/>: "//" starts a comment (false for Python, CSS, shell, ...).</summary>
+        public static List<CodeToken> Tokenize(string line, bool hashComments, bool slashComments)
+        {
             List<CodeToken> list = new List<CodeToken>();
             if (string.IsNullOrEmpty(line)) return list;
             int i = 0, n = line.Length;
@@ -122,7 +128,7 @@ namespace codeLess.Studio
             {
                 char c = line[i];
                 if (char.IsWhiteSpace(c)) { i++; continue; }
-                if ((c == '/' && i + 1 < n && line[i + 1] == '/') || (hashComments && c == '#'))
+                if ((slashComments && c == '/' && i + 1 < n && line[i + 1] == '/') || (hashComments && c == '#'))
                 {
                     list.Add(new CodeToken(i, n - i, CodeTokenKind.Comment));
                     break;
@@ -164,7 +170,7 @@ namespace codeLess.Studio
                 int o = i;
                 while (i < n && !char.IsWhiteSpace(line[i]) && !char.IsLetterOrDigit(line[i]) && line[i] != '_' && line[i] != '"' && line[i] != '\'' && line[i] != '`' && !(hashComments && line[i] == '#'))
                 {
-                    if (line[i] == '/' && i + 1 < n && line[i + 1] == '/') break;
+                    if (slashComments && line[i] == '/' && i + 1 < n && line[i + 1] == '/') break;
                     i++;
                 }
                 if (i == o) i++;

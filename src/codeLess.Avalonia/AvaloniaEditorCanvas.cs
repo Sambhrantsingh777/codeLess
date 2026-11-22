@@ -3944,6 +3944,38 @@ namespace codeLess.AvaloniaApp
         /// <summary>Raised when the pointer leaves the canvas, the view scrolls or focus is lost.</summary>
         public event Action PointerLeftCanvas;
 
+        /// <summary>
+        /// Fallback highlighting for a known language (no TextMate grammar / large files): the shared language-aware
+        /// FallbackTokenizer (same as Windows), so '#' / "//" are comments only where the language says so.
+        /// </summary>
+        public static List<SyntaxTokenSpan> TokenizeLineForTheme(string line, StudioTheme theme, string language)
+        {
+            if (string.IsNullOrEmpty(language)) return TokenizeLineForTheme(line, theme);
+            var list = new List<SyntaxTokenSpan>();
+            if (string.IsNullOrEmpty(line)) return list;
+            Color cText = AvaloniaColorHelper.ToAvColor(theme.TextPrimary);
+            int pos = 0;
+            foreach (var t in FallbackTokenizer.Tokenize(line, language))
+            {
+                if (t.Start > pos) list.Add(new SyntaxTokenSpan { Text = line.Substring(pos, t.Start - pos), Color = cText });
+                var span = new SyntaxTokenSpan { Text = line.Substring(t.Start, t.Length), Color = cText };
+                switch (t.Kind)
+                {
+                    case CodeTokenKind.Comment: span.Color = AvaloniaColorHelper.ToAvColor(theme.SyntaxComment); span.IsItalic = true; break;
+                    case CodeTokenKind.String: span.Color = AvaloniaColorHelper.ToAvColor(theme.SyntaxString); break;
+                    case CodeTokenKind.Number: span.Color = AvaloniaColorHelper.ToAvColor(theme.SyntaxNumber); break;
+                    case CodeTokenKind.Keyword: span.Color = AvaloniaColorHelper.ToAvColor(theme.SyntaxKeyword); span.IsBold = true; break;
+                    case CodeTokenKind.Control: span.Color = AvaloniaColorHelper.ToAvColor(theme.TokenControl); span.IsBold = true; break;
+                    case CodeTokenKind.Type: span.Color = AvaloniaColorHelper.ToAvColor(theme.SyntaxType); break;
+                    case CodeTokenKind.Function: span.Color = AvaloniaColorHelper.ToAvColor(theme.SyntaxFunction); break;
+                }
+                list.Add(span);
+                pos = t.Start + t.Length;
+            }
+            if (pos < line.Length) list.Add(new SyntaxTokenSpan { Text = line.Substring(pos), Color = cText });
+            return list;
+        }
+
         public static List<SyntaxTokenSpan> TokenizeLineForTheme(string line, StudioTheme theme)
         {
             var list = new List<SyntaxTokenSpan>();
@@ -4588,7 +4620,7 @@ namespace codeLess.AvaloniaApp
                 char c0 = ln[firstNonWs];
                 char c1 = (firstNonWs + 1 < ln.Length) ? ln[firstNonWs + 1] : '\0';
                 IBrush barBrush = txBrush;
-                if ((c0 == '/' && c1 == '/') || c0 == '#')
+                if (FallbackTokenizer.StartsWithLineComment(ln, firstNonWs, buf.Language))
                     barBrush = cmBrush;
                 else if (ln.IndexOf('(', firstNonWs, Math.Min(80, nonWsLen)) >= 0)
                     barBrush = fnBrush;

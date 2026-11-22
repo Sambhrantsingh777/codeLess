@@ -117,74 +117,40 @@ namespace codeLess.Studio
                 spans = s.GetTextMateSpans(buf.Lines, docLine, wfVisTop, th, wfTokenDeadline, out guess);
                 if (spans != null) { LastFrameTextMateLines++; if (guess) wfHadGuesses = true; }
             }
-            if (spans == null) spans = BuiltInSpansWF(fullLineText, th);
+            if (spans == null) spans = BuiltInSpansWF(fullLineText, buf.Language, th);
             if (s != null && EditorNicetyOptions.BracketPairColorization && s.Brackets.Profile.Enabled)
                 spans = EditorSyntaxSession.ApplyBracketColors(spans, s.Brackets.GetLine(buf.Lines, docLine, wfBracketDeadline), th);
             wfFrameSpans[docLine] = spans;
             return spans;
         }
 
-        /// <summary>The built-in WinForms tokenizer (same rules as before), producing spans over the raw line.</summary>
-        private List<StyledSpan> BuiltInSpansWF(string line, StudioTheme th)
+        /// <summary>
+        /// Fallback highlighting (no TextMate grammar / large files): the shared language-aware FallbackTokenizer, so '#'
+        /// is a comment only where the language says so (C# #region, CSS #id and colors stay code).
+        /// </summary>
+        private List<StyledSpan> BuiltInSpansWF(string line, string language, StudioTheme th)
         {
             List<StyledSpan> list = new List<StyledSpan>();
             if (string.IsNullOrEmpty(line)) return list;
-            int i = 0, n = line.Length;
+            int n = line.Length;
             int limit = Math.Min(n, 20000);
-            while (i < limit)
+            string text = limit < n ? line.Substring(0, limit) : line;
+            foreach (CodeToken t in FallbackTokenizer.Tokenize(text, language))
             {
-                char c = line[i];
-                if (char.IsWhiteSpace(c)) { i++; continue; }
-                if ((c == '/' && i + 1 < n && line[i + 1] == '/') || c == '#')
+                Color col = th.FgPrimary;
+                bool bold = false, italic = false;
+                switch (t.Kind)
                 {
-                    list.Add(new StyledSpan(i, n - i, th.TokenComment, false, true));
-                    return list;
+                    case CodeTokenKind.Comment: col = th.TokenComment; italic = true; break;
+                    case CodeTokenKind.String: col = th.TokenString; break;
+                    case CodeTokenKind.Number: col = th.TokenNumber; break;
+                    case CodeTokenKind.Control: col = th.TokenControl; bold = true; break;
+                    case CodeTokenKind.Keyword: col = th.TokenKeyword; bold = true; break;
+                    case CodeTokenKind.Type: col = th.TokenType; break;
+                    case CodeTokenKind.Function: col = th.TokenFunction; break;
+                    case CodeTokenKind.Operator: col = th.TokenOperator; break;
                 }
-                if (c == '"' || c == '\'' || c == '`')
-                {
-                    char q = c;
-                    int start = i++;
-                    while (i < n)
-                    {
-                        if (line[i] == '\\') { i += 2; continue; }
-                        if (line[i] == q) { i++; break; }
-                        i++;
-                    }
-                    if (i > n) i = n;
-                    list.Add(new StyledSpan(start, i - start, th.TokenString, false, false));
-                    continue;
-                }
-                if (char.IsDigit(c))
-                {
-                    int start = i;
-                    while (i < n && (char.IsLetterOrDigit(line[i]) || line[i] == '.')) i++;
-                    list.Add(new StyledSpan(start, i - start, th.TokenNumber, false, false));
-                    continue;
-                }
-                if (char.IsLetter(c) || c == '_' || c == '@')
-                {
-                    int start = i++;
-                    while (i < n && (char.IsLetterOrDigit(line[i]) || line[i] == '_')) i++;
-                    string word = line.Substring(start, i - start);
-                    Color col = th.FgPrimary;
-                    bool bold = false;
-                    if (word.StartsWith("@")) col = th.TokenKeyword;
-                    else if (ControlKeywords.Contains(word)) { col = th.TokenControl; bold = true; }
-                    else if (StorageKeywords.Contains(word)) { col = th.TokenKeyword; bold = true; }
-                    else if (TypeKeywords.Contains(word) || (word.Length > 1 && char.IsUpper(word[0]) && !IsAllUpper(word))) col = th.TokenType;
-                    else if (i < n && line[i] == '(') col = th.TokenFunction;
-                    list.Add(new StyledSpan(start, i - start, col, bold, false));
-                    continue;
-                }
-                int opStart = i;
-                while (i < n && !char.IsWhiteSpace(line[i]) && !char.IsLetterOrDigit(line[i]) &&
-                       line[i] != '_' && line[i] != '"' && line[i] != '\'' && line[i] != '`' && line[i] != '#')
-                {
-                    if (line[i] == '/' && i + 1 < n && line[i + 1] == '/') break;
-                    i++;
-                }
-                if (i == opStart) i++;
-                list.Add(new StyledSpan(opStart, i - opStart, th.TokenOperator, false, false));
+                list.Add(new StyledSpan(t.Start, t.Length, col, bold, italic));
             }
             if (limit < n) list.Add(new StyledSpan(limit, n - limit, th.FgPrimary, false, false));
             return list;
