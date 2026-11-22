@@ -2440,6 +2440,8 @@ namespace codeLess.Studio
         public CheckBox AgentApprovalBox;
         public CheckBox ShowWelcomeBox;
         public CheckBox AutoUpdateCheckBox;
+        /// <summary>update.mode (none / manual / start / default), replaces the old once-a-day checkbox.</summary>
+        public CodeLessDropdown UpdateModeCombo;
         public CheckBox ActivatePythonEnvBox;
         public CheckBox OfflineModeBox;
         public List<CheckBox> EditorNicetyBoxes;
@@ -2477,6 +2479,7 @@ namespace codeLess.Studio
             bool origActivateVenv = currentSettings.ActivatePythonEnvironmentInTerminal;
             bool origOffline = currentSettings.OfflineMode;
             bool origAutoUpdate = currentSettings.AutoCheckForUpdates;
+            string origUpdateMode = currentSettings.UpdateMode;
             string origExcluded = currentSettings.ExcludedFolders;
             string origAgentModel = currentSettings.DefaultAgentModel;
             string origAskModel = currentSettings.DefaultAskModel;
@@ -2626,7 +2629,11 @@ namespace codeLess.Studio
             ActivatePythonEnvBox = addCheck("Activate Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, 380, y);
             y += 24;
             OfflineModeBox = addCheck("Offline mode (block non-local network requests)", settings.OfflineMode, 24, y);
-            AutoUpdateCheckBox = addCheck("Check for updates automatically (once a day)", settings.AutoCheckForUpdates, 380, y);
+            UpdateModeCombo = new CodeLessDropdown { Location = new Point(380, y - 2), Size = new Size(285, 26), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 8.8f) };
+            UpdateModeCombo.ApplyTheme(activeTheme);
+            foreach (string mode in UpdateModes.All) UpdateModeCombo.Items.Add("Updates: " + UpdateModes.Label(mode));
+            UpdateModeCombo.SelectedIndex = Math.Max(0, Array.IndexOf(UpdateModes.All, settings.GetEffectiveUpdateMode()));
+            body.Controls.Add(UpdateModeCombo);
             AutoSaveBox.Visible = false; // superseded by the files.autoSave mode below
             y += 24;
             EditorNicetyBoxes = EditorNicetiesSettingsWinForms.AddTo(settings, addCheck, ref y);
@@ -2831,7 +2838,7 @@ namespace codeLess.Studio
             AgentApprovalBox.CheckedChanged += (s, e) => liveApply();
             ShowWelcomeBox.CheckedChanged += (s, e) => liveApply();
             OfflineModeBox.CheckedChanged += (s, e) => liveApply();
-            AutoUpdateCheckBox.CheckedChanged += (s, e) => liveApply();
+            UpdateModeCombo.SelectedIndexChanged += (s, e) => liveApply();
             ExcludedFoldersInput.TextChanged += (s, e) => liveApply();
             DefaultAgentModelCombo.SelectedIndexChanged += (s, e) => liveApply();
             DefaultAskModelCombo.SelectedIndexChanged += (s, e) => liveApply();
@@ -2890,6 +2897,7 @@ namespace codeLess.Studio
                 settings.OfflineMode = origOffline;
                 NetworkLedger.SetOfflineMode(origOffline);
                 settings.AutoCheckForUpdates = origAutoUpdate;
+                settings.UpdateMode = origUpdateMode;
                 settings.ExcludedFolders = origExcluded;
                 settings.DefaultAgentModel = origAgentModel;
                 settings.DefaultAskModel = origAskModel;
@@ -2988,8 +2996,8 @@ namespace codeLess.Studio
             settings.RequireAgentToolApproval = AgentApprovalBox.Checked;
             if (ShowWelcomeBox != null)
                 settings.ShowWelcomeOnStartup = ShowWelcomeBox.Checked;
-            if (AutoUpdateCheckBox != null)
-                settings.AutoCheckForUpdates = AutoUpdateCheckBox.Checked;
+            if (UpdateModeCombo != null && UpdateModeCombo.SelectedIndex >= 0 && UpdateModeCombo.SelectedIndex < UpdateModes.All.Length)
+                settings.SetUpdateMode(UpdateModes.All[UpdateModeCombo.SelectedIndex]);
             if (ActivatePythonEnvBox != null)
                 settings.ActivatePythonEnvironmentInTerminal = ActivatePythonEnvBox.Checked;
             if (OfflineModeBox != null)

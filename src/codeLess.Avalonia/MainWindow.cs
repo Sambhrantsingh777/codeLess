@@ -282,6 +282,7 @@ namespace codeLess.AvaloniaApp
             AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
             InstallMenuKeyHooks(); // MainWindow.Menus.cs: Alt+Z / ⌥Z word wrap from anywhere, Option text-input suppression
             InitEditorSwitcher(); // Ctrl+Tab recently-used-editors picker (key-up of Ctrl commits)
+            InitUpdates(); // MainWindow.Updates.cs: Check for Updates → Downloading → Restart to Update
 
             string startPath = initialPath;
             if (string.IsNullOrWhiteSpace(startPath))
@@ -762,6 +763,7 @@ namespace codeLess.AvaloniaApp
                     new Separator(),
                     MakeCtxItem("BYOK AI Providers & Keys...", ShowByokAndHarnessModal),
                     new Separator(),
+                    MakeUpdateGearItem(), // VS Code: Check for Updates... / Restart to Update in the Manage menu
                     MakeCtxItem("About codeLess", ShowAboutModal)
                 }
             };
@@ -1835,6 +1837,7 @@ namespace codeLess.AvaloniaApp
             statusLspBtn = MakeStatusBtn("", OpenLanguageServerStatusMenu);
             statusLspBtn.IsVisible = false;
 
+            rightRow.Children.Add(BuildUpdateStatusItem()); // hidden unless downloading / Restart to Update
             rightRow.Children.Add(statusLspBtn);
             rightRow.Children.Add(statusLnColBtn);
             rightRow.Children.Add(statusSpacesBtn);

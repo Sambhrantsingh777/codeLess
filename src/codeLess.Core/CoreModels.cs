@@ -1478,8 +1478,11 @@ namespace codeLess.Studio
             if (UndoStack.Count == 0) return false;
             LastTypingUndoTick = 0;
             LastTypingUndoLine = -1;
-            PushSnapshot(RedoStack, CaptureSnapshot());
+            List<string> before = Lines;
+            BufferSnapshot redoStep = CaptureSnapshot();
+            PushSnapshot(RedoStack, redoStep);
             RestoreSnapshot(PopSnapshot(UndoStack));
+            ApplyUndoRedoSelection(before, redoStep, true); // EditorUndoReveal.cs
             return true;
         }
 
@@ -1488,8 +1491,11 @@ namespace codeLess.Studio
             if (RedoStack.Count == 0) return false;
             LastTypingUndoTick = 0;
             LastTypingUndoLine = -1;
-            PushSnapshot(UndoStack, CaptureSnapshot());
+            List<string> before = Lines;
+            BufferSnapshot undoStep = CaptureSnapshot();
+            PushSnapshot(UndoStack, undoStep);
             RestoreSnapshot(PopSnapshot(RedoStack));
+            ApplyUndoRedoSelection(before, undoStep, false); // EditorUndoReveal.cs
             return true;
         }
 

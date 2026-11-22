@@ -36,7 +36,7 @@ namespace codeLess.AvaloniaApp
             autoClosed.Clear();
             if (buf.Lines.Count <= DeferAnalysisLineThreshold && !buf.IsLargeFile)
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buf);
-            EnsureCursorVisible();
+            RevealCaretAfterUndoRedo(buf); // centered when the change is off-screen (VS Code)
             owner.NotifyBufferModified();
             owner.NotifyCaretMoved();
             InvalidateVisual();

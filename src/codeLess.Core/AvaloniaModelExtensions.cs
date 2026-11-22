@@ -407,6 +407,7 @@ namespace codeLess.Studio
                 AutoSave = baseLoaded.AutoSave,
                 RequireAgentToolApproval = baseLoaded.RequireAgentToolApproval,
                 AutoCheckForUpdates = baseLoaded.AutoCheckForUpdates,
+                UpdateMode = baseLoaded.UpdateMode,
                 ThemeDefaultMigrated = baseLoaded.ThemeDefaultMigrated,
                 LastUpdateCheckUtc = baseLoaded.LastUpdateCheckUtc,
                 SkippedUpdateVersion = baseLoaded.SkippedUpdateVersion,
