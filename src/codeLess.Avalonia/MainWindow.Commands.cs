@@ -2157,7 +2157,7 @@ namespace codeLess.AvaloniaApp
                 kv.Value.Background = active ? WorkbenchStyles.B(UiTokens.ListActiveSelection(currentTheme, UiTokens.InputBackground(currentTheme))) : Brushes.Transparent;
                 kv.Value.Foreground = new SolidColorBrush(active ? textPrimary : textSecondary);
                 kv.Value.BorderThickness = new Thickness(1);
-                kv.Value.BorderBrush = active ? new SolidColorBrush(Color.FromArgb(150, accent.R, accent.G, accent.B)) : Brushes.Transparent;
+                kv.Value.BorderBrush = active ? new SolidColorBrush(Color.FromArgb(90, accent.R, accent.G, accent.B)) : Brushes.Transparent;
             }
         }
 

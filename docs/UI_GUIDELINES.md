@@ -37,6 +37,7 @@ notifications) and `MainWindow.Polish.cs` (status bar, hover styles). WinForms r
 | `FontTitle` | 20 | welcome page / empty-state headings only |
 
 Font family: Inter on macOS/Linux (bundled), Segoe UI on Windows; editor and terminal stay monospaced.
+Text and glyphs on accent fills use `UiTokens.OnAccent` (white, or near-black for light accents such as Monokai's).
 
 ### Metrics (px)
 
@@ -113,11 +114,13 @@ brightens the glyph (no fill). Active indicator: 2 px full-height accent bar on 
 **Side bar.** View title row 35 px, 20 px left padding, 11 px UPPERCASE regular `FgSecondary`; actions are
 22 px icon buttons (16 px glyphs). Section headers 22 px: vector chevron (12 px) + 11 px semibold UPPERCASE label.
 
-**Explorer tree.** 22 px rows, indent guides 1 px, file-type badges, folder glyphs. Selected row = list active
-selection; active editor file = inactive selection + 3 px accent marker; hover = hover token.
+**Explorer tree.** 22 px rows, 12 px indent, 1 px indent guides under the parent's twistie (active guide brighter),
+file-type badges, folder glyphs. Selected row = list active selection; active editor file = inactive selection;
+hover = hover token.
 
 **Editor tabs.** 35 px row; tab label 13 px regular (preview tabs italic); active tab on `BgEditor` with a 2 px
-accent top bar; inactive tabs on `TabBarBg`, hover fill on pointer-over. Close glyph (vector) visible on the active
+accent top bar and no bottom divider, so it merges into the editor; inactive tabs on `TabBarBg` with the 1 px row
+divider and a right separator, hover fill on pointer-over. Close glyph (vector) visible on the active
 tab and on hover; dirty dot in accent.
 
 **Breadcrumbs.** 24 px, 12 px `FgSecondary` segments, `FgMuted` `›` separators, symbol segment is plain secondary
@@ -154,8 +157,9 @@ Themed on every theme switch (fixes white-on-white text in light themes).
 history / close icon buttons. Review bar: widget background, "Accept All" primary, "Reject All" secondary. User
 messages on the inactive-selection fill (no blue border); assistant cards unchanged. Composer: one input-colored
 card (4 px radius, 1 px input border → accent on focus) holding context chips, the prompt (13 px, borderless),
-mode segment (Agent / Ask / Edit / Auto-Fix; active = accent-tinted fill), borderless provider/model pickers and a
-primary Send button with a vector glyph. Empty state: 14 px semibold title in `FgPrimary` with accent glyph,
+mode segment (Agent / Ask / Edit / Auto-Fix; active = accent-tinted fill + faint accent border), borderless
+provider/model pickers and an icon-only send button (accent glyph, hover fill) — three reviews flagged a filled
+"Send" button as too heavy. Empty state: 14 px semibold title in `FgPrimary` with accent glyph,
 starter prompts as bordered flat rows with a chevron glyph.
 
 **Inline diff (editor).** Banner: widget background, 12 px text, arrow icon buttons, primary "Accept All",
