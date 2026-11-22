@@ -626,6 +626,11 @@ namespace codeLess.Studio
     {
         public int CursorLine;
         public int CursorCol;
+        /// <summary>Selection anchor of the primary caret (-1 when there was no selection).</summary>
+        public int AnchorLine = -1;
+        public int AnchorCol = -1;
+        /// <summary>Extra carets (with their selections) at the time of the snapshot; null when there were none (QA #29).</summary>
+        public EditorCaret[] ExtraCarets;
         internal string[] FullLines;
         internal int DeltaPrefix;
         internal int DeltaSuffix;
@@ -777,6 +782,8 @@ namespace codeLess.Studio
         // Per-line gutter diff sets (0-based document line indices)
         public HashSet<int> GutterModifiedLines = new HashSet<int>();
         public HashSet<int> GutterAddedLines = new HashSet<int>();
+        /// <summary>Lines were deleted right after this line (-1: before the first line). VS Code's red "deleted" gutter / ruler marker.</summary>
+        public HashSet<int> GutterDeletedAfterLine = new HashSet<int>();
         public int ChangedLineCount = 0;
 
         public string EolLabel
@@ -1156,6 +1163,8 @@ namespace codeLess.Studio
             else GutterModifiedLines.Clear();
             if (GutterAddedLines == null) GutterAddedLines = new HashSet<int>();
             else GutterAddedLines.Clear();
+            if (GutterDeletedAfterLine == null) GutterDeletedAfterLine = new HashSet<int>();
+            else GutterDeletedAfterLine.Clear();
             ChangedLineCount = 0;
             GutterDiffVersion++;
 
@@ -1203,8 +1212,8 @@ namespace codeLess.Studio
             }
             else if (newLen <= 0)
             {
-                int anchor = Math.Max(0, Math.Min(newCount - 1, start));
-                GutterModifiedLines.Add(anchor);
+                // a pure deletion: VS Code marks the boundary (red "deleted" marker), not a modified line
+                GutterDeletedAfterLine.Add(Math.Min(newCount - 1, start - 1));
             }
             else if (oldLen == 1 && newLen == 1)
             {
@@ -1232,7 +1241,7 @@ namespace codeLess.Studio
                 {
                     if (ci < oldLen && cj < newLen && string.Equals(oldLines[start + ci], Lines[start + cj], StringComparison.Ordinal))
                     {
-                        FlushGutterChunk(pendingRemoved, pendingAdded);
+                        FlushGutterChunk(pendingRemoved, pendingAdded, start + cj - 1);
                         pendingRemoved = 0;
                         pendingAdded.Clear();
                         ci++;
@@ -1249,7 +1258,7 @@ namespace codeLess.Studio
                         ci++;
                     }
                 }
-                FlushGutterChunk(pendingRemoved, pendingAdded);
+                FlushGutterChunk(pendingRemoved, pendingAdded, start + cj - 1);
             }
             else
             {
@@ -1263,9 +1272,15 @@ namespace codeLess.Studio
             ChangedLineCount = GutterModifiedLines.Count + GutterAddedLines.Count;
         }
 
-        private void FlushGutterChunk(int removedCount, List<int> addedIndices)
+        private void FlushGutterChunk(int removedCount, List<int> addedIndices, int lastNewLineBefore)
         {
             if (removedCount == 0 && addedIndices.Count == 0) return;
+            if (removedCount > 0 && addedIndices.Count == 0)
+            {
+                // removed lines inside a larger change used to vanish from the gutter entirely
+                GutterDeletedAfterLine.Add(Math.Min(Lines.Count - 1, lastNewLineBefore));
+                return;
+            }
             if (removedCount > 0 && addedIndices.Count > 0)
             {
                 int modCnt = Math.Min(removedCount, addedIndices.Count);
@@ -1411,13 +1426,81 @@ namespace codeLess.Studio
             return true;
         }
 
+        /// <summary>
+        /// Supplies the extra carets for undo snapshots when a view keeps them outside <see cref="ExtraCarets"/> (the
+        /// Avalonia canvas). Null: <see cref="ExtraCarets"/> is used (WinForms).
+        /// </summary>
+        public Func<List<EditorCaret>> ExtraCaretsForUndo;
+
         private BufferSnapshot CaptureSnapshot()
         {
             BufferSnapshot s = new BufferSnapshot();
             s.FullLines = Lines.ToArray();
             s.CursorLine = CursorLine;
             s.CursorCol = CursorCol;
+            if (HasSelection())
+            {
+                s.AnchorLine = SelectionAnchorLine;
+                s.AnchorCol = SelectionAnchorCol;
+            }
+            List<EditorCaret> extras = null;
+            if (ExtraCaretsForUndo != null)
+            {
+                try { extras = ExtraCaretsForUndo(); } catch { extras = null; }
+            }
+            if (extras == null) extras = ExtraCarets;
+            if (extras != null && extras.Count > 0)
+            {
+                s.ExtraCarets = new EditorCaret[extras.Count];
+                for (int i = 0; i < extras.Count; i++) s.ExtraCarets[i] = CloneCaret(extras[i]);
+            }
             return s;
+        }
+
+        private static EditorCaret CloneCaret(EditorCaret c)
+        {
+            EditorCaret n = new EditorCaret();
+            if (c == null) return n;
+            n.Line = c.Line;
+            n.Col = c.Col;
+            n.AnchorLine = c.AnchorLine;
+            n.AnchorCol = c.AnchorCol;
+            return n;
+        }
+
+        /// <summary>Restores the carets and selections recorded in a snapshot (VS Code: undo / redo restore every cursor).</summary>
+        private void RestoreCaretState(BufferSnapshot s)
+        {
+            CursorLine = s.CursorLine;
+            CursorCol = s.CursorCol;
+            ClampCursor();
+            SelectionAnchorLine = -1;
+            SelectionAnchorCol = -1;
+            if (s.AnchorLine >= 0 && s.AnchorCol >= 0)
+            {
+                int al = Math.Min(Lines.Count - 1, s.AnchorLine);
+                SelectionAnchorLine = al;
+                SelectionAnchorCol = Math.Min(Lines[al].Length, s.AnchorCol);
+            }
+            if (ExtraCarets == null) ExtraCarets = new List<EditorCaret>();
+            ExtraCarets.Clear();
+            if (s.ExtraCarets == null) return;
+            HashSet<long> seen = new HashSet<long>();
+            seen.Add(((long)CursorLine << 32) | (uint)CursorCol);
+            foreach (EditorCaret c in s.ExtraCarets)
+            {
+                EditorCaret n = CloneCaret(c);
+                n.Line = Math.Max(0, Math.Min(Lines.Count - 1, n.Line));
+                n.Col = Math.Max(0, Math.Min(Lines[n.Line].Length, n.Col));
+                if (n.AnchorLine >= 0 && n.AnchorCol >= 0)
+                {
+                    n.AnchorLine = Math.Min(Lines.Count - 1, n.AnchorLine);
+                    n.AnchorCol = Math.Min(Lines[n.AnchorLine].Length, n.AnchorCol);
+                }
+                else { n.AnchorLine = -1; n.AnchorCol = -1; }
+                if (!seen.Add(((long)n.Line << 32) | (uint)n.Col)) continue;
+                ExtraCarets.Add(n);
+            }
         }
 
         private static void PushSnapshot(Stack<BufferSnapshot> stack, BufferSnapshot s)
@@ -1445,11 +1528,9 @@ namespace codeLess.Studio
         {
             Lines = new List<string>(s.FullLines ?? new string[] { "" });
             if (Lines.Count == 0) Lines.Add("");
-            CursorLine = s.CursorLine;
-            CursorCol = s.CursorCol;
             MarkLinesChanged();
             IsLargeFile = ComputeIsLargeFile(-1);
-            ClampCursor();
+            RestoreCaretState(s);
             IsDirty = ComputeDirtyFromLines(CursorLine);
             if (!IsLargeFile) RefreshGutterDiff();
             else GutterDiffVersion++;

@@ -35,6 +35,48 @@ namespace codeLess.AvaloniaApp
             rtb.Save(Path.Combine(outputDir, fileName));
         }
 
+        /// <summary>QA round 3: scrollbar + overview ruler, inline-diff deleted zone, word-based suggestions (fixture data only).</summary>
+        private async Task RunQaRound3ScreensAsync(string outputDir)
+        {
+            try
+            {
+                string cs = workspaceFiles.FirstOrDefault(f => f.EndsWith("OrderService.cs", StringComparison.OrdinalIgnoreCase))
+                            ?? workspaceFiles.FirstOrDefault(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase));
+                if (cs == null) return;
+                var tab = OpenFileInTab(cs, preview: false);
+                if (tab == null) return;
+                // a proposal that removes two lines and rewrites one: the removed lines show as a read-only red zone
+                var lines = tab.Lines.ToList();
+                int at = Math.Min(Math.Max(4, lines.Count / 3), Math.Max(0, lines.Count - 4));
+                var proposed = new List<string>(lines);
+                if (proposed.Count > at + 3)
+                {
+                    proposed.RemoveRange(at, 2);
+                    proposed[at] = proposed[at] + " // reviewed";
+                }
+                PrimaryEditor.StageProposedDiffContent(string.Join("\n", proposed));
+                // overview ruler: a problem, find matches, a second cursor
+                tab.Diagnostics.Add(new DiagnosticItem { Severity = "Error", Line = Math.Max(1, lines.Count - 3), Message = "Fixture error" });
+                tab.Diagnostics.Add(new DiagnosticItem { Severity = "Warning", Line = Math.Max(1, lines.Count / 2), Message = "Fixture warning" });
+                PrimaryEditor.ShowFindBar(false);
+                PrimaryEditor.SetFindQuery("order");
+                PrimaryEditor.Canvas.ScrollToVisualRow(Math.Max(0, at - 3));
+                await CaptureScreenshotAsync(outputDir, "r12_scrollbar_ruler_deleted_zone.png");
+                PrimaryEditor.HideFindBar();
+                PrimaryEditor.RejectAllPendingDiffs();
+                tab.Diagnostics.Clear();
+
+                // word-based suggestions + snippets without a language server
+                tab.CursorLine = Math.Min(tab.Lines.Count - 1, at);
+                tab.CursorCol = tab.Lines[tab.CursorLine].Length;
+                PrimaryEditor.Canvas.EnsureCursorVisible();
+                PrimaryLspBinding?.ShowWordBasedSuggestions();
+                await CaptureScreenshotAsync(outputDir, "r12_word_suggestions.png");
+                PrimaryLspBinding?.HideAll();
+            }
+            catch (Exception ex) { LogSuiteError(outputDir, ex); }
+        }
+
         private static void LogSuiteError(string outputDir, Exception ex)
         {
             try { File.AppendAllText(Path.Combine(outputDir, "suite-errors.txt"), ex + Environment.NewLine); } catch { }
@@ -193,6 +235,7 @@ namespace codeLess.AvaloniaApp
             }
             catch (Exception ex) { LogSuiteError(outputDir, ex); }
 
+            await RunQaRound3ScreensAsync(outputDir);
             await RunEditorNicetiesScreensAsync(outputDir); // sticky scroll, bracket colors / guides, occurrences, TextMate
 
             // Theme sweep: editor + explorer + terminal in every built-in theme.

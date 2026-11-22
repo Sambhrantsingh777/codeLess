@@ -25,6 +25,7 @@ namespace codeLess.AvaloniaApp
             var buf = Buffer;
             if (buf == null) return;
             if (shift) { IndentOrOutdentLines(outdent: true); return; }
+            multiAutoClosed.Clear();
             ClampExtraCursors(buf);
             bool anyMultiLine = false;
             var carets = new List<CaretState> { ReadPrimary(buf) };
@@ -56,6 +57,7 @@ namespace codeLess.AvaloniaApp
             var buf = Buffer;
             if (buf == null) return;
             buf.PushUndoSnapshot();
+            multiAutoClosed.Clear();
             ClampExtraCursors(buf);
             int tab = TabSize;
             bool spaces = InsertSpaces;
@@ -149,6 +151,16 @@ namespace codeLess.AvaloniaApp
             if (buf == null || string.IsNullOrEmpty(text) || text.Length != 1) return false;
             char ch = text[0];
             string path = buf.FilePath ?? buf.FileName ?? "";
+            ClampExtraCursors(buf);
+            if (ExtraCursors.Count > 0 && ch != '\n' && ch != '\r')
+            {
+                // several carets: the shared engine (same as WinForms) auto-closes / overtypes / surrounds at every
+                // caret and remembers each auto-inserted closer, so ")" steps over them and Backspace deletes the pairs
+                TypeCharAtAllCarets(buf, ch, path);
+                TextTyped?.Invoke(text);
+                return true;
+            }
+            multiAutoClosed.Clear();
             bool isOpener = EditorAutoClosing.CloserFor(ch, path) != '\0';
             bool isCloserOrQuote = EditorAutoClosing.IsCloser(ch) || EditorAutoClosing.IsQuote(ch);
             if (!isOpener && !isCloserOrQuote) { TrackTyping(buf, text); return false; }
@@ -235,6 +247,48 @@ namespace codeLess.AvaloniaApp
             FinalizeBufferEdit(buf);
             TextTyped?.Invoke(text);
             return true;
+        }
+
+        // absolute offsets of closers auto-inserted at several carets (EditorMultiCaret keeps them shifted)
+        private readonly List<long> multiAutoClosed = new List<long>();
+
+        private void SyncExtraCursorsToBuffer(EditorTabBuffer buf)
+        {
+            buf.ExtraCarets.Clear();
+            foreach (var ec in ExtraCursors)
+                buf.ExtraCarets.Add(new EditorCaret { Line = ec.Line, Col = ec.Col, AnchorLine = ec.HasSelection ? ec.AnchorLine : -1, AnchorCol = ec.HasSelection ? ec.AnchorCol : -1 });
+        }
+
+        private void SyncExtraCursorsFromBuffer(EditorTabBuffer buf)
+        {
+            ExtraCursors.Clear();
+            foreach (var c in buf.ExtraCarets)
+                ExtraCursors.Add(new ExtraCursorCaret { Line = c.Line, Col = c.Col, AnchorLine = c.HasSelection() ? c.AnchorLine : -1, AnchorCol = c.HasSelection() ? c.AnchorCol : -1 });
+            buf.ExtraCarets.Clear();
+        }
+
+        private void TypeCharAtAllCarets(EditorTabBuffer buf, char ch, string path)
+        {
+            bool replacing = buf.HasSelection() || ExtraCursors.Any(c => c.HasSelection);
+            buf.PushUndoSnapshot(coalesceTyping: !replacing);
+            if (replacing) { buf.LastTypingUndoTick = Environment.TickCount; buf.LastTypingUndoLine = buf.CursorLine; }
+            buf.GhostTextSuggestion = "";
+            autoClosed.Clear();
+            SyncExtraCursorsToBuffer(buf);
+            bool edited = EditorMultiCaret.TypeChar(buf, ch, path, multiAutoClosed);
+            SyncExtraCursorsFromBuffer(buf);
+            if (edited) { FinalizeBufferEdit(buf); return; }
+            owner.NotifyCaretMoved();
+            EnsureCursorVisible();
+            InvalidateVisual();
+        }
+
+        /// <summary>Backspace at several carets through the shared engine (auto-closed pairs, tab stops), same as WinForms.</summary>
+        private void BackspaceAtAllCarets(EditorTabBuffer buf)
+        {
+            SyncExtraCursorsToBuffer(buf);
+            EditorMultiCaret.Backspace(buf, TabSize, buf.FilePath ?? buf.FileName ?? "", multiAutoClosed);
+            SyncExtraCursorsFromBuffer(buf);
         }
 
         /// <summary>Keeps the tracked auto-inserted closers aligned with plain typing on their line.</summary>

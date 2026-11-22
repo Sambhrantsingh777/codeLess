@@ -3173,6 +3173,7 @@ if __name__ == '__main__':
         {
             if (lspController != null) lspController.Attach(ctrl);
             ctrl.OnSaveRequested += (buf) => SaveTabBufferUser(buf);
+            ctrl.OpenDocumentsProvider = () => openTabs; // word-based suggestions: open documents of the same language (QA #31)
             // The editor's own Accept All / Reject All on an agent proposal = accept / reject that file (same as Avalonia).
             ctrl.OnDiffAllDecision += OnEditorDiffAllDecisionWin;
             // Merge-conflict / staging entries in the editor context menu (QA #10, same entries as Avalonia).
@@ -3185,6 +3186,10 @@ if __name__ == '__main__':
             bool lastSyncedDirty = false;
             int lastSyncedCount = -1;
             System.Windows.Forms.Timer outlineDebounceTimer = null;
+            ctrl.OnBufferAnalyzed += (buf) =>
+            {
+                if (!this.IsDisposed && ReferenceEquals(buf, activeTab)) RefreshOutlineAndProblems(activeTab);
+            };
             ctrl.OnBufferModified += (buf) =>
             {
                 if (lspController != null) lspController.OnBufferModified(buf);
@@ -8710,8 +8715,7 @@ if __name__ == '__main__':
                 EditorIndentation.ApplyOnOpen(tab, settings); // .editorconfig, else detectIndentation (QA #12)
                 if (!tab.IsLargeFile)
                     tab.RefreshGutterDiff();
-                if (!tab.IsLargeFile)
-                    LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
+                // the outline / diagnostics pass runs when the editor loads the buffer (background for big files, QA #35)
                 if (!suppressNavRecord && activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
                     RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
                 openTabs.Add(tab);

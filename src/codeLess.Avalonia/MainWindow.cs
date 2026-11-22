@@ -378,6 +378,7 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnClosed(EventArgs e)
         {
+            windowClosed = true; // late background results (analysis) must not touch this window any more
             StopWorkspaceWatcher();
             ShutdownLanguageServers();
             try { workspaceLoadCts?.Cancel(); } catch { }
@@ -2706,7 +2707,7 @@ namespace codeLess.AvaloniaApp
             EditorIndentation.ApplyOnOpen(tab, settings); // .editorconfig, else detectIndentation (QA #12)
             if (!tab.IsLargeFile)
                 tab.RefreshGutterDiff();
-            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
+            AnalyzeBufferSoon(tab, OnBufferAnalyzed); // big files: off the UI thread (QA #35)
 
             openTabs.Add(tab);
             if (File.Exists(fullPath))
@@ -2978,14 +2979,11 @@ namespace codeLess.AvaloniaApp
                             ScheduleAutoSave(target);
                         if (!target.IsLargeFile)
                             target.RefreshGutterDiff();
-                        if (!target.IsLargeFile)
-                            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
                         if (ReferenceEquals(target, activeTab))
-                        {
-                            RefreshOutlineAndProblems(target);
-                            PrimaryEditor?.RefreshBreadcrumbs();
-                            PrimaryEditor?.Canvas?.InvalidateVisual();
-                        }
+                            PrimaryEditor?.Canvas?.InvalidateVisual(); // gutter bars now; outline / squiggles when analyzed
+                        // the AST / diagnostics pass runs on the thread pool; a result for an outdated version is dropped (QA #35)
+                        if (!target.IsLargeFile)
+                            AnalyzeBufferSoon(target, OnBufferAnalyzed);
                     };
                 }
                 debouncedUiSyncTimer.Stop();

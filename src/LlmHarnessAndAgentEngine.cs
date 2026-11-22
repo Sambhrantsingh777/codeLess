@@ -349,15 +349,54 @@ namespace codeLess.Studio
             RegexOptions.Compiled
         );
 
+        /// <summary>
+        /// Heuristic outline + diagnostics pass over the buffer, applied immediately (synchronous). Editors use
+        /// <see cref="BackgroundBufferAnalysis"/> for big documents so the pass runs off the UI thread (QA #35).
+        /// </summary>
         public static void AnalyzeBufferAstAndDiagnostics(EditorTabBuffer buf)
+        {
+            if (buf == null) return;
+            PrepareBufferForAnalysis(buf);
+            BufferAnalysisResult r = ComputeBufferAstAndDiagnostics(buf.Lines, buf.Language, buf.FilePath, buf.RelativePath ?? buf.FileName);
+            r.EditVersion = buf.EditVersion;
+            r.Language = buf.Language;
+            r.LineCount = buf.Lines.Count;
+            ApplyBufferAnalysis(buf, r);
+        }
+
+        /// <summary>Lines must be current before a snapshot is taken (a buffer created from Content only).</summary>
+        public static void PrepareBufferForAnalysis(EditorTabBuffer buf)
         {
             if (buf == null) return;
             if (buf.Lines == null || buf.Lines.Count == 0 || (buf.Lines.Count == 1 && buf.Lines[0].Length == 0 && !string.IsNullOrEmpty(buf.Content)))
             {
                 buf.SyncLinesFromContent();
             }
+        }
+
+        /// <summary>Replaces the buffer's outline / heuristic diagnostics with a computed result (UI thread).</summary>
+        public static void ApplyBufferAnalysis(EditorTabBuffer buf, BufferAnalysisResult r)
+        {
+            if (buf == null || r == null) return;
             buf.Symbols.Clear();
+            buf.Symbols.AddRange(r.Symbols);
             buf.Diagnostics.Clear();
+            buf.Diagnostics.AddRange(r.Diagnostics);
+            buf.AnalyzedEditVersion = r.EditVersion;
+            buf.AnalyzedLanguage = r.Language;
+            buf.AnalyzedLineCount = r.LineCount;
+            // Keep language-server diagnostics (published asynchronously) next to the heuristic ones.
+            LspDiagnosticsStore.MergeInto(buf);
+            LspSymbolsStore.ApplyTo(buf);
+        }
+
+        /// <summary>The analysis itself: a pure function of a line snapshot (strings are immutable), safe on any thread.</summary>
+        public static BufferAnalysisResult ComputeBufferAstAndDiagnostics(IList<string> lines, string language, string filePath, string relPath)
+        {
+            BufferAnalysisResult result = new BufferAnalysisResult();
+            List<AstSymbolItem> symbols = result.Symbols;
+            List<DiagnosticItem> diags = result.Diagnostics;
+            if (lines == null) return result;
 
             Regex symRegex = SharedSymbolRegex;
 
@@ -370,14 +409,14 @@ namespace codeLess.Studio
             bool inCsVerbatimStr = false;
             bool inPsHereString = false;
             string activeTripleQuote = null;
-            string lang = (buf.Language ?? "").ToLowerInvariant();
+            string lang = (language ?? "").ToLowerInvariant();
             bool isPowerShell = (lang == "ps1" || lang == "powershell");
-            bool checkBrackets = buf.Lines.Count <= 6000 &&
+            bool checkBrackets = lines.Count <= 6000 &&
                 (lang == "cs" || lang == "py" || lang == "js" || lang == "mjs" || lang == "ts" || lang == "tsx" || lang == "rs" || lang == "go" || lang == "json" || lang == "java" || lang == "c" || lang == "cpp");
 
-            for (int i = 0; i < buf.Lines.Count; i++)
+            for (int i = 0; i < lines.Count; i++)
             {
-                string line = buf.Lines[i] ?? "";
+                string line = lines[i] ?? "";
                 if (line.Length > 2000) continue;
                 string trimmed = line.Trim();
 
@@ -408,7 +447,7 @@ namespace codeLess.Studio
                         if (kw == "class" || kw == "struct" || kw == "interface" || kw == "enum")
                             kind = kw;
 
-                        buf.Symbols.Add(new AstSymbolItem
+                        symbols.Add(new AstSymbolItem
                         {
                             Name = name,
                             Kind = kind,
@@ -506,11 +545,11 @@ namespace codeLess.Studio
                             curlyBalance--;
                             if (curlyBalance < 0)
                             {
-                                buf.Diagnostics.Add(new DiagnosticItem
+                                diags.Add(new DiagnosticItem
                                 {
                                     Severity = "Error",
-                                    FilePath = buf.FilePath,
-                                    RelativePath = buf.RelativePath ?? buf.FileName,
+                                    FilePath = filePath,
+                                    RelativePath = relPath,
                                     Line = i + 1,
                                     Column = c + 1,
                                     Length = 1,
@@ -526,11 +565,11 @@ namespace codeLess.Studio
                             parenBalance--;
                             if (parenBalance < 0)
                             {
-                                buf.Diagnostics.Add(new DiagnosticItem
+                                diags.Add(new DiagnosticItem
                                 {
                                     Severity = "Error",
-                                    FilePath = buf.FilePath,
-                                    RelativePath = buf.RelativePath ?? buf.FileName,
+                                    FilePath = filePath,
+                                    RelativePath = relPath,
                                     Line = i + 1,
                                     Column = c + 1,
                                     Length = 1,
@@ -548,11 +587,11 @@ namespace codeLess.Studio
                 Match todoMatch = Regex.Match(line, @"(?://|#)\s*(TODO\b.*)$", RegexOptions.IgnoreCase);
                 if (todoMatch.Success)
                 {
-                    buf.Diagnostics.Add(new DiagnosticItem
+                    diags.Add(new DiagnosticItem
                     {
                         Severity = "Info",
-                        FilePath = buf.FilePath,
-                        RelativePath = buf.RelativePath ?? buf.FileName,
+                        FilePath = filePath,
+                        RelativePath = relPath,
                         Line = i + 1,
                         Column = todoMatch.Groups[1].Index + 1,
                         Length = 4,
@@ -566,11 +605,11 @@ namespace codeLess.Studio
                 {
                     if (Regex.IsMatch(line, @"(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,})"))
                     {
-                        buf.Diagnostics.Add(new DiagnosticItem
+                        diags.Add(new DiagnosticItem
                         {
                             Severity = "Error",
-                            FilePath = buf.FilePath,
-                            RelativePath = buf.RelativePath ?? buf.FileName,
+                            FilePath = filePath,
+                            RelativePath = relPath,
                             Line = i + 1,
                             Column = 1,
                             Length = Math.Max(8, trimmed.Length),
@@ -580,11 +619,11 @@ namespace codeLess.Studio
                     }
                     else if (Regex.IsMatch(line, @"\b(eval|exec)\s*\("))
                     {
-                        buf.Diagnostics.Add(new DiagnosticItem
+                        diags.Add(new DiagnosticItem
                         {
                             Severity = "Warning",
-                            FilePath = buf.FilePath,
-                            RelativePath = buf.RelativePath ?? buf.FileName,
+                            FilePath = filePath,
+                            RelativePath = relPath,
                             Line = i + 1,
                             Column = Math.Max(1, line.IndexOf('(') - 3),
                             Length = 6,
@@ -596,20 +635,20 @@ namespace codeLess.Studio
             }
 
             // Compute per-symbol LineSpan and Big-O Complexity Hint for Inline Code Lens
-            for (int sIdx = 0; sIdx < buf.Symbols.Count; sIdx++)
+            for (int sIdx = 0; sIdx < symbols.Count; sIdx++)
             {
-                AstSymbolItem sym = buf.Symbols[sIdx];
+                AstSymbolItem sym = symbols[sIdx];
                 int startL = Math.Max(0, sym.Line - 1);
-                int maxEndL = (sIdx + 1 < buf.Symbols.Count) ? Math.Max(startL, buf.Symbols[sIdx + 1].Line - 2) : (buf.Lines.Count - 1);
+                int maxEndL = (sIdx + 1 < symbols.Count) ? Math.Max(startL, symbols[sIdx + 1].Line - 2) : (lines.Count - 1);
                 int endL = maxEndL;
 
-                if (startL < buf.Lines.Count)
+                if (startL < lines.Count)
                 {
                     int braceDepth = 0;
                     bool sawOpenBrace = false;
-                    for (int l = startL; l <= maxEndL && l < buf.Lines.Count; l++)
+                    for (int l = startL; l <= maxEndL && l < lines.Count; l++)
                     {
-                        string rawLn = buf.Lines[l] ?? "";
+                        string rawLn = lines[l] ?? "";
                         bool inStr = false;
                         char sCh = '\0';
                         for (int c = 0; c < rawLn.Length; c++)
@@ -636,16 +675,16 @@ namespace codeLess.Studio
 
                     if (!sawOpenBrace)
                     {
-                        while (endL > startL && string.IsNullOrWhiteSpace(buf.Lines[endL]))
+                        while (endL > startL && string.IsNullOrWhiteSpace(lines[endL]))
                             endL--;
                     }
                 }
                 sym.LineSpan = Math.Max(1, endL - startL + 1);
 
                 int loopLines = 0;
-                for (int l = startL; l <= endL && l < buf.Lines.Count; l++)
+                for (int l = startL; l <= endL && l < lines.Count; l++)
                 {
-                    string lt = buf.Lines[l].TrimStart();
+                    string lt = lines[l].TrimStart();
                     if (lt.StartsWith("for ") || lt.StartsWith("for(") || lt.StartsWith("foreach ") ||
                         lt.StartsWith("while ") || lt.StartsWith("while("))
                     {
@@ -657,11 +696,11 @@ namespace codeLess.Studio
 
             if (curlyBalance > 0)
             {
-                buf.Diagnostics.Add(new DiagnosticItem
+                diags.Add(new DiagnosticItem
                 {
                     Severity = "Error",
-                    FilePath = buf.FilePath,
-                    RelativePath = buf.RelativePath ?? buf.FileName,
+                    FilePath = filePath,
+                    RelativePath = relPath,
                     Line = lastOpenCurlyLine,
                     Column = 1,
                     Length = 4,
@@ -671,11 +710,11 @@ namespace codeLess.Studio
             }
             if (parenBalance > 0)
             {
-                buf.Diagnostics.Add(new DiagnosticItem
+                diags.Add(new DiagnosticItem
                 {
                     Severity = "Warning",
-                    FilePath = buf.FilePath,
-                    RelativePath = buf.RelativePath ?? buf.FileName,
+                    FilePath = filePath,
+                    RelativePath = relPath,
                     Line = lastOpenParenLine,
                     Column = 1,
                     Length = 4,
@@ -683,9 +722,7 @@ namespace codeLess.Studio
                     Source = "codeLess Syntax Verifier"
                 });
             }
-            // Keep language-server diagnostics (published asynchronously) next to the heuristic ones.
-            LspDiagnosticsStore.MergeInto(buf);
-            LspSymbolsStore.ApplyTo(buf);
+            return result;
         }
 
         public static string GenerateInlineGhostCompletion(EditorTabBuffer buf)

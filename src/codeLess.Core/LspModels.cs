@@ -296,6 +296,8 @@ namespace codeLess.Studio
         public bool Resolved;
         /// <summary>Fuzzy score assigned by the client-side filter.</summary>
         public int Score;
+        /// <summary>Client-side payload (word-based suggestions: the CodeSnippetItem of a snippet entry).</summary>
+        public object Tag;
 
         public string EffectiveFilterText { get { return string.IsNullOrEmpty(FilterText) ? Label : FilterText; } }
         public string EffectiveSortText { get { return string.IsNullOrEmpty(SortText) ? Label : SortText; } }

@@ -392,7 +392,7 @@ namespace codeLess.Avalonia.Tests
         }
 
         [AvaloniaFact]
-        public void Editing_MultiCursorClipboard_WholeLinePaste_UndoDropsCarets_CtrlDWholeWord_BoxSelectionWithTabs()
+        public void Editing_MultiCursorClipboard_WholeLinePaste_UndoRestoresCarets_CtrlDWholeWord_BoxSelectionWithTabs()
         {
             var (w, tab) = Open("m.cs", "int a = item;\nint b = items;\nint c = item;\n\tabc\n    abc\n");
             var canvas = w.PrimaryEditor.Canvas;
@@ -405,13 +405,18 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal(2, canvas.ExtraCursors[0].Line);
             // copy of several selections: one per line in document order
             Assert.Equal("item\nitem", canvas.GetCopyText(tab));
-            // typing replaces every selection; undo restores the text and drops the extra carets
+            // typing replaces every selection; undo restores the text AND both selections (VS Code, QA #29)
             Type(canvas, "row");
             Assert.Equal("int a = row;", tab.Lines[0]);
             Assert.Equal("int c = row;", tab.Lines[2]);
             canvas.PerformUndoRedo(redo: false);
             Assert.Equal("int a = item;", tab.Lines[0]);
-            Assert.Empty(canvas.ExtraCursors);
+            Assert.Equal("item", tab.GetSelectedText());
+            Assert.Single(canvas.ExtraCursors);
+            Assert.Equal(2, canvas.ExtraCursors[0].Line);
+            Assert.True(canvas.ExtraCursors[0].HasSelection);
+            Assert.Equal("item\nitem", canvas.GetCopyText(tab));
+            canvas.ResetExtraCursors();
             // copy without a selection copies the line; pasting it goes above the caret line (VS Code)
             tab.ClearSelection();
             tab.CursorLine = 1; tab.CursorCol = 3;

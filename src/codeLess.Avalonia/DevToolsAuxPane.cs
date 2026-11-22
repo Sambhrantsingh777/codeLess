@@ -225,9 +225,10 @@ namespace codeLess.AvaloniaApp
         public double RowHeight { get; set; } = 22;
         public double ScrollOffset { get; private set; }
         public int SelectedIndex { get; private set; } = -1;
-        protected const double ThumbWidth = 10;
-        private bool draggingThumb;
-        private double dragStartY, dragStartOffset;
+        protected const double ThumbWidth = SlimScrollbar.DefaultWidth;
+        private readonly SlimScrollbar scrollbar = new SlimScrollbar();
+        /// <summary>The row list's scrollbar (tests).</summary>
+        public SlimScrollbar Scrollbar => scrollbar;
 
         public event Action<int> SelectionChanged;
         public event Action<int> RowActivated;
@@ -307,14 +308,8 @@ namespace codeLess.AvaloniaApp
                 var r = new Rect(0, i * RowHeight - ScrollOffset, w, RowHeight);
                 using (ctx.PushClip(r)) DrawRow(ctx, i, r, i == SelectedIndex);
             }
-            // Scroll thumb
-            double total = count * RowHeight;
-            if (total > Bounds.Height)
-            {
-                double th = Math.Max(24, Bounds.Height * Bounds.Height / total);
-                double ty = (Bounds.Height - th) * (ScrollOffset / Math.Max(1, MaxOffset));
-                ctx.FillRectangle(AvaloniaColorHelper.ToBrush(Theme.FgMuted, 70), new Rect(Bounds.Width - ThumbWidth + 2, ty, ThumbWidth - 4, th), 3);
-            }
+            // the shared VS Code list scrollbar (tokens, drag, click-to-jump), shown while hovering / dragging
+            scrollbar.Paint(ctx, Theme, Bounds.Size, count * RowHeight, Bounds.Height, ScrollOffset, IsPointerOver);
         }
 
         protected virtual void DrawEmpty(DrawingContext ctx) { }
@@ -338,12 +333,14 @@ namespace codeLess.AvaloniaApp
             base.OnPointerPressed(e);
             Focus();
             var pt = e.GetPosition(this);
-            if (pt.X >= Bounds.Width - ThumbWidth && RowCount * RowHeight > Bounds.Height)
+            if (scrollbar.Contains(pt))
             {
-                draggingThumb = true;
-                dragStartY = pt.Y;
-                dragStartOffset = ScrollOffset;
-                e.Pointer.Capture(this);
+                if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && scrollbar.Press(pt, out double off))
+                {
+                    ScrollTo(off);
+                    e.Pointer.Capture(this);
+                    InvalidateVisual();
+                }
                 e.Handled = true;
                 return;
             }
@@ -363,17 +360,34 @@ namespace codeLess.AvaloniaApp
         protected override void OnPointerMoved(PointerEventArgs e)
         {
             base.OnPointerMoved(e);
-            if (!draggingThumb) return;
-            double total = RowCount * RowHeight;
-            double th = Math.Max(24, Bounds.Height * Bounds.Height / Math.Max(1, total));
-            double ratio = MaxOffset / Math.Max(1, Bounds.Height - th);
-            ScrollTo(dragStartOffset + (e.GetPosition(this).Y - dragStartY) * ratio);
+            var pt = e.GetPosition(this);
+            if (scrollbar.Drag(pt, out double off)) { ScrollTo(off); return; }
+            if (scrollbar.UpdateHover(pt)) InvalidateVisual();
+        }
+
+        protected override void OnPointerEntered(PointerEventArgs e)
+        {
+            base.OnPointerEntered(e);
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerExited(PointerEventArgs e)
+        {
+            base.OnPointerExited(e);
+            scrollbar.UpdateHover(null);
+            InvalidateVisual();
         }
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
             base.OnPointerReleased(e);
-            if (draggingThumb) { draggingThumb = false; e.Pointer.Capture(null); }
+            if (scrollbar.Release()) { e.Pointer.Capture(null); InvalidateVisual(); }
+        }
+
+        protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+        {
+            base.OnPointerCaptureLost(e);
+            if (scrollbar.Release()) InvalidateVisual();
         }
 
         protected override void OnKeyDown(KeyEventArgs e)

@@ -2467,7 +2467,7 @@ namespace codeLess.AvaloniaApp
                     if (activeTab != null)
                     {
                         activeTab.Language = l.Ext;
-                        LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(activeTab);
+                        AnalyzeBufferSoon(activeTab, OnBufferAnalyzed);
                         UpdateStatusBar();
                         PrimaryEditor.Canvas.InvalidateVisual();
                     }

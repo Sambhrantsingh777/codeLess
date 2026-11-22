@@ -18,6 +18,7 @@ namespace codeLess.Studio
             if (buf == null || line < 0) return false;
             if (buf.GutterAddedLines != null && buf.GutterAddedLines.Contains(line)) return true;
             if (buf.GutterModifiedLines != null && buf.GutterModifiedLines.Contains(line)) return true;
+            if (buf.GutterDeletedAfterLine != null && (buf.GutterDeletedAfterLine.Contains(line) || (line == 0 && buf.GutterDeletedAfterLine.Contains(-1)))) return true;
             return false;
         }
 

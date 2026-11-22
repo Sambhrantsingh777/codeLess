@@ -42,6 +42,10 @@ namespace codeLess.AvaloniaApp
         public List<CodeSnippetItem> SnippetsForBuffer(EditorTabBuffer buf) =>
             SnippetEngine.ForLanguage(vsixEngine?.AllLoadedSnippets ?? new List<CodeSnippetItem>(), buf?.Language);
 
+        /// <summary>Expands a snippet at the caret, replacing the <paramref name="replaceChars"/> typed prefix characters (suggest widget).</summary>
+        internal void InsertSnippetReplacing(EditorTabBuffer buf, CodeSnippetItem snippet, int replaceChars) =>
+            SnippetEngine.InsertAtCaret(buf, snippet, replaceChars, EffectiveTabSize(buf), EffectiveInsertSpaces(buf));
+
         private int EffectiveTabSize(EditorTabBuffer b) => b?.CustomTabSize is int t && t > 0 ? t : Math.Max(1, settings.TabSize);
         private bool EffectiveInsertSpaces(EditorTabBuffer b) => b?.CustomInsertSpaces ?? settings.InsertSpaces;
 

@@ -21,6 +21,44 @@ namespace codeLess.Studio
         public static int FoldSyncLineLimitWF = 5000;
         // the closer this canvas auto-inserted last (VS Code "autoClosingOvertype / autoClosingDelete: auto")
         private int wfAutoCloseLine = -1, wfAutoCloseCol = -1;
+        // the primary caret is drawn at the END of its row when it sits exactly on a soft break after End / Up / Down
+        // (VS Code cursor affinity, QA #32); any other caret change drops it
+        private int wfAffinityLine = -1, wfAffinityCol = -1;
+        // absolute offsets of closers auto-inserted at multiple carets (overtype / pair delete only for those, QA #33)
+        private readonly List<long> wfMultiAutoClosed = new List<long>();
+
+        private bool HasRowEndAffinityWF(int line, int col)
+        {
+            return line == wfAffinityLine && col == wfAffinityCol;
+        }
+
+        internal void ClearRowEndAffinityWF()
+        {
+            wfAffinityLine = -1;
+            wfAffinityCol = -1;
+        }
+
+        /// <summary>Home on a wrapped row: row start first, then the line's first non-blank / column 0 (shared rule).</summary>
+        private bool TryWrappedHomeWF(EditorTabBuffer buf, ref int line, ref int col, bool primary)
+        {
+            if (!buf.WordWrap) return false;
+            int t = EditorWrapNavigation.Home(WrapOfWF(buf, line), col, primary && HasRowEndAffinityWF(line, col));
+            if (t < 0) return false;
+            col = t;
+            return true;
+        }
+
+        /// <summary>End on a wrapped row: end of the row (caret stays on that row), End again: end of the line.</summary>
+        private bool TryWrappedEndWF(EditorTabBuffer buf, ref int line, ref int col, bool primary, ref bool rowEndAffinity)
+        {
+            if (!buf.WordWrap) return false;
+            int len = (buf.Lines[line] ?? "").Length;
+            int t = EditorWrapNavigation.End(WrapOfWF(buf, line), len, col, primary && HasRowEndAffinityWF(line, col));
+            if (t < 0) return false;
+            col = t;
+            rowEndAffinity = true;
+            return true;
+        }
 
         private int TabWF(EditorTabBuffer buf)
         {
@@ -131,10 +169,17 @@ namespace codeLess.Studio
         /// <summary>Up / Down by visual rows (wrap- and fold-aware) keeping the desired visual column, like VS Code.</summary>
         private void MoveVerticalWF(EditorTabBuffer buf, ref int line, ref int col, int delta)
         {
+            bool unusedAffinity = false;
+            MoveVerticalWF(buf, ref line, ref col, delta, false, ref unusedAffinity);
+        }
+
+        /// <summary>Vertical move; the primary caret starts from the row it is drawn on and may land at a row end (affinity).</summary>
+        private void MoveVerticalWF(EditorTabBuffer buf, ref int line, ref int col, int delta, bool primary, ref bool rowEndAffinity)
+        {
             int tab = TabWF(buf);
             string text = buf.Lines[line] ?? "";
             WrapLayout wl = WrapOfWF(buf, line);
-            int row = wl.RowOf(Math.Min(col, text.Length), false);
+            int row = wl.RowOf(Math.Min(col, text.Length), primary && HasRowEndAffinityWF(line, col));
             int x;
             if (!wfPreferredVcol.TryGetValue(PosKeyWF(line, col), out x))
                 x = EditorTextLayout.VisualColumnFrom(text, wl.RowStarts[row], col, tab, wl.RowStartVcol(row));
@@ -166,7 +211,12 @@ namespace codeLess.Studio
             WrapLayout w2 = WrapOfWF(buf, tLine);
             int start = w2.RowStarts[tRow], end = w2.RowEnd(tRow, t2.Length);
             int c = EditorTextLayout.CharIndexForVisualColumnInRange(t2, start, end, x, tab, w2.RowStartVcol(tRow));
-            if (tRow < w2.RowCount - 1 && c >= end) c = Math.Max(start, end - 1);
+            if (tRow < w2.RowCount - 1 && c >= end)
+            {
+                // past the end of a continuation row: the primary caret stays on that row at its end (VS Code affinity)
+                if (primary) { c = end; rowEndAffinity = true; }
+                else c = Math.Max(start, end - 1);
+            }
             line = tLine;
             col = c;
             wfPreferredVcol[PosKeyWF(line, col)] = x;

@@ -17,7 +17,17 @@ namespace codeLess.AvaloniaApp
         /// <summary>Visual column the row's text starts at (the wrapped indent on continuation rows).</summary>
         public int StartVcol;
         public bool IsLastRow;
-        public bool IsFirstRow => Row == 0;
+        public bool IsFirstRow => Row == 0 && !IsDeleted;
+        /// <summary>
+        /// A read-only row of the inline-diff "deleted lines" zone (QA #30) showing removed line
+        /// <see cref="DeletedIndex"/> of the zone above <see cref="DocLine"/>; not part of the buffer.
+        /// </summary>
+        public bool IsDeleted;
+        public int DeletedIndex;
+        /// <summary>Text of the removed line on a deleted row (Start / End / StartVcol are its wrap segment).</summary>
+        public string DeletedText;
+        /// <summary>The zone sits after the last line (a deletion at the end of the file).</summary>
+        public bool DeletedAfterLast;
     }
 
     /// <summary>
@@ -85,7 +95,7 @@ namespace codeLess.AvaloniaApp
                 Start = wl.RowStarts[row],
                 End = wl.RowEnd(row, len),
                 StartVcol = wl.RowStartVcol(row),
-                IsLastRow = row == wl.RowCount - 1
+                IsLastRow = row == wl.RowCount - 1,
             };
         }
 
@@ -118,15 +128,118 @@ namespace codeLess.AvaloniaApp
         }
 
         // ---------------------------------------------------------------- viewport rows
-        /// <summary>Normalizes the scroll position (folded / out of range lines, wrap sub-row).</summary>
+        /// <summary>
+        /// Normalizes the scroll position (folded / out of range lines, wrap sub-row). A negative
+        /// <see cref="EditorTabBuffer.ScrollTopWrapRow"/> starts the viewport inside the deleted-lines zone above
+        /// <see cref="EditorTabBuffer.ScrollTopLine"/> (QA #30).
+        /// </summary>
         internal void NormalizeScroll(EditorTabBuffer b)
         {
             if (b == null) return;
             int top = VisibleLineAtOrAbove(b, b.ScrollTopLine);
             if (top != b.ScrollTopLine) { b.ScrollTopLine = top; b.ScrollTopWrapRow = 0; }
-            if (!b.WordWrap) { b.ScrollTopWrapRow = 0; return; }
-            int rows = WrapOf(b, top).RowCount;
-            b.ScrollTopWrapRow = Math.Max(0, Math.Min(rows - 1, b.ScrollTopWrapRow));
+            int zone = DeletedZoneRows(b, top);
+            int rows = b.WordWrap ? WrapOf(b, top).RowCount : 1;
+            b.ScrollTopWrapRow = Math.Max(-zone, Math.Min(rows - 1, b.ScrollTopWrapRow));
+        }
+
+        // ---------------------------------------------------------------- inline diff "deleted lines" zones (QA #30)
+        private object zonesHunksRef;
+        private int zonesHunkCount = -1, zonesLineCount = -1, zonesWrapCols = -1, zonesTab = -1;
+        private bool zonesWrap;
+        private Dictionary<int, List<string>> zonesByLine = new Dictionary<int, List<string>>();
+        private Dictionary<int, int> zoneRowsByLine = new Dictionary<int, int>();
+
+        /// <summary>Removed lines of pending review hunks keyed by the buffer line they are shown above (Lines.Count = after the last line).</summary>
+        internal Dictionary<int, List<string>> DeletedZones(EditorTabBuffer b)
+        {
+            if (b == null || b.DiffHunks == null || b.DiffHunks.Count == 0 || b.PreDiffContent == null)
+            {
+                if (zonesByLine.Count > 0) { zonesByLine = new Dictionary<int, List<string>>(); zoneRowsByLine = new Dictionary<int, int>(); }
+                zonesHunksRef = null;
+                return zonesByLine;
+            }
+            int cols = b.WordWrap ? WrapColumns : 0;
+            int tab = TabFor(b);
+            if (ReferenceEquals(zonesHunksRef, b.DiffHunks) && zonesHunkCount == b.DiffHunks.Count && zonesLineCount == b.Lines.Count &&
+                zonesWrap == b.WordWrap && zonesWrapCols == cols && zonesTab == tab && !HunkPendingChanged(b))
+                return zonesByLine;
+            zonesHunksRef = b.DiffHunks;
+            zonesHunkCount = b.DiffHunks.Count;
+            zonesLineCount = b.Lines.Count;
+            zonesWrap = b.WordWrap;
+            zonesWrapCols = cols;
+            zonesTab = tab;
+            var map = new Dictionary<int, List<string>>();
+            var rows = new Dictionary<int, int>();
+            zonesPendingKey = PendingKey(b);
+            foreach (var h in b.DiffHunks)
+            {
+                if (!h.IsPending || h.RemovedLines == null || h.RemovedLines.Count == 0) continue;
+                int anchor = Math.Max(0, Math.Min(b.Lines.Count, h.StartLine));
+                if (!map.TryGetValue(anchor, out var list)) { list = new List<string>(); map[anchor] = list; }
+                list.AddRange(h.RemovedLines);
+            }
+            foreach (var kv in map)
+            {
+                int n = 0;
+                foreach (var t in kv.Value) n += b.WordWrap ? WrapOfText(b, t).RowCount : 1;
+                rows[kv.Key] = n;
+            }
+            zonesByLine = map;
+            zoneRowsByLine = rows;
+            return zonesByLine;
+        }
+
+        private string zonesPendingKey = "";
+
+        private static string PendingKey(EditorTabBuffer b)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var h in b.DiffHunks) sb.Append(h.IsPending ? '1' : '0').Append(h.StartLine).Append(',');
+            return sb.ToString();
+        }
+
+        private bool HunkPendingChanged(EditorTabBuffer b) => !string.Equals(zonesPendingKey, PendingKey(b), StringComparison.Ordinal);
+
+        /// <summary>Screen rows of the deleted zone shown above <paramref name="line"/> (0 when none or the line is folded away).</summary>
+        internal int DeletedZoneRows(EditorTabBuffer b, int line)
+        {
+            if (b == null || b.DiffHunks == null || b.DiffHunks.Count == 0 || b.PreDiffContent == null) return 0;
+            DeletedZones(b);
+            if (zoneRowsByLine.Count == 0 || !zoneRowsByLine.TryGetValue(line, out int n)) return 0;
+            if (line < b.Lines.Count && b.FoldedBlockRanges.Count > 0 && EditorFoldState.HiddenBy(b, line) >= 0) return 0;
+            return n;
+        }
+
+        internal WrapLayout WrapOfText(EditorTabBuffer b, string text)
+        {
+            if (b == null || !b.WordWrap) return WrapLayout.Single;
+            wrapCache.Configure(WrapColumns, TabFor(b), true);
+            return wrapCache.Get(text ?? "");
+        }
+
+        /// <summary>The rows of the zone above <paramref name="line"/> from zone row <paramref name="fromRow"/> on.</summary>
+        private void AppendZoneRows(EditorTabBuffer b, int line, int fromRow, List<EditorVisualRow> rows, int maxRows)
+        {
+            if (!zonesByLine.TryGetValue(line, out var removed) || DeletedZoneRows(b, line) == 0) return;
+            bool afterLast = line >= b.Lines.Count;
+            int anchor = afterLast ? b.Lines.Count - 1 : line;
+            int k = 0;
+            for (int i = 0; i < removed.Count && rows.Count < maxRows; i++)
+            {
+                string t = removed[i] ?? "";
+                var wl = WrapOfText(b, t);
+                for (int r = 0; r < wl.RowCount && rows.Count < maxRows; r++, k++)
+                {
+                    if (k < fromRow) continue;
+                    rows.Add(new EditorVisualRow
+                    {
+                        DocLine = anchor, Row = r, Start = wl.RowStarts[r], End = wl.RowEnd(r, t.Length), StartVcol = wl.RowStartVcol(r),
+                        IsLastRow = r == wl.RowCount - 1, IsDeleted = true, DeletedIndex = i, DeletedText = t, DeletedAfterLast = afterLast
+                    });
+                }
+            }
         }
 
         /// <summary>The rows on screen from the scroll position (at most <paramref name="maxRows"/>).</summary>
@@ -135,13 +248,21 @@ namespace codeLess.AvaloniaApp
             var rows = new List<EditorVisualRow>(Math.Max(4, maxRows));
             if (b == null || b.Lines.Count == 0) return rows;
             NormalizeScroll(b);
+            bool zones = DeletedZones(b).Count > 0;
             int line = b.ScrollTopLine;
             int sub = b.ScrollTopWrapRow;
             while (rows.Count < maxRows && line >= 0 && line < b.Lines.Count)
             {
+                if (zones)
+                {
+                    // the read-only removed lines of a pending hunk come right above its first line (VS Code inline diff)
+                    int z = DeletedZoneRows(b, line);
+                    if (z > 0 && sub < 0) AppendZoneRows(b, line, z + sub, rows, maxRows);
+                    else if (z > 0 && line != b.ScrollTopLine) AppendZoneRows(b, line, 0, rows, maxRows);
+                }
                 var wl = WrapOf(b, line);
                 int len = (b.Lines[line] ?? "").Length;
-                for (int r = sub; r < wl.RowCount && rows.Count < maxRows; r++)
+                for (int r = Math.Max(0, sub); r < wl.RowCount && rows.Count < maxRows; r++)
                 {
                     rows.Add(new EditorVisualRow
                     {
@@ -152,6 +273,7 @@ namespace codeLess.AvaloniaApp
                 sub = 0;
                 line = NextVisibleLine(b, line);
             }
+            if (zones && line >= b.Lines.Count) AppendZoneRows(b, b.Lines.Count, 0, rows, maxRows); // deletion at the end of the file
             return rows;
         }
 
@@ -164,7 +286,20 @@ namespace codeLess.AvaloniaApp
             int idx = Math.Max(0, (int)(y / LineHeight));
             var rows = BuildViewportRows(b, idx + 1);
             if (rows.Count == 0) return new EditorVisualRow { DocLine = 0, End = 0, IsLastRow = true };
-            return rows[Math.Min(idx, rows.Count - 1)];
+            var hit = rows[Math.Min(idx, rows.Count - 1)];
+            if (!hit.IsDeleted) return hit;
+            // a deleted (read-only) row: the caret goes to the start of the line below the zone, or the end of the
+            // last line for a zone after it - it never enters the removed text
+            int dl = hit.DocLine;
+            if (hit.DeletedAfterLast)
+            {
+                var last = MakeRow(b, dl, WrapOf(b, dl).RowCount - 1);
+                last.Start = last.End = (b.Lines[dl] ?? "").Length;
+                return last;
+            }
+            var first = MakeRow(b, dl, 0);
+            first.End = first.Start;
+            return first;
         }
 
         /// <summary>Character boundary nearest to x on a row.</summary>
@@ -197,7 +332,10 @@ namespace codeLess.AvaloniaApp
 
         private void SetAffinityEndOfRow(int line, int col) { affinityLine = line; affinityCol = col; }
 
-        /// <summary>Number of rows from (l0, r0) forward to (l1, r1), capped at <paramref name="limit"/>; -1 when (l1, r1) is above.</summary>
+        /// <summary>
+        /// Number of screen rows from (l0, r0) forward to (l1, r1), capped at <paramref name="limit"/>; -1 when (l1, r1)
+        /// is above. Deleted-zone rows count (they take screen space); negative rows are positions inside a zone.
+        /// </summary>
         private int RowDistance(EditorTabBuffer b, int l0, int r0, int l1, int r1, int limit)
         {
             if (l1 < l0 || (l1 == l0 && r1 < r0)) return -1;
@@ -210,12 +348,17 @@ namespace codeLess.AvaloniaApp
                 int next = NextVisibleLine(b, line);
                 if (next > l1 || next >= b.Lines.Count) return n; // target hidden / past end: treat as just below
                 line = next;
+                r = -DeletedZoneRows(b, line); // the zone above the next line is on screen before its first row
             }
             return limit + 1;
         }
 
-        /// <summary>Moves (line, row) by <paramref name="delta"/> visual rows (clamped to the document).</summary>
-        private void StepRows(EditorTabBuffer b, ref int line, ref int row, int delta)
+        /// <summary>
+        /// Moves (line, row) by <paramref name="delta"/> visual rows (clamped to the document). With
+        /// <paramref name="includeZones"/> the rows of deleted zones are stepped through as negative rows (scrolling);
+        /// caret motion skips them (the caret never enters removed text).
+        /// </summary>
+        private void StepRows(EditorTabBuffer b, ref int line, ref int row, int delta, bool includeZones = false)
         {
             while (delta > 0)
             {
@@ -223,15 +366,17 @@ namespace codeLess.AvaloniaApp
                 if (row + 1 < rc) { row++; delta--; continue; }
                 int next = NextVisibleLine(b, line);
                 if (next >= b.Lines.Count) break;
-                line = next; row = 0; delta--;
+                int z = includeZones ? DeletedZoneRows(b, next) : 0;
+                line = next; row = z > 0 ? -z : 0; delta--;
             }
             while (delta < 0)
             {
-                if (row > 0) { row--; delta++; continue; }
+                if (row > 0 || (includeZones && row > -DeletedZoneRows(b, line))) { row--; delta++; continue; }
                 int prev = PrevVisibleLine(b, line);
                 if (prev < 0) break;
                 line = prev; row = WrapOf(b, prev).RowCount - 1; delta++;
             }
+            if (!includeZones && row < 0) row = 0;
         }
 
         /// <summary>Scrolls by visual rows (wheel, Ctrl+Up/Down, drag auto-scroll).</summary>
@@ -240,7 +385,7 @@ namespace codeLess.AvaloniaApp
             if (b == null || delta == 0) return;
             NormalizeScroll(b);
             int line = b.ScrollTopLine, row = b.ScrollTopWrapRow;
-            StepRows(b, ref line, ref row, delta);
+            StepRows(b, ref line, ref row, delta, includeZones: true);
             b.ScrollTopLine = line;
             b.ScrollTopWrapRow = row;
         }
@@ -268,7 +413,7 @@ namespace codeLess.AvaloniaApp
             else if (dist >= visRows)
             {
                 int line = b.CursorLine, row = cRow;
-                StepRows(b, ref line, ref row, -(visRows - 1));
+                StepRows(b, ref line, ref row, -(visRows - 1), includeZones: true);
                 b.ScrollTopLine = line;
                 b.ScrollTopWrapRow = row;
             }
@@ -286,7 +431,7 @@ namespace codeLess.AvaloniaApp
             else if (dist >= visRows)
             {
                 int l = line, r = 0;
-                StepRows(b, ref l, ref r, -(visRows / 2));
+                StepRows(b, ref l, ref r, -(visRows / 2), includeZones: true);
                 b.ScrollTopLine = l;
                 b.ScrollTopWrapRow = r;
             }
@@ -337,11 +482,10 @@ namespace codeLess.AvaloniaApp
         private bool TryWrappedHome(EditorTabBuffer b)
         {
             if (!b.WordWrap) return false;
-            var wl = WrapOf(b, b.CursorLine);
-            if (wl.RowCount == 1) return false;
-            int r = CaretRowOf(b, b.CursorLine, b.CursorCol, true);
-            if (r == 0 || b.CursorCol == wl.RowStarts[r]) return false;
-            b.CursorCol = wl.RowStarts[r];
+            bool aff = b.CursorLine == affinityLine && b.CursorCol == affinityCol;
+            int t = EditorWrapNavigation.Home(WrapOf(b, b.CursorLine), b.CursorCol, aff); // shared with WinForms (QA #32)
+            if (t < 0) return false;
+            b.CursorCol = t;
             affinityLine = -1;
             return true;
         }
@@ -350,14 +494,10 @@ namespace codeLess.AvaloniaApp
         private bool TryWrappedEnd(EditorTabBuffer b)
         {
             if (!b.WordWrap) return false;
-            var wl = WrapOf(b, b.CursorLine);
-            if (wl.RowCount == 1) return false;
             int len = (b.Lines[b.CursorLine] ?? "").Length;
-            int r = CaretRowOf(b, b.CursorLine, b.CursorCol, true);
-            if (r == wl.RowCount - 1) return false;
-            int end = wl.RowEnd(r, len);
-            bool atRowEnd = b.CursorCol == end && affinityLine == b.CursorLine && affinityCol == end;
-            if (atRowEnd) return false;
+            bool aff = b.CursorLine == affinityLine && b.CursorCol == affinityCol;
+            int end = EditorWrapNavigation.End(WrapOf(b, b.CursorLine), len, b.CursorCol, aff); // shared with WinForms (QA #32)
+            if (end < 0) return false;
             b.CursorCol = end;
             SetAffinityEndOfRow(b.CursorLine, end);
             return true;

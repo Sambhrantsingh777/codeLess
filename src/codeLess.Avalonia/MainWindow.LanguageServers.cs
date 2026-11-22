@@ -42,7 +42,14 @@ namespace codeLess.AvaloniaApp
         private void InitLanguageServers()
         {
             bool enabled = LanguageServersEnabledOverride ?? AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
-            if (!enabled) return;
+            if (!enabled)
+            {
+                // no language servers: the editors still get word-based suggestions + snippets (QA #31)
+                lspBindings.Add(new LspEditorBinding(this, PrimaryEditor));
+                lspBindings.Add(new LspEditorBinding(this, SplitEditor));
+                ApplyLanguageServerTheme(currentTheme);
+                return;
+            }
             lspUi = UiPost.CaptureCurrent();
             lsp = new LanguageServerManager(a => lspUi.Post(a));
             lsp.ClientVersion = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "3.2";
@@ -113,9 +120,9 @@ namespace codeLess.AvaloniaApp
 
         private void LspOnBufferModified(EditorTabBuffer buf)
         {
-            if (lsp == null || buf == null || string.IsNullOrEmpty(buf.FilePath)) return;
-            lsp.ChangeDocument(buf.FilePath);
-            foreach (var b in lspBindings) b.OnBufferModified(buf);
+            if (buf == null) return;
+            if (lsp != null && !string.IsNullOrEmpty(buf.FilePath)) lsp.ChangeDocument(buf.FilePath);
+            foreach (var b in lspBindings) b.OnBufferModified(buf); // also re-filters word-based suggestions (no server)
         }
 
         private void LspOnSaved(EditorTabBuffer tab)
@@ -127,9 +134,9 @@ namespace codeLess.AvaloniaApp
 
         private void LspOnTabClosed(EditorTabBuffer tab)
         {
+            foreach (var b in lspBindings) b.HideAll();
             if (lsp == null) return;
             LspSyncOpenDocuments();
-            foreach (var b in lspBindings) b.HideAll();
         }
 
         private void LspOnWorkspaceChanged()
@@ -522,7 +529,7 @@ namespace codeLess.AvaloniaApp
                 else if (ReferenceEquals(SplitEditor.CurrentBuffer, b)) SplitEditor.Canvas.CommitExternalEdit();
                 else
                 {
-                    LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(b);
+                    AnalyzeBufferSoon(b);
                     if (lsp != null && !string.IsNullOrEmpty(b.FilePath)) lsp.ChangeDocument(b.FilePath);
                 }
             }
@@ -602,7 +609,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Edit", Title = "Format Document", Shortcut = "Shift+Alt+F", Execute = () => FormatDocumentOrSelection(false) },
                 new PaletteEntryItem { Category = "Edit", Title = "Format Selection", Execute = () => FormatDocumentOrSelection(true) },
                 new PaletteEntryItem { Category = "Edit", Title = "Quick Fix...", Shortcut = "Ctrl+.", Execute = ShowQuickFixes },
-                new PaletteEntryItem { Category = "Edit", Title = "Trigger Suggest", Shortcut = "Ctrl+Space", Execute = () => PrimaryLspBinding?.TriggerCompletion(null) },
+                new PaletteEntryItem { Category = "Edit", Title = "Trigger Suggest", Shortcut = "Ctrl+Space", Execute = () => PrimaryLspBinding?.TriggerCompletion(null, explicitInvoke: true) },
                 new PaletteEntryItem { Category = "Edit", Title = "Trigger Parameter Hints", Shortcut = "Ctrl+Shift+Space", Execute = () => PrimaryLspBinding?.TriggerSignatureHelp(null, false) },
                 new PaletteEntryItem { Category = "Language Server", Title = "Restart Language Server", Execute = RestartLanguageServerForActiveFile },
                 new PaletteEntryItem { Category = "Language Server", Title = "Show Language Server Log", Execute = ShowLanguageServerLog },
@@ -796,10 +803,10 @@ namespace codeLess.AvaloniaApp
             if (e.Key == Key.Space && ctrl && !alt && !meta)
             {
                 if (shift) TriggerSignatureHelp(null, false);
-                else TriggerCompletion(null);
+                else TriggerCompletion(null, explicitInvoke: true);
                 return true;
             }
-            return window.HandleLanguageServerEditorKey(e);
+            return window.LanguageServers != null && window.HandleLanguageServerEditorKey(e);
         }
 
         private void Move(int delta)
@@ -816,7 +823,8 @@ namespace codeLess.AvaloniaApp
             var lsp = Lsp;
             string path = PathOrNull;
             HideHover();
-            if (lsp == null || path == null || string.IsNullOrEmpty(text) || !lsp.IsActive(path)) return;
+            if (string.IsNullOrEmpty(text) || Buf == null) return;
+            if (lsp == null || path == null || !lsp.IsActive(path)) { OnTextTypedWordBased(text); return; }
             var buf = Buf;
             string lineText = buf.Lines[buf.CursorLine];
             // Signature help triggers / closes.
@@ -865,12 +873,68 @@ namespace codeLess.AvaloniaApp
 
         // ---------------------------------------------------------------- completion
 
-        public async void TriggerCompletion(string triggerCharacter, bool incompleteRetrigger = false)
+        // ---------------------------------------------------------------- word-based suggestions (no language server, QA #31)
+
+        /// <summary>As-you-type without a server: identifier characters open the word / snippet list, never in comments or strings.</summary>
+        private void OnTextTypedWordBased(string text)
+        {
+            var buf = Buf;
+            char last = text[text.Length - 1];
+            if (session != null && Completion.IsVisible)
+            {
+                if (LspEditing.IsWordChar(last)) return; // OnBufferModified already re-filtered
+                CloseCompletion();
+            }
+            buf.ClampCursor();
+            string lineText = buf.Lines[buf.CursorLine];
+            if (!LspCompletionSession.ShouldTrigger(lineText, buf.CursorCol, text, null, 1, out _)) return;
+            // the word typed so far had no suggestions: more characters of the same word cannot add any (VS Code does not re-ask)
+            int ws = LspEditing.WordStart(lineText, buf.CursorCol);
+            if (ReferenceEquals(buf, noWordsBuf) && buf.CursorLine == noWordsLine && ws == noWordsStart && buf.CursorCol > noWordsCol) return;
+            if (!WordBasedSuggestions.QuickSuggestionsAllowed(buf, buf.CursorLine, buf.CursorCol)) return;
+            ShowWordBasedSuggestions();
+        }
+
+        private EditorTabBuffer noWordsBuf;
+        private int noWordsLine = -1, noWordsStart = -1, noWordsCol = -1;
+
+        /// <summary>Words of the open documents of the same language + the language's snippets, in the suggest widget.</summary>
+        public void ShowWordBasedSuggestions()
+        {
+            var buf = Buf;
+            if (buf == null || !WordBasedSuggestions.Enabled) { CloseCompletion(); return; }
+            buf.ClampCursor();
+            int line = buf.CursorLine, col = buf.CursorCol;
+            string lineText = buf.Lines[line];
+            int start = LspEditing.WordStart(lineText, col);
+            var items = WordBasedSuggestions.Build(buf, window.OpenTabs, line, col, window.SnippetsForBuffer(buf), lineText.Substring(start, col - start));
+            var s = new LspCompletionSession { FilePath = buf.FilePath, Line = line, StartCol = start };
+            s.SetItems(new LspCompletionList { Items = items });
+            if (items.Count == 0 || !s.Refilter(lineText, line, col))
+            {
+                noWordsBuf = buf; noWordsLine = line; noWordsStart = start; noWordsCol = col;
+                CloseCompletion();
+                return;
+            }
+            noWordsBuf = null;
+            completionCts?.Cancel();
+            session = s;
+            PositionCompletion();
+            Completion.Show(s);
+            ScheduleResolve();
+        }
+
+        public async void TriggerCompletion(string triggerCharacter, bool incompleteRetrigger = false, bool explicitInvoke = false)
         {
             var lsp = Lsp;
             var buf = Buf;
             string path = PathOrNull;
-            if (lsp == null || buf == null || path == null) return;
+            if (buf == null) return;
+            if (lsp == null || path == null || !lsp.IsActive(path))
+            {
+                if (triggerCharacter == null && !incompleteRetrigger) ShowWordBasedSuggestions(); // Ctrl+Space works in comments / strings too
+                return;
+            }
             completionCts?.Cancel();
             var cts = new CancellationTokenSource();
             completionCts = cts;
@@ -883,7 +947,15 @@ namespace codeLess.AvaloniaApp
             try { list = await lsp.RequestCompletionAsync(path, line, col, triggerCharacter, incompleteRetrigger, cts.Token); }
             catch { return; }
             if (cts.IsCancellationRequested || gen != completionGeneration || !ReferenceEquals(buf, Buf)) return;
-            if (list == null || list.Items.Count == 0) { if (!incompleteRetrigger) CloseCompletion(); return; }
+            if (list == null || list.Items.Count == 0)
+            {
+                if (incompleteRetrigger) return;
+                // VS Code: word-based suggestions appear when no other provider has results (not after trigger characters)
+                buf.ClampCursor();
+                if (triggerCharacter == null && (explicitInvoke || WordBasedSuggestions.QuickSuggestionsAllowed(buf, buf.CursorLine, buf.CursorCol))) ShowWordBasedSuggestions();
+                else CloseCompletion();
+                return;
+            }
             var s = new LspCompletionSession { FilePath = path, Line = line, StartCol = startCol };
             // A server-provided edit range defines where the word being completed starts.
             var first = list.Items.FirstOrDefault(i => i.TextEdit?.Range != null && i.TextEdit.Range.StartLine == line);
@@ -950,6 +1022,15 @@ namespace codeLess.AvaloniaApp
             var item = s?.Selected;
             var buf = Buf;
             if (item == null || buf == null) { CloseCompletion(); return; }
+            if (item.Tag is CodeSnippetItem snippet)
+            {
+                // snippets from the word-based list expand with the shared snippet engine (tab stops, variables, indentation)
+                int typed = Math.Max(0, buf.CursorCol - s.StartCol);
+                CloseCompletion();
+                window.InsertSnippetReplacing(buf, snippet, typed);
+                Editor.Canvas.CommitExternalEdit();
+                return;
+            }
             string before = LspEditing.BufferText(buf);
             CloseCompletion();
             var lsp = Lsp;

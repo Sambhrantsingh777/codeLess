@@ -89,9 +89,15 @@ namespace codeLess.AvaloniaApp
             ClipToBounds = true;
         }
 
+        private StudioTheme scrollTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
+        private readonly SlimScrollbar scrollbar = new SlimScrollbar();
+        /// <summary>The list scrollbar (tests).</summary>
+        public SlimScrollbar Scrollbar => scrollbar;
+
         public void ApplyTheme(StudioTheme theme)
         {
             if (theme == null) return;
+            scrollTheme = theme;
             BgColor = AvaloniaColorHelper.ToAvColor(theme.SidebarBg);
             TextPrimary = AvaloniaColorHelper.ToAvColor(theme.TextPrimary);
             TextSecondary = AvaloniaColorHelper.ToAvColor(theme.TextSecondary);
@@ -197,6 +203,9 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerMoved(e);
             var pt = e.GetPosition(this);
+            if (scrollbar.Drag(pt, out double dragged)) { ScrollOffsetY = dragged; ClampScroll(); InvalidateVisual(); return; }
+            if (scrollbar.UpdateHover(pt)) InvalidateVisual();
+            if (scrollbar.Contains(pt)) { if (hoveredRowIndex != -1) { hoveredRowIndex = -1; InvalidateVisual(); } return; }
             int idx = (int)((pt.Y + ScrollOffsetY) / RowHeight);
             if (idx < 0 || idx >= VisibleFlatRows.Count) idx = -1;
             if (idx != hoveredRowIndex)
@@ -206,9 +215,29 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        protected override void OnPointerEntered(PointerEventArgs e)
+        {
+            base.OnPointerEntered(e);
+            InvalidateVisual(); // the list scrollbar shows while the pointer is over the tree (VS Code)
+        }
+
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            base.OnPointerReleased(e);
+            if (scrollbar.Release()) { e.Pointer.Capture(null); InvalidateVisual(); }
+        }
+
+        protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+        {
+            base.OnPointerCaptureLost(e);
+            if (scrollbar.Release()) InvalidateVisual();
+        }
+
         protected override void OnPointerExited(PointerEventArgs e)
         {
             base.OnPointerExited(e);
+            scrollbar.UpdateHover(null);
+            InvalidateVisual();
             if (hoveredRowIndex != -1)
             {
                 hoveredRowIndex = -1;
@@ -221,6 +250,18 @@ namespace codeLess.AvaloniaApp
             base.OnPointerPressed(e);
             Focus();
             var pt = e.GetPosition(this);
+            if (scrollbar.Contains(pt))
+            {
+                if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && scrollbar.Press(pt, out double off))
+                {
+                    ScrollOffsetY = off;
+                    ClampScroll();
+                    e.Pointer.Capture(this);
+                    InvalidateVisual();
+                }
+                e.Handled = true;
+                return;
+            }
             int idx = (int)((pt.Y + ScrollOffsetY) / RowHeight);
             if (idx < 0 || idx >= VisibleFlatRows.Count) return;
 
@@ -585,17 +626,8 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
-            // Thin scrollbar thumb when content overflows
-            double totalH = VisibleFlatRows.Count * RowHeight;
-            if (totalH > h && h > 20)
-            {
-                double thumbH = Math.Max(24, (h / totalH) * h);
-                double maxScroll = totalH - h;
-                double thumbY = (ScrollOffsetY / maxScroll) * (h - thumbH);
-                context.FillRectangle(
-                    new SolidColorBrush(Color.FromArgb(90, TextSecondary.R, TextSecondary.G, TextSecondary.B)),
-                    new Rect(w - 5, thumbY, 4, thumbH));
-            }
+            // VS Code list scrollbar: 10 px, shown while hovering / dragging, drag + click-to-jump (QA #28 consistency)
+            scrollbar.Paint(context, scrollTheme, Bounds.Size, VisibleFlatRows.Count * RowHeight, h, ScrollOffsetY, IsPointerOver);
         }
     }
 }

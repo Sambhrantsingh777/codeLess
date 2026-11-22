@@ -22,10 +22,17 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            BindUndoCaretSource(buf);
             bool changed = redo ? buf.PerformRedo() : buf.PerformUndo();
             if (!changed) return;
+            // VS Code restores every caret and selection recorded with the undo step (QA #29)
             ExtraCursors.Clear();
-            buf.ClearSelection();
+            if (buf.ExtraCarets != null)
+            {
+                foreach (var c in buf.ExtraCarets)
+                    ExtraCursors.Add(new ExtraCursorCaret { Line = c.Line, Col = c.Col, AnchorLine = c.HasSelection() ? c.AnchorLine : -1, AnchorCol = c.HasSelection() ? c.AnchorCol : -1 });
+                buf.ExtraCarets.Clear();
+            }
             autoClosed.Clear();
             if (buf.Lines.Count <= DeferAnalysisLineThreshold && !buf.IsLargeFile)
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buf);
@@ -34,6 +41,25 @@ namespace codeLess.AvaloniaApp
             owner.NotifyCaretMoved();
             InvalidateVisual();
         }
+
+        /// <summary>Undo snapshots of <paramref name="buf"/> record this canvas' extra carets (the editor that is editing it).</summary>
+        internal void BindUndoCaretSource(EditorTabBuffer buf)
+        {
+            if (buf == null) return;
+            if (undoCaretSource == null)
+            {
+                undoCaretSource = () =>
+                {
+                    var list = new List<EditorCaret>(ExtraCursors.Count);
+                    foreach (var ec in ExtraCursors)
+                        list.Add(new EditorCaret { Line = ec.Line, Col = ec.Col, AnchorLine = ec.HasSelection ? ec.AnchorLine : -1, AnchorCol = ec.HasSelection ? ec.AnchorCol : -1 });
+                    return list;
+                };
+            }
+            if (!ReferenceEquals(buf.ExtraCaretsForUndo, undoCaretSource)) buf.ExtraCaretsForUndo = undoCaretSource;
+        }
+
+        private Func<List<EditorCaret>> undoCaretSource;
 
         /// <summary>Text for Copy / Cut: every selection (document order, one per line) or, with no selection, the caret lines.</summary>
         public string GetCopyText(EditorTabBuffer buf)

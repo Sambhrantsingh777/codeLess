@@ -142,7 +142,9 @@ namespace codeLess.Avalonia.Tests
     /// <summary>
     /// QA #17: cost of the per-edit (debounced) analysis that the old 2,500-line / 180 KB "large file" cut-off switched
     /// off, so the new thresholds can be justified with numbers. Appends to CODELESS_BENCH_REPORT when set.
+    /// Timing-sensitive: runs in the sequential collection so parallel CPU-heavy tests cannot skew it.
     /// </summary>
+    [Collection("SequentialWorkbench")]
     public class LargeFileThresholdBench
     {
         [Fact]

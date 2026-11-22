@@ -41,6 +41,23 @@ namespace codeLess.AvaloniaApp
         public Color TermFgColor { get; private set; } = Color.FromRgb(226, 232, 240);
         public Color AccentColor { get; private set; } = Color.FromRgb(59, 130, 246);
 
+        /// <summary>Scrollback scrollbar of the grid (tests / screenshots).</summary>
+        public SlimScrollbar ScrollbackScrollbar => gridCanvas.ScrollbackScrollbar;
+        /// <summary>Rows scrolled back from the live screen.</summary>
+        public int ScrollbackOffset => gridCanvas.ScrollbackOffset;
+        /// <summary>A left click on the scrollback scrollbar at a grid point (tests); false when not on it.</summary>
+        public bool ClickScrollbackScrollbarAt(Point pt) => gridCanvas.ClickScrollbarAt(pt);
+
+        /// <summary>Lays out and paints the grid once at the given size (tests).</summary>
+        public void RenderGridForTest(double w, double h)
+        {
+            gridCanvas.Measure(new Size(w, h));
+            gridCanvas.Arrange(new Rect(0, 0, w, h));
+            var target = new global::Avalonia.Media.Imaging.RenderTargetBitmap(new PixelSize(10, 10));
+            using (var ctx = target.CreateDrawingContext())
+                gridCanvas.Render(ctx);
+        }
+
         public AvaloniaTerminalEmulatorControl()
         {
             Focusable = true;
@@ -191,9 +208,13 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        /// <summary>Theme used for the scrollback scrollbar colors.</summary>
+        public StudioTheme CurrentTheme { get; private set; } = StudioTheme.GetById(StudioTheme.DefaultThemeId);
+
         public void ApplyTheme(StudioTheme theme)
         {
             if (theme == null) return;
+            CurrentTheme = theme;
             IsLightTerminal = theme.IsLight || AvaloniaColorHelper.IsLightColor(theme.EditorBg) || AvaloniaColorHelper.IsLightColor(theme.TerminalBg);
             TermBgColor = IsLightTerminal ? Color.FromRgb(255, 255, 255) : AvaloniaColorHelper.ToAvColor(theme.TerminalBg);
             TermFgColor = IsLightTerminal ? Color.FromRgb(31, 35, 40) : AvaloniaColorHelper.ToAvColor(theme.TerminalText);
@@ -874,6 +895,8 @@ namespace codeLess.AvaloniaApp
             base.OnPointerExited(e);
             lastPointerPos = null;
             ClearHoverLink();
+            scrollbar.UpdateHover(null);
+            InvalidateVisual();
         }
 
         protected override void OnKeyUp(KeyEventArgs e)
@@ -888,6 +911,16 @@ namespace codeLess.AvaloniaApp
             Focus();
             var buf = owner.ActiveBuffer;
             var pt = e.GetPosition(this);
+            if (scrollbar.Contains(pt))
+            {
+                if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && scrollbar.Press(pt, out double sbOff))
+                {
+                    ScrollbackFromSlider(sbOff);
+                    e.Pointer.Capture(this);
+                }
+                e.Handled = true;
+                return;
+            }
             int c = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
             int r = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
             var props = e.GetCurrentPoint(this).Properties;
@@ -964,6 +997,8 @@ namespace codeLess.AvaloniaApp
             base.OnPointerMoved(e);
             var buf = owner.ActiveBuffer;
             var pt = e.GetPosition(this);
+            if (scrollbar.Drag(pt, out double sbOff)) { ScrollbackFromSlider(sbOff); return; }
+            if (scrollbar.UpdateHover(pt)) InvalidateVisual();
             int c = Math.Max(0, (int)((pt.X - PadLeft) / CellW));
             int r = Math.Max(0, (int)((pt.Y - PadTop) / CellH));
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
@@ -999,6 +1034,7 @@ namespace codeLess.AvaloniaApp
             // A release that belongs to a click forwarded to a mouse-tracking app must not also raise the
             // context-menu gesture (Control.OnPointerReleased raises ContextRequested for unhandled right releases).
             if (activeMouseBtnCode >= 0) e.Handled = true;
+            if (scrollbar.Release()) { e.Pointer.Capture(null); e.Handled = true; InvalidateVisual(); }
             base.OnPointerReleased(e);
             if (activeMouseBtnCode >= 0 && owner.ActiveBuffer != null)
             {
@@ -1054,6 +1090,7 @@ namespace codeLess.AvaloniaApp
 
             int maxSb = buf.ScrollbackCount;
             scrollbackOffset = Math.Max(0, Math.Min(maxSb, scrollbackOffset + (wheelUp ? steps : -steps)));
+            lastScrollTicks = Environment.TickCount64;
             ClearHoverLink();
             if (lastPointerPos.HasValue) UpdateHoverLink(lastPointerPos.Value, IsLinkModifier(e.KeyModifiers));
             InvalidateVisual();
@@ -1514,6 +1551,44 @@ namespace codeLess.AvaloniaApp
                 else
                     context.DrawRectangle(new Pen(cursorBrush, 1), cursorRect.Deflate(0.5));
             }
+
+            // Scrollback scrollbar (VS Code terminal): in the right padding, shown while hovering / dragging / just scrolled
+            if (!buf.IsAlternateScreen)
+            {
+                int sb = buf.ScrollbackCount;
+                bool recent = Environment.TickCount64 - lastScrollTicks < EditorScrollbar.AutoHideDelayMs;
+                scrollbar.Paint(context, owner.CurrentTheme, Bounds.Size, (sb + rows) * CellH, rows * CellH, (sb - scrollbackOffset) * CellH, IsPointerOver || recent);
+            }
+            else scrollbar.Paint(context, owner.CurrentTheme, Bounds.Size, 0, 1, 0, false);
+        }
+
+        private readonly SlimScrollbar scrollbar = new SlimScrollbar();
+        private long lastScrollTicks;
+        /// <summary>The scrollback scrollbar (tests).</summary>
+        internal SlimScrollbar ScrollbackScrollbar => scrollbar;
+        /// <summary>Rows scrolled back from the live screen (tests).</summary>
+        internal int ScrollbackOffset => scrollbackOffset;
+
+        /// <summary>Scroll position from the slider: offset (px from the top of the scrollback) to rows back from the bottom.</summary>
+        private void ScrollbackFromSlider(double offsetPx)
+        {
+            var buf = owner.ActiveBuffer;
+            if (buf == null) return;
+            int sb = buf.ScrollbackCount;
+            int topRow = (int)Math.Round(offsetPx / Math.Max(1, CellH));
+            scrollbackOffset = Math.Max(0, Math.Min(sb, sb - topRow));
+            lastScrollTicks = Environment.TickCount64;
+            ClearHoverLink();
+            InvalidateVisual();
+        }
+
+        /// <summary>Simulated click on the scrollback scrollbar (tests): true when the point is on it.</summary>
+        internal bool ClickScrollbarAt(Point pt)
+        {
+            if (!scrollbar.Press(pt, out double off)) return false;
+            ScrollbackFromSlider(off);
+            scrollbar.Release();
+            return true;
         }
 
         private Color ResolveCellColors(TermCell cell, bool selected, Color selHighlightCol, out Color fg, out bool bold, out bool italic, out bool underline)

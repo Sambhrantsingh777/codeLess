@@ -179,11 +179,11 @@ namespace codeLess.AvaloniaApp
             r["ToolTipForeground"] = fg;
             r["ToolTipBorderBrush"] = widgetBorder;
 
-            // Scroll bars: thin, neutral thumb
-            var thumb = new SolidColorBrush(C(UiTokens.WithAlpha(t.FgSecondary, light ? 90 : 80)));
-            r["ScrollBarThumbFillPointerOver"] = new SolidColorBrush(C(UiTokens.WithAlpha(t.FgSecondary, light ? 130 : 120)));
-            r["ScrollBarThumbFillPressed"] = new SolidColorBrush(C(UiTokens.WithAlpha(t.FgSecondary, 150)));
-            r["ScrollBarThumbBackgroundColor"] = C(UiTokens.WithAlpha(t.FgSecondary, light ? 90 : 80));
+            // Scroll bars: thin, VS Code slider colors (the same tokens as the editor / list / terminal scrollbars)
+            var thumb = new SolidColorBrush(C(UiTokens.ScrollbarSlider(t)));
+            r["ScrollBarThumbFillPointerOver"] = new SolidColorBrush(C(UiTokens.ScrollbarSliderHover(t)));
+            r["ScrollBarThumbFillPressed"] = new SolidColorBrush(C(UiTokens.ScrollbarSliderActive(t)));
+            r["ScrollBarThumbBackgroundColor"] = C(UiTokens.ScrollbarSlider(t));
             r["ScrollBarPanningThumbBackground"] = thumb;
             r["ScrollBarTrackFill"] = transparent;
             r["ScrollBarTrackFillPointerOver"] = transparent;

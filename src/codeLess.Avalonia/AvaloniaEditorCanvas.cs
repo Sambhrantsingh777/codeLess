@@ -252,6 +252,7 @@ namespace codeLess.AvaloniaApp
             Canvas.IsVisible = true;
             breadcrumbBar.IsVisible = true;
             Canvas.ResetExtraCursors();
+            Canvas.BindUndoCaretSource(tab);
             RefreshBreadcrumbs();
             RefreshDiffBanner();
             if (findReplaceOverlay.IsVisible)
@@ -456,7 +457,11 @@ namespace codeLess.AvaloniaApp
             InlineDiffReview.Stage(CurrentBuffer, newFullContent);
             AfterInlineReviewChange();
             var first = CurrentBuffer.DiffHunks.Where(h => h.IsPending).OrderBy(h => h.StartLine).FirstOrDefault();
-            if (first != null) GoToLine(InlineDiffReview.AnchorLine(CurrentBuffer, first) + 1);
+            if (first != null)
+            {
+                GoToLine(InlineDiffReview.AnchorLine(CurrentBuffer, first) + 1);
+                Canvas.RevealDeletedZone(first.StartLine); // its removed lines are part of the change (QA #30)
+            }
         }
 
         /// <summary>Re-derives the pending hunks after the buffer was edited outside the review actions (typing, undo).</summary>
@@ -526,6 +531,7 @@ namespace codeLess.AvaloniaApp
                 ? sorted.Where(x => x > cur).DefaultIfEmpty(sorted[0]).First()
                 : sorted.Where(x => x < cur).DefaultIfEmpty(sorted[sorted.Count - 1]).Last();
             GoToLine(target + 1);
+            Canvas.RevealDeletedZone(target);
         }
 
         public void GoToLine(int oneBasedLine, int oneBasedCol = 1)
@@ -698,7 +704,9 @@ namespace codeLess.AvaloniaApp
             CurrentBuffer.SyncContentFromLines();
             CurrentBuffer.IsDirty = true;
             CurrentBuffer.RefreshGutterDiff();
-            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
+            // big documents: the debounced background analysis of BufferModified covers it (QA #35)
+            if (CurrentBuffer.Lines.Count <= AvaloniaVirtualEditorCanvas.DeferAnalysisLineThreshold)
+                LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
             RecomputeFindMatches();
             BufferModified?.Invoke(CurrentBuffer);
             Canvas.InvalidateVisual();
@@ -727,7 +735,9 @@ namespace codeLess.AvaloniaApp
             CurrentBuffer.SyncContentFromLines();
             CurrentBuffer.IsDirty = true;
             CurrentBuffer.RefreshGutterDiff();
-            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
+            // big documents: the debounced background analysis of BufferModified covers it (QA #35)
+            if (CurrentBuffer.Lines.Count <= AvaloniaVirtualEditorCanvas.DeferAnalysisLineThreshold)
+                LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
             RecomputeFindMatches();
             BufferModified?.Invoke(CurrentBuffer);
             Canvas.InvalidateVisual();
@@ -1566,8 +1576,8 @@ namespace codeLess.AvaloniaApp
             // Blink only while focused in an active, visible window; otherwise draw a steady caret and stay asleep.
             blinkGate = new UiTimerGate(this, blinkTimer, requireFocus: true);
             blinkGate.RunningChanged += () => { caretBlinkOn = true; InvalidateVisual(); };
-            AddHandler(KeyDownEvent, (s, e) => RestartCaretBlink(), global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
-            AddHandler(TextInputEvent, (s, e) => RestartCaretBlink(), global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+            AddHandler(KeyDownEvent, (s, e) => { RestartCaretBlink(); BindUndoCaretSource(Buffer); }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+            AddHandler(TextInputEvent, (s, e) => { RestartCaretBlink(); BindUndoCaretSource(Buffer); }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
         }
 
         private readonly UiTimerGate blinkGate;
@@ -1744,15 +1754,15 @@ namespace codeLess.AvaloniaApp
             int deltaLines = (int)wheelAccumY;
             wheelAccumY -= deltaLines;
             if (deltaLines != 0)
+            {
                 ScrollByRows(buf, deltaLines);
+                NoteScrollActivity();
+            }
             if (Math.Abs(dx) > 0.001 && !buf.WordWrap) // no horizontal scrolling while wrapping (VS Code)
             {
-                int longest = 0;
-                int first = Math.Max(0, buf.ScrollTopLine);
-                int tabW = TabFor(buf);
-                for (int i = first; i < Math.Min(buf.Lines.Count, first + 400); i++) longest = Math.Max(longest, EditorTextLayout.VisualWidth(buf.Lines[i], tabW));
-                double maxPx = Math.Max(0, longest * CharWidth - Math.Max(0, Bounds.Width - GutterWidth - 40));
-                buf.ScrollLeftPx = Math.Max(0, Math.Min(maxPx, buf.ScrollLeftPx - dx * CharWidth * 3));
+                // the range covers the widest line of the whole document (it was measured on 400 lines below the top)
+                buf.ScrollLeftPx = Math.Max(0, Math.Min(MaxScrollLeftPx(buf), buf.ScrollLeftPx - dx * CharWidth * 3));
+                NoteScrollActivity();
             }
             InvalidateVisual();
             e.Handled = true;
@@ -1806,7 +1816,13 @@ namespace codeLess.AvaloniaApp
             Cursor = c;
         }
 
-        private double CodeAreaRight => ShowMinimap ? Math.Max(GutterWidth + 60, Bounds.Width - MinimapWidth) : Bounds.Width;
+        /// <summary>Right edge of the text area: the vertical scrollbar / overview ruler (and the minimap left of it) are excluded.</summary>
+        private double CodeAreaRight => Math.Max(GutterWidth + 60, Bounds.Width - ScrollbarWidth - (ShowMinimap ? MinimapWidth : 0));
+
+        /// <summary>Left edge of the minimap (it sits between the text and the vertical scrollbar, like VS Code).</summary>
+        private double MinimapLeft => Bounds.Width - ScrollbarWidth - MinimapWidth;
+
+        private bool IsOverMinimap(Point pt) => ShowMinimap && pt.X >= MinimapLeft && pt.X < Bounds.Width - ScrollbarWidth;
 
         /// <summary>The character the pointer is over (not the nearest caret boundary); -1 past the end of the row.</summary>
         private int CharIndexUnderPoint(int docLine, double x)
@@ -1833,7 +1849,7 @@ namespace codeLess.AvaloniaApp
             {
                 if (ah.Rect.Contains(pt)) { SetPointerCursor(StandardCursorType.Hand); return; }
             }
-            if (ShowMinimap && pt.X >= Bounds.Width - MinimapWidth) { SetPointerCursor(StandardCursorType.Arrow); return; }
+            if (IsOverMinimap(pt) || IsOverVerticalScrollbar(pt) || IsOverHorizontalScrollbar(pt)) { SetPointerCursor(StandardCursorType.Arrow); return; }
             if (pt.X < GutterWidth)
             {
                 var buf = Buffer;
@@ -1887,6 +1903,8 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerExited(e);
             ClearLinkHover();
+            ClearScrollbarHover();
+            NoteScrollActivity(); // the slider fades out shortly after the pointer leaves (VS Code)
             if (stickyHoverIndex >= 0) { stickyHoverIndex = -1; InvalidateVisual(); }
             PointerLeftCanvas?.Invoke();
             if (hoveredAnnotation != null) { hoveredAnnotation = null; owner.NotifyAnnotationHovered(null, -1, default); InvalidateVisual(); }
@@ -1951,8 +1969,11 @@ namespace codeLess.AvaloniaApp
 
             var pt = e.GetPosition(this);
             lastHoverPt = pt;
+            multiAutoClosed.Clear();
             var props = e.GetCurrentPoint(this).Properties;
             var mods = e.KeyModifiers;
+            if (props.IsLeftButtonPressed && TryHandleScrollbarPressed(pt, e)) return; // scrollbar / overview ruler (QA #28)
+            if (IsOverVerticalScrollbar(pt) || IsOverHorizontalScrollbar(pt)) { e.Handled = true; return; }
             if (props.IsLeftButtonPressed && TryHandleStickyPointerPressed(pt)) { e.Handled = true; return; }
 
             // End-of-line annotation click (Send Request lens / blame details)
@@ -2019,8 +2040,7 @@ namespace codeLess.AvaloniaApp
             }
 
             // Check Minimap click/drag
-            double minimapX = Bounds.Width - (ShowMinimap ? MinimapWidth : 0);
-            if (ShowMinimap && pt.X >= minimapX)
+            if (IsOverMinimap(pt))
             {
                 isMinimapDragging = true;
                 ScrollFromMinimapY(pt.Y);
@@ -2031,6 +2051,8 @@ namespace codeLess.AvaloniaApp
             int docLine = ScreenYToDocLine(pt.Y);
             int docCol = ScreenXToDocCol(docLine, pt.X);
 
+            // the gutter of a read-only deleted row (inline diff) has no breakpoints / folding / line selection
+            if (pt.X < GutterWidth && IsDeletedRowAt(pt.Y)) { e.Handled = true; return; }
             if (pt.X < GutterWidth)
             {
                 // Glyph margin (left of the line numbers): toggle a breakpoint, like VS Code.
@@ -2158,6 +2180,7 @@ namespace codeLess.AvaloniaApp
             var pt = e.GetPosition(this);
             lastHoverPt = pt;
             if (buf == null) { SetPointerCursor(StandardCursorType.Arrow); return; }
+            if (TryHandleScrollbarMoved(pt)) return;
             PointerMovedOverCanvas?.Invoke(pt);
             if ((stickyHitBoxes.Count > 0 || stickyHoverIndex >= 0) && !isMouseSelecting && UpdateStickyHover(pt)) { SetPointerCursor(StandardCursorType.Hand); return; }
 
@@ -2284,6 +2307,7 @@ namespace codeLess.AvaloniaApp
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
             base.OnPointerReleased(e);
+            if (EndScrollbarDrag()) e.Pointer.Capture(null);
             isMouseSelecting = false;
             isMinimapDragging = false;
             isGutterSelecting = false;
@@ -2296,6 +2320,7 @@ namespace codeLess.AvaloniaApp
         protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
         {
             base.OnPointerCaptureLost(e);
+            EndScrollbarDrag();
             isMouseSelecting = false;
             isMinimapDragging = false;
             isGutterSelecting = false;
@@ -3202,6 +3227,7 @@ namespace codeLess.AvaloniaApp
             // the sticky Up/Down column of every caret survives only motions that come from Up/Down themselves
             nextPreferredVcolByPos = new Dictionary<long, int>();
             boxAnchorLine = -1;
+            multiAutoClosed.Clear();
             buf.LastTypingUndoTick = 0; // moving the caret ends the current typing undo group (VS Code)
             try
             {
@@ -3248,6 +3274,7 @@ namespace codeLess.AvaloniaApp
             buf.PushUndoSnapshot(coalesceTyping: typedChar && !replacing);
             if (typedChar && replacing) { buf.LastTypingUndoTick = Environment.TickCount; buf.LastTypingUndoLine = buf.CursorLine; }
             buf.GhostTextSuggestion = "";
+            multiAutoClosed.Clear();
             ClampExtraCursors(buf);
             if (ExtraCursors.Count == 0)
             {
@@ -3280,7 +3307,8 @@ namespace codeLess.AvaloniaApp
             int tab = TabSize;
             int lineBefore = buf.CursorLine, lenBefore = buf.Lines[buf.CursorLine].Length, countBefore = buf.Lines.Count;
             if (ExtraCursors.Count > 0 || buf.HasSelection()) autoClosed.Clear();
-            ApplyEditToAllCarets(buf, (b, k) => BackspaceAtCaret(b, tab));
+            if (ExtraCursors.Count > 0) BackspaceAtAllCarets(buf); // shared with WinForms: empty auto-closed pairs at every caret
+            else ApplyEditToAllCarets(buf, (b, k) => BackspaceAtCaret(b, tab));
             if (autoClosed.Count > 0)
             {
                 if (buf.Lines.Count != countBefore || buf.CursorLine != lineBefore) autoClosed.Clear();
@@ -3295,6 +3323,7 @@ namespace codeLess.AvaloniaApp
             var buf = Buffer;
             if (buf == null) return;
             buf.PushUndoSnapshot();
+            multiAutoClosed.Clear();
             ClampExtraCursors(buf);
             var linked = MaybeBeginLinkedTagEdit(buf);
             ApplyEditToAllCarets(buf, (b, k) => b.PerformDelete());
@@ -4148,7 +4177,7 @@ namespace codeLess.AvaloniaApp
                 Dispatcher.UIThread.Post(() => owner.NotifyScrollChanged(), DispatcherPriority.Background);
             }
             var annotationProvider = owner.LineAnnotationProvider;
-            double codeAreaRight = ShowMinimap ? Math.Max(GutterWidth + 60, w - MinimapWidth) : w;
+            double codeAreaRight = CodeAreaRight;
 
             // Gutter background & divider
             var gutterBrush = new SolidColorBrush(gutterBg);
@@ -4188,7 +4217,8 @@ namespace codeLess.AvaloniaApp
             int maxRows = (int)(h / LineHeight) + 2;
             var rows = BuildViewportRows(buf, maxRows);
             lastFrameRows = rows;
-            Func<int, int> rowToDoc = row => row >= 0 && row < rows.Count ? rows[row].DocLine : -1;
+            // a deleted-zone row sits between the line above and its anchor line (sticky scroll scopes)
+            Func<int, int> rowToDoc = row => row >= 0 && row < rows.Count ? (rows[row].IsDeleted && !rows[row].DeletedAfterLast ? Math.Max(0, rows[row].DocLine - 1) : rows[row].DocLine) : -1;
             BeginNicetiesFrame(buf, rowToDoc, maxRows);
             // folding ranges: incremental, bounded per frame; the rest finishes from a background tick
             var foldModel = FoldModelForFrame(buf);
@@ -4209,6 +4239,7 @@ namespace codeLess.AvaloniaApp
                 var vr = rows[r];
                 int docLine = vr.DocLine;
                 double y = r * LineHeight;
+                if (vr.IsDeleted) { DrawDeletedRow(context, buf, vr, y, codeBaseX, codeAreaRight); continue; } // read-only removed lines (QA #30)
                 string lineText = buf.Lines[docLine] ?? "";
                 bool isFoldedHeader = hasFolds && buf.FoldedBlockRanges.ContainsKey(docLine);
 
@@ -4233,16 +4264,7 @@ namespace codeLess.AvaloniaApp
                         double pillRight = codeAreaRight - 10;
                         var rejectRect = new Rect(pillRight - 58, y + 2, 54, LineHeight - 4);
                         var acceptRect = new Rect(rejectRect.X - 62, y + 2, 58, LineHeight - 4);
-                        // Removed lines (same "-N removed" tag as WinForms; a pure deletion also gets a red rule above its anchor line).
-                        if (buf.RemovedLineHistory.TryGetValue(docLine, out var removedHere) && removedHere.Count > 0)
-                        {
-                            var remColor = Color.FromArgb(255, 251, 113, 133);
-                            if (!isProposedDiffLine) context.FillRectangle(new SolidColorBrush(remColor), new Rect(GutterWidth + 1, y, codeAreaRight - GutterWidth - 1, 2));
-                            var remFt = new FormattedText("-" + removedHere.Count + " removed", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(remColor));
-                            var remRect = new Rect(acceptRect.X - remFt.Width - 14, y + 2, remFt.Width + 10, LineHeight - 4);
-                            context.DrawRectangle(new SolidColorBrush(Color.FromArgb(64, 225, 29, 72)), null, remRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
-                            context.DrawText(remFt, new Point(remRect.X + 5, remRect.Y + (remRect.Height - remFt.Height) / 2));
-                        }
+                        // the removed lines themselves are shown as the read-only red zone above (QA #30), like VS Code
                         // Calm per-hunk actions: primary (accent) Accept, secondary (neutral) Reject.
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonPrimaryBackground(Theme))), null, acceptRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonSecondaryBackground(Theme))), null, rejectRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
@@ -4307,6 +4329,8 @@ namespace codeLess.AvaloniaApp
                 {
                     context.FillRectangle(gitDelBrush, new Rect(GutterWidth - 7, y + LineHeight - 3, 6, 3));
                 }
+                if (docLine == 0 && vr.IsFirstRow && buf.GutterDeletedAfterLine != null && buf.GutterDeletedAfterLine.Contains(-1))
+                    context.FillRectangle(gitDelBrush, new Rect(GutterWidth - 7, y, 6, 3));
 
                 // Gutter folding chevron
                 if (vr.IsFirstRow && (isFoldedHeader || foldModel.IsFoldable(docLine)))
@@ -4563,11 +4587,12 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
-            // Right-side Minimap
-            if (ShowMinimap && w > GutterWidth + MinimapWidth + 80)
+            // Right-side Minimap (left of the scrollbar)
+            if (ShowMinimap && w > GutterWidth + MinimapWidth + ScrollbarWidth + 80)
             {
-                RenderMinimap(context, buf, w - MinimapWidth, MinimapWidth, h);
+                RenderMinimap(context, buf, MinimapLeft, MinimapWidth, h);
             }
+            RenderScrollbars(context, buf, w, h);
         }
 
         /// <summary>Selections of the primary caret and every extra caret (single- and multi-line) on one screen row.</summary>

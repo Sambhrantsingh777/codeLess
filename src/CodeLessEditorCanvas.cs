@@ -118,6 +118,8 @@ namespace codeLess.Studio
         public event Action<EditorTabBuffer> OnPinContextRequested;
         public event Action<EditorTabBuffer> OnBufferModified;
         public event Action<EditorTabBuffer> OnCursorOrSelectionChanged;
+        /// <summary>A background outline / diagnostics pass finished and was applied (UI thread).</summary>
+        public event Action<EditorTabBuffer> OnBufferAnalyzed;
         public event Action OnToggleSplitEditorRequested;
         public event Action OnOpenFolderClicked;
         public event Action OnOpenFileClicked;
@@ -190,20 +192,6 @@ namespace codeLess.Studio
         {
             if (OnFontSizeChanged != null) OnFontSizeChanged(pt);
         }
-
-        private static readonly string[] BuiltInKeywords = new[]
-        {
-            "async", "await", "break", "case", "catch", "class", "const", "continue",
-            "def", "default", "delete", "do", "else", "enum", "export", "extends",
-            "false", "finally", "fn", "for", "from", "function", "if", "impl",
-            "implements", "import", "in", "interface", "let", "loop", "match", "mod",
-            "mut", "namespace", "new", "null", "override", "package", "private",
-            "protected", "pub", "public", "readonly", "return", "self", "static",
-            "struct", "super", "switch", "this", "throw", "trait", "true", "try",
-            "type", "typeof", "undefined", "use", "using", "var", "virtual", "void",
-            "while", "yield", "Console", "WriteLine", "ReadAllText", "WriteAllText",
-            "List", "Dictionary", "Task", "Promise", "Array", "Record", "Result", "Option"
-        };
 
         public CodeLessEditorControl(StudioTheme initialTheme)
         {
@@ -929,10 +917,10 @@ namespace codeLess.Studio
                 e.Graphics.FillRectangle(b, e.Bounds);
 
             string raw = autocompleteList.Items[e.Index].ToString();
-            string badge = "sym";
-            Color badgeColor = Theme.TokenFunction;
+            // VS Code's kinds: plain words are "abc" (text), snippets "snip"
+            string badge = "abc";
+            Color badgeColor = Theme.FgSecondary;
             if (raw.EndsWith(" (snippet)")) { badge = "snip"; badgeColor = Theme.AccentSecondary; }
-            else if (BuiltInKeywords.Contains(raw)) { badge = "kw"; badgeColor = Theme.TokenKeyword; }
 
             using (SolidBrush bb = new SolidBrush(selected ? Color.FromArgb(40, 0, 0, 0) : Color.FromArgb(45, badgeColor)))
                 e.Graphics.FillRectangle(bb, e.Bounds.X + 4, e.Bounds.Y + 3, 34, e.Bounds.Height - 6);
@@ -1830,7 +1818,9 @@ namespace codeLess.Studio
             if (!buffer.IsLargeFile)
             {
                 buffer.RefreshGutterDiff();
-                LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buffer);
+                // switching tabs used to re-run the whole AST pass on the UI thread; skip it when the result is current
+                // and analyze big documents in the background (QA #35)
+                if (!buffer.IsAnalysisCurrent) AnalyzeBufferSoonWF(buffer);
             }
 
             breadcrumbBar.Visible = showBreadcrumbs;
@@ -2046,6 +2036,30 @@ namespace codeLess.Studio
         private System.Windows.Forms.Timer largeFileAstDebounceTimer;
         private EditorTabBuffer pendingAstBuffer;
 
+        /// <summary>Posts to the UI thread (dropped once the control is gone).</summary>
+        private void PostToUiWF(Action a)
+        {
+            if (a == null || IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke(a); } catch (InvalidOperationException) { }
+        }
+
+        /// <summary>Outline / heuristic diagnostics: inline for small documents, otherwise off the UI thread with a versioned apply (QA #35).</summary>
+        public void AnalyzeBufferSoonWF(EditorTabBuffer target)
+        {
+            if (target == null) return;
+            Action<Action> post = null;
+            if (IsHandleCreated) post = PostToUiWF;
+            BackgroundBufferAnalysis.Analyze(target, post, delegate(EditorTabBuffer b)
+            {
+                if (IsDisposed) return;
+                if (OnBufferAnalyzed != null) OnBufferAnalyzed(b);
+                if (!ReferenceEquals(b, CurrentBuffer)) return;
+                LayoutBreadcrumbButtons();
+                UpdateCursorStatusLabel();
+                if (virtualCanvas != null) virtualCanvas.Invalidate();
+            });
+        }
+
         public void NotifyBufferContentChanged()
         {
             if (CurrentBuffer == null) return;
@@ -2070,14 +2084,10 @@ namespace codeLess.Studio
                         if (target == null || this.IsDisposed) return;
                         if (target.Lines != null && !target.IsLargeFile)
                             target.RefreshGutterDiff();
+                        if (ReferenceEquals(target, CurrentBuffer) && virtualCanvas != null) virtualCanvas.Invalidate();
+                        // the AST / diagnostics pass runs on the thread pool; stale results are dropped (QA #35)
                         if (!target.IsLargeFile)
-                            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(target);
-                        if (ReferenceEquals(target, CurrentBuffer))
-                        {
-                            LayoutBreadcrumbButtons();
-                            UpdateCursorStatusLabel();
-                            if (virtualCanvas != null) virtualCanvas.Invalidate();
-                        }
+                            AnalyzeBufferSoonWF(target);
                     };
                 }
                 largeFileAstDebounceTimer.Stop();
@@ -2466,49 +2476,53 @@ namespace codeLess.Studio
         /// <summary>When it returns true for the current buffer the word-based popup stays hidden (a language server completes instead).</summary>
         public Func<EditorTabBuffer, bool> SuppressBuiltInAutocomplete;
 
+        /// <summary>Open documents (MainForm tabs): word-based suggestions use every open document of the same language.</summary>
+        public Func<IEnumerable<EditorTabBuffer>> OpenDocumentsProvider;
+
+        /// <summary>Set by the canvas when an identifier character was typed: only typing opens quick suggestions (VS Code).</summary>
+        public bool QuickSuggestPending;
+
+        /// <summary>
+        /// Suggest list without a language server (QA #31), same model as Avalonia: words of the open documents of the
+        /// same language + snippets, fuzzy-filtered; opens while typing identifiers (not in comments / strings, not on
+        /// Backspace), Ctrl+Space anywhere.
+        /// </summary>
         public void UpdateAutocompletePopup(bool forceShow = false)
         {
+            bool pending = QuickSuggestPending;
+            QuickSuggestPending = false;
             if (CurrentBuffer == null) { autocompleteFrame.Visible = false; return; }
             if (SuppressBuiltInAutocomplete != null && SuppressBuiltInAutocomplete(CurrentBuffer)) { autocompleteFrame.Visible = false; return; }
-            string line = CurrentBuffer.Lines[CurrentBuffer.CursorLine];
+            if (!forceShow && !autocompleteFrame.Visible && !pending) return; // deleting / moving never opens it
+            CurrentBuffer.ClampCursor();
+            string line = CurrentBuffer.Lines[CurrentBuffer.CursorLine] ?? "";
             int col = Math.Min(line.Length, CurrentBuffer.CursorCol);
-            if (col <= 0 && !forceShow) { autocompleteFrame.Visible = false; return; }
-
-            int start = col - 1;
-            while (start >= 0 && (char.IsLetterOrDigit(line[start]) || line[start] == '_'))
-                start--;
-            start++;
-
+            int start = LspEditing.WordStart(line, col);
             int len = Math.Max(0, col - start);
-            if (len < 2 && !forceShow)
+            if (!forceShow)
             {
-                autocompleteFrame.Visible = false;
-                return;
+                if (len < 1 || char.IsDigit(line[start]) || CurrentBuffer.HasSelection() || CurrentBuffer.HasMultiCursors) { autocompleteFrame.Visible = false; return; }
+                if (!autocompleteFrame.Visible && !WordBasedSuggestions.QuickSuggestionsAllowed(CurrentBuffer, CurrentBuffer.CursorLine, col)) { autocompleteFrame.Visible = false; return; }
             }
 
             currentWordPrefix = len > 0 ? line.Substring(start, len) : "";
-            var candidates = BuiltInKeywords
-                .Concat(AutocompleteSymbols)
-                .Concat(CurrentBuffer.Symbols.Select(s => s.Name))
-                .Concat(SnippetEngine.ForLanguage(LoadedSnippets, CurrentBuffer.Language).Select(s => s.Prefix + " (snippet)"))
-                .Distinct()
-                .Where(w => string.IsNullOrEmpty(currentWordPrefix) || (w.StartsWith(currentWordPrefix, StringComparison.OrdinalIgnoreCase) && !string.Equals(w, currentWordPrefix, StringComparison.OrdinalIgnoreCase)))
-                .Take(10)
-                .ToList();
-
-            if (candidates.Count == 0)
+            IEnumerable<EditorTabBuffer> docs = OpenDocumentsProvider != null ? OpenDocumentsProvider() : null;
+            List<LspCompletionItem> items = WordBasedSuggestions.Build(CurrentBuffer, docs, CurrentBuffer.CursorLine, col,
+                SnippetEngine.ForLanguage(LoadedSnippets, CurrentBuffer.Language), currentWordPrefix);
+            List<LspCompletionItem> visible = LspCompletionList.FilterAndSort(items, currentWordPrefix, 50);
+            if (visible.Count == 0 || (visible.Count == 1 && !visible[0].IsSnippet && string.Equals(visible[0].Label, currentWordPrefix, StringComparison.Ordinal)))
             {
                 autocompleteFrame.Visible = false;
                 return;
             }
 
             autocompleteList.Items.Clear();
-            foreach (string c in candidates)
-                autocompleteList.Items.Add(c);
+            foreach (LspCompletionItem it in visible)
+                autocompleteList.Items.Add(it.IsSnippet ? it.Label + " (snippet)" : it.Label);
             autocompleteList.SelectedIndex = 0;
 
             Point caretPt = virtualCanvas.GetCursorPixelPoint();
-            autocompleteFrame.Height = Math.Min(210, Math.Max(48, candidates.Count * 22 + 4));
+            autocompleteFrame.Height = Math.Min(12 * 22 + 4, Math.Max(26, visible.Count * 22 + 4));
             autocompleteFrame.Location = new Point(
                 Math.Max(68, Math.Min(editorBody.Width - autocompleteFrame.Width - 90, caretPt.X)),
                 Math.Max(4, Math.Min(editorBody.Height - autocompleteFrame.Height - 10, caretPt.Y + virtualCanvas.LineHeight + 2))
@@ -2774,7 +2788,7 @@ namespace codeLess.Studio
         public void PerformUndo()
         {
             if (CurrentBuffer == null || virtualCanvas == null) return;
-            CurrentBuffer.ClearExtraCarets();
+            // the snapshot restores the carets / selections recorded with the step (VS Code, QA #29)
             if (CurrentBuffer.Undo())
             {
                 NotifyBufferContentChanged();
@@ -2787,7 +2801,7 @@ namespace codeLess.Studio
         public void PerformRedo()
         {
             if (CurrentBuffer == null || virtualCanvas == null) return;
-            CurrentBuffer.ClearExtraCarets();
+            // the snapshot restores the carets / selections recorded with the step (VS Code, QA #29)
             if (CurrentBuffer.Redo())
             {
                 NotifyBufferContentChanged();
@@ -2855,7 +2869,6 @@ namespace codeLess.Studio
 
         private const int GutterWidth = 64;
         private const int MinimapWidth = 76;
-        private const int ScrollbarThickness = 10;
 
         private class InlineDiffPillHit
         {
@@ -2920,8 +2933,6 @@ namespace codeLess.Studio
         private int dragDropTargetLine = -1;
         private int dragDropTargetCol = -1;
         private bool isDraggingMinimap = false;
-        private bool isDraggingVScroll = false;
-        private bool isDraggingHScroll = false;
         private int hScrollMaxCol = 0;
         private Rectangle hScrollTrackRect = Rectangle.Empty;
 
@@ -3261,7 +3272,7 @@ namespace codeLess.Studio
         private int GetWrapCols()
         {
             int rightMinimapReserve = EffectiveShowMinimap ? MinimapWidth : 0;
-            int codeAreaRight = this.Width - rightMinimapReserve - ScrollbarThickness;
+            int codeAreaRight = CodeAreaRightWF; // text | minimap | scrollbar (VS Code order, QA #28)
             return Math.Max(24, (codeAreaRight - GutterWidth - 22) / Math.Max(6, CharWidth));
         }
 
@@ -3281,7 +3292,9 @@ namespace codeLess.Studio
             {
                 VisualRowEntry vre = lastPaintedRows[r];
                 // at a soft break the caret belongs to the next row (VS Code); the line's last row also takes its end
-                if (vre.DocLine == buf.CursorLine && buf.CursorCol >= vre.ColStart && (buf.CursorCol < vre.ColEnd || vre.ColEnd >= curLineText.Length))
+                // ...unless End / Up / Down left it at the end of this row (affinity, QA #32)
+                if (vre.DocLine == buf.CursorLine && buf.CursorCol >= vre.ColStart &&
+                    (buf.CursorCol < vre.ColEnd || vre.ColEnd >= curLineText.Length || (buf.CursorCol == vre.ColEnd && HasRowEndAffinityWF(buf.CursorLine, buf.CursorCol))))
                 {
                     int visCol = SegVcol(curLineText, vre, buf.CursorCol);
                     int vx = GutterWidth + 8 + (visCol - (buf.WordWrap ? 0 : buf.ScrollLeftCol)) * CharWidth;
@@ -3370,7 +3383,7 @@ namespace codeLess.Studio
             int totalLines = buf.Lines.Count;
             int visLines = VisibleLinesCount;
             int rightMinimapReserve = EffectiveShowMinimap ? MinimapWidth : 0;
-            int codeAreaRight = this.Width - rightMinimapReserve - ScrollbarThickness;
+            int codeAreaRight = CodeAreaRightWF; // text | minimap | scrollbar (VS Code order, QA #28)
             int wrapCols = Math.Max(24, (codeAreaRight - GutterWidth - 22) / Math.Max(6, CharWidth));
 
             // 1. Gutter background & separator
@@ -3396,12 +3409,10 @@ namespace codeLess.Studio
             buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
             bool hasSel = buf.HasSelection();
 
-            int maxVisibleLineLen = 0;
             int screenRow = 0;
             for (int docLine = buf.ScrollTopLine; docLine < totalLines && screenRow <= visLines; docLine++)
             {
                 string fullLineText = buf.Lines[docLine] ?? "";
-                if (fullLineText.Length > maxVisibleLineLen) maxVisibleLineLen = fullLineText.Length;
 
                 EditorDiffHunk hunk = buf.DiffHunks != null
                     ? InlineDiffReview.FindHunkAtLine(buf, docLine)
@@ -3463,6 +3474,15 @@ namespace codeLess.Studio
                         {
                             using (SolidBrush gitMod = new SolidBrush(Color.FromArgb(180, 59, 130, 246)))
                                 g.FillRectangle(gitMod, GutterWidth - 4, y + 1, 2, LineHeight - 2);
+                        }
+                        // deleted lines (VS Code red marker on the boundary): after this line / before the first line
+                        if (buf.GutterDeletedAfterLine != null && buf.GutterDeletedAfterLine.Count > 0)
+                        {
+                            using (SolidBrush delBrush = new SolidBrush(Color.FromArgb(241, 76, 76)))
+                            {
+                                if (buf.GutterDeletedAfterLine.Contains(docLine)) g.FillRectangle(delBrush, GutterWidth - 6, y + LineHeight - 3, 6, 3);
+                                if (docLine == 0 && buf.GutterDeletedAfterLine.Contains(-1)) g.FillRectangle(delBrush, GutterWidth - 6, y, 6, 3);
+                            }
                         }
                     }
 
@@ -3715,7 +3735,8 @@ namespace codeLess.Studio
                     }
 
                     // Ghost Text (Single-line inline + Multi-line Cursor Tab preview)
-                    if (docLine == buf.CursorLine && buf.CursorCol >= seg.ColStart && buf.CursorCol <= seg.ColEnd &&
+                    if (docLine == buf.CursorLine && buf.CursorCol >= seg.ColStart &&
+                        (buf.CursorCol < seg.ColEnd || seg.ColEnd >= fullLineText.Length || (buf.CursorCol == seg.ColEnd && HasRowEndAffinityWF(buf.CursorLine, buf.CursorCol))) &&
                         !string.IsNullOrEmpty(buf.GhostText) && buf.GhostLine == docLine)
                     {
                         string[] ghostLines = buf.GhostText.Replace("\r\n", "\n").Split('\n');
@@ -3755,7 +3776,8 @@ namespace codeLess.Studio
                     {
                         foreach (EditorCaret ec in buf.ExtraCarets)
                         {
-                            if (ec.CursorLine == docLine && ec.CursorCol >= seg.ColStart && ec.CursorCol <= seg.ColEnd)
+                            // a caret on a soft break belongs to the next row only (it was drawn on both rows)
+                            if (ec.CursorLine == docLine && ec.CursorCol >= seg.ColStart && (ec.CursorCol < seg.ColEnd || seg.ColEnd >= fullLineText.Length))
                             {
                                 int ecVisCol = SegVcol(fullLineText, seg, ec.CursorCol);
                                 int cx = GutterWidth + 8 + (ecVisCol - effScrollLeft) * CharWidth;
@@ -3834,7 +3856,7 @@ namespace codeLess.Studio
             // 4. Interactive Pixel Minimap
             if (EffectiveShowMinimap)
             {
-                int mmX = this.Width - MinimapWidth;
+                int mmX = MinimapLeftWF;
                 using (SolidBrush mmBg = new SolidBrush(th.BgSidebar))
                     g.FillRectangle(mmBg, mmX, 0, MinimapWidth, this.Height);
                 using (Pen mmBorder = new Pen(th.BorderSubtle))
@@ -3876,28 +3898,8 @@ namespace codeLess.Studio
                 }
             }
 
-            // 5. Sleek Vertical Scrollbar
-            if (totalLines > visLines)
-            {
-                int sbX = codeAreaRight;
-                int thumbH = Math.Max(24, (int)((double)visLines / totalLines * this.Height));
-                int thumbY = (int)((double)buf.ScrollTopLine / Math.Max(1, totalLines - visLines) * (this.Height - thumbH));
-                using (SolidBrush sbThumb = new SolidBrush(Color.FromArgb(115, th.FgMuted)))
-                    g.FillRectangle(sbThumb, sbX + 1, thumbY, ScrollbarThickness - 2, thumbH);
-            }
-
-            // 6. Sleek Bottom Horizontal Scrollbar
-            hScrollTrackRect = Rectangle.Empty;
-            int visCols = Math.Max(10, (codeAreaRight - GutterWidth - 16) / Math.Max(6, CharWidth));
-            hScrollMaxCol = Math.Max(0, maxVisibleLineLen - visCols + 8);
-            if (!buf.WordWrap && (hScrollMaxCol > 0 || buf.ScrollLeftCol > 0))
-            {
-                hScrollTrackRect = new Rectangle(GutterWidth, this.Height - 10, Math.Max(40, codeAreaRight - GutterWidth), 10);
-                int thumbW = Math.Max(36, (int)((double)visCols / Math.Max(visCols + 1, maxVisibleLineLen + 8) * hScrollTrackRect.Width));
-                int thumbX = hScrollTrackRect.X + (int)((double)Math.Min(buf.ScrollLeftCol, Math.Max(1, hScrollMaxCol)) / Math.Max(1, hScrollMaxCol) * (hScrollTrackRect.Width - thumbW));
-                using (SolidBrush hThumb = new SolidBrush(Color.FromArgb(120, th.FgMuted)))
-                    g.FillRectangle(hThumb, thumbX, hScrollTrackRect.Y + 2, thumbW, hScrollTrackRect.Height - 3);
-            }
+            // 5./6. Scrollbars + overview ruler (shared model with Avalonia, QA #28)
+            PaintScrollbarsWF(g, buf, th);
 
             // 7. Hover Diagnostic Floating Tooltip Card
             if (hoveredDiagnostic != null && !lastHoverMousePt.IsEmpty)
@@ -4017,8 +4019,12 @@ namespace codeLess.Studio
             return EditorTextLayout.CharIndexForVisualColumnInRange(lineText, colStart, colEnd, targetVisCol, TabWF(owner.CurrentBuffer), 0);
         }
 
+        // the last ScreenPointToLineCol landed past the end of a continuation row (caret goes to the row end)
+        private bool wfLastHitRowEnd;
+
         private void ScreenPointToLineCol(Point pt, out int line, out int col)
         {
+            wfLastHitRowEnd = false;
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) { line = 0; col = 0; return; }
 
@@ -4034,8 +4040,9 @@ namespace codeLess.Studio
                 line = Math.Max(0, Math.Min(buf.Lines.Count - 1, seg.DocLine));
                 string text = buf.Lines[line] ?? "";
                 col = EditorTextLayout.CharIndexForVisualColumnInRange(text, seg.ColStart, seg.ColEnd, vx, tab, seg.StartVcol);
-                // past the end of a continuation row: stay on that row (its boundary belongs to the next row)
-                if (seg.ColEnd < text.Length && col >= seg.ColEnd) col = Math.Max(seg.ColStart, seg.ColEnd - 1);
+                // past the end of a continuation row: the row end, drawn on THIS row (affinity, like Avalonia / VS Code)
+                wfLastHitRowEnd = false;
+                if (seg.ColEnd < text.Length && col >= seg.ColEnd) { col = seg.ColEnd; wfLastHitRowEnd = true; }
                 return;
             }
 
@@ -4216,7 +4223,10 @@ namespace codeLess.Studio
             this.Focus();
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
+            if (TryScrollbarMouseDownWF(e)) return; // scrollbars / overview ruler (QA #28)
             ResetPreferredColumnWF();
+            ClearRowEndAffinityWF();
+            wfMultiAutoClosed.Clear();
             wfAutoCloseLine = -1;
             buf.LastTypingUndoTick = 0;
 
@@ -4241,29 +4251,11 @@ namespace codeLess.Studio
                 }
             }
 
-            // 0b. Horizontal Scrollbar Click / Drag
-            if (!hScrollTrackRect.IsEmpty && hScrollTrackRect.Contains(e.Location))
-            {
-                isDraggingHScroll = true;
-                ScrollFromHScrollX(e.X);
-                return;
-            }
-
-            int rightMinimapStart = this.Width - (EffectiveShowMinimap ? MinimapWidth : 0);
-
-            // 1. Minimap Click / Drag
-            if (EffectiveShowMinimap && e.X >= rightMinimapStart)
+            // 1. Minimap Click / Drag (the vertical scrollbar was handled above)
+            if (IsOverMinimapWF(e.Location))
             {
                 isDraggingMinimap = true;
                 ScrollFromMinimapY(e.Y);
-                return;
-            }
-
-            // 2. Vertical Scrollbar Click / Drag
-            if (e.X >= rightMinimapStart - ScrollbarThickness && e.X < rightMinimapStart)
-            {
-                isDraggingVScroll = true;
-                ScrollFromVScrollY(e.Y);
                 return;
             }
 
@@ -4302,6 +4294,7 @@ namespace codeLess.Studio
 
             int targetLine, targetCol;
             ScreenPointToLineCol(e.Location, out targetLine, out targetCol);
+            bool clickRowEnd = wfLastHitRowEnd;
 
             // Preserve selection on Right-Click so Context Menu actions work on selected code
             if (e.Button == MouseButtons.Right)
@@ -4419,10 +4412,11 @@ namespace codeLess.Studio
             }
             if (e.Clicks >= 3)
             {
+                // VS Code: triple-click selects the whole line INCLUDING its line break (caret at the next line start)
                 buf.SelectionAnchorLine = targetLine;
                 buf.SelectionAnchorCol = 0;
-                buf.CursorLine = targetLine;
-                buf.CursorCol = buf.Lines[targetLine].Length;
+                if (targetLine + 1 < buf.Lines.Count) { buf.CursorLine = targetLine + 1; buf.CursorCol = 0; }
+                else { buf.CursorLine = targetLine; buf.CursorCol = buf.Lines[targetLine].Length; }
                 owner.UpdateCursorStatusLabel();
                 this.Invalidate();
                 return;
@@ -4444,6 +4438,7 @@ namespace codeLess.Studio
 
             buf.CursorLine = targetLine;
             buf.CursorCol = targetCol;
+            if (clickRowEnd) { wfAffinityLine = targetLine; wfAffinityCol = targetCol; }
             buf.GhostText = null;
             if (ColumnSelectionMode)
             {
@@ -4466,34 +4461,23 @@ namespace codeLess.Studio
         {
             base.OnMouseMove(e);
             if (MouseMovedOverCanvas != null && e.Button == MouseButtons.None) MouseMovedOverCanvas(e.Location);
-            int rightMinimapStart = this.Width - (EffectiveShowMinimap ? MinimapWidth : 0);
+            int rightMinimapStart = CodeAreaRightWF;
+            lastMouseClientPt = e.Location;
+            if (TryScrollbarMouseMoveWF(e)) return; // slider drag / hover (QA #28)
 
             bool overDiffPill = diffPillHits.Any(h => h.AcceptRect.Contains(e.Location) || h.RejectRect.Contains(e.Location));
-            bool overHScroll = !hScrollTrackRect.IsEmpty && hScrollTrackRect.Contains(e.Location);
+            bool overHScroll = false;
 
-            lastMouseClientPt = e.Location;
-            bool anyDrag = isDraggingHScroll || isDraggingVScroll || isDraggingMinimap || isDraggingGutterLineSelection ||
+            bool anyDrag = isDraggingMinimap || isDraggingGutterLineSelection ||
                            isDraggingBoxSelection || isPendingTextDrag || isDraggingSelectedText || isDraggingSelection;
             if (!anyDrag && (wfStickyHits.Count > 0 || wfStickyHover >= 0) && UpdateStickyHoverWF(e.Location)) { this.Cursor = Cursors.Hand; return; }
             if (!anyDrag) UpdateLinkHover(e.Location);
             else ClearLinkHover();
             bool overAnnotation = !anyDrag && UpdateLineAnnotationHover(e.Location);
-            this.Cursor = (overDiffPill || overHScroll || overAnnotation || e.X >= rightMinimapStart - ScrollbarThickness)
+            this.Cursor = (overDiffPill || overHScroll || overAnnotation)
                 ? Cursors.Hand
-                : (e.X < GutterWidth ? Cursors.Arrow
+                : (e.X < GutterWidth || e.X >= rightMinimapStart ? Cursors.Arrow
                 : (isDraggingSelectedText ? Cursors.Arrow : (linkHover != null ? Cursors.Hand : Cursors.IBeam)));
-
-            if (isDraggingHScroll)
-            {
-                ScrollFromHScrollX(e.X);
-                return;
-            }
-
-            if (isDraggingVScroll)
-            {
-                ScrollFromVScrollY(e.Y);
-                return;
-            }
 
             if (isDraggingMinimap)
             {
@@ -4545,6 +4529,7 @@ namespace codeLess.Studio
                 ScreenPointToLineCol(e.Location, out l, out c);
                 owner.CurrentBuffer.CursorLine = l;
                 owner.CurrentBuffer.CursorCol = c;
+                if (wfLastHitRowEnd) { wfAffinityLine = l; wfAffinityCol = c; } else ClearRowEndAffinityWF();
                 EnsureCursorVisible();
                 owner.UpdateCursorStatusLabel();
                 this.Invalidate();
@@ -4554,7 +4539,7 @@ namespace codeLess.Studio
             // Diagnostic hover tooltip hit-testing
             EditorTabBuffer buf = owner.CurrentBuffer;
             DiagnosticItem nextHover = null;
-            if (buf != null && buf.Diagnostics != null && e.X > GutterWidth && e.X < rightMinimapStart - ScrollbarThickness && !overDiffPill)
+            if (buf != null && buf.Diagnostics != null && e.X > GutterWidth && e.X < CodeAreaRightWF && !overDiffPill)
             {
                 int hl, hc;
                 ScreenPointToLineCol(e.Location, out hl, out hc);
@@ -4591,9 +4576,8 @@ namespace codeLess.Studio
             EditorTabBuffer buf = owner.CurrentBuffer;
             EditorLinkTarget next = null;
             int nextLine = -1;
-            int rightMinimapStart = this.Width - (EffectiveShowMinimap ? MinimapWidth : 0);
             Keys mods = EffectiveModifierKeys;
-            if (buf != null && mods == Keys.Control && pt.X >= GutterWidth && pt.X < rightMinimapStart - ScrollbarThickness &&
+            if (buf != null && mods == Keys.Control && pt.X >= GutterWidth && pt.X < CodeAreaRightWF &&
                 pt.Y >= 0 && pt.Y < this.Height)
             {
                 int col = CharIndexUnderPoint(pt);
@@ -4631,8 +4615,7 @@ namespace codeLess.Studio
             Point p = this.PointToClient(Control.MousePosition);
             if (!this.ClientRectangle.Contains(p)) { ClearLinkHover(); return; }
             UpdateLinkHover(p);
-            int rightMinimapStart = this.Width - (EffectiveShowMinimap ? MinimapWidth : 0);
-            if (p.X >= GutterWidth && p.X < rightMinimapStart - ScrollbarThickness)
+            if (p.X >= GutterWidth && p.X < CodeAreaRightWF)
                 this.Cursor = linkHover != null ? Cursors.Hand : Cursors.IBeam;
         }
 
@@ -4671,6 +4654,7 @@ namespace codeLess.Studio
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
+            OnMouseLeaveScrollbarsWF();
             ClearLinkHover();
             if (wfStickyHover >= 0) { wfStickyHover = -1; Invalidate(); }
             if (MouseLeftCanvas != null) MouseLeftCanvas();
@@ -4739,8 +4723,7 @@ namespace codeLess.Studio
             isDraggingGutterLineSelection = false;
             isDraggingBoxSelection = false;
             isDraggingMinimap = false;
-            isDraggingVScroll = false;
-            isDraggingHScroll = false;
+            EndScrollbarDragWF();
             if (buf != null &&
                 buf.SelectionAnchorLine == buf.CursorLine &&
                 buf.SelectionAnchorCol == buf.CursorCol)
@@ -4765,14 +4748,16 @@ namespace codeLess.Studio
             if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift && !buf.WordWrap)
             {
                 int colsDelta = e.Delta > 0 ? -6 : 6;
-                buf.ScrollLeftCol = Math.Max(0, Math.Min(Math.Max(0, hScrollMaxCol), buf.ScrollLeftCol + colsDelta));
+                // range = the widest line of the whole document (it was the widest line on screen)
+                buf.ScrollLeftCol = Math.Max(0, Math.Min(MaxScrollLeftColWF(buf), buf.ScrollLeftCol + colsDelta));
+                NoteScrollActivityWF();
                 owner.DismissAutocomplete();
                 this.Invalidate();
                 return;
             }
 
             int linesDelta = e.Delta > 0 ? -3 : 3;
-            buf.ScrollTopLine = Math.Max(0, Math.Min(Math.Max(0, buf.Lines.Count - 1), buf.ScrollTopLine + linesDelta));
+            ScrollLinesWF(buf, linesDelta); // folded regions are skipped
             owner.DismissAutocomplete();
             this.Invalidate();
         }
@@ -4783,31 +4768,6 @@ namespace codeLess.Studio
             if (buf == null || this.Height <= 0) return;
             double ratio = Math.Max(0.0, Math.Min(1.0, (double)mouseY / this.Height));
             buf.ScrollTopLine = (int)(ratio * Math.Max(0, buf.Lines.Count - VisibleLinesCount));
-            this.Invalidate();
-        }
-
-        private void ScrollFromVScrollY(int mouseY)
-        {
-            EditorTabBuffer buf = owner.CurrentBuffer;
-            if (buf == null || this.Height <= 0) return;
-            int totalLines = buf.Lines.Count;
-            int visLines = VisibleLinesCount;
-            if (totalLines <= visLines) return;
-            int thumbH = Math.Max(24, (int)((double)visLines / totalLines * this.Height));
-            int trackRange = Math.Max(1, this.Height - thumbH);
-            double ratio = Math.Max(0.0, Math.Min(1.0, (double)(mouseY - thumbH / 2) / trackRange));
-            buf.ScrollTopLine = (int)Math.Round(ratio * Math.Max(0, totalLines - visLines));
-            this.Invalidate();
-        }
-
-        private void ScrollFromHScrollX(int mouseX)
-        {
-            EditorTabBuffer buf = owner.CurrentBuffer;
-            if (buf == null || hScrollTrackRect.Width <= 0) return;
-            int thumbW = Math.Max(36, hScrollTrackRect.Width / 6);
-            int trackRange = Math.Max(1, hScrollTrackRect.Width - thumbW);
-            double ratio = Math.Max(0.0, Math.Min(1.0, (double)(mouseX - hScrollTrackRect.X - thumbW / 2) / trackRange));
-            buf.ScrollLeftCol = (int)Math.Round(ratio * Math.Max(0, hScrollMaxCol));
             this.Invalidate();
         }
 
@@ -5490,58 +5450,6 @@ namespace codeLess.Studio
             DeduplicateExtraCarets(buf);
         }
 
-        private void BackspaceAllCarets()
-        {
-            EditorTabBuffer buf = owner.CurrentBuffer;
-            if (buf == null) return;
-            List<CaretBinding> ordered = CollectOrderedCaretsDesc(buf);
-            List<CaretBinding> processed = new List<CaretBinding>();
-
-            foreach (CaretBinding cb in ordered)
-            {
-                int lineIdx, sCol;
-                bool hadSelection = CollapseCaretSelectionRange(buf, cb, processed, out lineIdx, out sCol);
-                int newLine = lineIdx;
-                int newCol = sCol;
-
-                if (!hadSelection)
-                {
-                    string ln = buf.Lines[lineIdx] ?? "";
-                    if (sCol > 0)
-                    {
-                        int prev = EditorTextLayout.PrevCharBoundary(ln, sCol);
-                        buf.Lines[lineIdx] = ln.Remove(prev, sCol - prev);
-                        newCol = prev;
-                    }
-                    else if (lineIdx > 0)
-                    {
-                        string prevLn = buf.Lines[lineIdx - 1] ?? "";
-                        newCol = prevLn.Length;
-                        newLine = lineIdx - 1;
-                        buf.Lines[newLine] = prevLn + ln;
-                        buf.Lines.RemoveAt(lineIdx);
-                        ShiftProcessedCarets(buf, processed, newLine, -1);
-                    }
-                }
-
-                if (cb.IsPrimary)
-                {
-                    buf.CursorLine = newLine;
-                    buf.CursorCol = newCol;
-                    buf.ClearSelection();
-                }
-                else
-                {
-                    cb.Extra.CursorLine = newLine;
-                    cb.Extra.CursorCol = newCol;
-                    cb.Extra.AnchorLine = newLine;
-                    cb.Extra.AnchorCol = newCol;
-                }
-                processed.Add(cb);
-            }
-            DeduplicateExtraCarets(buf);
-        }
-
         private void DeleteAllCarets()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
@@ -5647,6 +5555,13 @@ namespace codeLess.Studio
 
         private void MoveSinglePosition(EditorTabBuffer buf, Keys key, ref int line, ref int col, bool ctrl = false)
         {
+            bool unusedAffinity = false;
+            MoveSinglePosition(buf, key, ref line, ref col, ctrl, false, ref unusedAffinity);
+        }
+
+        /// <summary>One caret motion; <paramref name="primary"/> carets use / produce the row-end affinity on wrapped lines (QA #32).</summary>
+        private void MoveSinglePosition(EditorTabBuffer buf, Keys key, ref int line, ref int col, bool ctrl, bool primary, ref bool rowEndAffinity)
+        {
             int wrapCols = buf.WordWrap ? GetWrapCols() : int.MaxValue;
             if (key == Keys.Left)
             {
@@ -5706,11 +5621,11 @@ namespace codeLess.Studio
             }
             else if (key == Keys.Up)
             {
-                MoveVerticalWF(buf, ref line, ref col, -1); // visual rows (wrap / folds), sticky column (QA #11 / #20)
+                MoveVerticalWF(buf, ref line, ref col, -1, primary, ref rowEndAffinity); // visual rows (wrap / folds), sticky column (QA #11 / #20)
             }
             else if (key == Keys.Down)
             {
-                MoveVerticalWF(buf, ref line, ref col, 1);
+                MoveVerticalWF(buf, ref line, ref col, 1, primary, ref rowEndAffinity);
             }
             else if (key == Keys.Home)
             {
@@ -5719,7 +5634,7 @@ namespace codeLess.Studio
                     line = 0;
                     col = 0;
                 }
-                else
+                else if (!TryWrappedHomeWF(buf, ref line, ref col, primary)) // wrapped row: row start first (QA #32)
                 {
                     string ln = buf.Lines[line] ?? "";
                     int firstNonWs = 0;
@@ -5732,8 +5647,12 @@ namespace codeLess.Studio
                 if (ctrl)
                 {
                     line = Math.Max(0, buf.Lines.Count - 1);
+                    col = buf.Lines[line].Length;
                 }
-                col = buf.Lines[line].Length;
+                else if (!TryWrappedEndWF(buf, ref line, ref col, primary, ref rowEndAffinity)) // wrapped row: row end first (QA #32)
+                {
+                    col = buf.Lines[line].Length;
+                }
             }
             else if (key == Keys.PageUp)
             {
@@ -6133,8 +6052,7 @@ namespace codeLess.Studio
             if (e.Control && !e.Shift && e.KeyCode == Keys.Z)
             {
                 e.SuppressKeyPress = true;
-                buf.ClearExtraCarets();
-                buf.ClearSelection();
+                // the undo step restores its carets and selections (VS Code, QA #29); clearing them first lost them
                 if (buf.Undo())
                 {
                     owner.NotifyBufferContentChanged();
@@ -6148,8 +6066,7 @@ namespace codeLess.Studio
             if (e.Control && (e.KeyCode == Keys.Y || (e.Shift && e.KeyCode == Keys.Z)))
             {
                 e.SuppressKeyPress = true;
-                buf.ClearExtraCarets();
-                buf.ClearSelection();
+                // the undo step restores its carets and selections (VS Code, QA #29); clearing them first lost them
                 if (buf.Redo())
                 {
                     owner.NotifyBufferContentChanged();
@@ -6168,6 +6085,9 @@ namespace codeLess.Studio
             {
                 e.SuppressKeyPress = true;
                 buf.GhostText = null;
+                bool hadPrimarySelection = buf.HasSelection();
+                wfMultiAutoClosed.Clear(); // VS Code forgets auto-closed pairs once the caret leaves
+                int selAnchorLine = buf.SelectionAnchorLine, selAnchorCol = buf.SelectionAnchorCol;
                 if (e.Shift)
                 {
                     if (!buf.HasSelection())
@@ -6183,9 +6103,23 @@ namespace codeLess.Studio
 
                 int pLine = buf.CursorLine;
                 int pCol = buf.CursorCol;
-                MoveSinglePosition(buf, e.KeyCode, ref pLine, ref pCol, e.Control);
+                bool rowEndAffinity = false;
+                // VS Code: plain Left / Right with a selection collapses it to its start / end instead of moving
+                bool collapse = !e.Shift && !e.Control && !e.Alt && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right) && hadPrimarySelection;
+                if (collapse)
+                {
+                    bool toStart = e.KeyCode == Keys.Left;
+                    bool anchorFirst = selAnchorLine < pLine || (selAnchorLine == pLine && selAnchorCol < pCol);
+                    if (toStart == anchorFirst) { pLine = selAnchorLine; pCol = selAnchorCol; }
+                }
+                else
+                {
+                    MoveSinglePosition(buf, e.KeyCode, ref pLine, ref pCol, e.Control, true, ref rowEndAffinity);
+                }
                 buf.CursorLine = pLine;
                 buf.CursorCol = pCol;
+                if (rowEndAffinity) { wfAffinityLine = pLine; wfAffinityCol = pCol; }
+                else ClearRowEndAffinityWF();
                 if (!e.Shift)
                 {
                     buf.SelectionAnchorLine = pLine;
@@ -6198,7 +6132,14 @@ namespace codeLess.Studio
                     {
                         int ecLine = ec.CursorLine;
                         int ecCol = ec.CursorCol;
-                        MoveSinglePosition(buf, e.KeyCode, ref ecLine, ref ecCol, e.Control);
+                        if (!e.Shift && !e.Control && !e.Alt && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right) && ec.HasSelection())
+                        {
+                            int sl, sc, el, ecc;
+                            ec.GetNormalizedSelection(out sl, out sc, out el, out ecc);
+                            if (e.KeyCode == Keys.Left) { ecLine = sl; ecCol = sc; } else { ecLine = el; ecCol = ecc; }
+                        }
+                        else
+                            MoveSinglePosition(buf, e.KeyCode, ref ecLine, ref ecCol, e.Control);
                         ec.CursorLine = ecLine;
                         ec.CursorCol = ecCol;
                         if (!e.Shift)
@@ -6252,7 +6193,7 @@ namespace codeLess.Studio
                 }
                 buf.PushUndoSnapshot(!buf.HasSelection() && !buf.HasMultiCursors);
                 if (buf.HasMultiCursors)
-                    ReplaceAllCaretsText(SpacesWF(buf) ? EditorIndentation.TabInsertText(buf.Lines[buf.CursorLine], buf.CursorCol, TabWF(buf), true) : "\t");
+                    EditorMultiCaret.InsertTab(buf, TabWF(buf), SpacesWF(buf), wfMultiAutoClosed); // each caret to ITS next tab stop (QA #33)
                 else
                     InsertTabWF(buf);
                 owner.NotifyBufferContentChanged();
@@ -6265,9 +6206,26 @@ namespace codeLess.Studio
                 e.SuppressKeyPress = true;
                 buf.PushUndoSnapshot();
                 EditorTagEditing.LinkedEdit linkedTag = MaybeBeginLinkedTagEditWF(buf);
-                if (buf.HasMultiCursors)
+                if (buf.HasMultiCursors && e.Control)
                 {
-                    BackspaceAllCarets();
+                    // Ctrl+Backspace deletes the word left of EVERY caret (it deleted one character)
+                    EditorMultiCaret.ApplyToAllCarets(buf, delegate(EditorTabBuffer bb, int k)
+                    {
+                        if (!bb.HasSelection())
+                        {
+                            int wl = bb.CursorLine, wc = bb.CursorCol;
+                            MoveSinglePosition(bb, Keys.Left, ref wl, ref wc, true);
+                            bb.SelectionAnchorLine = wl;
+                            bb.SelectionAnchorCol = wc;
+                        }
+                        EditorMultiCaret.InsertAtCaret(bb, "");
+                    }, null);
+                    wfMultiAutoClosed.Clear();
+                }
+                else if (buf.HasMultiCursors)
+                {
+                    // empty auto-closed pairs, tab stops, surrogate pairs at every caret (QA #33)
+                    EditorMultiCaret.Backspace(buf, TabWF(buf), buf.FilePath ?? buf.FileName ?? "", wfMultiAutoClosed);
                 }
                 else if (buf.HasSelection())
                 {
@@ -6340,6 +6298,8 @@ namespace codeLess.Studio
 
         protected override void OnKeyPress(KeyPressEventArgs e)
         {
+            ClearRowEndAffinityWF();
+            owner.QuickSuggestPending = LspEditing.IsWordChar(e.KeyChar); // typing an identifier opens suggestions (QA #31)
             OnKeyPressCore(e);
             if (e.Handled && !char.IsControl(e.KeyChar) && e.KeyChar != '\x7f' && CharTyped != null) CharTyped(e.KeyChar);
         }
@@ -6381,13 +6341,16 @@ namespace codeLess.Studio
 
             if (buf.HasMultiCursors)
             {
-                buf.PushUndoSnapshot(true);
-                ReplaceAllCaretsText(e.KeyChar.ToString());
-                owner.NotifyBufferContentChanged();
+                // auto-closing pairs / overtype / auto-surround at every caret, VS Code rules (QA #33: plain insert only)
+                buf.PushUndoSnapshot(!buf.HasSelection() && EditorAutoClosing.CloserFor(e.KeyChar, buf.FilePath ?? buf.FileName ?? "") == '\0');
+                bool edited = EditorMultiCaret.TypeChar(buf, e.KeyChar, buf.FilePath ?? buf.FileName ?? "", wfMultiAutoClosed);
+                if (edited) owner.NotifyBufferContentChanged();
+                else owner.UpdateCursorStatusLabel();
                 EnsureCursorVisible();
                 this.Invalidate();
                 return;
             }
+            wfMultiAutoClosed.Clear();
 
             ResetPreferredColumnWF();
             string path = buf.FilePath ?? buf.FileName ?? "";

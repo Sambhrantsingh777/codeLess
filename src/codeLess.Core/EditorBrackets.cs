@@ -267,8 +267,44 @@ namespace codeLess.Studio
 
         protected override BracketLexState ProcessLine(string text, int lineIndex, BracketLexState start, out BracketLineData data)
         {
+            int unused;
+            return ScanLine(text, lineIndex, start, -1, out data, out unused);
+        }
+
+        /// <summary>Lexical context at a position: code, comment or string (quick suggestions are off in comments / strings).</summary>
+        public const int ContextCode = 0, ContextComment = 1, ContextString = 2;
+
+        private static int ContextOfMode(int mode)
+        {
+            if (mode == BracketLexState.ModeBlockComment) return ContextComment;
+            if (mode == BracketLexState.ModeCode) return ContextCode;
+            return ContextString;
+        }
+
+        /// <summary>
+        /// Whether (line, col) is in code, a comment or a string, with the same lexer as bracket matching (VS Code uses
+        /// the token type at the position). Lines before <paramref name="line"/> are lexed once and cached.
+        /// </summary>
+        public int ContextAt(IList<string> lines, int line, int col)
+        {
+            if (lines == null || line < 0 || line >= lines.Count || !Profile.Enabled) return ContextCode;
+            BracketLexState st = InitialState;
+            if (line > 0)
+            {
+                if (!EnsureValid(lines, line - 1, 0)) return ContextCode;
+                st = GetEndState(line - 1) ?? InitialState;
+            }
+            BracketLineData unusedData;
+            int ctx;
+            ScanLine(lines[line], line, st, Math.Max(0, col), out unusedData, out ctx);
+            return ctx;
+        }
+
+        private BracketLexState ScanLine(string text, int lineIndex, BracketLexState start, int stopCol, out BracketLineData data, out int ctxAtStop)
+        {
             BracketLexProfile p = Profile;
             string s = text ?? "";
+            ctxAtStop = ContextOfMode(start.Mode);
             if (!p.Enabled || s.Length > MaxLineLength)
             {
                 data = BracketLineData.Empty;
@@ -285,6 +321,7 @@ namespace codeLess.Studio
             int i = 0;
             while (i < n)
             {
+                if (stopCol >= 0 && i >= stopCol) { ctxAtStop = ContextOfMode(mode); data = BracketLineData.Empty; return start; }
                 char c = s[i];
                 if (mode == BracketLexState.ModeBlockComment)
                 {
@@ -346,9 +383,16 @@ namespace codeLess.Studio
                 if (p.LineComment != null && At(s, i, p.LineComment))
                 {
                     if (!(p.HashCommentNeedsSpace && p.LineComment == "#" && i > 0 && !char.IsWhiteSpace(s[i - 1])))
+                    {
+                        if (stopCol >= 0) { ctxAtStop = ContextComment; data = BracketLineData.Empty; return start; }
                         break;
+                    }
                 }
-                if (p.LineComment2 != null && At(s, i, p.LineComment2) && (i == 0 || char.IsWhiteSpace(s[i - 1]))) break;
+                if (p.LineComment2 != null && At(s, i, p.LineComment2) && (i == 0 || char.IsWhiteSpace(s[i - 1])))
+                {
+                    if (stopCol >= 0) { ctxAtStop = ContextComment; data = BracketLineData.Empty; return start; }
+                    break;
+                }
                 if (p.TripleQuotes && (c == '"' || c == '\'') && i + 2 < n && s[i + 1] == c && s[i + 2] == c)
                 {
                     mode = BracketLexState.ModeTriple;
@@ -436,6 +480,7 @@ namespace codeLess.Studio
                 }
                 i++;
             }
+            if (stopCol >= 0) ctxAtStop = ContextOfMode(mode); // caret at / past the end of the line (an open string is still a string)
             if (mode == BracketLexState.ModeString && quote != '`') { mode = BracketLexState.ModeCode; quote = '\0'; }
             data = d ?? BracketLineData.Empty;
             if (mode == start.Mode && quote == start.Quote && cdepth == start.CommentDepth && ReferenceEquals(stack, start.Stack)) return start;

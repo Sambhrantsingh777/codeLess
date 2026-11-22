@@ -123,7 +123,6 @@ namespace codeLess.Studio
 
         public HashSet<int> ProposedNewLines { get; } = new HashSet<int>();
         public Dictionary<int, List<string>> RemovedLineHistory { get; } = new Dictionary<int, List<string>>();
-        public HashSet<int> GutterDeletedAfterLine { get; } = new HashSet<int>();
 
         /// <summary>Buffer lines where a pending hunk starts (its Accept / Reject actions are drawn there).</summary>
         public HashSet<int> ProposedHunkStarts { get; } = new HashSet<int>();
