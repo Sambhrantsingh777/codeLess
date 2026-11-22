@@ -1,43 +1,36 @@
-# codeLess v3.3.1
+# codeLess v3.3.2
 
-The biggest release yet: VS Code-level code intelligence and debugging without Electron, a trustworthy AI agent, and a
-quality pass that fixed well over a hundred bugs. Every feature ships on Windows, macOS and Linux.
+A VS Code-parity release driven by bug reports from v3.3.1 on macOS. Every fix ships on Windows, macOS and Linux.
+
+## Fixed
+
+- **Strings in long lines are coloured correctly.** Highlighting used to restart at the visible part of a long line, so a
+  big JSON/dict literal in a `.py` file showed quoted text as variables once you scrolled or wrapped. Lines are now
+  tokenized from their start (cached, so a 1 MB single-line file costs ~40 ms once and < 2 ms per frame), and multi-line
+  strings and comments (`"""…"""`, `/* … */`, `@"…"`, template literals) stay coloured on every line. New bundled
+  TextMate grammars for **Python** and **JSON**.
+- **Find & Replace options you can see.** Match Case, Match Whole Word and Use Regular Expression are now proper
+  toggles with a clear ON state, tooltips and VS Code's shortcuts (⌥⌘C / ⌥⌘W / ⌥⌘R on macOS, Alt+C / Alt+W / Alt+R
+  elsewhere). New: **Preserve Case**, **Find in Selection**, Replace All with Ctrl/Cmd+Alt+Enter, and an "Invalid regex"
+  message. Whole-word matching follows VS Code's rules (works for queries like `foo(`) in the editor and in Search.
+- **Word Wrap in the menu.** View → Word Wrap (⌥Z / Alt+Z) is checkable and per editor; on macOS ⌥Z no longer types "Ω".
+- **Ctrl+Tab switches editors** — from the editor, terminal, side bar or chat. Hold Ctrl and tap Tab to walk a
+  "Recently used editors" list, release to open; a quick tap returns to the previous file. On macOS the key never reached
+  the app before. Closing an editor now focuses the one you used last.
+- **Code no longer paints over the line numbers** when the editor is scrolled horizontally.
+- A suggestion list left open in one file can no longer insert into another after switching tabs.
 
 ## New
 
-- **Built-in language servers (LSP)** — completion with docs and snippets, hover, signature help, go to definition /
-  type definition / implementation, find references, rename across files, format document/selection, quick fixes,
-  live diagnostics and outline. Servers are auto-detected (pyright, typescript-language-server, gopls, rust-analyzer,
-  clangd, csharp-ls, jdtls, …); a one-time hint offers the install command when one is missing. No extensions needed.
-- **Debugger (DAP)** — Run and Debug view, breakpoints with conditions / hit counts / logpoints, variables, watch, call
-  stack, debug console, `launch.json` with `preLaunchTask`, debugpy / dlv / lldb-dap / codelldb / netcoredbg.
-- **Zero-setup Python** — interpreter picker (venv, uv, poetry, pipenv, conda, pyenv), Run/Debug Python File, and
-  automatic venv activation in new terminals.
-- **Verified AI agent** — AI edits can be built/tested in a private copy of your workspace before you accept them
-  (your files are never touched), with optional auto-repair, "Accept if Verified", Best-of-N across models with a ranked
-  comparison, and per-turn undo/redo that also restores files the agent's commands created or deleted.
-- **Git, built in** — inline blame, commit graph and file history, branch picker, Sync/Pull/Push/Publish, merge-conflict
-  "Accept Current / Incoming / Both", stage or revert a single hunk from the gutter.
-- **Tasks** — `tasks.json`, Run Build Task (Cmd/Ctrl+Shift+B), auto-detected npm/make/dotnet/cargo/go/pytest tasks and
-  problem matchers feeding the Problems panel.
-- **Editor** — real word wrap, sticky scroll, bracket-pair colours and guides, indent guides, occurrence highlight,
-  HTML/JSX tag auto-close and linked rename, Emmet, TextMate grammars (18 bundled + grammars from VSIX extensions),
-  scrollbar with overview ruler, indentation detection and `.editorconfig`, word-based suggestions, inline diff review
-  with deleted-line zones.
-- **Huge files and big repos** — multi-GB files open instantly in a read-only viewer with search and live tail;
-  `.gitignore`-aware search and Quick Open across 50k+ files.
-- **Privacy you can see** — every outbound request is listed in View → Network Activity; Offline Mode blocks everything
-  except localhost (local models keep working). Zero telemetry.
-- **Workspace Trust** — opening an unfamiliar folder asks before anything from it can run (Restricted Mode), like VS Code.
-- **More** — `.http` request runner, native Markdown preview, VSIX themes/snippets on macOS/Linux, a cleaner VS Code-like UI
-  with a searchable Settings view, and Finder/Dock launches that pick up your shell PATH (nvm, pyenv, Homebrew).
-
-## Notable fixes
-
-Search results open the file again; Cmd/Ctrl+Click follows imports; the I-beam cursor and VS Code mouse behaviours;
-per-hunk Reject no longer loses lines; AI terminal commands no longer touch unaccepted files; Replace All in files no
-longer joins lines; case-only renames are safe; non-UTF-8 files keep their encoding; Offline Mode checks every redirect;
-typing on 50k-line files is ~3× faster with ~99% fewer allocations.
+- **Path completion in imports** as you type: JS/TS `import` / `require` / `export … from`, CSS `@import` and `url()`,
+  HTML `src`/`href`, C/C++ `#include "…"`, Markdown links. Relative paths, tsconfig/jsconfig aliases (`@/…`), npm
+  packages; folders first and drill in as you go.
+- **Python module completion** after `import` and `from`: workspace modules, relative imports, packages installed in the
+  selected interpreter, the standard library, and names inside a module (`from x import …`, honouring `__all__`).
+- **Complete menu bar, like VS Code's**: app menu (Settings ⌘,), File (Open Recent, Revert, Auto Save), Edit
+  (Cut/Copy/Paste that work in any focused field, Find/Replace in Files, comments, Emmet), Selection, View (Appearance,
+  Zoom, Minimap, Breadcrumbs, Sticky Scroll, panels), Go (Back/Forward, Switch Editor, Definition, References, Problems,
+  Bracket), Run (breakpoints), Terminal (tasks), Window and Help. Check marks reflect live state; Windows has the same set.
 
 ## Trust and verification
 
@@ -46,6 +39,4 @@ OpenPGP-signed (`docs/codeLess-release-signing-key.asc`). See `docs/SIGNING.md`.
 
 ## Upgrade notes
 
-- Previously opened folders ask for Workspace Trust once; in Restricted Mode git, tasks and workspace tools stay off
-  until you trust the folder.
 - Windows SmartScreen and macOS Gatekeeper may still warn until code-signing certificates are in place.

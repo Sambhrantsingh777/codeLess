@@ -2,7 +2,7 @@
 
 **Application Name:** `codeLess`  
 **Bundle Identifier:** `com.savatarr.codeless`  
-**Version:** `3.3.1`  
+**Version:** `3.3.2`  
 **Minimum macOS Version:** `macOS 11.0 (Big Sur)` or later  
 **Framework:** `.NET 8.0` + `Avalonia 11.1` + `codeLess.Core`
 
