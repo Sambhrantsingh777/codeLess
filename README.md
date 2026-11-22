@@ -7,7 +7,7 @@
 
 **codeLess** (by **Savatarr**) is a fast, open-source, native polyglot code editor and AI software engineering IDE for **Windows**, **macOS** (`arm64` & `x64`), and **Linux** (`x64` & `arm64`).
 
-Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders its workbench, syntax-highlighted virtualized editor canvas, minimap, diff review hunks, and truecolor VT100 terminal directly through native C# graphics pipelines (**Win32 / GDI+ on `.NET Framework 4.8`** for a **`~2.4 MB` standalone Windows `.exe`**, and **`.NET 8 + Avalonia Skia`** for native macOS and Linux desktop bundles). It pairs **VS Code keybindings** with a **Bring-Your-Own-Key (BYOK) autonomous coding agent** and **5 model-family-tuned LLM harnesses**—with zero subscription lock-in, zero intermediary proxy servers, and zero telemetry.
+Instead of bundling a Chromium browser and Node.js runtime, **codeLess** renders its workbench, syntax-highlighted virtualized editor canvas, minimap, diff review hunks, and truecolor VT100 terminal directly through native C# graphics pipelines (**Win32 / GDI+ on `.NET Framework 4.8`** for a **`~2.6 MB` standalone Windows `.exe`**, and **`.NET 8 + Avalonia Skia`** for native macOS and Linux desktop bundles). It pairs **VS Code keybindings** with a **Bring-Your-Own-Key (BYOK) autonomous coding agent** and **5 model-family-tuned LLM harnesses**—with zero subscription lock-in, zero intermediary proxy servers, and zero telemetry.
 
 ---
 
@@ -31,10 +31,10 @@ and extensions disabled. Full method, ranges and caveats: [`docs/BENCHMARKS.md`]
 
 | Metric | Measured Value |
 | :--- | :--- |
-| **Windows Standalone Executable (`codeLess.exe`)** | **`2.43 MB`** (portable single `.exe` with `codeLess.Core.dll` and 20 TextMate grammars embedded) |
+| **Windows Standalone Executable (`codeLess.exe`)** | **`2.57 MB`** (portable single `.exe` with `codeLess.Core.dll` and 20 TextMate grammars embedded) |
 | **Shared Core Engine (`codeLess.Core.dll`)** | `net48` / `netstandard2.0` / `net8.0` — LSP, DAP, git, tasks, agent and search engines shared by every platform |
-| **Windows Setup Installer (`codeLess-Setup.exe`)** | **`2.95 MB`** (Inno Setup LZMA2, per-user `PrivilegesRequired=lowest`) |
-| **macOS Self-Contained Disk Image (`.dmg`)** | **`47.6 MB`** (`osx-arm64`) / **`49.1 MB`** (`osx-x64`) *(bundles `.NET 8` + Skia runtime)* |
+| **Windows Setup Installer (`codeLess-Setup.exe`)** | **`2.99 MB`** (Inno Setup LZMA2, per-user `PrivilegesRequired=lowest`) |
+| **macOS Self-Contained Disk Image (`.dmg`)** | **`47.7 MB`** (`osx-arm64`) / **`49.2 MB`** (`osx-x64`) *(bundles `.NET 8` + Skia runtime)* |
 | **Managed (.NET GC) Heap (Full Workbench Loaded)** | **`~30 MB`** |
 | **Total Memory Footprint, macOS (whole process tree, idle, workspace + file open)** | **`199 MB`** phys_footprint · `214 MB` RSS · 2 processes *(measured with `bench/run_bench.py`; VS Code 1.147: 1,062 MB / 10 processes)* |
 | **20,000-File Repository Async Open** | **`30 ms` return**, **`23 ms` first tree paint** (non-blocking background indexing) |
@@ -48,7 +48,7 @@ and extensions disabled. Full method, ranges and caveats: [`docs/BENCHMARKS.md`]
 | :--- | :--- | :--- | :--- |
 | **UI & Rendering Stack** | Chromium DOM/Canvas + bundled V8 + Node.js multi-process host | Bundled Java Runtime (JBR) + Swing/AWT | **Windows**: Native Win32 + GDI+ (`csc.exe` on OS-built-in `.NET 4.8`)<br>**macOS / Linux**: Native `.NET 8` + Skia (`Avalonia`) |
 | **Bundled Browser / Node Runtime** | Bundles Chromium + Node.js in every installation | Bundles custom Java runtime | **None** (`0` Chromium processes; optional system `node` only if activating JS `.vsix` scripts) |
-| **Windows Portable Binary Size** | Multi-hundred-MB application directory | Multi-hundred-MB installation | **`2.43 MB` single portable `codeLess.exe`** (`2.95 MB` installer) |
+| **Windows Portable Binary Size** | Multi-hundred-MB application directory | Multi-hundred-MB installation | **`2.57 MB` single portable `codeLess.exe`** (`2.99 MB` installer) |
 | **Terminal Subsystem** | `node-pty` + `xterm.js` DOM/WebGL renderer | `pty4j` + JediTerm | Direct P/Invoke **`CreatePseudoConsole` (Windows ConPTY)** & **`forkpty` (Unix PTY)** + native C# **VT100/Truecolor** cell grid |
 | **AI Routing & Data Privacy** | Cloud proxy / vendor account required in commercial AI forks | Plugin-dependent cloud routing | **Direct HTTPS from user machine to chosen API or `127.0.0.1` Ollama** (`0` proxy servers, `0` telemetry) |
 | **Codebase Search & Retrieval** | Cloud vector upload in several AI IDEs or external indexers | Heavy full-project background index | **Local in-process BM25 + 1-hop AST symbol graph** (`0` code uploaded for indexing) |
@@ -104,9 +104,9 @@ Everything below is built in — no extensions to find, install or configure —
 
 | Platform | Package | Direct Download |
 | :--- | :--- | :--- |
-| **Windows 10 / 11 (x64)** | Windows Installer Package (`.msi`, ~1.1 MB) — recommended | [`codeLess-Setup.msi`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-Setup.msi) |
+| **Windows 10 / 11 (x64)** | Windows Installer Package (`.msi`, ~1.2 MB) — recommended | [`codeLess-Setup.msi`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-Setup.msi) |
 | **Windows 10 / 11 (x64)** | Setup Installer (`.exe`, ~2.9 MB) | [`codeLess-Setup.exe`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-Setup.exe) |
-| **Windows 10 / 11 (x64)** | Portable Standalone (`.exe`, ~2.4 MB) | [`codeLess.exe`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess.exe) |
+| **Windows 10 / 11 (x64)** | Portable Standalone (`.exe`, ~2.6 MB) | [`codeLess.exe`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess.exe) |
 | **macOS Apple Silicon (M1–M4)** | Disk Image (`.dmg`) / Bundle (`.zip`) | [`codeLess-mac-arm64.dmg`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-arm64.dmg) · [`.zip`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-arm64.zip) |
 | **macOS Intel (x64)** | Disk Image (`.dmg`) / Bundle (`.zip`) | [`codeLess-mac-x64.dmg`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-x64.dmg) · [`.zip`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-mac-x64.zip) |
 | **Linux (Ubuntu / Debian x64)** | Debian Package (`.deb`) / Tarball (`.tar.gz`) | [`codeLess-linux-x64.deb`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-linux-x64.deb) · [`.tar.gz`](https://github.com/Sambhrantsingh777/codeLess/releases/latest/download/codeLess-linux-x64.tar.gz) |
