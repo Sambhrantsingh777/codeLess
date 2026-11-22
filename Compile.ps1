@@ -151,6 +151,7 @@ $sourceFiles = @(
     "src\CodeLessMainForm.Parity.cs",
     "src\LargeFileViewerWinForms.cs",
     "src\CodeLessMainForm.Smoke.cs",
+    "src\CodeLessMainForm.AgentTrust.cs",
     "src\CodeLessMainForm.cs"
 )
 

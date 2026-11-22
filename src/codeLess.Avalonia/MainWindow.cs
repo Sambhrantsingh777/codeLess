@@ -256,6 +256,7 @@ namespace codeLess.AvaloniaApp
             BuildWorkbenchLayout();
             InitializeDevTools();
             InitializeWorkbenchParity();
+            InitAgentTrust();
             BuildNativeMacMenu();
             InitLanguageServers();
             ApplyTheme(currentTheme);
@@ -1856,7 +1857,7 @@ namespace codeLess.AvaloniaApp
             Grid.SetColumn(newChatBtn, 1);
             headerGrid.Children.Add(newChatBtn);
 
-            var historyChatBtn = WorkbenchStyles.IconButton("history", "Chat History", () => SetStatusMessage($"Chat history: {AgentFeed.Items.Count} message(s) in current session"), currentTheme);
+            var historyChatBtn = WorkbenchStyles.IconButton("history", "Agent Timeline (Undo / Redo turns)", () => ShowAgentTimelineModal(), currentTheme);
             Grid.SetColumn(historyChatBtn, 2);
             headerGrid.Children.Add(historyChatBtn);
 
@@ -1904,8 +1905,8 @@ namespace codeLess.AvaloniaApp
                 MinHeight = 22
             };
             changesetButtons = new[] { csAcceptBtn, csRejectBtn };
-            csAcceptBtn.Click += (s, e) => PrimaryEditor.AcceptAllPendingDiffs();
-            csRejectBtn.Click += (s, e) => PrimaryEditor.RejectAllPendingDiffs();
+            csAcceptBtn.Click += (s, e) => OnChangesetAcceptAll();
+            csRejectBtn.Click += (s, e) => OnChangesetRejectAll();
             csGrid.Children.Add(changesetSummaryText);
             Grid.SetColumn(csAcceptBtn, 1); csGrid.Children.Add(csAcceptBtn);
             Grid.SetColumn(csRejectBtn, 2); csGrid.Children.Add(csRejectBtn);
@@ -2360,6 +2361,8 @@ namespace codeLess.AvaloniaApp
             RebuildContextPillsBar();
             AgentFeed.ApplyTheme(theme);
             SetAgentMode(currentAgentMode);
+            UpdateAgentTrustComposer();
+            RefreshAgentTrustBanner();
 
             // Status Bar
             statusBarBorder.Background = AvaloniaColorHelper.ToBrush(UiTokens.StatusBarBackground(theme));
@@ -2985,7 +2988,9 @@ namespace codeLess.AvaloniaApp
             {
                 ApplySaveParticipants(tab);
                 tab.SyncContentFromLines();
+                var agentSave = BeginAgentTrackedSave(tab);
                 tab.WriteFilePreservingMetadata(tab.FilePath);
+                EndAgentTrackedSave(agentSave, tab);
                 tab.SavedContent = tab.Content;
                 tab.IsDirty = false;
                 tab.IsPreviewTab = false;
@@ -3103,6 +3108,7 @@ namespace codeLess.AvaloniaApp
             {
                 multiFileChangesetBar.IsVisible = false;
             }
+            RefreshAgentTrustBanner();
         }
 
         public void RefreshTabStrip()

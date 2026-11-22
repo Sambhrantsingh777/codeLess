@@ -2457,12 +2457,18 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             string workspaceRoot,
             List<string> workspaceFiles,
             List<string> contextPills,
-            string recentTerminalOutput = ""
+            string recentTerminalOutput = "",
+            Dictionary<string, string> baseStagedFiles = null
         )
         {
             CancelStreamingRequested = false;
             Stopwatch sw = Stopwatch.StartNew();
             AgentExecutionTurnResult result = new AgentExecutionTurnResult();
+            // Repair turns patch on top of the previous proposal (staged, never written) instead of the disk text.
+            if (baseStagedFiles != null)
+                foreach (KeyValuePair<string, string> kv in baseStagedFiles) result.StagedFileContents[kv.Key] = kv.Value;
+            int baseStagedCount = result.StagedFileContents.Count;
+            bool stagedThisTurn = false;
 
             ByokVendor activeVendor = preferredVendor;
             if (activeVendor == null || (activeVendor.Id != "ollama" && string.IsNullOrWhiteSpace(activeVendor.ApiKey)))
@@ -2679,6 +2685,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         {
                             string blockError;
                             bool blocksOk = TryExtractAndStageSearchReplaceBlocks(llmOutput, activeTab, workspaceRoot, result, out blockError, workspaceFiles);
+                            if (blocksOk) stagedThisTurn = true;
                             if (!blocksOk && step + 1 < maxSteps)
                             {
                                 messages.Add(new Dictionary<string, string> { { "role", "assistant" }, { "content", llmOutput } });
@@ -2702,6 +2709,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         var args = tc.ContainsKey("args") ? tc["args"] as Dictionary<string, object> : new Dictionary<string, object>();
                         AgentToolCallResult tr = ExecuteWorkspaceTool(toolName, args, workspaceRoot, workspaceFiles, activeTab, result.StagedFileContents);
                         result.ToolCalls.Add(tr);
+                        if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath)) stagedThisTurn = true;
                         toolOutputsSb.AppendLine(string.Format("<tool_result tool=\"{0}\" success=\"{1}\">\n{2}\n</tool_result>", toolName, tr.Success, tr.Output));
                     }
 
@@ -2712,7 +2720,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     });
                 }
 
-                if (result.StagedFileContents.Count == 0)
+                if (!stagedThisTurn && result.StagedFileContents.Count == baseStagedCount)
                 {
                     ExtractAndStageSearchReplaceBlocks(finalReply, activeTab, workspaceRoot, result, workspaceFiles);
                 }
@@ -3084,6 +3092,16 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 else if (toolName == "run_terminal")
                 {
                     string cmd = args.ContainsKey("command") ? Convert.ToString(args["command"]) : "";
+                    if (DisableTerminalTool)
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "run_terminal",
+                            Success = false,
+                            Summary = "Terminal disabled for this run: " + cmd,
+                            Output = "run_terminal is disabled in this run (Best-of-N candidates run side by side). Propose SEARCH/REPLACE edits instead; they are verified automatically."
+                        };
+                    }
                     if (OnRequestToolApproval != null && !OnRequestToolApproval("run_terminal", "Run terminal command in " + workspaceRoot + ":\n" + cmd))
                     {
                         return new AgentToolCallResult
@@ -3093,6 +3111,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             Summary = "User declined terminal command: " + cmd,
                             Output = "Command execution rejected by user approval gate."
                         };
+                    }
+
+                    // Per-turn checkpoints: snapshot the workspace before the command can change files.
+                    if (OnBeforeRunTerminal != null)
+                    {
+                        try { OnBeforeRunTerminal(cmd); } catch { }
                     }
 
                     // Back up raw bytes (not decoded text) so the restore is byte-exact: re-encoding via

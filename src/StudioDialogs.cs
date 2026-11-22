@@ -1260,7 +1260,12 @@ namespace codeLess.Studio
                 string parId = par[3];
                 addCmd(par[0], par[1], par[2], () => { SelectedCommandId = parId; this.DialogResult = DialogResult.OK; this.Close(); });
             }
-            addCmd("Arena", "Launch Multi-Harness Parallel Arena (Race 2 Harnesses Side-by-Side)", "",
+            foreach (string[] ag in CodeLessMainForm.AgentTrustPaletteCommands)
+            {
+                string agId = ag[3];
+                addCmd(ag[0], ag[1], ag[2], () => { SelectedCommandId = agId; this.DialogResult = DialogResult.OK; this.Close(); });
+            }
+            addCmd("Arena", "Best-of-N Arena: Compare Providers With Verification", "",
                 () => { SelectedCommandId = "open_arena"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Architecture", "Open Interactive Live Code & Dependency Map", "",
                 () => { SelectedCommandId = "open_arch_map"; this.DialogResult = DialogResult.OK; this.Close(); });
