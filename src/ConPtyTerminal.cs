@@ -625,6 +625,17 @@ namespace codeLess.Studio
             set { bgArgb = value.ToArgb(); }
         }
 
+        /// <summary>Packed ARGB of <see cref="Fg"/> (renderers use it without building a System.Drawing.Color).</summary>
+        public int FgArgb { get { return fgArgb; } }
+        /// <summary>Packed ARGB of <see cref="Bg"/>.</summary>
+        public int BgArgb { get { return bgArgb; } }
+
+        /// <summary>Same character, attributes and colours (renderers reuse a row's drawing while all its cells match).</summary>
+        public bool SameAs(TermCell o)
+        {
+            return Char == o.Char && Flags == o.Flags && fgArgb == o.fgArgb && bgArgb == o.bgArgb;
+        }
+
         public static TermCell Empty(Color defaultFg, Color defaultBg)
         {
             TermCell c = new TermCell();
@@ -653,10 +664,27 @@ namespace codeLess.Studio
         }
 
         private readonly object syncLock = new object();
-        private TermCell[,] primaryGrid;
-        private TermCell[,] altGrid;
-        private readonly List<TermCell[]> scrollback = new List<TermCell[]>();
+        private TermCell[][] primaryGrid;
+        private TermCell[][] altGrid;
+        private readonly TermRowRing scrollback = new TermRowRing();
         public int MaxScrollbackLines = 5000;
+        private long scrollbackPushCount;
+
+        // Appends a row to the scrollback (a ring: dropping the oldest row no longer shifts 5000 references).
+        private void PushScrollback(TermCell[] row)
+        {
+            scrollback.Add(row, Math.Max(1, MaxScrollbackLines));
+            scrollbackPushCount++;
+        }
+
+        /// <summary>
+        /// Rows ever pushed into the scrollback (never decreases, also counts rows trimmed later). A viewport scrolled
+        /// back keeps showing the same rows while output arrives by anchoring to this counter (xterm.js keeps ydisp).
+        /// </summary>
+        public long ScrollbackPushCount
+        {
+            get { lock (syncLock) { return scrollbackPushCount; } }
+        }
 
         public int Cols { get; private set; }
         public int Rows { get; private set; }
@@ -672,6 +700,12 @@ namespace codeLess.Studio
         public bool SgrMouseMode { get; private set; }
         public bool AlternateScrollMode { get; private set; }
         public string WindowTitle { get; private set; }
+        /// <summary>DECSCUSR shape requested by the application: 0 = the user's setting, 1/2 block, 3/4 underline, 5/6 bar (odd = blinking).</summary>
+        public int CursorShape { get; private set; }
+        /// <summary>DEC private mode 2026 (synchronized output) is set: the application is in the middle of a frame.</summary>
+        public bool SynchronizedOutput { get; private set; }
+        /// <summary>Environment.TickCount when synchronized output was last set (renderers give up waiting after a timeout).</summary>
+        public int SynchronizedOutputSinceTick { get; private set; }
 
         public int ScrollTop { get; private set; }
         public int ScrollBottom { get; private set; }
@@ -854,32 +888,37 @@ namespace codeLess.Studio
             return col;
         }
 
-        private void RemapGridColors(TermCell[,] grid, Color[] oldPalette, Color oldDefFg, Color oldDefBg)
+        private void RemapGridColors(TermCell[][] grid, Color[] oldPalette, Color oldDefFg, Color oldDefBg)
         {
             if (grid == null) return;
-            int rCount = grid.GetLength(0);
-            int cCount = grid.GetLength(1);
+            int rCount = grid.Length;
             for (int r = 0; r < rCount; r++)
             {
+                int cCount = grid[r].Length;
                 for (int c = 0; c < cCount; c++)
                 {
-                    RemapCellColors(ref grid[r, c], oldPalette, oldDefFg, oldDefBg);
+                    RemapCellColors(ref grid[r][c], oldPalette, oldDefFg, oldDefBg);
                 }
             }
         }
 
-        private TermCell[,] ActiveGrid
+        private TermCell[][] ActiveGrid
         {
             get { return IsAlternateScreen ? altGrid : primaryGrid; }
         }
 
-        private TermCell[,] CreateGrid(int cols, int rows)
+        private TermCell[][] CreateGrid(int cols, int rows)
         {
-            TermCell[,] g = new TermCell[rows, cols];
+            // Rows are separate arrays so scrolling rotates row references instead of copying every cell.
+            TermCell[][] g = new TermCell[rows][];
             TermCell empty = TermCell.Empty(DefaultFg, DefaultBg);
             for (int r = 0; r < rows; r++)
+            {
+                TermCell[] row = new TermCell[cols];
                 for (int c = 0; c < cols; c++)
-                    g[r, c] = empty;
+                    row[c] = empty;
+                g[r] = row;
+            }
             return g;
         }
 
@@ -907,24 +946,24 @@ namespace codeLess.Studio
             }
         }
 
-        private static bool IsGridRowBlank(TermCell[,] grid, int cols, int row)
+        private static bool IsGridRowBlank(TermCell[][] grid, int cols, int row)
         {
             for (int c = 0; c < cols; c++)
             {
-                char ch = grid[row, c].Char;
+                char ch = grid[row][c].Char;
                 if (ch != '\0' && ch != ' ')
                     return false;
             }
             return true;
         }
 
-        private static string ExtractGridRowTrimmed(TermCell[,] grid, int cols, int row, out int lastNonSpaceCol)
+        private static string ExtractGridRowTrimmed(TermCell[][] grid, int cols, int row, out int lastNonSpaceCol)
         {
             lastNonSpaceCol = -1;
             StringBuilder sb = new StringBuilder(cols);
             for (int c = 0; c < cols; c++)
             {
-                char ch = grid[row, c].Char;
+                char ch = grid[row][c].Char;
                 if (ch == '\0') ch = ' ';
                 if (ch != ' ') lastNonSpaceCol = c;
                 sb.Append(ch);
@@ -993,8 +1032,8 @@ namespace codeLess.Studio
                     return;
                 }
 
-                TermCell[,] newPrimary = CreateGrid(newCols, newRows);
-                TermCell[,] newAlt = CreateGrid(newCols, newRows);
+                TermCell[][] newPrimary = CreateGrid(newCols, newRows);
+                TermCell[][] newAlt = CreateGrid(newCols, newRows);
 
                 int lastOccupiedRow = CursorRow;
                 for (int r = Rows - 1; r > lastOccupiedRow; r--)
@@ -1012,9 +1051,7 @@ namespace codeLess.Studio
                     rowShift = lastOccupiedRow - newRows + 1;
                     for (int s = 0; s < rowShift && s < Rows; s++)
                     {
-                        scrollback.Add(CopyTrimmedScrollbackRow(primaryGrid, s, Cols));
-                        if (scrollback.Count > MaxScrollbackLines)
-                            scrollback.RemoveAt(0);
+                        PushScrollback(CopyTrimmedScrollbackRow(primaryGrid, s, Cols));
                     }
                 }
 
@@ -1025,12 +1062,12 @@ namespace codeLess.Studio
                     if (srcPrimaryRow >= 0 && srcPrimaryRow < Rows)
                     {
                         for (int c = 0; c < copyCols; c++)
-                            newPrimary[r, c] = primaryGrid[srcPrimaryRow, c];
+                            newPrimary[r][c] = primaryGrid[srcPrimaryRow][c];
                     }
                     if (r < Rows)
                     {
                         for (int c = 0; c < copyCols; c++)
-                            newAlt[r, c] = altGrid[r, c];
+                            newAlt[r][c] = altGrid[r][c];
                     }
                 }
 
@@ -1096,19 +1133,18 @@ namespace codeLess.Studio
             shift = Math.Min(shift, cursorRowOut); // keep the cursor row on screen
             for (int i = 0; i < shift; i++)
             {
-                scrollback.Add(rows[i]);
-                if (scrollback.Count > MaxScrollbackLines) scrollback.RemoveAt(0);
+                PushScrollback(rows[i]);
             }
 
-            TermCell[,] newPrimary = CreateGrid(newCols, newRows);
+            TermCell[][] newPrimary = CreateGrid(newCols, newRows);
             for (int r = 0; r < newRows && r + shift < rows.Count; r++)
             {
                 TermCell[] src = rows[r + shift];
-                for (int c = 0; c < src.Length && c < newCols; c++) newPrimary[r, c] = src[c];
+                for (int c = 0; c < src.Length && c < newCols; c++) newPrimary[r][c] = src[c];
             }
-            TermCell[,] newAlt = CreateGrid(newCols, newRows);
+            TermCell[][] newAlt = CreateGrid(newCols, newRows);
             for (int r = 0; r < newRows && r < Rows; r++)
-                for (int c = 0; c < newCols; c++) newAlt[r, c] = altGrid[r, c];
+                for (int c = 0; c < newCols; c++) newAlt[r][c] = altGrid[r][c];
 
             primaryGrid = newPrimary;
             altGrid = newAlt;
@@ -1340,7 +1376,7 @@ namespace codeLess.Studio
 
         private void WriteCellAt(int col, char ch)
         {
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
             if (CursorRow >= 0 && CursorRow < Rows && col >= 0 && col < Cols)
             {
                 TermCell cell = new TermCell();
@@ -1348,7 +1384,7 @@ namespace codeLess.Studio
                 cell.Fg = curFg;
                 cell.Bg = curBg;
                 cell.Flags = curFlags;
-                g[CursorRow, col] = cell;
+                g[CursorRow][col] = cell;
             }
         }
 
@@ -1509,26 +1545,22 @@ namespace codeLess.Studio
             top = Math.Max(0, Math.Min(Rows - 1, top));
             bottom = Math.Max(top, Math.Min(Rows - 1, bottom));
             count = Math.Max(1, Math.Min(bottom - top + 1, count));
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
 
             for (int n = 0; n < count; n++)
             {
                 if (pushToScrollback)
-                {
-                    scrollback.Add(CopyTrimmedScrollbackRow(g, top, Cols));
-                    if (scrollback.Count > MaxScrollbackLines)
-                        scrollback.RemoveAt(0);
-                }
+                    PushScrollback(CopyTrimmedScrollbackRow(g, top, Cols));
 
+                // rotate row references (was a copy of every cell of the region per line feed)
+                TermCell[] recycled = g[top];
                 for (int r = top; r < bottom; r++)
-                {
-                    for (int c = 0; c < Cols; c++)
-                        g[r, c] = g[r + 1, c];
-                }
+                    g[r] = g[r + 1];
+                g[bottom] = recycled;
 
                 TermCell blank = BlankAttrCell();
                 for (int c = 0; c < Cols; c++)
-                    g[bottom, c] = blank;
+                    recycled[c] = blank;
             }
         }
 
@@ -1537,19 +1569,18 @@ namespace codeLess.Studio
             top = Math.Max(0, Math.Min(Rows - 1, top));
             bottom = Math.Max(top, Math.Min(Rows - 1, bottom));
             count = Math.Max(1, Math.Min(bottom - top + 1, count));
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
 
             for (int n = 0; n < count; n++)
             {
+                TermCell[] recycled = g[bottom];
                 for (int r = bottom; r > top; r--)
-                {
-                    for (int c = 0; c < Cols; c++)
-                        g[r, c] = g[r - 1, c];
-                }
+                    g[r] = g[r - 1];
+                g[top] = recycled;
 
                 TermCell blank = BlankAttrCell();
                 for (int c = 0; c < Cols; c++)
-                    g[top, c] = blank;
+                    recycled[c] = blank;
             }
         }
 
@@ -1557,20 +1588,20 @@ namespace codeLess.Studio
         // background, no underline/inverse). GetVirtualCell already returns an Empty cell past the stored length,
         // so rendering is unchanged, but a mostly-empty wide row no longer costs Cols * ~64-byte cells
         // (5000 full-width rows per session otherwise pin tens of MB during heavy output).
-        private static TermCell[] CopyTrimmedScrollbackRow(TermCell[,] grid, int row, int cols)
+        private static TermCell[] CopyTrimmedScrollbackRow(TermCell[][] grid, int row, int cols)
         {
             const byte visibleBlankMask = TermCell.FLAG_UNDERLINE | TermCell.FLAG_INVERSE | TermCell.FLAG_DEFAULT_BG;
             int len = cols;
             while (len > 0)
             {
-                TermCell tail = grid[row, len - 1];
+                TermCell tail = grid[row][len - 1];
                 if ((tail.Char == ' ' || tail.Char == '\0') && (tail.Flags & visibleBlankMask) == TermCell.FLAG_DEFAULT_BG)
                     len--;
                 else
                     break;
             }
             TermCell[] line = new TermCell[len];
-            for (int c = 0; c < len; c++) line[c] = grid[row, c];
+            for (int c = 0; c < len; c++) line[c] = grid[row][c];
             return line;
         }
 
@@ -1623,6 +1654,8 @@ namespace codeLess.Studio
             CursorRow = 0;
             CursorCol = 0;
             pendingWrap = false;
+            CursorShape = 0;
+            SynchronizedOutput = false;
         }
 
         private void ExecuteOsc(string osc)
@@ -1654,6 +1687,27 @@ namespace codeLess.Studio
             if (finalChar == 'm' && csiPrefix == '\0')
             {
                 ExecuteSgrRaw(rawParams);
+                return;
+            }
+
+            // DECSCUSR (CSI Ps SP q): cursor shape set by the application (vim / neovim insert mode); 0 = user setting.
+            if (finalChar == 'q' && csiPrefix == '\0' && rawParams != null && rawParams.EndsWith(" ", StringComparison.Ordinal))
+            {
+                int shape;
+                if (!int.TryParse(rawParams.Trim(), out shape)) shape = 0;
+                CursorShape = (shape >= 0 && shape <= 6) ? shape : 0;
+                return;
+            }
+
+            // DECRQM (CSI ? Ps $ p) for synchronized output: apps probe it before using mode 2026.
+            if (finalChar == 'p' && csiPrefix == '?' && rawParams != null && rawParams.EndsWith("$", StringComparison.Ordinal))
+            {
+                int mode;
+                if (int.TryParse(rawParams.Substring(0, rawParams.Length - 1), out mode) && WriteBackCallback != null)
+                {
+                    int state = mode == 2026 ? (SynchronizedOutput ? 1 : 2) : 0;
+                    WriteBackCallback(string.Format("\x1b[?{0};{1}$y", mode, state));
+                }
                 return;
             }
 
@@ -1733,6 +1787,12 @@ namespace codeLess.Studio
                         else if (mode == 1007)
                         {
                             AlternateScrollMode = setMode;
+                        }
+                        else if (mode == 2026)
+                        {
+                            // Synchronized output: renderers keep showing the last complete frame until the reset.
+                            SynchronizedOutput = setMode;
+                            if (setMode) SynchronizedOutputSinceTick = Environment.TickCount;
                         }
                     }
                 }
@@ -1852,78 +1912,78 @@ namespace codeLess.Studio
 
         private void EraseInDisplay(int mode)
         {
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
             TermCell blank = BlankAttrCell();
             if (mode == 0)
             {
-                for (int c = CursorCol; c < Cols; c++) g[CursorRow, c] = blank;
+                for (int c = CursorCol; c < Cols; c++) g[CursorRow][c] = blank;
                 for (int r = CursorRow + 1; r < Rows; r++)
-                    for (int c = 0; c < Cols; c++) g[r, c] = blank;
+                    for (int c = 0; c < Cols; c++) g[r][c] = blank;
             }
             else if (mode == 1)
             {
                 for (int r = 0; r < CursorRow; r++)
-                    for (int c = 0; c < Cols; c++) g[r, c] = blank;
-                for (int c = 0; c <= CursorCol && c < Cols; c++) g[CursorRow, c] = blank;
+                    for (int c = 0; c < Cols; c++) g[r][c] = blank;
+                for (int c = 0; c <= CursorCol && c < Cols; c++) g[CursorRow][c] = blank;
             }
             else if (mode == 2 || mode == 3)
             {
                 for (int r = 0; r < Rows; r++)
-                    for (int c = 0; c < Cols; c++) g[r, c] = blank;
+                    for (int c = 0; c < Cols; c++) g[r][c] = blank;
                 if (mode == 3) scrollback.Clear();
             }
         }
 
         private void EraseInLine(int mode)
         {
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
             TermCell blank = BlankAttrCell();
             if (CursorRow < 0 || CursorRow >= Rows) return;
             if (mode == 0)
             {
-                for (int c = CursorCol; c < Cols; c++) g[CursorRow, c] = blank;
+                for (int c = CursorCol; c < Cols; c++) g[CursorRow][c] = blank;
             }
             else if (mode == 1)
             {
-                for (int c = 0; c <= CursorCol && c < Cols; c++) g[CursorRow, c] = blank;
+                for (int c = 0; c <= CursorCol && c < Cols; c++) g[CursorRow][c] = blank;
             }
             else if (mode == 2)
             {
-                for (int c = 0; c < Cols; c++) g[CursorRow, c] = blank;
+                for (int c = 0; c < Cols; c++) g[CursorRow][c] = blank;
             }
         }
 
         private void InsertBlankChars(int count)
         {
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
             if (CursorRow < 0 || CursorRow >= Rows) return;
             count = Math.Max(1, Math.Min(Cols - CursorCol, count));
             for (int c = Cols - 1; c >= CursorCol + count; c--)
-                g[CursorRow, c] = g[CursorRow, c - count];
+                g[CursorRow][c] = g[CursorRow][c - count];
             TermCell blank = BlankAttrCell();
             for (int c = CursorCol; c < CursorCol + count && c < Cols; c++)
-                g[CursorRow, c] = blank;
+                g[CursorRow][c] = blank;
         }
 
         private void DeleteChars(int count)
         {
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
             if (CursorRow < 0 || CursorRow >= Rows) return;
             count = Math.Max(1, Math.Min(Cols - CursorCol, count));
             for (int c = CursorCol; c < Cols - count; c++)
-                g[CursorRow, c] = g[CursorRow, c + count];
+                g[CursorRow][c] = g[CursorRow][c + count];
             TermCell blank = BlankAttrCell();
             for (int c = Cols - count; c < Cols; c++)
-                g[CursorRow, c] = blank;
+                g[CursorRow][c] = blank;
         }
 
         private void EraseChars(int count)
         {
-            TermCell[,] g = ActiveGrid;
+            TermCell[][] g = ActiveGrid;
             if (CursorRow < 0 || CursorRow >= Rows) return;
             TermCell blank = BlankAttrCell();
             for (int c = CursorCol; c < Math.Min(Cols, CursorCol + count); c++)
-                g[CursorRow, c] = blank;
+                g[CursorRow][c] = blank;
         }
 
         private void ExecuteSgrRaw(string rawParams)
@@ -2146,9 +2206,9 @@ namespace codeLess.Studio
         {
             lock (syncLock)
             {
-                TermCell[,] g = ActiveGrid;
+                TermCell[][] g = ActiveGrid;
                 if (row >= 0 && row < Rows && col >= 0 && col < Cols)
-                    return g[row, col];
+                    return g[row][col];
                 return TermCell.Empty(DefaultFg, DefaultBg);
             }
         }
@@ -2171,9 +2231,9 @@ namespace codeLess.Studio
                 }
 
                 int screenRow = IsAlternateScreen ? virtualRow : (virtualRow - scrollback.Count);
-                TermCell[,] g = ActiveGrid;
+                TermCell[][] g = ActiveGrid;
                 if (screenRow >= 0 && screenRow < Rows && col < Cols)
-                    return g[screenRow, col];
+                    return g[screenRow][col];
                 return TermCell.Empty(DefaultFg, DefaultBg);
             }
         }
@@ -2193,11 +2253,11 @@ namespace codeLess.Studio
         {
             lock (syncLock)
             {
-                TermCell[,] g = ActiveGrid;
+                TermCell[][] g = ActiveGrid;
                 if (screenRow < 0 || screenRow >= Rows) return "";
                 StringBuilder sb = new StringBuilder(Cols);
                 for (int c = 0; c < Cols; c++)
-                    sb.Append(g[screenRow, c].Char == '\0' ? ' ' : g[screenRow, c].Char);
+                    sb.Append(g[screenRow][c].Char == '\0' ? ' ' : g[screenRow][c].Char);
                 return sb.ToString().TrimEnd();
             }
         }
@@ -2253,6 +2313,111 @@ namespace codeLess.Studio
                 }
             }
             return GetCell(row, col);
+        }
+
+        /// <summary>
+        /// Copies the visible rows (scrolled back by <paramref name="scrollbackOffset"/>) and the cursor into
+        /// <paramref name="snap"/> under one lock, so a frame never shows a half-applied write from the PTY reader thread
+        /// (the renderers used to take the lock once per cell while the reader kept writing). Row arrays are reused.
+        /// </summary>
+        public void SnapshotViewport(int scrollbackOffset, TerminalViewportSnapshot snap)
+        {
+            if (snap == null) return;
+            lock (syncLock)
+            {
+                SnapshotViewportInternal(scrollbackOffset, snap);
+            }
+        }
+
+        /// <summary>
+        /// Like <see cref="SnapshotViewport(int, TerminalViewportSnapshot)"/>, but first moves <paramref name="scroll"/>
+        /// along with the output (inside the same lock, so the rows shown and the anchor always agree).
+        /// </summary>
+        public void SnapshotViewport(TerminalScrollModel scroll, TerminalViewportSnapshot snap)
+        {
+            if (snap == null || scroll == null) return;
+            lock (syncLock)
+            {
+                int sb = IsAlternateScreen ? 0 : scrollback.Count;
+                scroll.Sync(scrollbackPushCount, sb);
+                SnapshotViewportInternal(scroll.DisplayOffset, snap);
+            }
+        }
+
+        /// <summary>Scrollback size and push counter read together.</summary>
+        public void GetScrollbackState(out long pushCount, out int count)
+        {
+            lock (syncLock)
+            {
+                pushCount = scrollbackPushCount;
+                count = IsAlternateScreen ? 0 : scrollback.Count;
+            }
+        }
+
+        /// <summary>
+        /// A cell addressed by absolute line (<see cref="ScrollbackPushCount"/> based: scrollback row i is
+        /// push - count + i, screen row r is push + r), so selections follow the content as it scrolls.
+        /// </summary>
+        public TermCell GetAbsoluteCell(long absRow, int col)
+        {
+            lock (syncLock)
+            {
+                int sb = IsAlternateScreen ? 0 : scrollback.Count;
+                long first = scrollbackPushCount - sb;
+                long v = absRow - first;
+                if (v < 0 || v > int.MaxValue) return TermCell.Empty(DefaultFg, DefaultBg);
+                return GetVirtualCell((int)v, col);
+            }
+        }
+
+        /// <summary>First and last absolute rows currently stored (oldest scrollback row .. last screen row).</summary>
+        public void GetAbsoluteRange(out long first, out long last)
+        {
+            lock (syncLock)
+            {
+                int sb = IsAlternateScreen ? 0 : scrollback.Count;
+                first = scrollbackPushCount - sb;
+                last = scrollbackPushCount + Rows - 1;
+            }
+        }
+
+        private void SnapshotViewportInternal(int scrollbackOffset, TerminalViewportSnapshot snap)
+        {
+            {
+                snap.Prepare(Cols, Rows);
+                int sbCount = IsAlternateScreen ? 0 : scrollback.Count;
+                int off = Math.Max(0, Math.Min(scrollbackOffset, sbCount));
+                TermCell empty = TermCell.Empty(DefaultFg, DefaultBg);
+                TermCell[][] g = ActiveGrid;
+                for (int r = 0; r < Rows; r++)
+                {
+                    TermCell[] dst = snap.Cells[r];
+                    int vr = sbCount - off + r;
+                    if (vr < sbCount)
+                    {
+                        TermCell[] line = scrollback[vr];
+                        int n = Math.Min(line.Length, Cols);
+                        Array.Copy(line, dst, n);
+                        for (int c = n; c < Cols; c++) dst[c] = empty;
+                    }
+                    else
+                    {
+                        Array.Copy(g[vr - sbCount], dst, Cols);
+                    }
+                }
+                snap.ScrollbackOffset = off;
+                snap.ScrollbackCount = sbCount;
+                snap.ScrollbackPushCount = scrollbackPushCount;
+                snap.CursorRow = CursorRow;
+                snap.CursorCol = CursorCol;
+                snap.CursorVisible = CursorVisible;
+                snap.CursorShape = CursorShape;
+                snap.IsAlternateScreen = IsAlternateScreen;
+                snap.SynchronizedOutput = SynchronizedOutput;
+                snap.DefaultFgArgb = DefaultFg.ToArgb();
+                snap.DefaultBgArgb = DefaultBg.ToArgb();
+                snap.Version++;
+            }
         }
 
         public string GetViewportLineText(int screenRow)
@@ -3977,7 +4142,7 @@ namespace codeLess.Studio
     // =========================================================================
     // 5. VS CODE INTEGRATED TERMINAL EMULATOR CONTROL (DIRECT CANVAS INPUT)
     // =========================================================================
-    public class CodeLessTerminalEmulatorControl : Control
+    public partial class CodeLessTerminalEmulatorControl : Control
     {
         private ConPtyTerminalSession session;
         private StudioTheme theme;
@@ -3993,7 +4158,6 @@ namespace codeLess.Studio
         // Scrollback offset (0 = pinned to bottom live screen; >0 = scrolled up N lines)
         private int scrollbackOffset = 0;
         private int wheelDeltaRemainder = 0;
-        private int repaintQueued = 0;
         private int activeMouseButtonCode = -1;
 
         // Selection state (in virtual row/col coordinates)
@@ -4055,17 +4219,11 @@ namespace codeLess.Studio
             this.BackColor = Color.FromArgb(24, 24, 27);
             this.ForeColor = Color.FromArgb(204, 204, 204);
 
-            SetTerminalFont("Cascadia Mono", 9.8f);
+            ApplyTerminalFontFromOptions(); // terminal.integrated.fontSize / fontFamily / lineHeight
 
-            blinkTimer = new System.Windows.Forms.Timer { Interval = 530 };
-            blinkTimer.Tick += (s, e) =>
-            {
-                if (this.Focused)
-                {
-                    cursorBlinkOn = !cursorBlinkOn;
-                    this.Invalidate();
-                }
-            };
+            // xterm.js blink interval; runs only when blinking is on (off by default, like VS Code) and focused
+            blinkTimer = new System.Windows.Forms.Timer { Interval = (int)TerminalOptions.BlinkIntervalMs };
+            blinkTimer.Tick += (s, e) => OnBlinkTick();
             // Started in OnGotFocus / stopped in OnLostFocus: no wakeups while unfocused, inactive or minimized.
 
             BuildContextMenu();
@@ -4089,6 +4247,8 @@ namespace codeLess.Studio
                 }
                 session = value;
                 scrollbackOffset = 0;
+                scrollModel.ScrollToBottom();
+                paintedRowHashes = new ulong[0];
                 hasSelection = false;
                 if (session != null)
                 {
@@ -4138,6 +4298,7 @@ namespace codeLess.Studio
             {
                 session.Buffer.ClearScrollbackAndScreen();
                 scrollbackOffset = 0;
+                scrollModel.ScrollToBottom();
                 hasSelection = false;
                 if (!session.HasExited)
                 {
@@ -4184,7 +4345,7 @@ namespace codeLess.Studio
             Size s100 = TextRenderer.MeasureText(new string('W', 100), regularFont, new Size(4000, 200), TextFormatFlags.NoPadding);
             Size s1 = TextRenderer.MeasureText("W", regularFont, new Size(4000, 200), TextFormatFlags.NoPadding);
             cellWidth = Math.Max(6, (int)Math.Round((s100.Width - s1.Width) / 99.0));
-            cellHeight = Math.Max(14, s1.Height + 2);
+            ApplyLineHeight(s1.Height); // lineHeight 1 = the font's own line height, like VS Code
             RecalculateGridDimensions();
         }
 
@@ -4219,21 +4380,7 @@ namespace codeLess.Studio
 
         private void OnSessionOutputReceived()
         {
-            if (this.IsDisposed || !this.IsHandleCreated) return;
-            if (Interlocked.Exchange(ref repaintQueued, 1) != 0) return;
-            try
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    Interlocked.Exchange(ref repaintQueued, 0);
-                    if (!this.IsDisposed)
-                        this.Invalidate();
-                }));
-            }
-            catch
-            {
-                Interlocked.Exchange(ref repaintQueued, 0);
-            }
+            OnSessionOutputFeel(); // one repaint per painted frame, only the rows that changed
         }
 
         protected override void OnResize(EventArgs e)
@@ -4253,7 +4400,16 @@ namespace codeLess.Studio
             int availH = Math.Max(40, this.ClientSize.Height - padTop * 2);
             int cols = Math.Max(20, availW / Math.Max(1, cellWidth));
             int rows = Math.Max(5, availH / Math.Max(1, cellHeight));
-            session.Resize(cols, rows);
+            ResizeSession(cols, rows); // columns debounced with a large buffer (VS Code)
+        }
+
+        private void RecalculateGridDimensionsNow()
+        {
+            if (session == null || this.ClientSize.Width <= 40 || this.ClientSize.Height <= 30) return;
+            int availW = Math.Max(80, this.ClientSize.Width - padLeft - 14);
+            int availH = Math.Max(40, this.ClientSize.Height - padTop * 2);
+            session.Resize(Math.Max(20, availW / Math.Max(1, cellWidth)), Math.Max(5, availH / Math.Max(1, cellHeight)));
+            this.Invalidate();
         }
 
         private void BuildContextMenu()
@@ -4418,15 +4574,15 @@ namespace codeLess.Studio
         {
             base.OnGotFocus(e);
             cursorBlinkOn = true;
-            if (blinkTimer != null) blinkTimer.Start();
-            this.Invalidate();
+            UpdateBlinkTimer(); // also repaints the cursor cell (outline -> filled)
         }
 
         protected override void OnLostFocus(EventArgs e)
         {
             base.OnLostFocus(e);
             if (blinkTimer != null) blinkTimer.Stop();
-            this.Invalidate();
+            cursorBlinkOn = true;
+            InvalidateCursorCell(); // filled -> outline (terminal.integrated.cursorStyleInactive)
         }
 
         protected override bool IsInputKey(Keys keyData)
@@ -4518,18 +4674,14 @@ namespace codeLess.Studio
                 e.SuppressKeyPress = true;
                 e.Handled = true;
                 if (session.Buffer != null)
-                {
-                    scrollbackOffset = session.Buffer.ScrollbackCount;
-                    this.Invalidate();
-                }
+                    SetScrollOffsetRows(session.Buffer.ScrollbackCount);
                 return;
             }
             if (e.Control && !e.Shift && !e.Alt && e.KeyCode == Keys.End)
             {
                 e.SuppressKeyPress = true;
                 e.Handled = true;
-                scrollbackOffset = 0;
-                this.Invalidate();
+                ScrollToBottomFeel();
                 return;
             }
 
@@ -4621,7 +4773,7 @@ namespace codeLess.Studio
             {
                 e.SuppressKeyPress = true;
                 e.Handled = true;
-                scrollbackOffset = 0;
+                ScrollToBottomFeel();
                 hasSelection = false;
                 session.WriteInput(vtSeq);
                 this.Invalidate();
@@ -4640,7 +4792,7 @@ namespace codeLess.Studio
                 return;
             }
 
-            scrollbackOffset = 0;
+            ScrollToBottomFeel();
             hasSelection = false;
             cursorBlinkOn = true;
 
@@ -4755,7 +4907,7 @@ namespace codeLess.Studio
                     string txt = Clipboard.GetText();
                     if (!string.IsNullOrEmpty(txt))
                     {
-                        scrollbackOffset = 0;
+                        ScrollToBottomFeel();
                         session.WriteInput(Vt100TerminalBuffer.PreparePasteText(txt, session.Buffer != null && session.Buffer.BracketedPasteMode));
                     }
                 }
@@ -5067,25 +5219,30 @@ namespace codeLess.Studio
             base.OnMouseWheel(e);
             if (session == null || session.Buffer == null || e.Delta == 0) return;
 
-            if ((wheelDeltaRemainder > 0 && e.Delta < 0) || (wheelDeltaRemainder < 0 && e.Delta > 0))
-                wheelDeltaRemainder = 0;
-
-            wheelDeltaRemainder += e.Delta;
-            const int stepThreshold = 40; // 120 (1 standard notch) = 3 steps; smooth 1-step precision touchpad scrolling
-            int steps = wheelDeltaRemainder / stepThreshold;
-            if (steps == 0) return;
-            wheelDeltaRemainder %= stepThreshold;
-
-            bool wheelUp = steps > 0;
-            int absSteps = Math.Min(12, Math.Abs(steps));
-
             Keys mods = Control.ModifierKeys;
             bool shift = (mods & Keys.Shift) == Keys.Shift;
             bool alt = (mods & Keys.Alt) == Keys.Alt;
             bool ctrl = (mods & Keys.Control) == Keys.Control;
-
             int col1, row1;
             PointToScreenOneBasedCell(e.Location, out col1, out row1);
+            if (session.Buffer.EncodeMouseWheelSequence(e.Delta > 0, col1, row1, shift, alt, ctrl) == null)
+            {
+                // scrollback: exact position (touchpad deltas accumulate), rows snap; Alt = fastScrollSensitivity
+                wheelDeltaRemainder = 0;
+                WheelScrollback(e.Delta, alt);
+                return;
+            }
+
+            // mouse-tracking apps / alternate screen: whole lines
+            if ((wheelDeltaRemainder > 0 && e.Delta < 0) || (wheelDeltaRemainder < 0 && e.Delta > 0))
+                wheelDeltaRemainder = 0;
+            wheelDeltaRemainder += e.Delta;
+            const int stepThreshold = 40; // 120 (1 standard notch) = 3 steps
+            int steps = wheelDeltaRemainder / stepThreshold;
+            if (steps == 0) return;
+            wheelDeltaRemainder %= stepThreshold;
+            bool wheelUp = steps > 0;
+            int absSteps = Math.Min(12, Math.Abs(steps));
             string vtWheel = session.Buffer.EncodeMouseWheelSequence(wheelUp, col1, row1, shift, alt, ctrl);
             if (vtWheel != null)
             {
@@ -5093,18 +5250,13 @@ namespace codeLess.Studio
                 for (int i = 0; i < absSteps; i++)
                     batch.Append(vtWheel);
                 session.WriteInput(batch.ToString());
-                return;
             }
-
-            ScrollByLines(steps);
         }
 
         private void ScrollByLines(int deltaLines)
         {
             if (session == null || session.Buffer == null || session.Buffer.IsAlternateScreen) return;
-            int maxScroll = session.Buffer.ScrollbackCount;
-            scrollbackOffset = Math.Max(0, Math.Min(maxScroll, scrollbackOffset + deltaLines));
-            this.Invalidate();
+            SetScrollOffsetRows(Math.Round(scrollModel.Offset) + deltaLines);
         }
 
         private void UpdateScrollFromMouseY(int mouseY)
@@ -5113,8 +5265,7 @@ namespace codeLess.Studio
             int maxScroll = session.Buffer.ScrollbackCount;
             if (maxScroll <= 0) return;
             double ratio = Math.Max(0.0, Math.Min(1.0, (double)mouseY / Math.Max(1, this.ClientSize.Height)));
-            scrollbackOffset = (int)Math.Round((1.0 - ratio) * maxScroll);
-            this.Invalidate();
+            SetScrollOffsetRows((1.0 - ratio) * maxScroll); // exact: the thumb follows the pointer, rows snap
         }
 
         private void DetectHoveredLink(int vr, int col, bool ctrlHeld)
@@ -5197,224 +5348,6 @@ namespace codeLess.Studio
             return true;
         }
 
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            bool isLight = (theme != null && (theme.IsLight || theme.BgEditor.GetBrightness() > 0.5f)) ||
-                           (session != null && session.Buffer != null && session.Buffer.IsLightTheme) ||
-                           this.BackColor.GetBrightness() > 0.5f;
-            Color effBg = isLight ? Color.FromArgb(255, 255, 255) : this.BackColor;
-            Color effFg = isLight ? Color.FromArgb(59, 59, 59) : this.ForeColor;
-            g.Clear(effBg);
-
-            if (session == null || session.Buffer == null) return;
-
-            Vt100TerminalBuffer buf = session.Buffer;
-            int rows = buf.Rows;
-            int cols = buf.Cols;
-            int totalVirtual = buf.TotalVirtualRows;
-            int topVirtualRow = Math.Max(0, totalVirtual - rows - scrollbackOffset);
-
-            Color selHighlightBg = (theme != null)
-                ? StudioTheme.Blend(effBg, theme.AccentPrimary, isLight ? 0.25 : 0.38)
-                : (isLight ? Color.FromArgb(173, 214, 255) : Color.FromArgb(38, 79, 120));
-
-            StringBuilder runChars = new StringBuilder(cols);
-
-            for (int sr = 0; sr < rows; sr++)
-            {
-                int vr = topVirtualRow + sr;
-                int y = padTop + sr * cellHeight;
-
-                // 1. Paint non-default cell backgrounds & selection highlights
-                for (int c = 0; c < cols; c++)
-                {
-                    TermCell cell = buf.GetVirtualCell(vr, c);
-                    bool sel = IsCellSelected(vr, c);
-                    bool inv = (cell.Flags & TermCell.FLAG_INVERSE) != 0;
-                    bool isDefBg = (cell.Flags & TermCell.FLAG_DEFAULT_BG) != 0 ||
-                                   (cell.Bg.R == 0 && cell.Bg.G == 0 && cell.Bg.B == 0) ||
-                                   (isLight && (cell.Bg == Color.FromArgb(24, 24, 27) || cell.Bg == Color.FromArgb(7, 8, 12)));
-                    Color cellBg = inv
-                        ? (((cell.Flags & TermCell.FLAG_DEFAULT_FG) != 0) ? effFg : cell.Fg)
-                        : (isDefBg ? effBg : cell.Bg);
-
-                    if (sel)
-                    {
-                        using (SolidBrush sb = new SolidBrush(selHighlightBg))
-                            g.FillRectangle(sb, padLeft + c * cellWidth, y, cellWidth, cellHeight);
-                    }
-                    else if (cellBg.ToArgb() != effBg.ToArgb())
-                    {
-                        using (SolidBrush bb = new SolidBrush(cellBg))
-                            g.FillRectangle(bb, padLeft + c * cellWidth, y, cellWidth, cellHeight);
-                    }
-                }
-
-                // 2. Paint foreground text in style/color runs for crisp high-speed rendering
-                int cIdx = 0;
-                while (cIdx < cols)
-                {
-                    TermCell first = buf.GetVirtualCell(vr, cIdx);
-                    char ch = first.Char == '\0' ? ' ' : first.Char;
-                    if (ch == ' ' && (first.Flags & TermCell.FLAG_UNDERLINE) == 0)
-                    {
-                        cIdx++;
-                        continue;
-                    }
-
-                    bool inv = (first.Flags & TermCell.FLAG_INVERSE) != 0;
-                    Color runFg = inv
-                        ? (((first.Flags & TermCell.FLAG_DEFAULT_BG) != 0) ? effBg : first.Bg)
-                        : (((first.Flags & TermCell.FLAG_DEFAULT_FG) != 0) ? effFg : first.Fg);
-
-                    if (isLight && !inv && runFg.GetBrightness() > 0.78f)
-                        runFg = effFg;
-
-                    if ((first.Flags & TermCell.FLAG_DIM) != 0)
-                        runFg = StudioTheme.Blend(runFg, effBg, 0.40);
-
-                    byte styleMask = (byte)(first.Flags & (TermCell.FLAG_BOLD | TermCell.FLAG_ITALIC | TermCell.FLAG_UNDERLINE));
-                    int runStartCol = cIdx;
-                    runChars.Length = 0;
-                    runChars.Append(ch);
-                    cIdx++;
-
-                    while (cIdx < cols)
-                    {
-                        TermCell next = buf.GetVirtualCell(vr, cIdx);
-                        bool nextInv = (next.Flags & TermCell.FLAG_INVERSE) != 0;
-                        Color nextFg = nextInv
-                            ? (((next.Flags & TermCell.FLAG_DEFAULT_BG) != 0) ? effBg : next.Bg)
-                            : (((next.Flags & TermCell.FLAG_DEFAULT_FG) != 0) ? effFg : next.Fg);
-                        if (isLight && !nextInv && nextFg.GetBrightness() > 0.78f)
-                            nextFg = effFg;
-                        if ((next.Flags & TermCell.FLAG_DIM) != 0)
-                            nextFg = StudioTheme.Blend(nextFg, effBg, 0.40);
-                        byte nextStyle = (byte)(next.Flags & (TermCell.FLAG_BOLD | TermCell.FLAG_ITALIC | TermCell.FLAG_UNDERLINE));
-
-                        if (nextFg.ToArgb() != runFg.ToArgb() || nextStyle != styleMask)
-                            break;
-
-                        char nch = next.Char == '\0' ? ' ' : next.Char;
-                        runChars.Append(nch);
-                        cIdx++;
-                    }
-
-                    Font runFont = regularFont;
-                    if ((styleMask & TermCell.FLAG_BOLD) != 0) runFont = boldFont;
-                    else if ((styleMask & TermCell.FLAG_ITALIC) != 0) runFont = italicFont;
-                    else if ((styleMask & TermCell.FLAG_UNDERLINE) != 0) runFont = underlineFont;
-
-                    string sRun = runChars.ToString().TrimEnd(' ');
-                    if (sRun.Length > 0)
-                    {
-                        TextRenderer.DrawText(
-                            g,
-                            sRun,
-                            runFont,
-                            new Point(padLeft + runStartCol * cellWidth, y),
-                            runFg,
-                            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-                    }
-
-                    if ((styleMask & TermCell.FLAG_UNDERLINE) != 0)
-                    {
-                        using (Pen up = new Pen(runFg, 1f))
-                        {
-                            int ux1 = padLeft + runStartCol * cellWidth;
-                            int ux2 = ux1 + sRun.Length * cellWidth;
-                            g.DrawLine(up, ux1, y + cellHeight - 2, ux2, y + cellHeight - 2);
-                        }
-                    }
-                }
-
-                // 3. Hovered link underline
-                if (vr == hoveredVRow && hoveredLinkStartCol >= 0 && hoveredLinkEndCol >= hoveredLinkStartCol)
-                {
-                    Color linkCol = theme != null ? theme.AccentPrimary : Color.FromArgb(56, 189, 248);
-                    using (Pen lp = new Pen(linkCol, 1f))
-                    {
-                        int lx1 = padLeft + hoveredLinkStartCol * cellWidth;
-                        int lx2 = padLeft + (hoveredLinkEndCol + 1) * cellWidth;
-                        g.DrawLine(lp, lx1, y + cellHeight - 2, lx2, y + cellHeight - 2);
-                    }
-                }
-            }
-
-            // 4. Paint Cursor (if viewing live screen and cursor is visible)
-            if (scrollbackOffset == 0 && buf.CursorVisible && !session.HasExited)
-            {
-                int cx = padLeft + buf.CursorCol * cellWidth;
-                int cy = padTop + buf.CursorRow * cellHeight;
-                Color curColor = isLight
-                    ? (theme != null ? theme.AccentPrimary : Color.FromArgb(0, 95, 184))
-                    : (theme != null ? theme.AccentPrimary : Color.FromArgb(229, 229, 229));
-
-                if (this.Focused)
-                {
-                    if (cursorBlinkOn)
-                    {
-                        if (UseBarCursor)
-                        {
-                            using (SolidBrush cb = new SolidBrush(curColor))
-                                g.FillRectangle(cb, cx, cy + 1, 2, cellHeight - 2);
-                        }
-                        else
-                        {
-                            using (SolidBrush cb = new SolidBrush(Color.FromArgb(200, curColor)))
-                                g.FillRectangle(cb, cx, cy, cellWidth, cellHeight);
-                            TermCell curCell = buf.GetCell(buf.CursorRow, buf.CursorCol);
-                            if (curCell.Char > ' ')
-                            {
-                                TextRenderer.DrawText(
-                                    g,
-                                    curCell.Char.ToString(),
-                                    regularFont,
-                                    new Point(cx, cy),
-                                    effBg,
-                                    TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    // Unfocused cursor: subtle filled tint + crisp outline so cursor is always readable in light & dark themes
-                    using (SolidBrush cb = new SolidBrush(Color.FromArgb(isLight ? 45 : 35, curColor)))
-                        g.FillRectangle(cb, cx, cy, cellWidth, cellHeight);
-                    using (Pen cp = new Pen(Color.FromArgb(200, curColor), 1.2f))
-                        g.DrawRectangle(cp, cx, cy, cellWidth - 1, cellHeight - 1);
-                }
-            }
-
-            // 5. Theme-aware scrollbar track & thumb on the right edge
-            int sbCount = buf.ScrollbackCount;
-            int trackW = 10;
-            int trackX = this.ClientSize.Width - trackW - 2;
-            int trackH = Math.Max(20, this.ClientSize.Height - 4);
-            if (trackX > 20)
-            {
-                Color trackBg = isLight
-                    ? Color.FromArgb(isMouseInside ? 28 : 14, 100, 116, 139)
-                    : Color.FromArgb(isMouseInside ? 28 : 14, 148, 163, 184);
-                using (SolidBrush trkBrush = new SolidBrush(trackBg))
-                    g.FillRectangle(trkBrush, trackX, 2, trackW, trackH);
-
-                double visibleFraction = sbCount > 0 ? ((double)rows / Math.Max(1, totalVirtual)) : 1.0;
-                int thumbH = Math.Max(24, (int)(trackH * Math.Min(1.0, visibleFraction)));
-                double posFraction = sbCount > 0 ? (1.0 - ((double)scrollbackOffset / Math.Max(1, sbCount))) : 1.0;
-                int thumbY = 2 + (int)((trackH - thumbH) * posFraction);
-
-                Color thumbCol = isLight
-                    ? Color.FromArgb(isMouseInside ? 140 : 85, 100, 116, 139)
-                    : Color.FromArgb(isMouseInside ? 120 : 75, 128, 128, 138);
-                using (SolidBrush tb = new SolidBrush(thumbCol))
-                    g.FillRectangle(tb, trackX + 1, thumbY, trackW - 2, thumbH);
-            }
-        }
-
         protected override void Dispose(bool disposing)
         {
             if (disposing)
@@ -5424,6 +5357,7 @@ namespace codeLess.Studio
                     try { blinkTimer.Stop(); blinkTimer.Dispose(); } catch { }
                     blinkTimer = null;
                 }
+                DisposeFeel();
                 if (terminalContextMenu != null)
                 {
                     try { terminalContextMenu.Dispose(); } catch { }

@@ -390,6 +390,27 @@ namespace codeLess.Studio
             v.ApiKey = key ?? "";
         }
 
+        /// <summary>
+        /// Copies every other persisted property (the explicit list above missed settings added later, e.g. the editor
+        /// niceties, smooth scrolling and terminal settings, so the macOS app forgot them on restart). Values already
+        /// adjusted above (font size) and null lists are kept.
+        /// </summary>
+        private static void CopyRemainingPersisted(IdePersistentSettings from, StudioSettings to)
+        {
+            foreach (var pi in typeof(IdePersistentSettings).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                if (!pi.CanRead || !pi.CanWrite || pi.GetSetMethod() == null || pi.GetIndexParameters().Length > 0) continue;
+                if (pi.Name == nameof(EditorFontSize)) continue;
+                try
+                {
+                    object v = pi.GetValue(from);
+                    if (v == null && !pi.PropertyType.IsValueType && pi.GetValue(to) != null) continue;
+                    pi.SetValue(to, v);
+                }
+                catch { }
+            }
+        }
+
         public static new StudioSettings Load()
         {
             var baseLoaded = IdePersistentSettings.Load();
@@ -432,6 +453,7 @@ namespace codeLess.Studio
             };
             loaded.CopyLanguageServerSettingsFrom(baseLoaded);
             loaded.CopyWorkbenchParitySettingsFrom(baseLoaded);
+            CopyRemainingPersisted(baseLoaded, loaded);
             return loaded;
         }
     }

@@ -391,7 +391,7 @@ namespace codeLess.Avalonia.Tests
             object canvas = typeof(AvaloniaTerminalEmulatorControl).GetField("gridCanvas", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(term);
             Type ct = canvas.GetType();
             double cellW = (double)ct.GetProperty("CellW").GetValue(canvas);
-            double cellH = (double)ct.GetField("CellH").GetValue(null);
+            double cellH = (double)ct.GetProperty("CellH").GetValue(canvas);
             double padL = (double)ct.GetField("PadLeft").GetValue(null);
             double padT = (double)ct.GetField("PadTop").GetValue(null);
             return new Point(padL + col * cellW + cellW / 2, padT + row * cellH + cellH / 2);

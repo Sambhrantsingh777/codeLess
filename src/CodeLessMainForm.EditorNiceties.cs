@@ -30,6 +30,9 @@ namespace codeLess.Studio
                 case "nicety_emmet": EditorNicetyOptions.EmmetOnTab = !EditorNicetyOptions.EmmetOnTab; break;
                 case "nicety_smooth_scroll": EditorScrollOptions.SmoothScrolling = !EditorScrollOptions.SmoothScrolling; break;
                 case "nicety_smooth_caret": EditorScrollOptions.SmoothCaretAnimation = !EditorScrollOptions.SmoothCaretAnimation; break;
+                case "nicety_term_blink": TerminalOptions.CursorBlinking = !TerminalOptions.CursorBlinking; break;
+                case "nicety_term_cursor_style": TerminalOptions.CycleCursorStyle(); break;
+                case "nicety_term_smooth": TerminalOptions.SmoothScrolling = !TerminalOptions.SmoothScrolling; break;
                 case "nicety_cursor_blinking":
                     {
                         int bi = Array.IndexOf(CaretBlink.Styles, CaretBlink.Normalize(EditorScrollOptions.CursorBlinking));
@@ -45,6 +48,8 @@ namespace codeLess.Studio
             }
             if (editorControl != null) { editorControl.Canvas.ApplyCaretSettings(); editorControl.Invalidate(true); }
             if (splitEditorControl != null) { splitEditorControl.Canvas.ApplyCaretSettings(); splitEditorControl.Invalidate(true); }
+            if (conPtyTerminalControl != null) conPtyTerminalControl.ApplyTerminalOptions();
+            if (splitConPtyTerminalControl != null) splitConPtyTerminalControl.ApplyTerminalOptions();
             return true;
         }
     }
@@ -67,6 +72,9 @@ namespace codeLess.Studio
             new[] { "View", "View: Toggle Smooth Scrolling", "", "nicety_smooth_scroll" },
             new[] { "View", "View: Toggle Smooth Caret Animation", "", "nicety_smooth_caret" },
             new[] { "View", "View: Cycle Cursor Blinking Style", "", "nicety_cursor_blinking" },
+            new[] { "Terminal", "Terminal: Toggle Cursor Blinking", "", "nicety_term_blink" },
+            new[] { "Terminal", "Terminal: Cycle Cursor Style (Block / Line / Underline)", "", "nicety_term_cursor_style" },
+            new[] { "Terminal", "Terminal: Toggle Smooth Scrolling", "", "nicety_term_smooth" },
         };
     }
 
@@ -159,6 +167,74 @@ namespace codeLess.Studio
             if (double.TryParse(t, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v))
                 s.EditorMouseWheelScrollSensitivity = EditorScrollOptions.ClampSensitivity(v, 1.0);
             // ApplySettingsToEditors pushes them into EditorScrollOptions after saving
+        }
+    }
+
+    /// <summary>
+    /// Terminal block of the WinForms Settings dialog (VS Code terminal.integrated.cursorStyle, cursorStyleInactive,
+    /// cursorBlinking, smoothScrolling, fontSize, lineHeight, fontFamily, minimumContrastRatio). STRICT C# 5.
+    /// </summary>
+    public sealed class TerminalFeelSettingsBlockWin
+    {
+        public static readonly string[] StyleNames = new string[] { "Block", "Line", "Underline" };
+        public static readonly string[] InactiveNames = new string[] { "Outline", "Block", "Line", "Underline", "None" };
+        public CheckBox BlinkBox, SmoothBox;
+        public CodeLessDropdown StyleCombo, InactiveCombo;
+        public CodeLessDarkInputBox FontSizeInput, LineHeightInput, FontFamilyInput, ContrastInput;
+
+        public static TerminalFeelSettingsBlockWin Build(Panel body, IdePersistentSettings s, StudioTheme theme, Func<string, bool, int, int, CheckBox> addCheck, ref int y)
+        {
+            TerminalFeelSettingsBlockWin b = new TerminalFeelSettingsBlockWin();
+            b.BlinkBox = addCheck("Terminal cursor blinking", s.TerminalCursorBlinking, 24, y);
+            b.SmoothBox = addCheck("Terminal smooth scrolling", s.TerminalSmoothScrolling, 380, y);
+            y += 30;
+            b.StyleCombo = AddCombo(body, theme, "Terminal cursor style:", StyleNames, Array.IndexOf(TerminalCursorStyle.ActiveStyles, TerminalCursorStyle.NormalizeActive(s.TerminalCursorStyle)), ref y);
+            b.InactiveCombo = AddCombo(body, theme, "Terminal cursor (unfocused):", InactiveNames, Array.IndexOf(TerminalCursorStyle.InactiveStyles, TerminalCursorStyle.NormalizeInactive(s.TerminalCursorStyleInactive)), ref y);
+            b.FontSizeInput = AddInput(body, theme, "Terminal font size (px, empty = 14):", s.TerminalFontSize > 0 ? TerminalOptions.FormatNumber(s.TerminalFontSize) : "", 90, ref y);
+            b.LineHeightInput = AddInput(body, theme, "Terminal line height:", TerminalOptions.FormatNumber(TerminalOptions.ClampLineHeight(s.TerminalLineHeight)), 90, ref y);
+            b.FontFamilyInput = AddInput(body, theme, "Terminal font family (empty = Consolas):", s.TerminalFontFamily ?? "", 260, ref y);
+            b.ContrastInput = AddInput(body, theme, "Terminal minimum contrast ratio:", TerminalOptions.FormatNumber(TerminalOptions.ClampContrast(s.TerminalMinimumContrastRatio)), 90, ref y);
+            return b;
+        }
+
+        private static CodeLessDropdown AddCombo(Panel body, StudioTheme theme, string label, string[] items, int index, ref int y)
+        {
+            Label lbl = new Label { Location = new Point(24, y + 4), Size = new Size(210, 20), Text = label, Font = new Font("Segoe UI", 8.8f), ForeColor = theme.FgSecondary, UseMnemonic = false };
+            body.Controls.Add(lbl);
+            CodeLessDropdown combo = new CodeLessDropdown { Location = new Point(240, y), Size = new Size(180, 26), DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 9.0f) };
+            combo.ApplyTheme(theme);
+            foreach (string n in items) combo.Items.Add(n);
+            combo.SelectedIndex = Math.Max(0, index);
+            body.Controls.Add(combo);
+            y += 32;
+            return combo;
+        }
+
+        private static CodeLessDarkInputBox AddInput(Panel body, StudioTheme theme, string label, string text, int width, ref int y)
+        {
+            Label lbl = new Label { Location = new Point(24, y + 4), Size = new Size(210, 20), Text = label, Font = new Font("Segoe UI", 8.8f), ForeColor = theme.FgSecondary, UseMnemonic = false };
+            body.Controls.Add(lbl);
+            CodeLessDarkInputBox box = new CodeLessDarkInputBox { Location = new Point(240, y), Size = new Size(width, 26), Text = text, Font = new Font("Consolas", 8.8f) };
+            box.ApplyTheme(theme);
+            body.Controls.Add(box);
+            y += 32;
+            return box;
+        }
+
+        public void Apply(IdePersistentSettings s)
+        {
+            s.TerminalCursorBlinking = BlinkBox.Checked;
+            s.TerminalSmoothScrolling = SmoothBox.Checked;
+            int i = StyleCombo.SelectedIndex;
+            s.TerminalCursorStyle = i >= 0 && i < TerminalCursorStyle.ActiveStyles.Length ? TerminalCursorStyle.ActiveStyles[i] : TerminalCursorStyle.Block;
+            int j = InactiveCombo.SelectedIndex;
+            s.TerminalCursorStyleInactive = j >= 0 && j < TerminalCursorStyle.InactiveStyles.Length ? TerminalCursorStyle.InactiveStyles[j] : TerminalCursorStyle.Outline;
+            double fs = TerminalOptions.ParseNumber(FontSizeInput.Text, s.TerminalFontSize);
+            s.TerminalFontSize = fs >= 6 && fs <= 100 ? fs : 0;
+            s.TerminalLineHeight = TerminalOptions.ClampLineHeight(TerminalOptions.ParseNumber(LineHeightInput.Text, s.TerminalLineHeight));
+            s.TerminalFontFamily = (FontFamilyInput.Text ?? "").Trim();
+            s.TerminalMinimumContrastRatio = TerminalOptions.ClampContrast(TerminalOptions.ParseNumber(ContrastInput.Text, s.TerminalMinimumContrastRatio));
+            // ApplySettingsToEditors pushes them into TerminalOptions and the terminals after saving
         }
     }
 }

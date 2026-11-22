@@ -2569,6 +2569,7 @@ namespace codeLess.AvaloniaApp
             };
             all.AddRange(BuildLanguageServerPaletteCommands());
             all.AddRange(BuildEditorNicetiesPaletteCommands());
+            all.AddRange(BuildTerminalFeelPaletteCommands());
             all.AddRange(BuildDevToolsPaletteCommands());
             all.AddRange(BuildParityPaletteCommands());
             all.AddRange(BuildTaskPaletteCommands());

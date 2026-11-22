@@ -32,6 +32,7 @@ namespace codeLess.Studio
             EmmetOnTab = s.EditorEmmetOnTab;
             TextMateHighlighting = s.EditorTextMateHighlighting;
             EditorScrollOptions.ApplyFrom(s); // smooth scrolling / caret settings travel with the editor switches
+            TerminalOptions.ApplyFrom(s); // terminal cursor / font / scrolling settings too
         }
 
         public static void CopyTo(IdePersistentSettings s)
@@ -47,6 +48,7 @@ namespace codeLess.Studio
             s.EditorEmmetOnTab = EmmetOnTab;
             s.EditorTextMateHighlighting = TextMateHighlighting;
             EditorScrollOptions.CopyTo(s);
+            TerminalOptions.CopyTo(s);
         }
     }
 

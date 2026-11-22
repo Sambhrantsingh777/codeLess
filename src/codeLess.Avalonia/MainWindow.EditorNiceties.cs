@@ -19,6 +19,7 @@ namespace codeLess.AvaloniaApp
             EditorNicetyOptions.ApplyFrom(settings); // also EditorScrollOptions (smooth scrolling / caret)
             PrimaryEditor?.Canvas?.ApplyCaretSettings();
             SplitEditor?.Canvas?.ApplyCaretSettings();
+            ApplyTerminalFeelSettings(); // TerminalOptions came along with the niceties
         }
 
         /// <summary>Flips a smooth-scrolling / caret switch from the command palette and persists it.</summary>

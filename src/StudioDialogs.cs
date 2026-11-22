@@ -2453,6 +2453,7 @@ namespace codeLess.Studio
         public CodeLessDarkInputBox ExcludedFoldersInput;
         public ParitySettingsBlockWin ParityBlock;
         public EditorSmoothnessSettingsBlockWin SmoothnessBlock;
+        public TerminalFeelSettingsBlockWin TerminalFeelBlock;
 
         // AI Section controls
         public CodeLessDropdown ProviderCombo;
@@ -2647,6 +2648,8 @@ namespace codeLess.Studio
             EditorNicetyBoxes = EditorNicetiesSettingsWinForms.AddTo(settings, addCheck, ref y);
             y += 28;
             SmoothnessBlock = EditorSmoothnessSettingsBlockWin.Build(body, settings, activeTheme, addCheck, ref y);
+            y += 28;
+            TerminalFeelBlock = TerminalFeelSettingsBlockWin.Build(body, settings, activeTheme, addCheck, ref y);
             y += 28;
             ParityBlock = ParitySettingsBlockWin.Build(body, settings, activeTheme, ref y);
             addLabel("Excluded Folders (files.exclude):", y);
@@ -2998,6 +3001,7 @@ namespace codeLess.Studio
             settings.ShowMinimap = MinimapBox.Checked;
             EditorNicetiesSettingsWinForms.Apply(EditorNicetyBoxes, settings);
             if (SmoothnessBlock != null) SmoothnessBlock.Apply(settings);
+            if (TerminalFeelBlock != null) TerminalFeelBlock.Apply(settings);
             settings.EnableInlineGhostText = GhostTextBox.Checked;
             settings.AutoSave = AutoSaveBox.Checked;
             if (ParityBlock != null) ParityBlock.Apply(settings);

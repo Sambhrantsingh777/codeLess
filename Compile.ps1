@@ -143,6 +143,7 @@ Write-Host "✓ Compiled codeLess.Core.dll successfully ($coreSizeKb KB)"
 $sourceFiles = @(
     "src\CoreModelsAndThemes.cs",
     "src\ConPtyTerminal.cs",
+    "src\CodeLessTerminalEmulatorControl.Feel.cs",
     "src\CodeLessEditorCanvas.cs",
     "src\StudioDialogs.cs",
     "src\NetworkActivityForm.cs",

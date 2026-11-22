@@ -136,7 +136,7 @@ namespace codeLess.Avalonia.Tests
                 .GetField("gridCanvas", BindingFlags.NonPublic | BindingFlags.Instance)
                 .GetValue(term);
             Type ct = canvas.GetType();
-            double cellH = (double)ct.GetField("CellH").GetValue(null);
+            double cellH = (double)ct.GetProperty("CellH").GetValue(canvas);
             double padTop = (double)ct.GetField("PadTop").GetValue(null);
             int rows = (int)ct.GetMethod("CalcRows").Invoke(canvas, null);
             double top = (double)ct.GetProperty("TextTopOffset").GetValue(canvas);

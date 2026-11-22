@@ -221,6 +221,16 @@ namespace codeLess.AvaloniaApp
             // ---------------------------------------------------------------- Terminal, network
             BeginSection("Terminal");
             var venvChk = AddCheck("Activate the Python environment in new terminals", settings.ActivatePythonEnvironmentInTerminal, "python.terminal.activateEnvironment");
+            var termFeel = TerminalFeelSettingsPanel.Build(settings, AvaloniaColorHelper.ToAvColor(theme.TextPrimary));
+            var termGrid = AddGrid();
+            AddToGrid(termGrid, termFeel.BlinkBox, "Terminal cursor blinking");
+            AddToGrid(termGrid, termFeel.SmoothBox, "Terminal smooth scrolling");
+            AddLabeled("Cursor Style", termFeel.StyleCombo, "terminal.integrated.cursorStyle", "terminal cursor block line bar underline");
+            AddLabeled("Cursor Style (Unfocused)", termFeel.InactiveCombo, "terminal.integrated.cursorStyleInactive", "terminal cursor outline inactive");
+            AddLabeled("Font Size", termFeel.FontSizeBox, "terminal.integrated.fontSize", "terminal font size");
+            AddLabeled("Line Height", termFeel.LineHeightBox, "terminal.integrated.lineHeight", "terminal line height spacing");
+            AddLabeled("Font Family", termFeel.FontFamilyBox, "terminal.integrated.fontFamily", "terminal font family");
+            AddLabeled("Minimum Contrast Ratio", termFeel.ContrastBox, "terminal.integrated.minimumContrastRatio", "terminal contrast colors");
             BeginSection("Language Servers");
             var lspAutoInstallChk = AddCheck("Install missing language servers automatically (into codeLess's own folder; never global, never sudo)", settings.AutoInstallLanguageServers, "codeless.languageServers.autoInstall");
             BeginSection("Network & Updates");
@@ -345,6 +355,7 @@ namespace codeLess.AvaloniaApp
                 niceties.Apply(settings);
                 smoothness.Apply(settings);
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;
+                termFeel.Apply(settings);
                 settings.AutoInstallLanguageServers = lspAutoInstallChk.IsChecked == true;
                 settings.OfflineMode = offlineChk.IsChecked == true;
                 if (updateModeCombo.SelectedIndex >= 0 && updateModeCombo.SelectedIndex < UpdateModes.All.Length)

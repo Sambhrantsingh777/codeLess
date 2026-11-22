@@ -10986,6 +10986,9 @@ if __name__ == '__main__':
                 ghostToggleCheck.Checked = settings.EnableInlineGhostText;
             if (editorControl != null) editorControl.Invalidate(true);
             if (splitEditorControl != null) splitEditorControl.Invalidate(true);
+            // terminal cursor / font / line height / smooth scrolling (TerminalOptions, applied with the niceties above)
+            if (conPtyTerminalControl != null) conPtyTerminalControl.ApplyTerminalOptions();
+            if (splitConPtyTerminalControl != null) splitConPtyTerminalControl.ApplyTerminalOptions();
             UpdateStatusBarCursorAndLanguage(activeTab);
             UpdateTelemetryBadges();
         }
