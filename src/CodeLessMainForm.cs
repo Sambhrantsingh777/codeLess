@@ -509,6 +509,7 @@ namespace codeLess.Studio
             UpdateWindowTitle();
 
             this.KeyDown += HandleGlobalKeyDown;
+            InitEditorSwitcherWin(); // Ctrl+Tab recently-used-editors picker
             this.DragEnter += (s, e) =>
             {
                 if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
@@ -1306,10 +1307,10 @@ namespace codeLess.Studio
                 if (activeTab != null) CloseTabBuffer(activeTab);
                 else if (IsWelcomeTabOpen) CloseWelcomeTab();
             }
-            else if (e.Control && e.KeyCode == Keys.Tab) // VS Code Cycle Tabs
+            else if (e.Control && e.KeyCode == Keys.Tab) // Ctrl+Tab: recently used editors (normally handled in ProcessCmdKey)
             {
                 e.SuppressKeyPress = true;
-                SwitchTabByOffset(e.Shift ? -1 : 1);
+                OpenOrAdvanceEditorSwitcherWin(e.Shift);
             }
             else if (e.Control && e.KeyCode == Keys.Next) // Ctrl+PageDown Next Tab / Terminal
             {
@@ -8871,7 +8872,7 @@ if __name__ == '__main__':
             }
             if (activeTab == captured)
             {
-                activeTab = openTabs.LastOrDefault();
+                activeTab = EditorAfterCloseWin(captured); // most recently used editor (VS Code focusRecentEditorAfterClose)
                 if (editorControl != null)
                 {
                     editorControl.ShowWelcomePage = IsWelcomeTabOpen;
@@ -9106,6 +9107,7 @@ if __name__ == '__main__':
 
         private void RefreshTabStrip()
         {
+            TouchEditorMruWin();
             ArmAutoSaveTimer();
             WinFormsLargeFileHost.SweepClosed(openTabs);
             tabStrip.SuspendLayout();

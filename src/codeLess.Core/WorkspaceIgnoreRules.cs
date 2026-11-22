@@ -347,6 +347,14 @@ namespace codeLess.Studio
             return IsGitIgnored(fullDir, name, true);
         }
 
+        /// <summary>True when .gitignore / info/exclude ignore the entry (no binary-extension rule; path completion).</summary>
+        public bool IsGitIgnoredEntry(string fullPath, bool isDirectory)
+        {
+            string name = Path.GetFileName(fullPath.TrimEnd('/', '\\'));
+            if (string.IsNullOrEmpty(name)) return false;
+            return IsGitIgnored(fullPath, name, isDirectory);
+        }
+
         /// <summary>True for files that indexing / search skip (binary extension or gitignored).</summary>
         public bool IsIgnoredFile(string fullPath)
         {

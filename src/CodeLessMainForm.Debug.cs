@@ -1026,6 +1026,7 @@ namespace codeLess.Studio
         /// <summary>Debug keys before menus / controls: F5, Ctrl+F5, Shift+F5, Ctrl+Shift+F5, F6, F9, F10, F11, Shift+F11, Ctrl+Shift+D/Y.</summary>
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (HandleEditorSwitcherCmdKey(keyData)) return true; // Ctrl+Tab from any control (before focus navigation)
             if (debugController != null && HandleDebugKey(keyData)) return true;
             return base.ProcessCmdKey(ref msg, keyData);
         }

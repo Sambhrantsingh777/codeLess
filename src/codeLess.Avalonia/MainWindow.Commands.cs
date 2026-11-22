@@ -60,6 +60,7 @@ namespace codeLess.AvaloniaApp
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
+            if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
             if (IsFromTerminal(e.Source) && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
                 return;
 
@@ -94,6 +95,7 @@ namespace codeLess.AvaloniaApp
 
         private bool SimulateShortcutCore(Key key, KeyModifiers modifiers)
         {
+            if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(key, modifiers)) return true;
             if (HandleWorkbenchKeyEvent(key, modifiers))
                 return true;
 
@@ -350,9 +352,15 @@ namespace codeLess.AvaloniaApp
                 return true;
             }
 
-            // Ctrl/Cmd + Tab or Ctrl/Cmd + PageDown/PageUp or Cmd+Option+Left/Right -> Switch Tabs
-            if ((ctrl && key == Key.Tab) ||
-                (ctrlOrCmd && (key == Key.PageDown || key == Key.PageUp)) ||
+            // Ctrl+Tab / Ctrl+Shift+Tab (every platform, also on macOS like VS Code): recently used editors picker (MRU).
+            if (ctrl && !alt && key == Key.Tab)
+            {
+                OpenOrAdvanceEditorSwitcher(backwards: shift);
+                return true;
+            }
+
+            // Ctrl/Cmd + PageDown/PageUp or Cmd+Option+Left/Right -> next / previous editor in tab-strip order
+            if ((ctrlOrCmd && (key == Key.PageDown || key == Key.PageUp)) ||
                 (meta && alt && (key == Key.Right || key == Key.Left)))
             {
                 if (openTabs.Count > 1 && activeTab != null)

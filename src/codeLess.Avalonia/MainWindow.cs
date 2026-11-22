@@ -277,6 +277,7 @@ namespace codeLess.AvaloniaApp
 
             // Register tunnel & bubble key handlers so workbench shortcuts work anywhere
             AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+            InitEditorSwitcher(); // Ctrl+Tab recently-used-editors picker (key-up of Ctrl commits)
 
             string startPath = initialPath;
             if (string.IsNullOrWhiteSpace(startPath))
@@ -2786,6 +2787,7 @@ namespace codeLess.AvaloniaApp
             // Remember where the caret was in the editor being left so Back returns there (not to where it was opened).
             if (!suppressNavRecord && !ReferenceEquals(activeTab, tab)) CaptureCurrentNavPosition();
             activeTab = tab;
+            if (tab != null) editorMru.Touch(tab); // per-group MRU (Ctrl+Tab order, focus after close)
             if (tab != null)
             {
                 PrimaryEditor.LoadBuffer(tab);
@@ -2848,8 +2850,9 @@ namespace codeLess.AvaloniaApp
             {
                 if (openTabs.Count > 0)
                 {
+                    // VS Code (workbench.editor.focusRecentEditorAfterClose): the most recently used editor takes over.
                     int nextIdx = Math.Max(0, Math.Min(openTabs.Count - 1, idx));
-                    ActivateTab(openTabs[nextIdx]);
+                    ActivateTab(editorMru.MostRecentOther(openTabs, tab) ?? openTabs[nextIdx]);
                 }
                 else
                 {

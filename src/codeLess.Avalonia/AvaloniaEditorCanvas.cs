@@ -3401,7 +3401,7 @@ namespace codeLess.AvaloniaApp
             // Ghost text acceptance
             if (!string.IsNullOrEmpty(buf.GhostTextSuggestion))
             {
-                if (e.Key == Key.Tab && !shift && !ctrlOrCmd && !alt)
+                if (e.Key == Key.Tab && !shift && !ctrl && !meta && !alt)
                 {
                     AcceptGhostText(singleWordOnly: false);
                     e.Handled = true;
@@ -3765,6 +3765,7 @@ namespace codeLess.AvaloniaApp
                     }
                     break;
                 case Key.Tab:
+                    if (ctrl || meta) break; // Ctrl+Tab / Cmd+Tab switch editors (workbench), never indent
                     if (!shift && !ctrlOrCmd && !alt && TryHandleNicetyTab(buf)) { e.Handled = true; break; } // Emmet
                     HandleTabKey(shift); // honours the buffer's tab size / insert spaces (detected, .editorconfig, settings)
                     e.Handled = true;

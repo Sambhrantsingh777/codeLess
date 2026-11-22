@@ -237,6 +237,7 @@ namespace codeLess.AvaloniaApp
 
             await RunQaRound3ScreensAsync(outputDir);
             await RunEditorNicetiesScreensAsync(outputDir); // sticky scroll, bracket colors / guides, occurrences, TextMate
+            await RunEditorSwitchAndImportScreensAsync(outputDir); // Ctrl+Tab recently used editors, import path completion
 
             // Theme sweep: editor + explorer + terminal in every built-in theme.
             try
