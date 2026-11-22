@@ -3613,7 +3613,7 @@ namespace codeLess.Studio
                                 g.FillRectangle(rb, rejectRect);
                             g.SmoothingMode = SmoothingMode.Default;
 
-                            TextRenderer.DrawText(g, "Accept", gutterFont, acceptRect, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                            TextRenderer.DrawText(g, "Accept", gutterFont, acceptRect, UiTokens.OnAccent(th), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
                             TextRenderer.DrawText(g, "Reject", gutterFont, rejectRect, th.FgPrimary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
                             if (showRemTag)

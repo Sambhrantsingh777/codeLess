@@ -217,9 +217,9 @@ namespace codeLess.AvaloniaApp
         private void ShowLanguageServerHint(LanguageServerHint hint)
         {
             if (hint == null) return;
-            SetStatusMessage(hint.Message);
             var host = CommandPalette?.Parent as Panel;
-            if (host == null) return;
+            // The toast carries the message; repeating it in the status bar only duplicates it (VS Code shows one).
+            if (host == null) { SetStatusMessage(hint.Message); return; }
             if (lspToast != null) host.Children.Remove(lspToast);
             var text = new TextBlock { Text = hint.Message };
             Border toast = null;

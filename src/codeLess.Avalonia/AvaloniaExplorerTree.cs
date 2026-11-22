@@ -73,6 +73,8 @@ namespace codeLess.AvaloniaApp
         public Color SelectedFill { get; set; } = Color.FromRgb(42, 54, 78);
         public Color AccentColor { get; set; } = Color.FromRgb(59, 130, 246);
         public Color IndentGuideColor { get; set; } = Color.FromRgb(44, 44, 52);
+        public Color ActiveFileFill { get; set; } = Color.FromRgb(40, 42, 48);
+        public Color ActiveGuideColor { get; set; } = Color.FromRgb(90, 94, 102);
 
         public event Action<ExplorerTreeNode> BeforeExpand;
         public event Action<ExplorerTreeNode> AfterSelect;
@@ -95,9 +97,11 @@ namespace codeLess.AvaloniaApp
             TextSecondary = AvaloniaColorHelper.ToAvColor(theme.TextSecondary);
             AccentColor = AvaloniaColorHelper.ToAvColor(theme.AccentPrimary);
             bool isLight = AvaloniaColorHelper.IsLightColor(theme.SidebarBg);
-            HoverFill = isLight ? Color.FromRgb(230, 234, 242) : Color.FromRgb(34, 36, 44);
-            SelectedFill = isLight ? Color.FromRgb(212, 224, 246) : Color.FromRgb(38, 52, 78);
-            IndentGuideColor = isLight ? Color.FromRgb(214, 218, 226) : Color.FromRgb(44, 46, 56);
+            HoverFill = AvaloniaColorHelper.ToAvColor(UiTokens.Hover(theme, theme.SidebarBg));
+            SelectedFill = AvaloniaColorHelper.ToAvColor(UiTokens.ListActiveSelection(theme, theme.SidebarBg));
+            IndentGuideColor = AvaloniaColorHelper.ToAvColor(UiTokens.IndentGuide(theme, theme.SidebarBg));
+            ActiveFileFill = AvaloniaColorHelper.ToAvColor(UiTokens.ListInactiveSelection(theme, theme.SidebarBg));
+            ActiveGuideColor = AvaloniaColorHelper.ToAvColor(UiTokens.IndentGuideActive(theme, theme.SidebarBg));
             InvalidateVisual();
         }
 
@@ -457,8 +461,7 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (isActiveFile)
                 {
-                    context.FillRectangle(new SolidColorBrush(Color.FromArgb(40, AccentColor.R, AccentColor.G, AccentColor.B)), rowRect);
-                    context.FillRectangle(new SolidColorBrush(AccentColor), new Rect(0, y + 2, 3, RowHeight - 4));
+                    context.FillRectangle(new SolidColorBrush(ActiveFileFill), rowRect);
                 }
                 else if (isHovered)
                 {
@@ -468,17 +471,16 @@ namespace codeLess.AvaloniaApp
                 int depth = node.Level;
                 for (int d = 1; d <= depth; d++)
                 {
-                    double gx = d * 14 + 10;
+                    // Indent guide sits under the parent folder's twistie (VS Code).
+                    double gx = Math.Round(8 + (d - 1) * UiTokens.TreeIndent + 5.5) + 0.5;
                     bool isActiveGuide = !string.IsNullOrEmpty(selectedDirTag) && !string.IsNullOrEmpty(fullPath) &&
                                          (string.Equals(fullPath, selectedDirTag, StringComparison.OrdinalIgnoreCase) ||
                                           fullPath.StartsWith(selectedDirTag.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
-                    var guidePen = new Pen(new SolidColorBrush(isActiveGuide
-                        ? Color.FromArgb(140, TextSecondary.R, TextSecondary.G, TextSecondary.B)
-                        : IndentGuideColor), 1);
+                    var guidePen = new Pen(new SolidColorBrush(isActiveGuide ? ActiveGuideColor : IndentGuideColor), 1);
                     context.DrawLine(guidePen, new Point(gx, y), new Point(gx, y + RowHeight));
                 }
 
-                double indentX = 8 + depth * 14;
+                double indentX = 8 + depth * UiTokens.TreeIndent;
                 bool isFolder = node.IsDirectory || node.StateImageIndex == 1 || node.Nodes.Count > 0;
 
                 if (isFolder)
@@ -490,7 +492,7 @@ namespace codeLess.AvaloniaApp
                     // Draw folder icon
                     var folderColor = Color.FromRgb(220, 182, 122);
                     var folderPen = new Pen(new SolidColorBrush(folderColor), 1.3);
-                    double fx = indentX + 14;
+                    double fx = indentX + 15;
                     double fy = y + 5;
                     context.DrawRectangle(
                         node.IsExpanded ? new SolidColorBrush(Color.FromArgb(55, 220, 182, 122)) : null,
@@ -554,7 +556,7 @@ namespace codeLess.AvaloniaApp
                     gitBadgeColor = modAmber;
                 }
 
-                double textX = indentX + 30;
+                double textX = indentX + 32;
                 double maxTextW = Math.Max(20, w - textX - (gitBadge != null ? 24 : 8));
                 var ft = new FormattedText(
                     node.Text ?? "",

@@ -776,8 +776,8 @@ namespace codeLess.AvaloniaApp
             out TextBlock cntLbl, out Button mcBtn, out Button wwBtn, out Button rxBtn)
         {
             // VS Code-style find widget: option toggles inside the input, vector glyph buttons, compact 24 px rows.
-            fBox = new TextBox { Watermark = "Find", Width = 230, FontSize = UiTokens.FontUi, Padding = new Thickness(6, 2, 2, 2), MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
-            rBox = new TextBox { Watermark = "Replace", Width = 230, FontSize = UiTokens.FontUi, Padding = new Thickness(6, 2, 6, 2), MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
+            fBox = new TextBox { Watermark = "Find", Width = 230, FontSize = UiTokens.FontUi, Padding = new Thickness(8, 2, 2, 2), MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
+            rBox = new TextBox { Watermark = "Replace", Width = 230, FontSize = UiTokens.FontUi, Padding = new Thickness(8, 2, 6, 2), MinHeight = 24, VerticalContentAlignment = VerticalAlignment.Center };
             cntLbl = new TextBlock
             {
                 Text = "No results",
@@ -4210,7 +4210,7 @@ namespace codeLess.AvaloniaApp
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonPrimaryBackground(Theme))), null, acceptRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
                         context.DrawRectangle(new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.ButtonSecondaryBackground(Theme))), null, rejectRect, UiTokens.ControlRadius, UiTokens.ControlRadius);
 
-                        var accFt = new FormattedText("Accept", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, Brushes.White);
+                        var accFt = new FormattedText("Accept", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.OnAccent(Theme))));
                         var rejFt = new FormattedText("Reject", CultureInfo.InvariantCulture, FlowDirection.LeftToRight, CachedUiFontRegular, 10.5, new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.FgPrimary)));
                         context.DrawText(accFt, new Point(acceptRect.X + (acceptRect.Width - accFt.Width) / 2, acceptRect.Y + (acceptRect.Height - accFt.Height) / 2));
                         context.DrawText(rejFt, new Point(rejectRect.X + (rejectRect.Width - rejFt.Width) / 2, rejectRect.Y + (rejectRect.Height - rejFt.Height) / 2));

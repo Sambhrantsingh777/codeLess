@@ -2247,9 +2247,10 @@ namespace codeLess.Studio
             sidebarHeaderLabel = new Label
             {
                 Dock = DockStyle.Top,
-                Height = 28,
-                Padding = new Padding(12, 6, 8, 4),
-                Font = new Font("Segoe UI", 8.2f, FontStyle.Regular),
+                Height = UiTokens.ViewHeaderHeight,
+                Padding = new Padding(UiTokens.ViewPaddingX + 8, 0, 8, 0),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", UiTokens.Pt(UiTokens.FontHeader), FontStyle.Regular),
                 UseMnemonic = false,
                 Text = "EXPLORER"
             };
@@ -2259,7 +2260,7 @@ namespace codeLess.Studio
                 CodeLessVectorIcons.DrawIcon(
                     e.Graphics,
                     "more",
-                    new Rectangle(sidebarHeaderLabel.Width - 24, 6, 16, 16),
+                    new Rectangle(sidebarHeaderLabel.Width - 24, (sidebarHeaderLabel.Height - 16) / 2, 16, 16),
                     fg,
                     1.5f
                 );
@@ -6844,20 +6845,23 @@ if __name__ == '__main__':
 
             sendPromptBtn = CreateHeaderButton("Send", new Point(284, 3), 68, true);
             sendPromptBtn.Height = 24;
+            // VS Code chat input: an accent send glyph on the composer background, not a filled button.
             sendPromptBtn.Paint += (s, e) =>
             {
-                Color bg = activeTheme != null ? activeTheme.AccentPrimary : sendPromptBtn.BackColor;
+                Color bg = composerFooter != null && composerFooter.BackColor.A == 255 ? composerFooter.BackColor
+                    : (activeTheme != null ? activeTheme.BgEditor : sendPromptBtn.BackColor);
+                Point mouse = sendPromptBtn.PointToClient(Control.MousePosition);
+                if (activeTheme != null && sendPromptBtn.ClientRectangle.Contains(mouse)) bg = UiTokens.Hover(activeTheme, bg);
                 e.Graphics.Clear(bg);
-                TextRenderer.DrawText(
-                    e.Graphics,
-                    "Send",
-                    sendPromptBtn.Font,
-                    new Rectangle(8, 0, Math.Max(20, sendPromptBtn.Width - 24), sendPromptBtn.Height),
-                    Color.White,
-                    TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding
-                );
-                CodeLessVectorIcons.DrawIcon(e.Graphics, "arrow-up", new Rectangle(sendPromptBtn.Width - 19, 6, 12, 12), Color.White, 1.45f);
+                Color fg = activeTheme != null ? activeTheme.AccentPrimary : Color.FromArgb(25, 120, 229);
+                int cx = sendPromptBtn.Width / 2, cy = sendPromptBtn.Height / 2;
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (Pen p = new Pen(fg, 1.5f) { LineJoin = System.Drawing.Drawing2D.LineJoin.Round })
+                    e.Graphics.DrawPolygon(p, new[] { new Point(cx - 7, cy - 6), new Point(cx + 7, cy), new Point(cx - 7, cy + 6), new Point(cx - 4, cy) });
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
             };
+            sendPromptBtn.MouseEnter += (s, e) => sendPromptBtn.Invalidate();
+            sendPromptBtn.MouseLeave += (s, e) => sendPromptBtn.Invalidate();
             sendPromptBtn.Click += async (s, e) => await SubmitAgentPromptAsync();
 
             stopPromptBtn = CreateHeaderButton("Stop", new Point(284, 3), 68, false);
@@ -6905,16 +6909,17 @@ if __name__ == '__main__':
             composerFooter.Resize += (s, e) =>
             {
                 int fw = composerFooter.Width;
-                int sendW = fw < 260 ? 58 : 64;
+                int stopW = fw < 260 ? 58 : 64;
+                int sendW = 30;
                 int modeW = 68;
                 sendPromptBtn.Location = new Point(fw - sendW, 3);
                 sendPromptBtn.Width = sendW;
-                stopPromptBtn.Location = sendPromptBtn.Location;
-                stopPromptBtn.Width = sendW;
+                stopPromptBtn.Location = new Point(fw - stopW, 3);
+                stopPromptBtn.Width = stopW;
                 composerModePillBtn.Location = new Point(0, 3);
                 composerModePillBtn.Width = modeW;
                 quickVendorCombo.Location = new Point(modeW + 3, 3);
-                quickVendorCombo.Width = Math.Max(90, sendPromptBtn.Left - (modeW + 6));
+                quickVendorCombo.Width = Math.Max(90, Math.Min(sendPromptBtn.Left, stopPromptBtn.Left) - (modeW + 6));
             };
 
             promptInputBox = new CodeLessDarkInputBox

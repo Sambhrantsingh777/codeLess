@@ -77,7 +77,7 @@ namespace codeLess.AvaloniaApp
             {
                 Watermark = "Type the name of a command, file, @symbol, #workspace-symbol, or :line...",
                 FontSize = UiTokens.FontUi,
-                Padding = new Thickness(8, 4),
+                Padding = new Thickness(10, 4),
                 MinHeight = UiTokens.ControlHeight
             };
 
@@ -293,7 +293,7 @@ namespace codeLess.AvaloniaApp
                 var row = new Grid
                 {
                     ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-                    Margin = new Thickness(0, 0),
+                    Margin = new Thickness(2, 0, 0, 0),
                     MinHeight = UiTokens.ListRowHeight - 4
                 };
 

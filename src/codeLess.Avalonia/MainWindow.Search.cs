@@ -98,7 +98,7 @@ namespace codeLess.AvaloniaApp
             wsReplaceToggleBtn.Margin = new Thickness(0, 0, 3, 0);
             findRow.Children.Add(wsReplaceToggleBtn);
 
-            workspaceSearchInput = new TextBox { Watermark = "Search", FontSize = UiTokens.FontUi, Padding = new Thickness(6, 3, 2, 3) };
+            workspaceSearchInput = new TextBox { Watermark = "Search", FontSize = UiTokens.FontUi, Padding = new Thickness(8, 3, 2, 3) };
             Grid.SetColumn(workspaceSearchInput, 1);
             findRow.Children.Add(workspaceSearchInput);
 
@@ -118,7 +118,7 @@ namespace codeLess.AvaloniaApp
 
             // Row 2 (collapsible): [ replace box ............ ] [Replace All]
             workspaceReplaceRow = new Grid { ColumnDefinitions = new ColumnDefinitions("21,*,Auto"), IsVisible = false };
-            workspaceReplaceInput = new TextBox { Watermark = "Replace", FontSize = UiTokens.FontUi, Padding = new Thickness(6, 3) };
+            workspaceReplaceInput = new TextBox { Watermark = "Replace", FontSize = UiTokens.FontUi, Padding = new Thickness(8, 3) };
             Grid.SetColumn(workspaceReplaceInput, 1);
             workspaceReplaceRow.Children.Add(workspaceReplaceInput);
             wsReplaceAllBtn = WorkbenchStyles.IconButton("replace-all", "Replace All", null, currentTheme);
@@ -608,7 +608,8 @@ namespace codeLess.AvaloniaApp
             {
                 tb.Inlines.Add(new Run(preview.Substring(ps, pl))
                 {
-                    Background = AvaloniaColorHelper.ToBrush(theme.AccentPrimary, 85)
+                    // Same amber find-match highlight as the editor (VS Code findMatchHighlight), not a murky accent tint.
+                    Background = new SolidColorBrush(Color.FromArgb(theme.IsLight ? (byte)90 : (byte)80, 234, 179, 8))
                 });
             }
             if (ps + pl < preview.Length) tb.Inlines.Add(new Run(preview.Substring(ps + pl)));

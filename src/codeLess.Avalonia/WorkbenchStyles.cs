@@ -147,9 +147,9 @@ namespace codeLess.AvaloniaApp
             r["CheckBoxCheckBackgroundFillCheckedPressed"] = accent;
             r["CheckBoxCheckBackgroundStrokeCheckedPointerOver"] = accent;
             r["CheckBoxCheckBackgroundStrokeCheckedPressed"] = accent;
-            r["CheckBoxCheckGlyphForegroundChecked"] = Brushes.White;
-            r["CheckBoxCheckGlyphForegroundCheckedPointerOver"] = Brushes.White;
-            r["CheckBoxCheckGlyphForegroundCheckedPressed"] = Brushes.White;
+            r["CheckBoxCheckGlyphForegroundChecked"] = B(UiTokens.OnAccent(t));
+            r["CheckBoxCheckGlyphForegroundCheckedPointerOver"] = B(UiTokens.OnAccent(t));
+            r["CheckBoxCheckGlyphForegroundCheckedPressed"] = B(UiTokens.OnAccent(t));
 
             // Menus / context menus / combo popups
             r["MenuFlyoutPresenterBackground"] = widget;
@@ -243,7 +243,9 @@ namespace codeLess.AvaloniaApp
             app.Styles.Add(MakeStyle(x => x.OfType<CheckBox>(),
                 (TemplatedControl.MinHeightProperty, (object)22d),
                 (TemplatedControl.FontSizeProperty, UiTokens.FontUi)));
-            app.Styles.Add(MakeStyle(x => x.OfType<CheckBox>().Template().OfType<Border>().Name("NormalRectangle"),
+            // The Fluent template sets the 20 px box size on the part itself (template priority); a selector with a
+            // pseudo-class activator runs at style-trigger priority, which wins over template values.
+            app.Styles.Add(MakeStyle(x => x.OfType<CheckBox>().Not(y => y.Class(":__never")).Template().OfType<Border>().Name("NormalRectangle"),
                 (Layoutable.WidthProperty, (object)16d),
                 (Layoutable.HeightProperty, 16d),
                 (Border.CornerRadiusProperty, new CornerRadius(3)),

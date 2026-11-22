@@ -149,7 +149,7 @@ namespace codeLess.AvaloniaApp
             var totalsOuter = new StackPanel { Spacing = 4 };
             totalsOuter.Children.Add(new TextBlock { Text = "Totals per feature", FontSize = 11.5, FontWeight = FontWeight.SemiBold, Tag = "secondary" });
             totalsOuter.Children.Add(totalsScroll);
-            totalsBorder = new Border { Child = totalsOuter, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 6), Margin = new Thickness(0, 8, 0, 0) };
+            totalsBorder = new Border { Child = totalsOuter, BorderThickness = new Thickness(0, 1, 0, 0), CornerRadius = new CornerRadius(0), Padding = new Thickness(2, 8, 2, 0), Margin = new Thickness(0, 10, 0, 0) };
 
             var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto") };
             root.Children.Add(summaryText);

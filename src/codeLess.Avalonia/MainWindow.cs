@@ -1280,30 +1280,35 @@ namespace codeLess.AvaloniaApp
             };
 
             var topStack = new StackPanel { Spacing = 6 };
-            scmBranchBanner = new TextBlock { Text = "Branch: main", FontSize = 11.5, FontWeight = FontWeight.SemiBold };
+            scmBranchBanner = new TextBlock { Text = "Branch: main", FontSize = UiTokens.FontSmall, FontWeight = FontWeight.Normal, Margin = new Thickness(2, 0, 0, 0) };
             scmCommitInput = new TextBox
             {
                 Watermark = "Message (Ctrl+Enter to commit on 'main')",
                 AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
                 Height = 54,
-                FontSize = 12,
-                Padding = new Thickness(7, 5)
+                FontSize = UiTokens.FontUi,
+                Padding = new Thickness(8, 5)
             };
 
             var btnRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto") };
             var commitBtn = new Button
             {
-                Content = "✓ Commit",
-                FontWeight = FontWeight.SemiBold,
-                FontSize = 11.5,
+                Content = new IconLabel("check", "Commit", 14, UiTokens.FontUi) { HorizontalAlignment = HorizontalAlignment.Center },
+                FontSize = UiTokens.FontUi,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Center,
-                Padding = new Thickness(8, 4),
-                Background = new SolidColorBrush(Color.FromRgb(59, 130, 246)),
-                Foreground = Brushes.White
+                Padding = new Thickness(8, 3),
+                MinHeight = UiTokens.ControlHeight
             };
-            var stageAllBtn = new Button { Content = "+ All", FontSize = 11, Padding = new Thickness(7, 4), Margin = new Thickness(4, 0, 0, 0) };
-            var unstageAllBtn = new Button { Content = "- All", FontSize = 11, Padding = new Thickness(7, 4), Margin = new Thickness(4, 0, 0, 0) };
+            commitBtn.Classes.Add("primary");
+            scmCommitButton = commitBtn;
+            var stageAllBtn = WorkbenchStyles.IconButton("plus", "Stage All Changes", null, currentTheme, 26, 15);
+            stageAllBtn.Margin = new Thickness(4, 0, 0, 0);
+            var unstageAllBtn = WorkbenchStyles.IconButton("minus", "Unstage All Changes", null, currentTheme, 26, 15);
+            unstageAllBtn.Margin = new Thickness(2, 0, 0, 0);
+            sidebarHeaderIconButtons.Add(stageAllBtn);
+            sidebarHeaderIconButtons.Add(unstageAllBtn);
             var refreshGitBtn = WorkbenchStyles.IconButton("refresh", "Refresh", null, currentTheme, 26, 15);
             refreshGitBtn.Margin = new Thickness(4, 0, 0, 0);
 
@@ -1324,9 +1329,9 @@ namespace codeLess.AvaloniaApp
             grid.Children.Add(topStack);
 
             var listsStack = new StackPanel { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
-            scmStagedHeader = new TextBlock { Text = "▾ STAGED CHANGES (0)", FontSize = 10.5, FontWeight = FontWeight.Bold };
+            scmStagedHeader = new TextBlock { Text = "▾ STAGED CHANGES (0)", FontSize = UiTokens.FontHeader, FontWeight = FontWeight.SemiBold, Margin = new Thickness(2, 0, 0, 0) };
             scmStagedListStack = new StackPanel { Spacing = 2 };
-            scmChangesHeader = new TextBlock { Text = "▾ CHANGES (0)", FontSize = 10.5, FontWeight = FontWeight.Bold, Margin = new Thickness(0, 6, 0, 0) };
+            scmChangesHeader = new TextBlock { Text = "▾ CHANGES (0)", FontSize = UiTokens.FontHeader, FontWeight = FontWeight.SemiBold, Margin = new Thickness(2, 6, 0, 0) };
             scmChangesListStack = new StackPanel { Spacing = 2 };
 
             listsStack.Children.Add(scmStagedHeader);
@@ -1527,12 +1532,17 @@ namespace codeLess.AvaloniaApp
             tabRightActions.Children.Add(splitBtn);
             Grid.SetColumn(tabRightActions, 1);
             tabBarGrid.Children.Add(tabRightActions);
+            // 1 px divider under the tab row; inactive tabs repeat it, the active tab covers it so it merges into
+            // the editor (VS Code).
+            tabStripBottomLine = new Border { Height = UiTokens.DividerWidth, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false };
+            Grid.SetColumnSpan(tabStripBottomLine, 2);
+            tabBarGrid.Children.Insert(0, tabStripBottomLine);
 
             tabStripBorder = new Border
             {
-                Height = 35,
+                Height = UiTokens.TabHeight,
                 Child = tabBarGrid,
-                BorderThickness = new Thickness(0, 0, 0, 1)
+                BorderThickness = new Thickness(0)
             };
             Grid.SetRow(tabStripBorder, 0);
             centerGrid.Children.Add(tabStripBorder);
@@ -1795,6 +1805,8 @@ namespace codeLess.AvaloniaApp
         private Button[] chatHeaderIconButtons = new Button[0];
         private Button[] changesetButtons = new Button[0];
         private IconLabel chatHeaderTitle;
+        private Button scmCommitButton;
+        private Border tabStripBottomLine;
         private Border composerBorder;
 
         private void ApplyComposerTheme()
@@ -1811,7 +1823,7 @@ namespace codeLess.AvaloniaApp
             if (chatHeaderTitle != null) { chatHeaderTitle.Label.Foreground = WorkbenchStyles.B(t.FgSecondary); chatHeaderTitle.Icon.FollowForeground = false; chatHeaderTitle.Icon.IconColor = WorkbenchStyles.C(t.AccentPrimary); chatHeaderTitle.Icon.InvalidateVisual(); }
             foreach (var b in chatHeaderIconButtons) WorkbenchStyles.ThemeIconButton(b, t);
             if (changesetButtons.Length == 2) { WorkbenchStyles.StylePrimaryButton(changesetButtons[0], t); WorkbenchStyles.StyleSecondaryButton(changesetButtons[1], t); }
-            if (chatSendBtn != null) WorkbenchStyles.StylePrimaryButton(chatSendBtn, t);
+            if (chatSendBtn != null) { chatSendBtn.Foreground = WorkbenchStyles.B(t.AccentPrimary); if (chatSendBtn.Content is VectorIconControl sg) { sg.IconColor = WorkbenchStyles.C(t.AccentPrimary); sg.InvalidateVisual(); } }
             foreach (var c in new[] { chatProviderCombo, chatModelCombo })
                 if (c != null) { c.Foreground = WorkbenchStyles.B(t.FgSecondary); }
             ApplyComposerTheme();
@@ -1831,7 +1843,7 @@ namespace codeLess.AvaloniaApp
                 Margin = new Thickness(12, 0, 8, 0)
             };
             chatHeaderTitle = new IconLabel("sparkle", "AI AGENT & COMPOSER", 13, UiTokens.FontHeader, "✦ ") { Spacing = 6 };
-            chatHeaderTitle.Label.FontWeight = FontWeight.SemiBold;
+            chatHeaderTitle.Label.FontWeight = FontWeight.Normal;
             headerGrid.Children.Add(chatHeaderTitle);
 
             var newChatBtn = WorkbenchStyles.IconButton("plus", "New Chat", () => AgentFeed.ClearFeed(), currentTheme);
@@ -1859,7 +1871,7 @@ namespace codeLess.AvaloniaApp
             var csGrid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
-                Margin = new Thickness(8, 4)
+                Margin = new Thickness(12, 5, 10, 5)
             };
             changesetSummaryText = new TextBlock
             {
@@ -1895,9 +1907,9 @@ namespace codeLess.AvaloniaApp
             multiFileChangesetBar = new Border
             {
                 Child = csGrid,
-                Margin = new Thickness(8, 2, 8, 2),
-                CornerRadius = new CornerRadius(5),
-                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0),
+                CornerRadius = new CornerRadius(0),
+                BorderThickness = new Thickness(0, 0, 0, 1),
                 IsVisible = false
             };
             Grid.SetRow(multiFileChangesetBar, 2);
@@ -2017,17 +2029,8 @@ namespace codeLess.AvaloniaApp
                 }
             };
 
-            chatSendBtn = new Button
-            {
-                Name = "ChatSendBtn",
-                Content = new IconLabel("send", "Send", 13, UiTokens.FontSmall),
-                FontSize = UiTokens.FontSmall,
-                Padding = new Thickness(10, 2),
-                MinHeight = 24,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            chatSendBtn.Classes.Add("primary");
-            ToolTip.SetTip(chatSendBtn, "Send (Enter)");
+            chatSendBtn = WorkbenchStyles.IconButton("send", "Send (Enter)", null, currentTheme, 28, 16);
+            chatSendBtn.Name = "ChatSendBtn";
             chatSendBtn.Click += (s, e) => SubmitChatMessage();
 
             Grid.SetColumn(chatProviderCombo, 0); bottomRow.Children.Add(chatProviderCombo);
@@ -2314,6 +2317,7 @@ namespace codeLess.AvaloniaApp
             // Tab Strip & Editors
             tabStripBorder.Background = AvaloniaColorHelper.ToBrush(theme.TabBarBg);
             tabStripBorder.BorderBrush = new SolidColorBrush(borderCol);
+            if (tabStripBottomLine != null) tabStripBottomLine.Background = new SolidColorBrush(borderCol);
             splitEditorBorder.BorderBrush = new SolidColorBrush(borderCol);
             PrimaryEditor.ApplyTheme(theme);
             SplitEditor.ApplyTheme(theme);
@@ -2339,9 +2343,10 @@ namespace codeLess.AvaloniaApp
             rightChatDockBorder.BorderBrush = new SolidColorBrush(borderCol);
             chatProgressBar.TrackColor = AvaloniaColorHelper.ToAvColor(theme.ChatBg);
             chatProgressBar.BarColor = accent;
-            multiFileChangesetBar.Background = WorkbenchStyles.B(UiTokens.WidgetBackground(theme));
-            multiFileChangesetBar.BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(theme));
+            multiFileChangesetBar.Background = AvaloniaColorHelper.ToBrush(theme.ChatBg);
+            multiFileChangesetBar.BorderBrush = new SolidColorBrush(borderCol);
             ApplyChatDockChromeTheme(theme);
+            if (scmCommitButton != null) WorkbenchStyles.StylePrimaryButton(scmCommitButton, theme);
             changesetSummaryText.Foreground = new SolidColorBrush(textPrimary);
             RebuildContextPillsBar();
             AgentFeed.ApplyTheme(theme);
@@ -3113,11 +3118,11 @@ namespace codeLess.AvaloniaApp
                 var wTabBorder = new Border
                 {
                     Child = wRow,
-                    Height = UiTokens.TabHeight - UiTokens.DividerWidth,
+                    Height = UiTokens.TabHeight,
                     Padding = new Thickness(12, 0, 6, 0),
                     Background = new SolidColorBrush(isWelcomeActive ? activeBg : inactiveBg),
                     BorderBrush = new SolidColorBrush(isWelcomeActive ? accent : borderCol),
-                    BorderThickness = isWelcomeActive ? new Thickness(0, 2, 1, 0) : new Thickness(0, 0, 1, 0)
+                    BorderThickness = isWelcomeActive ? new Thickness(0, UiTokens.TabIndicatorWidth, 0, 0) : new Thickness(0, 0, 1, 1)
                 };
                 wTabBorder.PointerPressed += (s, e) => OpenWelcomeTab();
                 tabStripStack.Children.Add(wTabBorder);
@@ -3172,11 +3177,11 @@ namespace codeLess.AvaloniaApp
                 var tabBorder = new Border
                 {
                     Child = row,
-                    Height = UiTokens.TabHeight - UiTokens.DividerWidth,
+                    Height = UiTokens.TabHeight,
                     Padding = new Thickness(12, 0, 6, 0),
                     Background = new SolidColorBrush(isActive ? activeBg : inactiveBg),
                     BorderBrush = new SolidColorBrush(isActive ? accent : borderCol),
-                    BorderThickness = isActive ? new Thickness(0, 2, 1, 0) : new Thickness(0, 0, 1, 0)
+                    BorderThickness = isActive ? new Thickness(0, UiTokens.TabIndicatorWidth, 0, 0) : new Thickness(0, 0, 1, 1)
                 };
                 var tabHoverBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.Hover(currentTheme, currentTheme.TabBarBg)));
                 tabBorder.PointerEntered += (s, e) => { closeBtn.Opacity = 1; if (!isActive) tabBorder.Background = tabHoverBrush; };

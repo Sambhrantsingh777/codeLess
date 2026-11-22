@@ -150,7 +150,16 @@ namespace codeLess.Studio
 
         public static Color ButtonPrimaryForeground(StudioTheme t)
         {
-            return Color.White;
+            return OnAccent(t);
+        }
+
+        /// <summary>Text/glyph color on an accent fill: white, or near-black for light accents (e.g. Monokai).</summary>
+        public static Color OnAccent(StudioTheme t)
+        {
+            if (t == null) return Color.White;
+            Color a = t.AccentPrimary;
+            double lum = (0.299 * a.R + 0.587 * a.G + 0.114 * a.B) / 255.0;
+            return lum > 0.62 ? Color.FromArgb(24, 24, 24) : Color.White;
         }
 
         public static Color ButtonSecondaryBackground(StudioTheme t)

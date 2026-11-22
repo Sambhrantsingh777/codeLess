@@ -102,7 +102,7 @@ namespace codeLess.AvaloniaApp
             if (statusRemoteBtn != null)
             {
                 statusRemoteBtn.Background = WorkbenchStyles.B(UiTokens.StatusBadgeBackground(theme));
-                statusRemoteBtn.Foreground = Brushes.White;
+                statusRemoteBtn.Foreground = WorkbenchStyles.B(UiTokens.OnAccent(theme));
             }
         }
 
@@ -119,6 +119,7 @@ namespace codeLess.AvaloniaApp
             r["CodelessStatusForeground"] = WorkbenchStyles.B(UiTokens.StatusBarForeground(theme));
             r["CodelessFgPrimary"] = WorkbenchStyles.B(theme.FgPrimary);
             r["CodelessPrimaryHover"] = WorkbenchStyles.B(UiTokens.ButtonPrimaryHover(theme));
+            r["CodelessOnAccent"] = WorkbenchStyles.B(UiTokens.OnAccent(theme));
             if (chromeStylesInstalled) return;
             chromeStylesInstalled = true;
 
@@ -135,7 +136,7 @@ namespace codeLess.AvaloniaApp
             app.Styles.Add(S(x => x.OfType<Button>().Class("statusBadge").Class(":pointerover").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter"),
                 ContentPresenter.BackgroundProperty, new DynamicResourceExtension("CodelessStatusBadgeHover")));
             app.Styles.Add(S(x => x.OfType<Button>().Class("statusBadge").Class(":pointerover").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter"),
-                ContentPresenter.ForegroundProperty, Brushes.White));
+                ContentPresenter.ForegroundProperty, new DynamicResourceExtension("CodelessOnAccent")));
             app.Styles.Add(S(x => x.OfType<Button>().Class("icon").Class(":pointerover").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter"),
                 ContentPresenter.BackgroundProperty, new DynamicResourceExtension("CodelessToolbarHover")));
             app.Styles.Add(S(x => x.OfType<Button>().Class("icon").Class(":pressed").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter"),
@@ -156,7 +157,7 @@ namespace codeLess.AvaloniaApp
                 app.Styles.Add(S(x => x.OfType<Button>().Class("primary").Class(st).Template().OfType<ContentPresenter>().Name("PART_ContentPresenter"),
                     ContentPresenter.BackgroundProperty, new DynamicResourceExtension("CodelessPrimaryHover")));
                 app.Styles.Add(S(x => x.OfType<Button>().Class("primary").Class(st).Template().OfType<ContentPresenter>().Name("PART_ContentPresenter"),
-                    ContentPresenter.ForegroundProperty, Brushes.White));
+                    ContentPresenter.ForegroundProperty, new DynamicResourceExtension("CodelessOnAccent")));
             }
         }
     }
