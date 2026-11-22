@@ -743,6 +743,8 @@ namespace codeLess.AvaloniaApp
             var fontBox = new TextBox { Text = settings.FontSize.ToString("0.#", CultureInfo.InvariantCulture), Width = 90 };
             var tabBox = new TextBox { Text = settings.TabSize.ToString(CultureInfo.InvariantCulture), Width = 90 };
             var wrapChk = new CheckBox { Content = "Word Wrap (Alt+Z)", IsChecked = settings.WordWrap, Foreground = new SolidColorBrush(textPrimary) };
+            var insertSpacesChk = new CheckBox { Content = "Insert Spaces (Tab inserts spaces)", IsChecked = settings.InsertSpaces, Foreground = new SolidColorBrush(textPrimary) };
+            var detectIndentChk = new CheckBox { Content = "Detect Indentation (from the file's content and .editorconfig)", IsChecked = settings.DetectIndentation, Foreground = new SolidColorBrush(textPrimary) };
             var minimapChk = new CheckBox { Content = "Show Editor Minimap", IsChecked = settings.ShowMinimap, Foreground = new SolidColorBrush(textPrimary) };
             var autoSaveChk = new CheckBox { Content = "Auto Save Modified Files", IsChecked = settings.AutoSave, Foreground = new SolidColorBrush(textPrimary) };
             var venvChk = new CheckBox { Content = "Activate Python environment in new terminals", IsChecked = settings.ActivatePythonEnvironmentInTerminal, Foreground = new SolidColorBrush(textPrimary) };
@@ -788,6 +790,10 @@ namespace codeLess.AvaloniaApp
             togglesRow.Children.Add(wrapChk);
             togglesRow.Children.Add(minimapChk);
             stack.Children.Add(togglesRow);
+            var indentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
+            indentRow.Children.Add(insertSpacesChk);
+            indentRow.Children.Add(detectIndentChk);
+            stack.Children.Add(indentRow);
             var niceties = EditorNicetiesSettingsPanel.Build(settings, theme, textPrimary);
             stack.Children.Add(niceties.Panel);
             stack.Children.Add(venvChk);
@@ -832,9 +838,11 @@ namespace codeLess.AvaloniaApp
                     settings.ThemeId = themes[themeCombo.SelectedIndex].Id;
                 if (float.TryParse(fontBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float fs) && fs >= 8 && fs <= 32)
                     settings.FontSize = fs;
-                if (int.TryParse(tabBox.Text, out int ts) && ts >= 1 && ts <= 8)
+                if (int.TryParse(tabBox.Text, out int ts) && ts >= 1 && ts <= 16)
                     settings.TabSize = ts;
                 settings.WordWrap = wrapChk.IsChecked == true;
+                settings.InsertSpaces = insertSpacesChk.IsChecked == true;
+                settings.DetectIndentation = detectIndentChk.IsChecked == true;
                 settings.ShowMinimap = minimapChk.IsChecked == true;
                 niceties.Apply(settings);
                 settings.AutoSave = autoSaveChk.IsChecked == true;

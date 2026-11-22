@@ -352,6 +352,7 @@ namespace codeLess.AvaloniaApp
         {
             if (tab == null || tab.IsLargeFileViewer) return;
             var opts = SaveActionOptions.FromSettings(settings, autoSaveDepth > 0);
+            EditorConfigResolver.ApplyBeforeSave(tab, opts); // end_of_line, charset, final newline / trailing whitespace
             if (!opts.Any) return;
             if (SaveActions.ApplyToBuffer(tab, opts))
             {
@@ -381,8 +382,8 @@ namespace codeLess.AvaloniaApp
             {
                 using (var cts = new CancellationTokenSource(1500))
                 {
-                    int tabSize = tab.CustomTabSize.HasValue && tab.CustomTabSize.Value > 0 ? tab.CustomTabSize.Value : Math.Max(1, settings.TabSize);
-                    bool spaces = tab.CustomInsertSpaces ?? settings.InsertSpaces;
+                    int tabSize = EditorIndentation.EffectiveTabSize(tab, settings.TabSize);
+                    bool spaces = EditorIndentation.EffectiveInsertSpaces(tab, settings.InsertSpaces);
                     var req = lsp.RequestFormattingAsync(path, null, tabSize, spaces, cts.Token);
                     var done = await Task.WhenAny(req, Task.Delay(1600));
                     if (done == req) edits = req.Result;

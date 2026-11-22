@@ -2517,63 +2517,43 @@ namespace codeLess.Studio
         public void DetectActiveBufferIndentation()
         {
             if (activeTab == null || activeTab.Lines == null) return;
-            int tabLines = 0;
-            int spaceLines = 0;
-            Dictionary<int, int> stepCounts = new Dictionary<int, int>();
-            int prevSpaces = 0;
-            foreach (string raw in activeTab.Lines)
+            int gTab = settings != null && settings.TabSize > 0 ? settings.TabSize : 4;
+            bool gSpaces = settings == null || settings.InsertSpaces;
+            int t, evidence;
+            bool sp;
+            EditorIndentation.Guess(activeTab.Lines, gTab, gSpaces, out t, out sp, out evidence); // VS Code's guessIndentation
+            if (evidence > 0)
             {
-                string ln = raw ?? "";
-                if (string.IsNullOrWhiteSpace(ln)) continue;
-                if (ln[0] == '\t')
-                {
-                    tabLines++;
-                }
-                else if (ln[0] == ' ')
-                {
-                    spaceLines++;
-                    int sp = 0;
-                    while (sp < ln.Length && ln[sp] == ' ') sp++;
-                    int diff = Math.Abs(sp - prevSpaces);
-                    if (diff == 2 || diff == 4 || diff == 8)
-                    {
-                        int c;
-                        stepCounts[diff] = (stepCounts.TryGetValue(diff, out c) ? c : 0) + 1;
-                    }
-                    prevSpaces = sp;
-                }
+                activeTab.CustomInsertSpaces = sp;
+                activeTab.CustomTabSize = sp ? t : EditorIndentation.EffectiveTabSize(activeTab, gTab);
             }
-            activeTab.CustomInsertSpaces = (spaceLines >= tabLines);
-            if (activeTab.CustomInsertSpaces.Value && stepCounts.Count > 0)
-            {
-                activeTab.CustomTabSize = stepCounts.OrderByDescending(kv => kv.Value).First().Key;
-            }
+            if (editorControl != null) editorControl.Invalidate(true);
             UpdateStatusBarCursorAndLanguage(activeTab);
         }
 
         private void ConvertActiveBufferIndentation(bool toSpaces)
         {
             if (activeTab == null || activeTab.Lines == null) return;
-            int tabSz = (activeTab.CustomTabSize.HasValue && activeTab.CustomTabSize.Value > 0) ? activeTab.CustomTabSize.Value : (settings != null && settings.TabSize > 0 ? settings.TabSize : 4);
-            string spacesUnit = new string(' ', tabSz);
-            activeTab.PushUndoSnapshot();
+            int tabSz = EditorIndentation.EffectiveTabSize(activeTab, settings != null ? settings.TabSize : 4);
+            bool any = false;
             for (int i = 0; i < activeTab.Lines.Count; i++)
             {
                 string ln = activeTab.Lines[i] ?? "";
-                int leadEnd = 0;
-                while (leadEnd < ln.Length && (ln[leadEnd] == ' ' || ln[leadEnd] == '\t')) leadEnd++;
+                int leadEnd = EditorIndentation.LeadingWhitespaceLength(ln);
                 if (leadEnd == 0) continue;
-                string leading = ln.Substring(0, leadEnd);
-                string rest = ln.Substring(leadEnd);
-                if (toSpaces)
-                    leading = leading.Replace("\t", spacesUnit);
-                else
-                    leading = leading.Replace(spacesUnit, "\t");
-                activeTab.Lines[i] = leading + rest;
+                // visual width of the indentation, rebuilt in the target style (mixed tabs / spaces included)
+                string nl = EditorIndentation.Build(EditorTextLayout.VisualColumn(ln, leadEnd, tabSz), tabSz, toSpaces) + ln.Substring(leadEnd);
+                if (nl == ln) continue;
+                if (!any) { activeTab.PushUndoSnapshot(); any = true; }
+                activeTab.Lines[i] = nl;
             }
             activeTab.CustomInsertSpaces = toSpaces;
-            activeTab.SyncContentFromLines();
-            activeTab.IsDirty = true;
+            activeTab.CustomTabSize = tabSz;
+            if (any)
+            {
+                activeTab.ClampCursor();
+                activeTab.SyncContentFromLines();
+            }
             if (editorControl != null) editorControl.Invalidate(true);
             UpdateStatusBarCursorAndLanguage(activeTab);
             RefreshTabStrip();
@@ -8663,7 +8643,8 @@ if __name__ == '__main__':
                 {
                     try { fileLen = new FileInfo(filePath).Length; } catch { }
                 }
-                bool isLarge = fileLen > 1024 * 1024;
+                // QA #17: one large-file policy for both UIs (ordinary multi-MB sources keep git markers / analysis)
+                bool isLarge = fileLen > EditorLargeFileThresholds.CharThreshold;
                 EditorTabBuffer largeViewerTab = WinFormsLargeFileHost.TryCreateTab(filePath, workspaceRoot, settings);
                 if (largeViewerTab != null)
                 {
@@ -8708,8 +8689,10 @@ if __name__ == '__main__':
                     IsLargeFile = isLarge
                 };
                 tab.SyncLinesFromContent();
-                tab.RefreshGutterDiff();
-                if (!isLarge)
+                EditorIndentation.ApplyOnOpen(tab, settings); // .editorconfig, else detectIndentation (QA #12)
+                if (!tab.IsLargeFile)
+                    tab.RefreshGutterDiff();
+                if (!tab.IsLargeFile)
                     LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
                 if (!suppressNavRecord && activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
                     RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);

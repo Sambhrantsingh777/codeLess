@@ -2606,6 +2606,7 @@ namespace codeLess.AvaloniaApp
                     ApplyTheme(StudioTheme.GetById(updated.ThemeId), persistSetting: true);
                     PrimaryEditor.ShowMinimap = updated.ShowMinimap;
                     PrimaryEditor.Canvas.FontSizePx = updated.FontSize;
+                    ApplyEditorIndentAndWrapSettings(updated);
                     ApplyGitParitySettings();
                     ApplyEditorNicetySettings();
                     UpdateStatusBar();

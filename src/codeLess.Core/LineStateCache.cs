@@ -93,7 +93,10 @@ namespace codeLess.Studio
             if (targetLine >= n) targetLine = n - 1;
             if (targetLine < validCount) return true;
             int i = validCount;
-            int sinceCheck = 0;
+            // check the deadline before the first line too: a frame calls this once per visible row, and an expired
+            // deadline must not still process a batch of lines on every call (that made the first frames of a big file
+            // take ~100 ms each while the tokenizer caught up)
+            int sinceCheck = 7;
             while (i <= targetLine)
             {
                 TState start = i == 0 ? InitialState : endStates[i - 1];
