@@ -2730,7 +2730,7 @@ namespace codeLess.AvaloniaApp
             var stack = new StackPanel { Spacing = 8 };
             stack.Children.Add(new TextBlock
             {
-                Text = "codeLess v3.3.4",
+                Text = "codeLess v3.3.5",
                 FontSize = 18,
                 FontWeight = FontWeight.Bold,
                 Foreground = new SolidColorBrush(textPrimary)

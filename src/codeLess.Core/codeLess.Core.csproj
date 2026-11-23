@@ -4,7 +4,7 @@
     <TargetFrameworks>netstandard2.0;net8.0;net48</TargetFrameworks>
     <AssemblyName>codeLess.Core</AssemblyName>
     <RootNamespace>codeLess.Studio</RootNamespace>
-    <Version>3.3.4</Version>
+    <Version>3.3.5</Version>
     <Company>Savatarr</Company>
     <Product>codeLess</Product>
     <LangVersion>latest</LangVersion>
