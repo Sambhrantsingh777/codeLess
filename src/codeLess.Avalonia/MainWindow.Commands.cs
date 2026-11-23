@@ -23,6 +23,18 @@ namespace codeLess.AvaloniaApp
     public partial class MainWindow
     {
         /// <summary>True when the key event originates from the integrated terminal grid.</summary>
+        /// <summary>The terminal control that contains <paramref name="source"/> (focused grid canvas, split terminals), or null.</summary>
+        private static AvaloniaTerminalEmulatorControl TerminalControlOf(object source)
+        {
+            var v = source as global::Avalonia.Visual;
+            while (v != null)
+            {
+                if (v is AvaloniaTerminalEmulatorControl t) return t;
+                v = global::Avalonia.VisualTree.VisualExtensions.GetVisualParent(v);
+            }
+            return null;
+        }
+
         private static bool IsFromTerminal(object source)
         {
             var v = source as global::Avalonia.Visual;

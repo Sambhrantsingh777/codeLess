@@ -475,9 +475,10 @@ namespace codeLess.AvaloniaApp
                 else tb.SelectAll();
                 return;
             }
-            if (focused is Avalonia.Visual v && IsFromTerminal(v))
+            var term = TerminalControlOf(focused);
+            if (term != null)
             {
-                if (cmd == "selectall") activeTerminalSession?.Control?.SelectAll();
+                if (cmd == "selectall") term.SelectAll(); // the focused terminal (split terminals included)
                 return;
             }
             Key key = cmd == "selectall" ? Key.A : Key.Z;

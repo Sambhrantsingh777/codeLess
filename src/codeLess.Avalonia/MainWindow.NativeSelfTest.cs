@@ -71,6 +71,47 @@ namespace codeLess.AvaloniaApp
                     report["activeAfter"] = after;
                     report["activeEditorChanged"] = !string.Equals(before, after, StringComparison.Ordinal);
                     if (IsEditorSwitcherOpen) { report["switcherStillOpenAfterRelease"] = true; CancelEditorSwitcher(); }
+
+                    // ⌘V into a focused terminal through the real AppKit path (Edit menu key equivalent first).
+                    var term = activeTerminalSession?.Control;
+                    var clip = Clipboard;
+                    if (term != null && clip != null)
+                    {
+                        string saved = null;
+                        try { saved = await clip.GetTextAsync(); } catch { }
+                        string marker = "CL_PASTE_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                        // multi-line, like a copied code block (v3.3.4 report: multi-line ⌘V did nothing)
+                        var sb = new System.Text.StringBuilder();
+                        for (int li = 0; li < 60; li++) sb.Append("# line ").Append(li).Append(li == 0 ? " " + marker + "_FIRST" : li == 59 ? " " + marker + "_LAST" : "").Append('\n');
+                        await clip.SetTextAsync(sb.ToString());
+                        term.FocusTerminalCanvas();
+                        await Task.Delay(500);
+                        // Optional: a full-screen app that enables bracketed paste (CODELESS_SELFTEST_TUI="<command>").
+                        string tui = Environment.GetEnvironmentVariable("CODELESS_SELFTEST_TUI");
+                        if (!string.IsNullOrEmpty(tui))
+                        {
+                            term.WriteAutomatedInput(tui + "\r");
+                            for (int i = 0; i < 50 && !(term.GetVisibleScreenText() ?? "").Contains("TUI_READY"); i++) await Task.Delay(100);
+                            report["tuiReady"] = (term.GetVisibleScreenText() ?? "").Contains("TUI_READY");
+                            report["bracketedPasteModeSeen"] = term.ActiveBuffer?.BracketedPasteMode;
+                        }
+                        report["terminalFocused"] = TerminalControlOf(FocusManager?.GetFocusedElement()) != null;
+                        report["cmdVSent"] = MacSelfTestNative.SendCommandKey(nsWindow, "v", 9 /* kVK_ANSI_V */);
+                        if (report.ContainsKey("tuiReady")) { await Task.Delay(1000); report["tuiScreen1sAfterPaste"] = term.GetVisibleScreenText(); }
+                        bool arrived = false;
+                        for (int i = 0; i < 30 && !arrived; i++)
+                        {
+                            await Task.Delay(100);
+                            string scr = term.GetVisibleScreenText() ?? "";
+                            report["terminalPasteFirstLine"] = scr.Contains(marker + "_FIRST") || (term.ActiveBuffer?.GetScrollbackAndScreenText(400) ?? "").Contains(marker + "_FIRST");
+                            arrived = scr.Contains(marker + "_LAST");
+                        }
+                        report["terminalPasteArrived"] = arrived;
+                        if (report.ContainsKey("tuiReady")) report["tuiScreenAfterPaste"] = term.GetVisibleScreenText();
+                        report["terminalScreenAfterPaste"] = term.GetVisibleScreenText();
+                        term.WriteAutomatedInput("\u0015"); // Ctrl+U: clear the pasted line at the prompt
+                        try { if (saved != null) await clip.SetTextAsync(saved); } catch { }
+                    }
                 }
                 report["result"] = "completed";
             }
@@ -192,6 +233,22 @@ namespace codeLess.AvaloniaApp
                 IntPtr tab = MsgStr(objc_getClass("NSString"), S("stringWithUTF8String:"), "\t");
                 IntPtr evt = MsgKeyEvent(objc_getClass("NSEvent"), S("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:"),
                     10 /* NSEventTypeKeyDown */, new NSPoint(), 1UL << 18 /* Control */, 0, windowNumber, IntPtr.Zero, tab, tab, 0, 48 /* kVK_Tab */);
+                if (evt == IntPtr.Zero) return false;
+                MsgP(App, S("sendEvent:"), evt);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>⌘+key key-down through -[NSApplication sendEvent:] (menu key equivalents get it first, like a real keyboard).</summary>
+        public static bool SendCommandKey(IntPtr nsWindow, string chars, ushort keyCode)
+        {
+            try
+            {
+                long windowNumber = nsWindow != IntPtr.Zero ? MsgRetL(nsWindow, S("windowNumber")) : 0;
+                IntPtr c = MsgStr(objc_getClass("NSString"), S("stringWithUTF8String:"), chars);
+                IntPtr evt = MsgKeyEvent(objc_getClass("NSEvent"), S("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:"),
+                    10 /* NSEventTypeKeyDown */, new NSPoint(), 1UL << 20 /* Command */, 0, windowNumber, IntPtr.Zero, c, c, 0, keyCode);
                 if (evt == IntPtr.Zero) return false;
                 MsgP(App, S("sendEvent:"), evt);
                 return true;

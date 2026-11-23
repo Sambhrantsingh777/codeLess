@@ -306,9 +306,13 @@ namespace codeLess.AvaloniaApp
                 return;
             }
             Key key = cmd == "cut" ? Key.X : cmd == "copy" ? Key.C : Key.V;
-            if (focused is Visual v && IsFromTerminal(v))
+            var term = TerminalControlOf(focused);
+            if (term != null)
             {
-                activeTerminalSession?.Control?.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = key, KeyModifiers = MacKeymap.PrimaryModifier });
+                // macOS hands ⌘V / ⌘C to the Edit menu before the terminal sees the key: call the terminal directly.
+                // (A synthetic KeyDown raised on the terminal control never reached its grid canvas, so paste was lost.)
+                if (cmd == "paste") _ = term.PasteFromClipboardAsync();
+                else term.CopySelection(); // Cut in a terminal copies, like VS Code
                 return;
             }
             var ctl = FocusedEditorControl();

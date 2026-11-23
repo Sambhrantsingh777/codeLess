@@ -478,5 +478,27 @@ namespace codeLess.Avalonia.Tests
             Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(600), "100k lines took " + sw.ElapsedMilliseconds + " ms");
             Assert.Equal(5000, vt.ScrollbackCount);
         }
+            [Fact]
+        public void Startup_Capability_Queries_Are_Answered_Like_VS_Code()
+        {
+            // The exact startup queries of a Bubble Tea / Antigravity CLI ("agy") session (v3.3.4 report: paste into agy
+            // did nothing). Unanswered, such apps can keep waiting for the reply before handling input.
+            var vt = new Vt100TerminalBuffer(40, 10, false);
+            var replies = new System.Collections.Generic.List<string>();
+            vt.WriteBackCallback = r => replies.Add(r);
+            vt.FeedText("\x1b[>q\x1b[c\x1b[?2026$p\x1b]11;?\x07\x1b]10;?\x07\x1b[>c\x1b[>4;2m\x1b[>5u\x1b[?u");
+            Assert.Contains(replies, r => r.StartsWith("\x1bP>|codeLess(") && r.EndsWith("\x1b\\"));   // XTVERSION
+            Assert.Contains("\x1b[?1;2c", replies);                                                 // DA1
+            Assert.Contains("\x1b[>0;276;0c", replies);                                             // DA2
+            Assert.Contains("\x1b[?2026;2$y", replies);                                             // DECRQM
+            Assert.Contains(replies, r => r.StartsWith("\x1b]11;rgb:") && r.EndsWith("\x07"));      // background
+            Assert.Contains(replies, r => r.StartsWith("\x1b]10;rgb:"));                            // foreground
+            Assert.Equal(6, replies.Count); // kitty (>5u, ?u) and modifyOtherKeys (>4;2m) stay unanswered, like VS Code's default
+            // ... and they don't touch the screen: no underline/dim from ">4;2m", no cursor restore from ">5u"
+            vt.FeedText("X");
+            var cell = vt.GetCell(0, 0);
+            Assert.Equal('X', cell.Char);
+            Assert.Equal(0, cell.Flags & (TermCell.FLAG_UNDERLINE | TermCell.FLAG_DIM));
+        }
     }
 }

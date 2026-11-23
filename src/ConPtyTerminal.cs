@@ -1668,6 +1668,13 @@ namespace codeLess.Studio
                 string arg = osc.Substring(semi + 1);
                 if (code == "0" || code == "2")
                     WindowTitle = arg;
+                else if ((code == "10" || code == "11") && arg == "?" && WriteBackCallback != null)
+                {
+                    // Foreground / background colour query (TUIs pick light or dark styles from it), answered like
+                    // xterm / VS Code: "OSC 11 ; rgb:RRRR/GGGG/BBBB BEL".
+                    Color c = code == "10" ? DefaultFg : DefaultBg;
+                    WriteBackCallback(string.Format("\x1b]{0};rgb:{1:x2}{1:x2}/{2:x2}{2:x2}/{3:x2}{3:x2}\x07", code, c.R, c.G, c.B));
+                }
             }
         }
 
@@ -1688,6 +1695,20 @@ namespace codeLess.Studio
             {
                 ExecuteSgrRaw(rawParams);
                 return;
+            }
+
+            // Device attributes / version, answered like xterm.js (VS Code). TUIs (Bubble Tea, crossterm, Ink...) send
+            // these at startup to detect capabilities and may wait for the answer before handling input.
+            if (WriteBackCallback != null && (string.IsNullOrEmpty(rawParams) || rawParams == "0"))
+            {
+                if (finalChar == 'c' && csiPrefix == '\0') { WriteBackCallback("\x1b[?1;2c"); return; }      // DA1: VT100 with AVO
+                if (finalChar == 'c' && csiPrefix == '>') { WriteBackCallback("\x1b[>0;276;0c"); return; }    // DA2
+                if (finalChar == 'q' && csiPrefix == '>')                                                    // XTVERSION
+                {
+                    Version v = typeof(Vt100TerminalBuffer).Assembly.GetName().Version;
+                    WriteBackCallback("\x1bP>|codeLess(" + (v == null ? "0" : v.Major + "." + v.Minor + "." + v.Build) + ")\x1b\\");
+                    return;
+                }
             }
 
             // DECSCUSR (CSI Ps SP q): cursor shape set by the application (vim / neovim insert mode); 0 = user setting.

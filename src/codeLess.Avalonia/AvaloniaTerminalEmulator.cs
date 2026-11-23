@@ -490,6 +490,10 @@ namespace codeLess.AvaloniaApp
 
         public string GetSelectedText() => gridCanvas.GetSelectedText();
         public void SelectAll() => gridCanvas.SelectAll();
+        /// <summary>Copy the selection to the clipboard (Edit → Copy while the terminal has focus).</summary>
+        public void CopySelection() => gridCanvas.CopySelectionToClipboard();
+        /// <summary>Paste the clipboard into the shell (Edit → Paste while the terminal has focus).</summary>
+        public System.Threading.Tasks.Task PasteFromClipboardAsync() => gridCanvas.PasteFromClipboardPublicAsync();
         public void ClearSelection() => gridCanvas.ClearSelection();
         public void FocusTerminalCanvas() => gridCanvas.Focus();
 
@@ -1208,6 +1212,18 @@ namespace codeLess.AvaloniaApp
                 if (alt || ctrl) suppressNextTextInput = true;
             }
         }
+
+        /// <summary>Edit → Copy / ⌘C via the menu: copies the selection (and clears it like the keyboard path).</summary>
+        public void CopySelectionToClipboard()
+        {
+            string sel = GetSelectedText();
+            if (string.IsNullOrEmpty(sel)) return;
+            _ = CopyToClipboardAsync(sel);
+            ClearSelection();
+        }
+
+        /// <summary>Edit → Paste / ⌘V via the menu (bracketed paste when the app asked for it).</summary>
+        public Task PasteFromClipboardPublicAsync() => PasteFromClipboardAsync();
 
         private async Task CopyToClipboardAsync(string text)
         {
