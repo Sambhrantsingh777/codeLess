@@ -22,6 +22,8 @@ namespace codeLess.Studio
         public List<string> WorkspaceSymbols = new List<string>();
         public List<WorkspaceSymbolLocation> WorkspaceSymbolMap = new List<WorkspaceSymbolLocation>();
         public List<HarnessTraceEntry> TraceHistory = new List<HarnessTraceEntry>();
+        public FileTimeTracker FileTimeTracker = new FileTimeTracker();
+
 
         private Dictionary<string, int> docFreq = new Dictionary<string, int>();
         private double avgChunkTokens = 100.0;
@@ -2849,28 +2851,72 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("read_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
+                    
+                    if (!File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var allPaths = workspaceFiles != null ? workspaceFiles : new List<string>();
+                        var suggestions = MissingFileSuggestions.SuggestSimilarFiles(fullPath, allPaths);
+                        string outputMsg = "File does not exist.";
+                        if (suggestions.Count > 0)
+                        {
+                            outputMsg += "\nDid you mean one of these?\n" + string.Join("\n", suggestions.Select(s => s.StartsWith(workspaceRoot) ? s.Substring(workspaceRoot.Length).TrimStart('/', '\\') : s));
+                        }
+                        return new AgentToolCallResult { ToolName = "read_file", Success = false, Summary = "File not found: " + relPath, Output = outputMsg };
+                    }
+
                     string rawText = null;
                     if (stagedFiles != null && stagedFiles.ContainsKey(fullPath))
+                    {
                         rawText = stagedFiles[fullPath];
+                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
+                    }
                     else if (activeTab != null && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
+                    {
                         rawText = activeTab.Content ?? "";
-                    else if (File.Exists(fullPath))
-                        rawText = File.ReadAllText(fullPath);
+                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
+                    }
                     else
-                        return new AgentToolCallResult { ToolName = "read_file", Success = false, Summary = "File not found: " + relPath, Output = "File does not exist." };
+                    {
+                        if (BinaryDetector.IsBinaryFile(fullPath))
+                        {
+                            return new AgentToolCallResult { ToolName = "read_file", Success = false, Summary = "Binary file: " + relPath, Output = "Cannot read binary file: " + relPath };
+                        }
+                        rawText = File.ReadAllText(fullPath);
+                        FileTimeTracker.RecordRead(fullPath, File.GetLastWriteTimeUtc(fullPath));
+                    }
 
                     string[] lines = (rawText ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
-                    int sLine = args.ContainsKey("start_line") ? Math.Max(1, Convert.ToInt32(args["start_line"])) : 1;
-                    int eLine = args.ContainsKey("end_line") ? Math.Min(lines.Length, Convert.ToInt32(args["end_line"])) : Math.Min(lines.Length, sLine + 120);
+                    
+                    int limit = args.ContainsKey("limit") ? Convert.ToInt32(args["limit"]) : 2000;
+                    int startLine = 1;
+                    if (args.ContainsKey("offset")) startLine = Convert.ToInt32(args["offset"]) + 1;
+                    else if (args.ContainsKey("start_line")) startLine = Convert.ToInt32(args["start_line"]);
+                    startLine = Math.Max(1, startLine);
+                    
+                    int endLine = args.ContainsKey("end_line") ? Convert.ToInt32(args["end_line"]) : startLine + limit - 1;
+                    endLine = Math.Min(lines.Length, endLine);
+
                     StringBuilder sb = new StringBuilder();
-                    for (int i = sLine - 1; i < eLine && i < lines.Length; i++)
-                        sb.AppendLine((i + 1) + ": " + lines[i]);
+                    sb.AppendLine("<file>");
+                    for (int i = startLine - 1; i < endLine && i < lines.Length; i++)
+                    {
+                        string lineText = lines[i];
+                        if (lineText.Length > 2000) lineText = lineText.Substring(0, 2000) + "...";
+                        sb.AppendLine(string.Format("{0:D5}| {1}", i + 1, lineText));
+                    }
+                    
+                    if (endLine < lines.Length)
+                        sb.AppendLine(string.Format("(File has more lines. Use 'offset' parameter to read beyond line {0})", endLine));
+                    else
+                        sb.AppendLine(string.Format("(End of file - total {0} lines)", lines.Length));
+                    
+                    sb.AppendLine("</file>");
 
                     return new AgentToolCallResult
                     {
                         ToolName = "read_file",
                         Success = true,
-                        Summary = string.Format("Read {0} (L{1}-L{2})", relPath, sLine, eLine),
+                        Summary = string.Format("Read {0} (L{1}-L{2})", relPath, startLine, endLine),
                         Output = sb.ToString()
                     };
                 }
@@ -3016,6 +3062,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("write_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
+
+                    if (File.Exists(fullPath))
+                    {
+                        return new AgentToolCallResult { ToolName = "write_file", Success = false, Summary = "File already exists", Output = "File already exists. Use edit_file or multiedit to modify existing files." };
+                    }
                     if (OnRequestToolApproval != null && !OnRequestToolApproval("write_file", "Write " + content.Length + " chars to " + relPath))
                     {
                         return new AgentToolCallResult
@@ -3056,7 +3107,21 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("edit_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
-                    if (OnRequestToolApproval != null && !OnRequestToolApproval("edit_file", "Apply surgical edit to " + relPath))
+                    
+                    if (File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (!FileTimeTracker.HasRead(fullPath))
+                        {
+                            return new AgentToolCallResult { ToolName = "edit_file", Success = false, Summary = "Must read file first", Output = "You must read the file " + relPath + " before overwriting it. Use the read_file tool first." };
+                        }
+                        DateTime lastRead = FileTimeTracker.GetLastReadTime(fullPath);
+                        DateTime lastWrite = File.GetLastWriteTimeUtc(fullPath);
+                        if (lastWrite > lastRead)
+                        {
+                            return new AgentToolCallResult { ToolName = "edit_file", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
+                        }
+                    }
+if (OnRequestToolApproval != null && !OnRequestToolApproval("edit_file", "Apply surgical edit to " + relPath))
                     {
                         return new AgentToolCallResult
                         {
@@ -3115,7 +3180,21 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("multiedit", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
-                    if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply multiple edits to " + relPath))
+                    
+                    if (File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (!FileTimeTracker.HasRead(fullPath))
+                        {
+                            return new AgentToolCallResult { ToolName = "multiedit", Success = false, Summary = "Must read file first", Output = "You must read the file " + relPath + " before overwriting it. Use the read_file tool first." };
+                        }
+                        DateTime lastRead = FileTimeTracker.GetLastReadTime(fullPath);
+                        DateTime lastWrite = File.GetLastWriteTimeUtc(fullPath);
+                        if (lastWrite > lastRead)
+                        {
+                            return new AgentToolCallResult { ToolName = "multiedit", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
+                        }
+                    }
+if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply multiple edits to " + relPath))
                     {
                         return new AgentToolCallResult
                         {
