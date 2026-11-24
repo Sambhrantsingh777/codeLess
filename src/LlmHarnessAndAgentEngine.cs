@@ -1808,16 +1808,24 @@ namespace codeLess.Studio
             return Path.GetFileName(fullPath);
         }
 
-        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness)
+        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot)
         {
             string hName = harness != null ? harness.Name : "codeLess Adaptive Harness";
             string hDirective = harness != null ? harness.SystemPromptDirective : "";
 
+            string providerRules = vendor != null ? AgentContextBuilder.GetProviderPrompt(vendor.Id) : AgentContextBuilder.GetProviderPrompt("");
+            string instructions = AgentContextBuilder.DiscoverInstructions(workspaceRoot ?? "");
+            string envBlock = AgentContextBuilder.BuildEnvBlock(workspaceRoot ?? "");
+            
             string basePrompt = string.Format(
-@"You are codeLess Autonomous Software Engineering Agent, running inside the [{0}] harness.
+@"{0}
+{1}
+{2}
+
+You are codeLess Autonomous Software Engineering Agent, running inside the [{3}] harness.
 Core Engineering Rules:
 1. Ground every answer in the <repository_map>, <active_editor>, <diagnostics>, and <bm25_semantic_chunks>.
-2. Harness Directive: {1}
+2. Harness Directive: {4}
 3. When modifying existing files, emit surgical SEARCH/REPLACE blocks:
 ### File: relative/path/to/file.ext
 <<<<<<< SEARCH
@@ -1826,7 +1834,7 @@ exact existing lines
 updated replacement lines
 >>>>>>> REPLACE
 4. Never insert dummy placeholder comments. Always write complete, production-ready, working code.",
-                hName, hDirective);
+                envBlock, providerRules, instructions, hName, hDirective);
 
             string normMode = (mode ?? "").Trim().ToLowerInvariant();
             if (normMode == "agent" || normMode == "autofix")
@@ -2710,7 +2718,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            string sysPrompt = BuildSystemHarnessPrompt(mode, harness);
+            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot);
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
@@ -2731,6 +2739,28 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                     result.Iterations++;
                     // ConfigureAwait(false): tools (shell commands, file reads) never run on a UI thread, whoever calls.
+                    
+                    AgentContextBuilder.PruneHistory(messages);
+                    
+                    int currentTokens = EstimateTokens(sysPrompt + "\n" + string.Join("\n", messages.ConvertAll(m => m["content"])));
+                    int ctxWindow = (activeVendor != null && false) ? 128000 : 128000;
+                    int maxOut = (activeVendor != null && false) ? 4096 : 4096;
+                    
+                    if (currentTokens > ctxWindow - maxOut)
+                    {
+                        var summaryMessages = new List<Dictionary<string, string>>();
+                        summaryMessages.Add(new Dictionary<string, string> { { "role", "system" }, { "content", "Provide a detailed prompt for continuing our conversation above. Focus on what we did, what we're doing, which files we're working on, and what we're going to do next." } });
+                        summaryMessages.AddRange(messages);
+                        string summary = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, summaryMessages, 0.15).ConfigureAwait(false);
+                        
+                        var lastMsg = messages[messages.Count - 1];
+                        messages.Clear();
+                        messages.Add(new Dictionary<string, string> { { "role", "assistant" }, { "content", summary } });
+                        messages.Add(lastMsg);
+                        
+                        // Fake feed msg "Context compacted"
+                    }
+                    
                     string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp).ConfigureAwait(false);
                     finalReply = llmOutput;
 
