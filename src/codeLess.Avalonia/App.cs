@@ -126,11 +126,13 @@ namespace codeLess.AvaloniaApp
                     });
                 };
                 
-                // If it's a first launch but we want to restore previous windows, we can do it here.
-                // But for now, just process the args.
                 codeLess.Studio.ApplicationSession.ProcessArgs(desktop.Args, Environment.CurrentDirectory, wm);
                 
                 var mainWindow = desktop.MainWindow as MainWindow;
+                if (mainWindow == null && desktop.Windows.Count > 0) {
+                    mainWindow = desktop.Windows[0] as MainWindow;
+                    desktop.MainWindow = mainWindow;
+                }
 
                 // macOS delivers "Open With", dock-icon drops and `open -a codeLess <path>` as Apple Events,
                 // not argv; they were silently ignored.
