@@ -72,9 +72,12 @@ namespace codeLess.AvaloniaApp
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
-            if (DispatchKeybinding(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
             if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
-            if (IsFromTerminal(e.Source) && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
+            
+            bool isTerminal = IsFromTerminal(e.Source);
+            if (DispatchKeybinding(e.Key, e.KeyModifiers, isTerminal)) { e.Handled = true; return; }
+
+            if (isTerminal && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
                 return;
 
             if (e.Source is TextBox &&

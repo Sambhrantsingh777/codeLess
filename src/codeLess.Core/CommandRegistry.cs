@@ -28,27 +28,10 @@ namespace codeLess.Core
     public static class CommandRegistry
     {
         private static readonly Dictionary<string, CommandDefinition> commands = new Dictionary<string, CommandDefinition>();
-        private static readonly Dictionary<string, Action> actions = new Dictionary<string, Action>();
 
         public static void RegisterCommand(CommandDefinition def)
         {
             commands[def.Id] = def;
-        }
-
-        public static void BindAction(string id, Action action)
-        {
-            actions[id] = action;
-        }
-
-        public static bool ExecuteCommand(string id)
-        {
-            Action action;
-            if (actions.TryGetValue(id, out action))
-            {
-                action();
-                return true;
-            }
-            return false;
         }
 
         public static IEnumerable<CommandDefinition> AllCommands
