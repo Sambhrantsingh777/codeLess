@@ -134,6 +134,36 @@ namespace codeLess.AvaloniaApp
         private StackPanel tabStripStack;
         private Grid editorSplitGrid;
         public AvaloniaEditorControl PrimaryEditor { get; private set; }
+        private void OnSettingsFileChanged(codeLess.Studio.IdePersistentSettings newSettings)
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                this.settings = codeLess.Studio.StudioSettings.Load();
+                codeLess.Studio.EditorNicetyOptions.ApplyFrom(this.settings);
+                codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DisplayTabSize = System.Math.Max(1, System.Math.Min(16, settings.TabSize <= 0 ? 4 : settings.TabSize));
+                codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
+                if (!string.IsNullOrWhiteSpace(settings.ThemeId)) {
+                    var newTheme = codeLess.Studio.StudioTheme.GetById(settings.ThemeId);
+                    if (newTheme != currentTheme) {
+                        currentTheme = newTheme;
+                        ApplyTheme(currentTheme);
+                    }
+                }
+                if (PrimaryEditor != null && PrimaryEditor.Canvas != null) {
+                    PrimaryEditor.Canvas.FontSizePx = settings.EditorFontSize;
+                    PrimaryEditor.Canvas.InvalidateVisual();
+                }
+                if (SplitEditor != null && SplitEditor.Canvas != null) {
+                    SplitEditor.Canvas.FontSizePx = settings.EditorFontSize;
+                    SplitEditor.Canvas.InvalidateVisual();
+                }
+            });
+        }
+
+        public float GetEditorFontSizeForTests() { return (float)PrimaryEditor.Canvas.FontSizePx; }
+        public bool TestCheckDisposed() {
+            return windowClosed && terminalSessions.Count == 0 && workspaceLoadCts?.IsCancellationRequested == true;
+        }
+        public void TestAddWorkspaceFolder(string path) { workspaceFiles.Add(path); }
         public AvaloniaEditorControl SplitEditor { get; private set; }
         private Border splitEditorBorder;
         private bool isEditorSplit = false;
@@ -259,6 +289,10 @@ namespace codeLess.AvaloniaApp
             EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
             InitNetworkPrivacy();
+            
+            codeLess.Studio.IdeSettingsWatcher.Start();
+            codeLess.Studio.IdeSettingsWatcher.OnSettingsFileChanged += OnSettingsFileChanged;
+
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
@@ -285,24 +319,6 @@ namespace codeLess.AvaloniaApp
             InitUpdates(); // MainWindow.Updates.cs: Check for Updates → Downloading → Restart to Update
 
             string startPath = initialPath;
-            if (string.IsNullOrWhiteSpace(startPath))
-            {
-                string validRecent = settings.RecentWorkspaces?.FirstOrDefault(p =>
-                    !string.IsNullOrWhiteSpace(p) &&
-                    Directory.Exists(p) &&
-                    !IsUnsafeDefaultStartupDirectory(p));
-                if (!string.IsNullOrEmpty(validRecent))
-                {
-                    startPath = validRecent;
-                }
-                else if (!IsUnsafeDefaultStartupDirectory(Environment.CurrentDirectory) &&
-                         !IsHomeOrSystemTempDirectory(Environment.CurrentDirectory))
-                {
-                    // Dock / Finder / .desktop launches start in $HOME: never silently index + watch the whole
-                    // home folder (12k files, an inotify watch per directory); show the Welcome screen instead.
-                    startPath = Environment.CurrentDirectory;
-                }
-            }
 
             if (!string.IsNullOrWhiteSpace(startPath))
             {

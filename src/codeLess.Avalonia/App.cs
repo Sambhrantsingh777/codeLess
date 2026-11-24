@@ -15,6 +15,8 @@ namespace codeLess.AvaloniaApp
 {
     public class App : Application
     {
+        public static AvaloniaWindowManager WindowManager { get; private set; }
+        public static System.Collections.Generic.IEnumerable<codeLess.Studio.IWorkbenchWindow> TestOpenWindows { get; set; }
         public static string StartupWorkspacePath { get; set; }
 
         private static readonly System.Diagnostics.Stopwatch launchClock = System.Diagnostics.Stopwatch.StartNew();
@@ -118,7 +120,8 @@ namespace codeLess.AvaloniaApp
                 // in the background so tasks, language servers and debug adapters find the user's tools (VS Code parity).
                 UserShellEnvironment.StartResolve();
                 
-                var wm = new AvaloniaWindowManager(desktop);
+                WindowManager = new AvaloniaWindowManager(desktop);
+                var wm = WindowManager;
                 
                 codeLess.Studio.ApplicationSession.OnMessageReceived = (msg, ack) => {
                     Dispatcher.UIThread.Post(() => {

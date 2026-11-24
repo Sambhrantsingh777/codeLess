@@ -8,6 +8,7 @@ namespace codeLess.Studio
 {
     public class CodeLessMultiWindowAppContext : ApplicationContext, IWindowManager
     {
+        private bool _isQuitting = false;
         private List<CodeLessMainForm> windows = new List<CodeLessMainForm>();
         
         public CodeLessMultiWindowAppContext(string[] args)
@@ -44,11 +45,13 @@ namespace codeLess.Studio
                 f.FormClosed -= OnFormClosed;
                 windows.Remove(f);
             }
-            var settings = codeLess.Studio.IdePersistentSettings.Load();
-            string root = ((IWorkbenchWindow)f).WorkspaceRoot;
-            if (settings.RestoreWindowPaths.Contains(root)) {
-                settings.RestoreWindowPaths.Remove(root);
-                settings.Save();
+            if (!_isQuitting) {
+                var settings = codeLess.Studio.IdePersistentSettings.Load();
+                string root = ((IWorkbenchWindow)f).WorkspaceRoot ?? "";
+                if (settings.RestoreWindowPaths.Contains(root)) {
+                    settings.RestoreWindowPaths.Remove(root);
+                    settings.Save();
+                }
             }
             if (windows.Count == 0)
             {
@@ -81,6 +84,7 @@ namespace codeLess.Studio
 
         public void QuitApplication()
         {
+            _isQuitting = true;
             var settings = codeLess.Studio.IdePersistentSettings.Load();
             if (settings.WindowRestoreWindows != "none") {
                 settings.RestoreWindowPaths.Clear();

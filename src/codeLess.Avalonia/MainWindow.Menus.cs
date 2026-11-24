@@ -54,7 +54,7 @@ namespace codeLess.AvaloniaApp
                 ["app.hide"] = () => MacAppNative.Send("hide:"),
                 ["app.hideOthers"] = () => MacAppNative.Send("hideOtherApplications:"),
                 ["app.showAll"] = () => MacAppNative.Send("unhideAllApplications:"),
-                ["app.quit"] = () => { var l = Avalonia.Application.Current.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime; if (l != null) new AvaloniaWindowManager(l).QuitApplication(); else Close(); },
+                ["app.quit"] = () => { if (App.WindowManager != null) App.WindowManager.QuitApplication(); else Close(); },
                 ["pref.settings"] = ShowSettingsModal,
                 ["pref.keyboardShortcuts"] = ShowKeyboardShortcutsModal,
                 ["pref.colorTheme"] = OpenThemePickerPalette,
@@ -377,6 +377,26 @@ namespace codeLess.AvaloniaApp
                 if (!menu.VisibleOn(mac)) continue;
                 var top = new MenuItem { Header = "_" + menu.Title };
                 top.ItemsSource = BuildMenuItems(menu.Items, mac);
+
+                if (menu.Title == "Window") {
+                    top.SubmenuOpened += (s, e) => {
+                        var items = BuildMenuItems(menu.Items, mac);
+                        
+                        var openWindows = App.TestOpenWindows ?? App.WindowManager?.GetOpenWindows();
+                        if (openWindows != null) {
+                            items.Add(new Separator());
+                            foreach (var w in openWindows) {
+                                if (w is MainWindow mw) {
+                                    var item = new MenuItem { Header = new LiteralTextBlock(mw.Title) };
+                                    item.Click += (s2, e2) => mw.Activate();
+                                    items.Add(item);
+                                }
+                            }
+                        }
+                        top.ItemsSource = items;
+                    };
+                }
+
                 top.SubmenuOpened += (s, e) => RefreshMenuItemStates(top);
                 tops.Add(top);
             }
@@ -477,6 +497,26 @@ namespace codeLess.AvaloniaApp
                 // The live macOS app menu is built once in App.Initialize (AppNativeMenu): a later
                 // NativeMenu.SetMenu(Application) is never exported by Avalonia 11.1 (v3.3.3: Quit-only app menu).
                 if (menu.Title == "codeLess" && !includeAppMenu) continue;
+                
+            if (menu.Title == "Window") {
+                EventHandler<EventArgs> populator = null;
+                populator = (s, e) => {
+                    sub.Items.Clear();
+                    FillNativeMenu(sub, menu.Items);
+                    if (App.WindowManager != null) {
+                        sub.Items.Add(new NativeMenuItemSeparator());
+                        foreach (var w in App.WindowManager.GetOpenWindows()) {
+                            if (w is MainWindow mw) {
+                                var item = new NativeMenuItem(mw.Title);
+                                item.Click += (s2, e2) => mw.Activate();
+                                sub.Items.Add(item);
+                            }
+                        }
+                    }
+                };
+                sub.NeedsUpdate += populator;
+            }
+
                 rootMenu.Add(new NativeMenuItem(menu.Title) { Menu = sub });
             }
         }

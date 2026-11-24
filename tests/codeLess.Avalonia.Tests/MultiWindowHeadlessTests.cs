@@ -12,63 +12,151 @@ namespace codeLess.AvaloniaApp.Tests
     public class MultiWindowHeadlessTests
     {
         [AvaloniaFact]
+        public void WindowTitle_Format()
+        {
+            string tmpDir1 = Path.Combine(Path.GetTempPath(), "mw-test1-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tmpDir1);
+            File.WriteAllText(Path.Combine(tmpDir1, "test.txt"), "hello");
+            var w1 = new MainWindow(tmpDir1);
+            w1.Show();
+            
+            ((IWorkbenchWindow)w1).OpenFileInTab(Path.Combine(tmpDir1, "test.txt"));
+            Dispatcher.UIThread.RunJobs();
+            
+            Assert.Equal("test.txt — " + Path.GetFileName(tmpDir1) + " — codeLess", w1.Title);
+            
+            w1.Close();
+            try { Directory.Delete(tmpDir1, true); } catch { }
+        }
+
+        [AvaloniaFact]
         public void NewWindow_OpensEmpty_Cascaded()
         {
-            var w1 = new MainWindow(System.IO.Path.GetFullPath("/workspace/a"));
+            string tmpDir1 = Path.Combine(Path.GetTempPath(), "mw-test1-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tmpDir1);
+
+            var w1 = new MainWindow(tmpDir1);
             w1.Show();
             var w2 = new MainWindow(null);
             w2.Show();
             
             var ww2 = (IWorkbenchWindow)w2;
             var ww1 = (IWorkbenchWindow)w1;
-            Assert.True(string.IsNullOrEmpty(ww2.WorkspaceRoot)); // Should be empty (Welcome)
-            // ww1 might have a null workspaceRoot if it failed to load a non-existent dir, but let's test isolation anyway
-            // Tests two windows have independent workspaceRoot.
-            // if w1's workspaceRoot is also "", skip NotEqual.
-            if (!string.IsNullOrEmpty(ww1.WorkspaceRoot)) {
-                Assert.NotEqual(ww1.WorkspaceRoot ?? "", ww2.WorkspaceRoot ?? "");
-            }
+            
+            Assert.True(string.IsNullOrEmpty(ww2.WorkspaceRoot));
+            Assert.Equal(tmpDir1, ww1.WorkspaceRoot);
             
             w2.Close();
             w1.Close();
+            
+            try { Directory.Delete(tmpDir1, true); } catch { }
         }
 
         [AvaloniaFact]
         public void CloseWindow_DisposesOwnResources()
         {
-            var w1 = new MainWindow("/workspace/a");
-            var w2 = new MainWindow("/workspace/b");
+            string tmpDir1 = Path.Combine(Path.GetTempPath(), "mw-test1-" + Guid.NewGuid().ToString("N"));
+            string tmpDir2 = Path.Combine(Path.GetTempPath(), "mw-test2-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tmpDir1);
+            Directory.CreateDirectory(tmpDir2);
+
+            var w1 = new MainWindow(tmpDir1);
+            var w2 = new MainWindow(tmpDir2);
             w1.Show();
             w2.Show();
             
             w1.Close();
-            // In a headless run, wait briefly for Dispose to run.
-            // There's no direct assert for "disposed LSP" here without spying on LanguageServerManager, 
-            // but we ensure w2 remains viable and no crashes occur.
+            Dispatcher.UIThread.RunJobs();
+            
+            System.Threading.Thread.Sleep(50);
+            
+            Assert.False(w1.IsVisible);
+            Assert.True(w1.TestCheckDisposed());
             Assert.True(w2.IsVisible);
+
             w2.Close();
+            
+            try { Directory.Delete(tmpDir1, true); } catch { }
+            try { Directory.Delete(tmpDir2, true); } catch { }
         }
         
         [AvaloniaFact]
         public void SettingsChange_Propagates()
         {
-            var w1 = new MainWindow("/workspace/a");
-            var w2 = new MainWindow("/workspace/b");
+            string tmpDir1 = Path.Combine(Path.GetTempPath(), "mw-test1-" + Guid.NewGuid().ToString("N"));
+            string tmpDir2 = Path.Combine(Path.GetTempPath(), "mw-test2-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tmpDir1);
+            Directory.CreateDirectory(tmpDir2);
+
+            var w1 = new MainWindow(tmpDir1);
+            var w2 = new MainWindow(tmpDir2);
             w1.Show();
             w2.Show();
             
+            float oldSize = w2.GetEditorFontSizeForTests();
+            float newSize = oldSize == 20f ? 22f : 20f;
+            
             var settings = IdePersistentSettings.Load();
-            settings.EditorFontSize = 20.0f;
+            settings.EditorFontSize = newSize;
             settings.Save();
             
-            // Wait for watcher debounce (300ms)
             System.Threading.Thread.Sleep(500);
-            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Dispatcher.UIThread.RunJobs();
             
-            // Cannot easily read EditorFontSize from the editorControl in headless as it's private,
-            // but we can verify it loaded a new setting instance.
+            Assert.Equal(newSize, w2.GetEditorFontSizeForTests());
+            
             w1.Close();
             w2.Close();
+            
+            try { Directory.Delete(tmpDir1, true); } catch { }
+            try { Directory.Delete(tmpDir2, true); } catch { }
+        }
+
+        [AvaloniaFact]
+        public void WindowMenu_ItemsMatchOpenWindows()
+        {
+            string tmpDir1 = Path.Combine(Path.GetTempPath(), "mw-test1-" + Guid.NewGuid().ToString("N"));
+            string tmpDir2 = Path.Combine(Path.GetTempPath(), "mw-test2-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tmpDir1);
+            Directory.CreateDirectory(tmpDir2);
+
+            var w1 = new MainWindow(tmpDir1);
+            var w2 = new MainWindow(tmpDir2);
+            w1.Show();
+            w2.Show();
+            
+            global::codeLess.AvaloniaApp.App.TestOpenWindows = new[] { w1, w2 };
+            var topMenu = w1.TopMenuControl;
+            var windowMenu = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.Cast<global::Avalonia.Controls.MenuItem>(topMenu.ItemsSource), m => 
+                m.Header?.ToString().Replace("_", "") == "Window");
+                
+            Assert.NotNull(windowMenu);
+            
+            windowMenu.RaiseEvent(new global::Avalonia.Interactivity.RoutedEventArgs(global::Avalonia.Controls.MenuItem.SubmenuOpenedEvent));
+            
+            Dispatcher.UIThread.RunJobs();
+            
+            var items = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Cast<object>(windowMenu.ItemsSource));
+            
+                        bool w1Found = false;
+            bool w2Found = false;
+            foreach(var it in items) {
+                if (it is global::Avalonia.Controls.MenuItem mi) {
+                    var tb = mi.Header as global::Avalonia.Controls.TextBlock;
+                    if (tb != null) {
+                        if (tb.Text == w1.Title) w1Found = true;
+                        if (tb.Text == w2.Title) w2Found = true;
+                    }
+                }
+            }
+            Assert.True(w1Found, "w1 not found in menu items");
+            Assert.True(w2Found, "w2 not found in menu items");
+            
+            w1.Close();
+            w2.Close();
+            
+            try { Directory.Delete(tmpDir1, true); } catch { }
+            try { Directory.Delete(tmpDir2, true); } catch { }
         }
     }
 }

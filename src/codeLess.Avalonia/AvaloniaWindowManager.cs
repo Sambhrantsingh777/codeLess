@@ -10,6 +10,7 @@ namespace codeLess.AvaloniaApp
     public class AvaloniaWindowManager : IWindowManager
     {
         private IClassicDesktopStyleApplicationLifetime _desktop;
+        private bool _isQuitting = false;
         
         public AvaloniaWindowManager(IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -33,9 +34,11 @@ namespace codeLess.AvaloniaApp
             
             w.Closed += (s, e) =>
             {
+                if (_isQuitting) return;
                 var settings = codeLess.Studio.IdePersistentSettings.Load();
-                if (settings.RestoreWindowPaths.Contains(workspacePath)) {
-                    settings.RestoreWindowPaths.Remove(workspacePath);
+                string normPath = workspacePath ?? "";
+                if (settings.RestoreWindowPaths.Contains(normPath)) {
+                    settings.RestoreWindowPaths.Remove(normPath);
                     settings.Save();
                 }
                 if (!OperatingSystem.IsMacOS() && !_desktop.Windows.OfType<MainWindow>().Any())
@@ -55,6 +58,7 @@ namespace codeLess.AvaloniaApp
 
         public void QuitApplication()
         {
+            _isQuitting = true;
             var settings = codeLess.Studio.IdePersistentSettings.Load();
             if (settings.WindowRestoreWindows != "none") {
                 settings.RestoreWindowPaths.Clear();
