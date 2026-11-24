@@ -11,8 +11,9 @@ namespace codeLess.Studio
             string dir = Path.Combine(appData, "codeLess");
             string overrideDir = Environment.GetEnvironmentVariable("CODELESS_SETTINGS_DIR");
             if (!string.IsNullOrEmpty(overrideDir)) dir = overrideDir;
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            return Path.Combine(dir, "keybindings.json");
+            string userDir = Path.Combine(dir, "User");
+            if (!Directory.Exists(userDir)) Directory.CreateDirectory(userDir);
+            return Path.Combine(dir, "User", "keybindings.json");
         }
     }
 }

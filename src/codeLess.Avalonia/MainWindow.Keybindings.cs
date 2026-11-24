@@ -42,6 +42,7 @@ namespace codeLess.AvaloniaApp
 
             contextKeyService = new WindowContextKeyService(this);
             InitializeVscodeSettingsWatcher();
+            InitializeWorkspaceSettingsWatcher();
 
             string path = codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath();
             keybindingsWatcher = new KeybindingsFileWatcher(path, content => {
@@ -121,19 +122,76 @@ namespace codeLess.AvaloniaApp
                 sb.Append("  }");
             }
             sb.AppendLine();
+
             sb.AppendLine("]");
             
-            string tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "defaultKeybindings.json");
+            string settingsDir = codeLess.Studio.IdePersistentSettings.GetSettingsFilePath().Replace("settings.json", "");
+            string tmpDir = System.IO.Path.Combine(settingsDir, ".tmp");
+            System.IO.Directory.CreateDirectory(tmpDir);
+            string tempPath = System.IO.Path.Combine(tmpDir, "defaultKeybindings_" + System.Guid.NewGuid().ToString().Substring(0, 8) + ".json");
             try {
                 System.IO.File.WriteAllText(tempPath, sb.ToString());
             } catch { }
             var tab = OpenFileInTab(tempPath, preview: false);
             if (tab != null) {
-                tab.IsReadOnlyDiffPreview = true;
+                tab.IsReadOnly = true;
                 tab.RelativePath = "Default Keybindings";
                 tab.FileName = "Default Keybindings";
             }
         }
+
+                private System.IO.FileSystemWatcher workspaceSettingsWatcher;
+        
+        private void InitializeWorkspaceSettingsWatcher()
+        {
+            string path = VscodeSettingsManager.GetWorkspaceSettingsPath(workspaceRoot);
+            if (path == null) return;
+            string dir = System.IO.Path.GetDirectoryName(path);
+            if (!System.IO.Directory.Exists(dir)) return;
+            
+            workspaceSettingsWatcher = new System.IO.FileSystemWatcher(dir, System.IO.Path.GetFileName(path));
+            workspaceSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName;
+            System.Threading.Timer t = null;
+            System.IO.FileSystemEventHandler handler = (s, e) => {
+                if (t != null) { t.Dispose(); t = null; }
+                t = new System.Threading.Timer(_ => {
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                        try {
+                            if (!System.IO.File.Exists(path)) return;
+                            string content = System.IO.File.ReadAllText(path);
+                            // Apply IN MEMORY ONLY - clone settings
+                            var clone = codeLess.Studio.IdePersistentSettings.Load(); // load base
+                            // apply user settings over base
+                            string userPath = VscodeSettingsManager.GetUserSettingsPath();
+                            if (System.IO.File.Exists(userPath)) VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(userPath), clone);
+                            // apply workspace
+                            string err = VscodeSettingsManager.ApplySettings(content, clone);
+                            if (err != null) ShowKeybindingsNotification("Workspace settings parse error: " + err);
+                            else HideKeybindingsNotification();
+                            
+                            this.settings = clone as codeLess.Studio.StudioSettings ?? this.settings;
+                            ApplyVscodeSettings(""); // just refresh UI
+                        } catch { }
+                    });
+                }, null, 100, System.Threading.Timeout.Infinite);
+            };
+            workspaceSettingsWatcher.Changed += handler;
+            workspaceSettingsWatcher.Created += handler;
+            workspaceSettingsWatcher.Renamed += (s, e) => handler(s, null);
+            workspaceSettingsWatcher.EnableRaisingEvents = true;
+            
+            try { 
+                if (System.IO.File.Exists(path)) {
+                    var clone = codeLess.Studio.IdePersistentSettings.Load();
+                    string userPath = VscodeSettingsManager.GetUserSettingsPath();
+                    if (System.IO.File.Exists(userPath)) VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(userPath), clone);
+                    string err = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(path), clone);
+                    if (err != null) ShowKeybindingsNotification("Workspace settings parse error: " + err);
+                    this.settings = clone as codeLess.Studio.StudioSettings ?? this.settings;
+                }
+            } catch { }
+        }
+
         private System.IO.FileSystemWatcher userSettingsWatcher;
         
         private void InitializeVscodeSettingsWatcher()
@@ -143,26 +201,36 @@ namespace codeLess.AvaloniaApp
                 try { System.IO.File.WriteAllText(path, "{\n}"); } catch { }
             }
             userSettingsWatcher = new System.IO.FileSystemWatcher(System.IO.Path.GetDirectoryName(path), System.IO.Path.GetFileName(path));
-            userSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite;
-            userSettingsWatcher.Changed += (s, e) => {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => {
-                    try {
-                        System.Threading.Thread.Sleep(50); // debounce file write
-                        string content = System.IO.File.ReadAllText(path);
-                        ApplyVscodeSettings(content);
-                    } catch { }
-                });
+            userSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName;
+            System.Threading.Timer t = null;
+            System.IO.FileSystemEventHandler handler = (s, e) => {
+                if (t != null) { t.Dispose(); t = null; }
+                t = new System.Threading.Timer(_ => {
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                        try {
+                            string content = System.IO.File.ReadAllText(path);
+                            string err = ApplyVscodeSettings(content);
+                            if (err != null) ShowKeybindingsNotification("Settings parse error: " + err);
+                            else HideKeybindingsNotification();
+                        } catch { }
+                    });
+                }, null, 100, System.Threading.Timeout.Infinite);
             };
+            userSettingsWatcher.Changed += handler;
+            userSettingsWatcher.Created += handler;
+            userSettingsWatcher.Renamed += (s, e) => handler(s, null);
             userSettingsWatcher.EnableRaisingEvents = true;
             
-            try { ApplyVscodeSettings(System.IO.File.ReadAllText(path)); } catch { }
+            try { string err = ApplyVscodeSettings(System.IO.File.ReadAllText(path)); if (err != null) ShowKeybindingsNotification("Settings parse error: " + err); } catch { }
         }
 
-        private void ApplyVscodeSettings(string content)
+        private string ApplyVscodeSettings(string content)
         {
-            if (string.IsNullOrWhiteSpace(content)) return;
-            VscodeSettingsManager.ApplySettings(content, settings);
-            try { settings.Save(); } catch { }
+            string parseError = null;
+            if (!string.IsNullOrWhiteSpace(content)) {
+                parseError = VscodeSettingsManager.ApplySettings(content, settings);
+            }
+            // No save here
             
             var studioSettings = settings as StudioSettings;
             if (studioSettings != null)
@@ -176,6 +244,7 @@ namespace codeLess.AvaloniaApp
                 ApplyEditorNicetySettings();
                 UpdateStatusBar();
             }
+            return parseError;
         }
 
         private void OpenWorkspaceSettingsFile()

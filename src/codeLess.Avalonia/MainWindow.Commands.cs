@@ -710,6 +710,7 @@ namespace codeLess.AvaloniaApp
                 SplitEditor.Canvas.FontSizePx = next;
             }
             settings.FontSize = (float)PrimaryEditor.Canvas.FontSizePx;
+            codeLess.Core.VscodeSettingsManager.WriteSetting("editor.fontSize", PrimaryEditor.Canvas.FontSizePx);
             PrimaryEditor.Canvas.InvalidateVisual();
             SplitEditor.Canvas.InvalidateVisual();
         }
@@ -1063,6 +1064,7 @@ namespace codeLess.AvaloniaApp
         private void OpenEditorContextMenu(EditorTabBuffer tab, Point pt)
         {
             if (tab == null) return;
+            string scI = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+I");
             string scK = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+K");
             string scF = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+F");
             string scSym = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+Shift+O");
@@ -2714,7 +2716,7 @@ namespace codeLess.AvaloniaApp
             var view = AvaloniaDialogBuilder.BuildKeyboardShortcutsView(currentTheme, () => {
                 ModalHost.CloseModal();
                 OpenFileInTab(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath());
-            });
+            }, this.keybindings);
             ModalHost.ShowModal("keyboard-shortcuts", "Keyboard Shortcuts Reference — codeLess", view, 700);
         }
 

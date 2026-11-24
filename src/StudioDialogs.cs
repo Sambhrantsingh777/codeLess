@@ -3074,7 +3074,7 @@ namespace codeLess.Studio
             topBar.Controls.Add(FilterInput);
             Button btnJson = new Button { Text = "JSON", Dock = DockStyle.Right, Width = 60, FlatStyle = FlatStyle.Flat, ForeColor = theme.FgPrimary, BackColor = theme.BgActivity };
             btnJson.FlatAppearance.BorderSize = 0;
-            btnJson.Click += (s, e) => { this.Close();  /* We need a way to open it, we can just execute the command */ codeLess.Core.KeybindingManager dummy = new codeLess.Core.KeybindingManager(); dummy.ExecuteCommand("workbench.action.openGlobalKeybindingsFile"); };
+            btnJson.Click += (s, e) => { this.OpenJsonRequested = true; this.Close(); };
             topBar.Controls.Add(btnJson);
 
             ShortcutsList = new CodeLessListBox
@@ -3088,12 +3088,13 @@ namespace codeLess.Studio
             ShortcutsList.ApplyTheme(theme);
 
             
-            var cmds = codeLess.Core.CommandRegistry.AllCommands;
-            foreach (var cmd in cmds)
+            var defaults = new codeLess.Core.KeybindingManager().Defaults;
+            foreach (var d in defaults)
             {
-                string key = cmd.DefaultKeyWin;
-                if (!string.IsNullOrEmpty(key)) {
-                    allShortcutRows.Add(string.Format("  {0,-28}  |  {1}", key, cmd.Title ?? cmd.Id));
+                var cmd = codeLess.Core.CommandRegistry.GetCommand(d.Command);
+                if (!string.IsNullOrEmpty(d.Key)) {
+                    string t = (cmd != null && cmd.Title != null) ? cmd.Title : d.Command;
+                    allShortcutRows.Add(string.Format("  {0,-28}  |  {1}", d.Key, t));
                 }
             }
 

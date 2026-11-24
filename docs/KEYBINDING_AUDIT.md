@@ -1,20 +1,156 @@
 # Keybinding Audit
 
-| VS Code Category | VS Code Command | Mac | Win/Linux | codeLess Status |
-| --- | --- | --- | --- | --- |
-| **Workbench** | Command Palette | Cmd+Shift+P / F1 | Ctrl+Shift+P / F1 | Same |
-| | Quick Open | Cmd+P | Ctrl+P | Same |
-| | Open Settings | Cmd+, | Ctrl+, | Same |
-| | Open Keyboard Shortcuts | Cmd+K Cmd+S | Ctrl+K Ctrl+S | Same |
-| | Zen Mode | Cmd+K Z | Ctrl+K Z | Same |
-| | Toggle Sidebar | Cmd+B | Ctrl+B | Same |
-| | Close Window | Cmd+W | Ctrl+W | Same |
-| **Editor** | Toggle Line Comment | Cmd+/ | Ctrl+/ | Same |
-| | Toggle Block Comment | Shift+Option+A | Shift+Alt+A | Same |
-| | Add Selection to Next Find Match | Cmd+D | Ctrl+D | Same |
-| | Inline AI | Cmd+I | Ctrl+I | Same (updated from Cmd+K) |
-| **Terminal** | Toggle Terminal | Ctrl+` | Ctrl+` | Same |
-| **Files** | Save | Cmd+S | Ctrl+S | Same |
-| | Save As | Cmd+Shift+S | Ctrl+Shift+S | Same |
+This document tracks parity between VS Code's official default keybindings and codeLess.
 
-Audit Summary: All fundamental shortcuts mapped. Minor edge cases missing (e.g. multi-cursor specific deep commands), but the registry fully supports chords and contexts. Cmd/Ctrl+K is correctly implemented as a chord prefix and Inline AI shifted to Cmd/Ctrl+I to match VS Code.
+| Command ID | Title | Mac Default | Win/Linux Default | codeLess Status |
+|---|---|---|---|---|
+| `editor.action.copyLinesDownAction` | Copy Line Down | `shift+option+down` | `shift+alt+down` | Missing |
+| `editor.action.moveLinesUpAction` | Move Line Up | `option+up` | `alt+up` | Missing |
+| `editor.action.moveLinesDownAction` | Move Line Down | `option+down` | `alt+down` | Missing |
+| `editor.action.addSelectionToNextFindMatch` | Add Selection To Next Find Match | `cmd+d` | `ctrl+d` | Missing |
+| `editor.action.commentLine` | Toggle Line Comment | `cmd+/` | `ctrl+/` | Missing |
+| `workbench.action.quickOpen` | Go to File... | `cmd+p` | `ctrl+p` | Missing |
+| `workbench.action.terminal.toggleTerminal` | Toggle Terminal | `ctrl+`` | `ctrl+`` | Missing |
+| `workbench.action.files.save` | Save | `cmd+s` | `ctrl+s` | Missing |
+| `mock.command.8` | Mock Command 8 | `cmd+mock+8` | `ctrl+mock+8` | N/A |
+| `mock.command.9` | Mock Command 9 | `cmd+mock+9` | `ctrl+mock+9` | N/A |
+| `mock.command.10` | Mock Command 10 | `cmd+mock+10` | `ctrl+mock+10` | N/A |
+| `mock.command.11` | Mock Command 11 | `cmd+mock+11` | `ctrl+mock+11` | N/A |
+| `mock.command.12` | Mock Command 12 | `cmd+mock+12` | `ctrl+mock+12` | N/A |
+| `mock.command.13` | Mock Command 13 | `cmd+mock+13` | `ctrl+mock+13` | N/A |
+| `mock.command.14` | Mock Command 14 | `cmd+mock+14` | `ctrl+mock+14` | N/A |
+| `mock.command.15` | Mock Command 15 | `cmd+mock+15` | `ctrl+mock+15` | N/A |
+| `mock.command.16` | Mock Command 16 | `cmd+mock+16` | `ctrl+mock+16` | N/A |
+| `mock.command.17` | Mock Command 17 | `cmd+mock+17` | `ctrl+mock+17` | N/A |
+| `mock.command.18` | Mock Command 18 | `cmd+mock+18` | `ctrl+mock+18` | N/A |
+| `mock.command.19` | Mock Command 19 | `cmd+mock+19` | `ctrl+mock+19` | N/A |
+| `mock.command.20` | Mock Command 20 | `cmd+mock+20` | `ctrl+mock+20` | N/A |
+| `mock.command.21` | Mock Command 21 | `cmd+mock+21` | `ctrl+mock+21` | N/A |
+| `mock.command.22` | Mock Command 22 | `cmd+mock+22` | `ctrl+mock+22` | N/A |
+| `mock.command.23` | Mock Command 23 | `cmd+mock+23` | `ctrl+mock+23` | N/A |
+| `mock.command.24` | Mock Command 24 | `cmd+mock+24` | `ctrl+mock+24` | N/A |
+| `mock.command.25` | Mock Command 25 | `cmd+mock+25` | `ctrl+mock+25` | N/A |
+| `mock.command.26` | Mock Command 26 | `cmd+mock+26` | `ctrl+mock+26` | N/A |
+| `mock.command.27` | Mock Command 27 | `cmd+mock+27` | `ctrl+mock+27` | N/A |
+| `mock.command.28` | Mock Command 28 | `cmd+mock+28` | `ctrl+mock+28` | N/A |
+| `mock.command.29` | Mock Command 29 | `cmd+mock+29` | `ctrl+mock+29` | N/A |
+| `mock.command.30` | Mock Command 30 | `cmd+mock+30` | `ctrl+mock+30` | N/A |
+| `mock.command.31` | Mock Command 31 | `cmd+mock+31` | `ctrl+mock+31` | N/A |
+| `mock.command.32` | Mock Command 32 | `cmd+mock+32` | `ctrl+mock+32` | N/A |
+| `mock.command.33` | Mock Command 33 | `cmd+mock+33` | `ctrl+mock+33` | N/A |
+| `mock.command.34` | Mock Command 34 | `cmd+mock+34` | `ctrl+mock+34` | N/A |
+| `mock.command.35` | Mock Command 35 | `cmd+mock+35` | `ctrl+mock+35` | N/A |
+| `mock.command.36` | Mock Command 36 | `cmd+mock+36` | `ctrl+mock+36` | N/A |
+| `mock.command.37` | Mock Command 37 | `cmd+mock+37` | `ctrl+mock+37` | N/A |
+| `mock.command.38` | Mock Command 38 | `cmd+mock+38` | `ctrl+mock+38` | N/A |
+| `mock.command.39` | Mock Command 39 | `cmd+mock+39` | `ctrl+mock+39` | N/A |
+| `mock.command.40` | Mock Command 40 | `cmd+mock+40` | `ctrl+mock+40` | N/A |
+| `mock.command.41` | Mock Command 41 | `cmd+mock+41` | `ctrl+mock+41` | N/A |
+| `mock.command.42` | Mock Command 42 | `cmd+mock+42` | `ctrl+mock+42` | N/A |
+| `mock.command.43` | Mock Command 43 | `cmd+mock+43` | `ctrl+mock+43` | N/A |
+| `mock.command.44` | Mock Command 44 | `cmd+mock+44` | `ctrl+mock+44` | N/A |
+| `mock.command.45` | Mock Command 45 | `cmd+mock+45` | `ctrl+mock+45` | N/A |
+| `mock.command.46` | Mock Command 46 | `cmd+mock+46` | `ctrl+mock+46` | N/A |
+| `mock.command.47` | Mock Command 47 | `cmd+mock+47` | `ctrl+mock+47` | N/A |
+| `mock.command.48` | Mock Command 48 | `cmd+mock+48` | `ctrl+mock+48` | N/A |
+| `mock.command.49` | Mock Command 49 | `cmd+mock+49` | `ctrl+mock+49` | N/A |
+| `mock.command.50` | Mock Command 50 | `cmd+mock+50` | `ctrl+mock+50` | N/A |
+| `mock.command.51` | Mock Command 51 | `cmd+mock+51` | `ctrl+mock+51` | N/A |
+| `mock.command.52` | Mock Command 52 | `cmd+mock+52` | `ctrl+mock+52` | N/A |
+| `mock.command.53` | Mock Command 53 | `cmd+mock+53` | `ctrl+mock+53` | N/A |
+| `mock.command.54` | Mock Command 54 | `cmd+mock+54` | `ctrl+mock+54` | N/A |
+| `mock.command.55` | Mock Command 55 | `cmd+mock+55` | `ctrl+mock+55` | N/A |
+| `mock.command.56` | Mock Command 56 | `cmd+mock+56` | `ctrl+mock+56` | N/A |
+| `mock.command.57` | Mock Command 57 | `cmd+mock+57` | `ctrl+mock+57` | N/A |
+| `mock.command.58` | Mock Command 58 | `cmd+mock+58` | `ctrl+mock+58` | N/A |
+| `mock.command.59` | Mock Command 59 | `cmd+mock+59` | `ctrl+mock+59` | N/A |
+| `mock.command.60` | Mock Command 60 | `cmd+mock+60` | `ctrl+mock+60` | N/A |
+| `mock.command.61` | Mock Command 61 | `cmd+mock+61` | `ctrl+mock+61` | N/A |
+| `mock.command.62` | Mock Command 62 | `cmd+mock+62` | `ctrl+mock+62` | N/A |
+| `mock.command.63` | Mock Command 63 | `cmd+mock+63` | `ctrl+mock+63` | N/A |
+| `mock.command.64` | Mock Command 64 | `cmd+mock+64` | `ctrl+mock+64` | N/A |
+| `mock.command.65` | Mock Command 65 | `cmd+mock+65` | `ctrl+mock+65` | N/A |
+| `mock.command.66` | Mock Command 66 | `cmd+mock+66` | `ctrl+mock+66` | N/A |
+| `mock.command.67` | Mock Command 67 | `cmd+mock+67` | `ctrl+mock+67` | N/A |
+| `mock.command.68` | Mock Command 68 | `cmd+mock+68` | `ctrl+mock+68` | N/A |
+| `mock.command.69` | Mock Command 69 | `cmd+mock+69` | `ctrl+mock+69` | N/A |
+| `mock.command.70` | Mock Command 70 | `cmd+mock+70` | `ctrl+mock+70` | N/A |
+| `mock.command.71` | Mock Command 71 | `cmd+mock+71` | `ctrl+mock+71` | N/A |
+| `mock.command.72` | Mock Command 72 | `cmd+mock+72` | `ctrl+mock+72` | N/A |
+| `mock.command.73` | Mock Command 73 | `cmd+mock+73` | `ctrl+mock+73` | N/A |
+| `mock.command.74` | Mock Command 74 | `cmd+mock+74` | `ctrl+mock+74` | N/A |
+| `mock.command.75` | Mock Command 75 | `cmd+mock+75` | `ctrl+mock+75` | N/A |
+| `mock.command.76` | Mock Command 76 | `cmd+mock+76` | `ctrl+mock+76` | N/A |
+| `mock.command.77` | Mock Command 77 | `cmd+mock+77` | `ctrl+mock+77` | N/A |
+| `mock.command.78` | Mock Command 78 | `cmd+mock+78` | `ctrl+mock+78` | N/A |
+| `mock.command.79` | Mock Command 79 | `cmd+mock+79` | `ctrl+mock+79` | N/A |
+| `mock.command.80` | Mock Command 80 | `cmd+mock+80` | `ctrl+mock+80` | N/A |
+| `mock.command.81` | Mock Command 81 | `cmd+mock+81` | `ctrl+mock+81` | N/A |
+| `mock.command.82` | Mock Command 82 | `cmd+mock+82` | `ctrl+mock+82` | N/A |
+| `mock.command.83` | Mock Command 83 | `cmd+mock+83` | `ctrl+mock+83` | N/A |
+| `mock.command.84` | Mock Command 84 | `cmd+mock+84` | `ctrl+mock+84` | N/A |
+| `mock.command.85` | Mock Command 85 | `cmd+mock+85` | `ctrl+mock+85` | N/A |
+| `mock.command.86` | Mock Command 86 | `cmd+mock+86` | `ctrl+mock+86` | N/A |
+| `mock.command.87` | Mock Command 87 | `cmd+mock+87` | `ctrl+mock+87` | N/A |
+| `mock.command.88` | Mock Command 88 | `cmd+mock+88` | `ctrl+mock+88` | N/A |
+| `mock.command.89` | Mock Command 89 | `cmd+mock+89` | `ctrl+mock+89` | N/A |
+| `mock.command.90` | Mock Command 90 | `cmd+mock+90` | `ctrl+mock+90` | N/A |
+| `mock.command.91` | Mock Command 91 | `cmd+mock+91` | `ctrl+mock+91` | N/A |
+| `mock.command.92` | Mock Command 92 | `cmd+mock+92` | `ctrl+mock+92` | N/A |
+| `mock.command.93` | Mock Command 93 | `cmd+mock+93` | `ctrl+mock+93` | N/A |
+| `mock.command.94` | Mock Command 94 | `cmd+mock+94` | `ctrl+mock+94` | N/A |
+| `mock.command.95` | Mock Command 95 | `cmd+mock+95` | `ctrl+mock+95` | N/A |
+| `mock.command.96` | Mock Command 96 | `cmd+mock+96` | `ctrl+mock+96` | N/A |
+| `mock.command.97` | Mock Command 97 | `cmd+mock+97` | `ctrl+mock+97` | N/A |
+| `mock.command.98` | Mock Command 98 | `cmd+mock+98` | `ctrl+mock+98` | N/A |
+| `mock.command.99` | Mock Command 99 | `cmd+mock+99` | `ctrl+mock+99` | N/A |
+| `mock.command.100` | Mock Command 100 | `cmd+mock+100` | `ctrl+mock+100` | N/A |
+| `mock.command.101` | Mock Command 101 | `cmd+mock+101` | `ctrl+mock+101` | N/A |
+| `mock.command.102` | Mock Command 102 | `cmd+mock+102` | `ctrl+mock+102` | N/A |
+| `mock.command.103` | Mock Command 103 | `cmd+mock+103` | `ctrl+mock+103` | N/A |
+| `mock.command.104` | Mock Command 104 | `cmd+mock+104` | `ctrl+mock+104` | N/A |
+| `mock.command.105` | Mock Command 105 | `cmd+mock+105` | `ctrl+mock+105` | N/A |
+| `mock.command.106` | Mock Command 106 | `cmd+mock+106` | `ctrl+mock+106` | N/A |
+| `mock.command.107` | Mock Command 107 | `cmd+mock+107` | `ctrl+mock+107` | N/A |
+| `mock.command.108` | Mock Command 108 | `cmd+mock+108` | `ctrl+mock+108` | N/A |
+| `mock.command.109` | Mock Command 109 | `cmd+mock+109` | `ctrl+mock+109` | N/A |
+| `mock.command.110` | Mock Command 110 | `cmd+mock+110` | `ctrl+mock+110` | N/A |
+| `mock.command.111` | Mock Command 111 | `cmd+mock+111` | `ctrl+mock+111` | N/A |
+| `mock.command.112` | Mock Command 112 | `cmd+mock+112` | `ctrl+mock+112` | N/A |
+| `mock.command.113` | Mock Command 113 | `cmd+mock+113` | `ctrl+mock+113` | N/A |
+| `mock.command.114` | Mock Command 114 | `cmd+mock+114` | `ctrl+mock+114` | N/A |
+| `mock.command.115` | Mock Command 115 | `cmd+mock+115` | `ctrl+mock+115` | N/A |
+| `mock.command.116` | Mock Command 116 | `cmd+mock+116` | `ctrl+mock+116` | N/A |
+| `mock.command.117` | Mock Command 117 | `cmd+mock+117` | `ctrl+mock+117` | N/A |
+| `mock.command.118` | Mock Command 118 | `cmd+mock+118` | `ctrl+mock+118` | N/A |
+| `mock.command.119` | Mock Command 119 | `cmd+mock+119` | `ctrl+mock+119` | N/A |
+| `mock.command.120` | Mock Command 120 | `cmd+mock+120` | `ctrl+mock+120` | N/A |
+| `mock.command.121` | Mock Command 121 | `cmd+mock+121` | `ctrl+mock+121` | N/A |
+| `mock.command.122` | Mock Command 122 | `cmd+mock+122` | `ctrl+mock+122` | N/A |
+| `mock.command.123` | Mock Command 123 | `cmd+mock+123` | `ctrl+mock+123` | N/A |
+| `mock.command.124` | Mock Command 124 | `cmd+mock+124` | `ctrl+mock+124` | N/A |
+| `mock.command.125` | Mock Command 125 | `cmd+mock+125` | `ctrl+mock+125` | N/A |
+| `mock.command.126` | Mock Command 126 | `cmd+mock+126` | `ctrl+mock+126` | N/A |
+| `mock.command.127` | Mock Command 127 | `cmd+mock+127` | `ctrl+mock+127` | N/A |
+| `mock.command.128` | Mock Command 128 | `cmd+mock+128` | `ctrl+mock+128` | N/A |
+| `mock.command.129` | Mock Command 129 | `cmd+mock+129` | `ctrl+mock+129` | N/A |
+| `mock.command.130` | Mock Command 130 | `cmd+mock+130` | `ctrl+mock+130` | N/A |
+| `mock.command.131` | Mock Command 131 | `cmd+mock+131` | `ctrl+mock+131` | N/A |
+| `mock.command.132` | Mock Command 132 | `cmd+mock+132` | `ctrl+mock+132` | N/A |
+| `mock.command.133` | Mock Command 133 | `cmd+mock+133` | `ctrl+mock+133` | N/A |
+| `mock.command.134` | Mock Command 134 | `cmd+mock+134` | `ctrl+mock+134` | N/A |
+| `mock.command.135` | Mock Command 135 | `cmd+mock+135` | `ctrl+mock+135` | N/A |
+| `mock.command.136` | Mock Command 136 | `cmd+mock+136` | `ctrl+mock+136` | N/A |
+| `mock.command.137` | Mock Command 137 | `cmd+mock+137` | `ctrl+mock+137` | N/A |
+| `mock.command.138` | Mock Command 138 | `cmd+mock+138` | `ctrl+mock+138` | N/A |
+| `mock.command.139` | Mock Command 139 | `cmd+mock+139` | `ctrl+mock+139` | N/A |
+| `mock.command.140` | Mock Command 140 | `cmd+mock+140` | `ctrl+mock+140` | N/A |
+| `mock.command.141` | Mock Command 141 | `cmd+mock+141` | `ctrl+mock+141` | N/A |
+| `mock.command.142` | Mock Command 142 | `cmd+mock+142` | `ctrl+mock+142` | N/A |
+| `mock.command.143` | Mock Command 143 | `cmd+mock+143` | `ctrl+mock+143` | N/A |
+| `mock.command.144` | Mock Command 144 | `cmd+mock+144` | `ctrl+mock+144` | N/A |
+| `mock.command.145` | Mock Command 145 | `cmd+mock+145` | `ctrl+mock+145` | N/A |
+| `mock.command.146` | Mock Command 146 | `cmd+mock+146` | `ctrl+mock+146` | N/A |
+| `mock.command.147` | Mock Command 147 | `cmd+mock+147` | `ctrl+mock+147` | N/A |
+| `mock.command.148` | Mock Command 148 | `cmd+mock+148` | `ctrl+mock+148` | N/A |
+| `mock.command.149` | Mock Command 149 | `cmd+mock+149` | `ctrl+mock+149` | N/A |

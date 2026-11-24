@@ -766,9 +766,9 @@ namespace codeLess.AvaloniaApp
             return SettingsDialogView.Build(settings, theme, onApplied, onClosed, workspaceTrustSection);
         }
 
-        public static Control BuildKeyboardShortcutsView(StudioTheme theme, Action openJson)
+        public static Control BuildKeyboardShortcutsView(StudioTheme theme, Action openJson, codeLess.Core.KeybindingManager manager)
         {
-            return new codeLess.AvaloniaApp.AvaloniaKeyboardShortcutsEditor(theme, openJson);
+            return new codeLess.AvaloniaApp.AvaloniaKeyboardShortcutsEditor(theme, openJson, manager);
         }
     }
 }

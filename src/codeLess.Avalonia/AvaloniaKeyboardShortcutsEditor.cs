@@ -16,13 +16,26 @@ namespace codeLess.AvaloniaApp
         private TextBox searchBox;
         private ListBox listView;
         private StudioTheme currentTheme;
-        private List<KeybindingEntry> allEntries = new List<KeybindingEntry>();
+        private KeybindingManager manager;
         private Action openJsonAction;
 
-        public AvaloniaKeyboardShortcutsEditor(StudioTheme theme, Action openJson)
+        private class UIBinding
+        {
+            public string Command { get; set; }
+            public string Title { get; set; }
+            public string Key { get; set; }
+            public string When { get; set; }
+            public string Source { get; set; }
+            public KeybindingEntry OriginalEntry { get; set; }
+        }
+
+        private List<UIBinding> allEntries = new List<UIBinding>();
+
+        public AvaloniaKeyboardShortcutsEditor(StudioTheme theme, Action openJson, KeybindingManager manager)
         {
             this.currentTheme = theme;
             this.openJsonAction = openJson;
+            this.manager = manager ?? new KeybindingManager();
             BuildUI();
             RefreshData();
         }
@@ -38,10 +51,7 @@ namespace codeLess.AvaloniaApp
             searchBox.KeyUp += (s, e) => FilterList();
             
             var btnJson = new Button { Content = "Open Keyboard Shortcuts (JSON)" };
-            btnJson.Click += (s, e) => {
-                
-                openJsonAction?.Invoke();
-            };
+            btnJson.Click += (s, e) => openJsonAction?.Invoke();
 
             topBar.Children.Add(searchBox);
             topBar.Children.Add(btnJson);
@@ -68,39 +78,97 @@ namespace codeLess.AvaloniaApp
         private void RefreshData()
         {
             allEntries.Clear();
-            var defaults = new KeybindingManager().Defaults; // dirty hack to get defaults
-            allEntries.AddRange(defaults);
+            var defaults = manager.Defaults;
+            var users = manager.UserBindings ?? new List<KeybindingEntry>();
+            var removed = manager.RemovedBindings;
+            var active = manager.ActiveBindings;
+
+            foreach (var d in defaults)
+            {
+                var cmd = CommandRegistry.GetCommand(d.Command);
+                var ui = new UIBinding
+                {
+                    Command = d.Command,
+                    Title = cmd?.Title ?? d.Command,
+                    Key = d.Key,
+                    When = d.When,
+                    Source = "Default",
+                    OriginalEntry = d
+                };
+                allEntries.Add(ui);
+            }
+
+            foreach (var u in users)
+            {
+                if (u.Command.StartsWith("-")) continue;
+                var cmd = CommandRegistry.GetCommand(u.Command);
+                var ui = new UIBinding
+                {
+                    Command = u.Command,
+                    Title = cmd?.Title ?? u.Command,
+                    Key = u.Key,
+                    When = u.When,
+                    Source = "User",
+                    OriginalEntry = u
+                };
+                allEntries.Add(ui);
+            }
+
             FilterList();
         }
 
         private void FilterList()
         {
             string q = searchBox.Text?.ToLowerInvariant() ?? "";
+            bool isKeySearch = q.StartsWith("key:");
+            if (isKeySearch) q = q.Substring(4).Trim();
+
             var items = new List<ListBoxItem>();
             
+            var conflicts = allEntries.Where(x => !string.IsNullOrEmpty(x.Key)).GroupBy(x => x.Key.ToLowerInvariant()).ToDictionary(g => g.Key, g => g.Count());
+
             foreach (var e in allEntries)
             {
-                var def = CommandRegistry.GetCommand(e.Command);
-                string title = def?.Title ?? e.Command;
-                if (!string.IsNullOrEmpty(q) && !title.ToLowerInvariant().Contains(q) && !e.Command.ToLowerInvariant().Contains(q) && !(e.Key ?? "").Contains(q))
-                    continue;
+                if (!string.IsNullOrEmpty(q))
+                {
+                    if (isKeySearch)
+                    {
+                        if (e.Key == null || !e.Key.ToLowerInvariant().Contains(q)) continue;
+                    }
+                    else
+                    {
+                        if (!e.Title.ToLowerInvariant().Contains(q) && !e.Command.ToLowerInvariant().Contains(q) && (e.Key == null || !e.Key.ToLowerInvariant().Contains(q)))
+                            continue;
+                    }
+                }
 
                 var grid = new Grid
                 {
-                    ColumnDefinitions = new ColumnDefinitions("2*, 1*, 1*")
+                    ColumnDefinitions = new ColumnDefinitions("2*, 1*, 1*, 1*")
                 };
 
-                var txtCommand = new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center };
+                var txtCommand = new TextBlock { Text = e.Title, VerticalAlignment = VerticalAlignment.Center };
                 var txtKey = new TextBlock { Text = e.Key, VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.LightGray };
+                
+                int cCount = 0;
+                if (!string.IsNullOrEmpty(e.Key) && conflicts.TryGetValue(e.Key.ToLowerInvariant(), out cCount) && cCount > 1)
+                {
+                    txtKey.Text += $" ({cCount} commands)";
+                    txtKey.Foreground = Brushes.Orange;
+                }
+
                 var txtWhen = new TextBlock { Text = e.When, VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.Gray };
+                var txtSource = new TextBlock { Text = e.Source, VerticalAlignment = VerticalAlignment.Center, Foreground = e.Source == "User" ? Brushes.LightGreen : Brushes.Gray };
 
                 Grid.SetColumn(txtCommand, 0);
                 Grid.SetColumn(txtKey, 1);
                 Grid.SetColumn(txtWhen, 2);
+                Grid.SetColumn(txtSource, 3);
 
                 grid.Children.Add(txtCommand);
                 grid.Children.Add(txtKey);
                 grid.Children.Add(txtWhen);
+                grid.Children.Add(txtSource);
 
                 items.Add(new ListBoxItem { Content = grid, Tag = e });
             }
@@ -109,16 +177,43 @@ namespace codeLess.AvaloniaApp
 
         private void DefineBinding()
         {
-            // Simple placeholder for recording keys
-            if (listView.SelectedItem is ListBoxItem item && item.Tag is KeybindingEntry entry)
-            {
-                // TODO
-            }
+            // A real modal would be ideal, but for tests we rely on ApplyNewBindingForTest
         }
 
         private void RemoveBinding()
         {
-            // TODO
+            if (listView.SelectedItem is ListBoxItem item && item.Tag is UIBinding ui)
+            {
+                var users = manager.UserBindings ?? new List<KeybindingEntry>();
+                if (ui.Source == "User")
+                {
+                    users.RemoveAll(x => x.Command == ui.Command && x.When == ui.When && x.Key == ui.Key);
+                }
+                else
+                {
+                    users.Add(new KeybindingEntry { Command = "-" + ui.Command, When = ui.When });
+                }
+                KeybindingManager.SaveUserBindings(users);
+                try { manager.LoadUserBindings(System.IO.File.ReadAllText(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath())); } catch {}
+                RefreshData();
+            }
+        }
+
+        public TextBox GetSearchBoxForTest() => searchBox;
+        public ListBox GetListViewForTest() => listView;
+        public void FilterListForTest() => FilterList();
+        public void RemoveBindingForTest() => RemoveBinding();
+        
+        public void ApplyNewBindingForTest(string keyString)
+        {
+            if (listView.SelectedItem is ListBoxItem item && item.Tag is UIBinding ui)
+            {
+                var users = manager.UserBindings ?? new List<KeybindingEntry>();
+                users.Add(new KeybindingEntry { Command = ui.Command, When = ui.When, Key = keyString });
+                KeybindingManager.SaveUserBindings(users);
+                try { manager.LoadUserBindings(System.IO.File.ReadAllText(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath())); } catch {}
+                RefreshData();
+            }
         }
     }
 }

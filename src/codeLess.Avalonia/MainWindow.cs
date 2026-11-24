@@ -1870,6 +1870,7 @@ namespace codeLess.AvaloniaApp
             if (persistSetting && settings != null)
             {
                 settings.ThemeId = theme.Id;
+                codeLess.Core.VscodeSettingsManager.WriteSetting("workbench.colorTheme", theme.Id);
                 try { settings.Save(); } catch { }
             }
 

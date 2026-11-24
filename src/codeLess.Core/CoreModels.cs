@@ -774,6 +774,7 @@ namespace codeLess.Studio
         public int? CustomTabSize = null;
         public bool? CustomInsertSpaces = null;
         public bool IsReadOnlyDiffPreview = false;
+        public bool IsReadOnly = false;
         public string EolSequence = "\r\n";
         public Encoding FileEncoding = new UTF8Encoding(false);
         public bool HasBom = false;
@@ -1841,6 +1842,9 @@ namespace codeLess.Studio
         public bool EnableInlineGhostText { get; set; }
         public bool ShowMinimap { get; set; }
         public bool ShowBreadcrumbs { get; set; }
+        public bool ShowRenderWhitespace { get; set; }
+        public string EditorCursorStyle { get; set; }
+        public bool ShowLineNumbers { get; set; }
         public bool ShowWelcomeOnStartup { get; set; }
         /// <summary>Activate the workspace's Python venv (.venv/venv/env/.env) in new terminals, like VS Code.</summary>
         public bool ActivatePythonEnvironmentInTerminal { get; set; }

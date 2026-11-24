@@ -3912,7 +3912,7 @@ namespace codeLess.AvaloniaApp
             // Standard Editing & Navigation Keys
             switch (e.Key)
             {
-                case Key.Back:
+                case Key.Back: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     // macOS: Option+Backspace = word, Cmd+Backspace = to line start. Windows/Linux: Ctrl = word.
                     if (MacKeymap.IsMacOS && meta && !alt)
                         DeleteToLineBoundary(buf, toEnd: false);
@@ -3922,7 +3922,7 @@ namespace codeLess.AvaloniaApp
                         PerformBackspaceAcrossCursors();
                     e.Handled = true;
                     break;
-                case Key.Delete:
+                case Key.Delete: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     if (MacKeymap.IsMacOS && meta && !alt)
                     {
                         DeleteToLineBoundary(buf, toEnd: true);
@@ -3937,14 +3937,14 @@ namespace codeLess.AvaloniaApp
                     }
                     e.Handled = true;
                     break;
-                case Key.Enter:
+                case Key.Enter: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     if (!ctrlOrCmd)
                     {
                         PerformNewlineAcrossCursors();
                         e.Handled = true;
                     }
                     break;
-                case Key.Tab:
+                case Key.Tab: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     if (ctrl || meta) break; // Ctrl+Tab / Cmd+Tab switch editors (workbench), never indent
                     if (!shift && !ctrlOrCmd && !alt && TryHandleNicetyTab(buf)) { e.Handled = true; break; } // Emmet
                     HandleTabKey(shift); // honours the buffer's tab size / insert spaces (detected, .editorconfig, settings)
@@ -4206,6 +4206,7 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnTextInput(TextInputEventArgs e)
         {
+            if (Buffer != null && (Buffer.IsReadOnly || Buffer.IsReadOnlyDiffPreview)) { e.Handled = true; return; }
             base.OnTextInput(e);
             if (suppressTextInputAfterShortcut)
             {
