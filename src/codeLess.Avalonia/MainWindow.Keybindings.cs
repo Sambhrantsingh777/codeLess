@@ -26,7 +26,8 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.quickOpen", () => OpenQuickOpen());
             keybindings.BindAction("workbench.action.newWindow", () => CreateNewWindowInstance());
             keybindings.BindAction("workbench.action.closeWindow", () => Close());
-            keybindings.BindAction("workbench.action.openSettingsJson", () => ShowSettingsModal());
+            keybindings.BindAction("workbench.action.openSettingsJson", () => OpenFileInTab(VscodeSettingsManager.GetUserSettingsPath()));
+            keybindings.BindAction("workbench.action.openWorkspaceSettingsFile", () => OpenWorkspaceSettingsFile());
             keybindings.BindAction("workbench.action.openGlobalKeybindings", () => ShowKeyboardShortcutsModal());
             keybindings.BindAction("workbench.action.openGlobalKeybindingsFile", () => OpenFileInTab(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath()));
             keybindings.BindAction("workbench.action.openDefaultKeybindingsFile", () => OpenDefaultKeybindingsFile());
@@ -40,6 +41,7 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("editor.action.commentLine", () => PrimaryEditor.Canvas.ToggleLineComment());
 
             contextKeyService = new WindowContextKeyService(this);
+            InitializeVscodeSettingsWatcher();
 
             string path = codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath();
             keybindingsWatcher = new KeybindingsFileWatcher(path, content => {
@@ -131,6 +133,63 @@ namespace codeLess.AvaloniaApp
                 tab.RelativePath = "Default Keybindings";
                 tab.FileName = "Default Keybindings";
             }
+        }
+        private System.IO.FileSystemWatcher userSettingsWatcher;
+        
+        private void InitializeVscodeSettingsWatcher()
+        {
+            string path = VscodeSettingsManager.GetUserSettingsPath();
+            if (!System.IO.File.Exists(path)) {
+                try { System.IO.File.WriteAllText(path, "{\n}"); } catch { }
+            }
+            userSettingsWatcher = new System.IO.FileSystemWatcher(System.IO.Path.GetDirectoryName(path), System.IO.Path.GetFileName(path));
+            userSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite;
+            userSettingsWatcher.Changed += (s, e) => {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                    try {
+                        System.Threading.Thread.Sleep(50); // debounce file write
+                        string content = System.IO.File.ReadAllText(path);
+                        ApplyVscodeSettings(content);
+                    } catch { }
+                });
+            };
+            userSettingsWatcher.EnableRaisingEvents = true;
+            
+            try { ApplyVscodeSettings(System.IO.File.ReadAllText(path)); } catch { }
+        }
+
+        private void ApplyVscodeSettings(string content)
+        {
+            if (string.IsNullOrWhiteSpace(content)) return;
+            VscodeSettingsManager.ApplySettings(content, settings);
+            try { settings.Save(); } catch { }
+            
+            var studioSettings = settings as StudioSettings;
+            if (studioSettings != null)
+            {
+                ApplyTheme(StudioTheme.GetById(studioSettings.ActiveThemeId), persistSetting: true);
+                PrimaryEditor.ShowMinimap = studioSettings.ShowMinimap;
+                PrimaryEditor.ShowBreadcrumbs = studioSettings.ShowBreadcrumbs;
+                PrimaryEditor.Canvas.FontSizePx = studioSettings.EditorFontSize;
+                ApplyEditorIndentAndWrapSettings(studioSettings);
+                ApplyGitParitySettings();
+                ApplyEditorNicetySettings();
+                UpdateStatusBar();
+            }
+        }
+
+        private void OpenWorkspaceSettingsFile()
+        {
+            string path = VscodeSettingsManager.GetWorkspaceSettingsPath(workspaceRoot);
+            if (path == null) return;
+            if (!System.IO.File.Exists(path))
+            {
+                try {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                    System.IO.File.WriteAllText(path, "{\n}");
+                } catch { }
+            }
+            OpenFileInTab(path);
         }
     }
 }
