@@ -1936,102 +1936,25 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             return hunks;
         }
 
-        public static string ApplySearchReplacePatch(string originalContent, string searchBlock, string replaceBlock, out bool applied)
+        public static string ApplySearchReplacePatch(string originalContent, string searchBlock, string replaceBlock, bool replaceAll, out string errorMessage)
         {
-            applied = false;
+            errorMessage = null;
             bool useCrlf = (originalContent ?? "").Contains("\r\n");
-            string eol = useCrlf ? "\r\n" : "\n";
-
+            
             string normOrig = (originalContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
-            string normSearch = (searchBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Trim('\r', '\n');
-            string normReplace = (replaceBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Trim('\r', '\n');
-
-            if (string.IsNullOrEmpty(normOrig))
+            string normSearch = (searchBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            string normReplace = (replaceBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            
+            try 
             {
-                applied = true;
-                return useCrlf ? normReplace.Replace("\n", "\r\n") : normReplace;
+                string patched = codeLess.Studio.EditReplacers.Replace(normOrig, normSearch, normReplace, replaceAll);
+                return useCrlf ? patched.Replace("\n", "\r\n") : patched;
             }
-
-            if (string.IsNullOrEmpty(normSearch))
+            catch (ArgumentException ex)
             {
-                applied = true;
-                bool hadFinalNl = normOrig.EndsWith("\n");
-                string baseBody = hadFinalNl ? normOrig.Substring(0, normOrig.Length - 1) : normOrig;
-                string combined = baseBody + "\n" + normReplace + (hadFinalNl ? "\n" : "");
-                return useCrlf ? combined.Replace("\n", "\r\n") : combined;
-            }
-
-            string[] origLines = normOrig.Split('\n');
-            string[] searchLines = normSearch.Split('\n');
-            string[] replaceLines = normReplace.Length == 0 ? new string[0] : normReplace.Split('\n');
-
-            // 1. Check if searchBlock uses fuzzy '...' anchor elisions
-            bool hasEllipsisAnchor = searchLines.Any(l => IsEllipsisAnchorLine(l));
-            if (hasEllipsisAnchor)
-            {
-                int fuzzyStart, fuzzyEnd, fuzzyMatches;
-                if (TryFindFuzzyAnchorSpan(origLines, searchLines, out fuzzyStart, out fuzzyEnd, out fuzzyMatches) && fuzzyMatches == 1)
-                {
-                    string[] adaptedFuzzy = AdaptReplacementIndentation(origLines, fuzzyStart, searchLines, replaceLines);
-                    List<string> updated = new List<string>();
-                    updated.AddRange(origLines.Take(fuzzyStart));
-                    updated.AddRange(adaptedFuzzy);
-                    updated.AddRange(origLines.Skip(fuzzyEnd));
-                    applied = true;
-                    return string.Join(eol, updated);
-                }
+                errorMessage = ex.Message;
                 return originalContent;
             }
-
-            // 2. Exact match check (with ambiguity rejection if searchBlock occurs multiple times)
-            int idx = normOrig.IndexOf(normSearch, StringComparison.Ordinal);
-            if (idx >= 0)
-            {
-                // Search from idx + 1 so overlapping duplicates (e.g. "a\na" inside "a\na\na") are also rejected as ambiguous
-                int secondIdx = normOrig.IndexOf(normSearch, idx + 1, StringComparison.Ordinal);
-                if (secondIdx >= 0)
-                {
-                    // Ambiguous duplicate match without disambiguating context
-                    applied = false;
-                    return originalContent;
-                }
-                applied = true;
-                string patchedExact = normOrig.Substring(0, idx) + normReplace + normOrig.Substring(idx + normSearch.Length);
-                return useCrlf ? patchedExact.Replace("\n", "\r\n") : patchedExact;
-            }
-
-            // 3. Line-trimmed / indentation-drift match (with ambiguity rejection and indentation/tab adaptation)
-            List<int> matchIndices = new List<int>();
-            for (int i = 0; i <= origLines.Length - searchLines.Length; i++)
-            {
-                bool match = true;
-                for (int k = 0; k < searchLines.Length; k++)
-                {
-                    if (origLines[i + k].Trim() != searchLines[k].Trim())
-                    {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match)
-                {
-                    matchIndices.Add(i);
-                }
-            }
-
-            if (matchIndices.Count == 1)
-            {
-                int matchStart = matchIndices[0];
-                string[] adaptedReplace = AdaptReplacementIndentation(origLines, matchStart, searchLines, replaceLines);
-                List<string> updated = new List<string>();
-                updated.AddRange(origLines.Take(matchStart));
-                updated.AddRange(adaptedReplace);
-                updated.AddRange(origLines.Skip(matchStart + searchLines.Length));
-                applied = true;
-                return string.Join(eol, updated);
-            }
-
-            return originalContent;
         }
 
         private static bool IsEllipsisAnchorLine(string line)
@@ -2971,7 +2894,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
                 else if (toolName == "ast_outline")
                 {
-                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (activeTab != null ? activeTab.RelativePath : "");
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (args.ContainsKey("filePath") ? Convert.ToString(args["filePath"]) : (activeTab != null ? activeTab.RelativePath : ""));
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("ast_outline", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
@@ -3126,9 +3049,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
                 else if (toolName == "edit_file")
                 {
-                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (activeTab != null ? activeTab.RelativePath : "");
-                    string search = args.ContainsKey("search") ? Convert.ToString(args["search"]) : "";
-                    string replace = args.ContainsKey("replace") ? Convert.ToString(args["replace"]) : "";
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (args.ContainsKey("filePath") ? Convert.ToString(args["filePath"]) : (activeTab != null ? activeTab.RelativePath : ""));
+                    string search = args.ContainsKey("search") ? Convert.ToString(args["search"]) : (args.ContainsKey("oldString") ? Convert.ToString(args["oldString"]) : "");
+                    string replace = args.ContainsKey("replace") ? Convert.ToString(args["replace"]) : (args.ContainsKey("newString") ? Convert.ToString(args["newString"]) : "");
+                    bool replaceAll = args.ContainsKey("replaceAll") && Convert.ToBoolean(args["replaceAll"]);
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("edit_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
@@ -3152,9 +3076,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             ? activeTab.Content
                             : (File.Exists(fullPath) ? EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out dummyEol, out dummyEnc, out dummyBom, out dummyFinalNl) : ""));
 
-                    bool applied;
-                    string next = ApplySearchReplacePatch(current, search, replace, out applied);
-                    if (applied)
+                    string errorMsg;
+                    string next = ApplySearchReplacePatch(current, search, replace, replaceAll, out errorMsg);
+                    if (errorMsg == null)
                     {
                         string syntaxErr;
                         if (!SyntaxVerifier.VerifyCodeSyntax(fullPath, next, out syntaxErr))
@@ -3181,8 +3105,88 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     {
                         ToolName = "edit_file",
                         Success = false,
-                        Summary = "Search block did not match in " + relPath,
-                        Output = "Could not find exact or unambiguous search lines in " + relPath + "."
+                        Summary = "Edit failed in " + relPath,
+                        Output = errorMsg
+                    };
+                }
+                else if (toolName == "multiedit")
+                {
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (args.ContainsKey("filePath") ? Convert.ToString(args["filePath"]) : (activeTab != null ? activeTab.RelativePath : ""));
+                    string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("multiedit", workspaceRoot, fullPath, relPath, activeTab);
+                    if (denied != null) return denied;
+                    if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply multiple edits to " + relPath))
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "multiedit",
+                            Success = false,
+                            Summary = "User declined multiedit: " + relPath,
+                            Output = "User rejected multiedit operation."
+                        };
+                    }
+                    
+                    string dummyEol;
+                    System.Text.Encoding dummyEnc;
+                    bool dummyBom;
+                    bool dummyFinalNl;
+                    string current = stagedFiles.ContainsKey(fullPath)
+                        ? stagedFiles[fullPath]
+                        : (activeTab != null && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)
+                            ? activeTab.Content
+                            : (System.IO.File.Exists(fullPath) ? EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out dummyEol, out dummyEnc, out dummyBom, out dummyFinalNl) : ""));
+
+                    if (!args.ContainsKey("edits") || !(args["edits"] is System.Collections.Generic.IEnumerable<object>))
+                    {
+                        return new AgentToolCallResult { ToolName = "multiedit", Success = false, Output = "Missing or invalid 'edits' array." };
+                    }
+
+                    string next = current;
+                    int editCount = 0;
+                    foreach (var editObj in (System.Collections.Generic.IEnumerable<object>)args["edits"])
+                    {
+                        var editDict = editObj as System.Collections.Generic.IDictionary<string, object>;
+                        if (editDict == null) continue;
+                        
+                        string search = editDict.ContainsKey("oldString") ? Convert.ToString(editDict["oldString"]) : (editDict.ContainsKey("search") ? Convert.ToString(editDict["search"]) : "");
+                        string replace = editDict.ContainsKey("newString") ? Convert.ToString(editDict["newString"]) : (editDict.ContainsKey("replace") ? Convert.ToString(editDict["replace"]) : "");
+                        bool replaceAll = editDict.ContainsKey("replaceAll") && Convert.ToBoolean(editDict["replaceAll"]);
+                        
+                        string errorMsg;
+                        next = ApplySearchReplacePatch(next, search, replace, replaceAll, out errorMsg);
+                        if (errorMsg != null)
+                        {
+                            return new AgentToolCallResult
+                            {
+                                ToolName = "multiedit",
+                                Success = false,
+                                Summary = "Multiedit failed at edit #" + (editCount + 1) + " in " + relPath,
+                                Output = "Edit #" + (editCount + 1) + " failed (rolled back all): " + errorMsg
+                            };
+                        }
+                        editCount++;
+                    }
+
+                    string syntaxErr;
+                    if (!SyntaxVerifier.VerifyCodeSyntax(fullPath, next, out syntaxErr))
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "multiedit",
+                            Success = false,
+                            Summary = "Post-edit syntax error in " + relPath + " (rolled back)",
+                            Output = "Syntax check failed after applying multiedit (rolled back): " + syntaxErr
+                        };
+                    }
+                    
+                    stagedFiles[fullPath] = next;
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "multiedit",
+                        Success = true,
+                        Summary = "Staged " + editCount + " edits in " + relPath,
+                        Output = "All " + editCount + " edits applied cleanly.",
+                        ModifiedFilePath = fullPath
                     };
                 }
                 else if (toolName == "run_terminal")
@@ -3324,7 +3328,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 if (!string.IsNullOrEmpty(targetFullPath))
                 {
                     string baseText = ReadCandidateFileContent(targetFullPath, activeTab, result.StagedFileContents);
-                    patched = ApplySearchReplacePatch(baseText, searchPart, replacePart, out applied);
+                    string errorMsg;
+                    patched = ApplySearchReplacePatch(baseText, searchPart, replacePart, false, out errorMsg);
+                    applied = (errorMsg == null);
                 }
 
                 // If no explicit ### File: header was provided and the active tab did not match,
@@ -3344,8 +3350,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         if (string.IsNullOrEmpty(candPath)) continue;
                         string candBase = ReadCandidateFileContent(candPath, activeTab, result.StagedFileContents);
                         if (string.IsNullOrEmpty(candBase)) continue;
-                        bool candApplied;
-                        string candPatched = ApplySearchReplacePatch(candBase, searchPart, replacePart, out candApplied);
+                        string candErrorMsg;
+                        string candPatched = ApplySearchReplacePatch(candBase, searchPart, replacePart, false, out candErrorMsg);
+                        bool candApplied = (candErrorMsg == null);
                         if (candApplied)
                         {
                             matchedPath = candPath;
