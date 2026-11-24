@@ -120,9 +120,9 @@ namespace codeLess.AvaloniaApp
                 
                 var wm = new AvaloniaWindowManager(desktop);
                 
-                codeLess.Studio.ApplicationSession.OnMessageReceived = msg => {
+                codeLess.Studio.ApplicationSession.OnMessageReceived = (msg, ack) => {
                     Dispatcher.UIThread.Post(() => {
-                        codeLess.Studio.ApplicationSession.ProcessArgs(msg.Args, msg.Cwd, wm);
+                        codeLess.Studio.ApplicationSession.ProcessArgs(msg.Args, msg.Cwd, wm, ack);
                     });
                 };
                 

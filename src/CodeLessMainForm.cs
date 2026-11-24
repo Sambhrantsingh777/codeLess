@@ -8943,6 +8943,7 @@ if __name__ == '__main__':
                 closedTabPaths.Push(captured.FilePath);
 
             openTabs.Remove(captured);
+            if (captured.OnClosed != null) { try { captured.OnClosed(); } catch { } }
             bool anySameFileRemaining = openTabs.Any(t =>
                 (!string.IsNullOrEmpty(captured.FilePath) && string.Equals(t.FilePath, captured.FilePath, StringComparison.OrdinalIgnoreCase)) ||
                 (!string.IsNullOrEmpty(captured.FileName) && string.Equals(t.FileName, captured.FileName, StringComparison.OrdinalIgnoreCase)));

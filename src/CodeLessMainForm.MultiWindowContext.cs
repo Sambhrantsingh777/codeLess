@@ -18,7 +18,7 @@ namespace codeLess.Studio
                 return;
             }
 
-            ApplicationSession.OnMessageReceived = msg =>
+            ApplicationSession.OnMessageReceived = (msg, ack) =>
             {
                 if (windows.Count > 0)
                 {

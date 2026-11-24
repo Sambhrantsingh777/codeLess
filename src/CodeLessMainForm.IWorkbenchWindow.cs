@@ -17,18 +17,19 @@ namespace codeLess.Studio
             this.Activate();
         }
 
-        void IWorkbenchWindow.OpenFileInTab(string filePath)
-        {
-            this.OpenFileInTab(filePath);
-        }
-
-        void IWorkbenchWindow.OpenFileAtLine(string filePath, int line, int col)
+        void IWorkbenchWindow.OpenFileInTab(string filePath, Action onClosed)
         {
             var tab = this.OpenFileInTab(filePath);
+            if (tab != null && onClosed != null) tab.OnClosed += onClosed;
+        }
+
+        void IWorkbenchWindow.OpenFileAtLine(string filePath, int line, int col, Action onClosed)
+        {
+            var tab = this.OpenFileInTab(filePath);
+            if (tab != null && onClosed != null) tab.OnClosed += onClosed;
             if (tab != null && this.editorControl != null)
             {
                 this.editorControl.JumpToLine(line);
-                // jump to col could be added if supported
             }
         }
 
@@ -51,11 +52,16 @@ namespace codeLess.Studio
             }
         }
 
-        void IWorkbenchWindow.DiffFiles(string fileA, string fileB)
+        void IWorkbenchWindow.DiffFiles(string fileA, string fileB, Action onClosed)
         {
-            // if diff is supported, implement it. otherwise just open both.
-            this.OpenFileInTab(fileA);
-            this.OpenFileInTab(fileB);
+            var t1 = this.OpenFileInTab(fileA);
+            var t2 = this.OpenFileInTab(fileB);
+            if (t1 != null && onClosed != null) t1.OnClosed += onClosed;
+        }
+
+        event EventHandler IWorkbenchWindow.WindowClosed {
+            add { this.FormClosed += (s, e) => value(s, e); }
+            remove { this.FormClosed -= (s, e) => value(s, e); }
         }
 
         void IWorkbenchWindow.CloseWindow()

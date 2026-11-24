@@ -2526,6 +2526,7 @@ namespace codeLess.AvaloniaApp
 
             int idx = openTabs.IndexOf(tab);
             openTabs.Remove(tab);
+            if (tab.OnClosed != null) { try { tab.OnClosed(); } catch { } }
             SweepClosedLargeFileTabs();
 
             if (ReferenceEquals(activeTab, tab))

@@ -16,10 +16,61 @@ namespace codeLess.Studio
         public string[] Args { get; set; }
     }
 
+    
+    public interface IIpcTransport
+    {
+        Stream ConnectClient(string pipeName, int timeout);
+        IIpcServer CreateServer(string pipeName);
+    }
+    public interface IIpcServer : IDisposable
+    {
+        Stream Stream { get; }
+        void WaitForConnection();
+        void Disconnect();
+    }
+    public class NamedPipeIpcTransport : IIpcTransport
+    {
+        public Stream ConnectClient(string pipeName, int timeout)
+        {
+            var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.None);
+            client.Connect(timeout);
+            return client;
+        }
+        public IIpcServer CreateServer(string pipeName)
+        {
+            try {
+                var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
+                return new NamedPipeServer(server);
+            } catch (IOException) {
+                if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                    try {
+                        string tmp = Path.Combine(Path.GetTempPath(), ".dotnet", "corefx", "pipe", pipeName);
+                        if (File.Exists(tmp)) File.Delete(tmp);
+                        else {
+                            tmp = Path.Combine(Path.GetTempPath(), pipeName);
+                            if (File.Exists(tmp)) File.Delete(tmp);
+                        }
+                    } catch { }
+                }
+                var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
+                return new NamedPipeServer(server);
+            }
+        }
+    }
+    public class NamedPipeServer : IIpcServer
+    {
+        private NamedPipeServerStream _server;
+        public NamedPipeServer(NamedPipeServerStream server) { _server = server; }
+        public Stream Stream { get { return _server; } }
+        public void WaitForConnection() { _server.WaitForConnection(); }
+        public void Disconnect() { _server.Disconnect(); }
+        public void Dispose() { _server.Dispose(); }
+    }
+
     public static partial class ApplicationSession
     {
-        public static Action<ApplicationIpcMessage> OnMessageReceived;
-        public static Action<ApplicationIpcMessage, Action> OnWaitRequested;
+        public static Action<ApplicationIpcMessage, Action> OnMessageReceived;
+        
 
         public static bool ShouldBypassForwarding(string[] args)
         {
@@ -69,6 +120,7 @@ namespace codeLess.Studio
         }
         
         public static string OverrideIpcPipeName = null;
+        public static IIpcTransport Transport = new NamedPipeIpcTransport();
 
         public static bool TryForwardToPrimaryInstance(string[] args)
         {
@@ -81,9 +133,8 @@ namespace codeLess.Studio
             string pipeName = OverrideIpcPipeName ?? GetIpcPipeName();
             try
             {
-                using (var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.None))
+                using (var client = Transport.ConnectClient(pipeName, 20))
                 {
-                    client.Connect(20);
                     var msg = new ApplicationIpcMessage { Cwd = Environment.CurrentDirectory, Args = args };
                     string json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(msg);
                     byte[] data = Encoding.UTF8.GetBytes(json);
@@ -116,29 +167,10 @@ namespace codeLess.Studio
                 int exceptionCount = 0;
                 while (true)
                 {
-                    NamedPipeServerStream server = null;
+                    IIpcServer server = null;
                     try
                     {
-                        server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
-                    }
-                    catch (IOException)
-                    {
-                        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
-                        {
-                            try
-                            {
-                                string tmp = Path.Combine(Path.GetTempPath(), ".dotnet", "corefx", "pipe", pipeName);
-                                if (File.Exists(tmp)) File.Delete(tmp);
-                                else
-                                {
-                                    tmp = Path.Combine(Path.GetTempPath(), pipeName);
-                                    if (File.Exists(tmp)) File.Delete(tmp);
-                                }
-                            }
-                            catch { }
-                        }
-                        try { server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None); }
-                        catch { return; }
+                        server = Transport.CreateServer(pipeName);
                     }
                     catch { 
                         exceptionCount++;
@@ -152,12 +184,13 @@ namespace codeLess.Studio
                     {
                         while (true)
                         {
+                            if (server == null) break; // Re-create server if it was taken by wait
                             server.WaitForConnection();
                             byte[] lenBuf = new byte[4];
                             int read = 0;
                             while (read < 4)
                             {
-                                int r = server.Read(lenBuf, read, 4 - read);
+                                int r = server.Stream.Read(lenBuf, read, 4 - read);
                                 if (r == 0) break;
                                 read += r;
                             }
@@ -170,7 +203,7 @@ namespace codeLess.Studio
                                     read = 0;
                                     while (read < len)
                                     {
-                                        int r = server.Read(data, read, len - read);
+                                        int r = server.Stream.Read(data, read, len - read);
                                         if (r == 0) break;
                                         read += r;
                                     }
@@ -178,24 +211,24 @@ namespace codeLess.Studio
                                     {
                                         string json = Encoding.UTF8.GetString(data);
                                         var msg = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<ApplicationIpcMessage>(json);
-                                        if (msg != null && OnMessageReceived != null)
-                                        {
-                                            OnMessageReceived(msg);
-                                        }
                                         bool wait = false;
                                         if (msg != null && msg.Args != null) {
                                             foreach (var a in msg.Args) if (a == "-w" || a == "--wait") wait = true;
                                         }
                                         if (wait) {
-                                            if (OnWaitRequested != null) {
-                                                NamedPipeServerStream waitServer = server;
+                                            if (OnMessageReceived != null) {
+                                                IIpcServer waitServer = server;
                                                 server = null; // Don't let outer loop dispose it
-                                                OnWaitRequested(msg, () => {
-                                                    try { waitServer.WriteByte(1); waitServer.Flush(); waitServer.Disconnect(); waitServer.Dispose(); } catch { }
+                                                OnMessageReceived(msg, () => {
+                                                    try { waitServer.Stream.WriteByte(1); waitServer.Stream.Flush(); waitServer.Disconnect(); waitServer.Dispose(); } catch { }
                                                 });
                                                 continue; // loop without disconnect
                                             } else {
-                                                try { server.WriteByte(1); server.Flush(); } catch { }
+                                                try { server.Stream.WriteByte(1); server.Stream.Flush(); } catch { }
+                                            }
+                                        } else {
+                                            if (msg != null && OnMessageReceived != null) {
+                                                OnMessageReceived(msg, null);
                                             }
                                         }
                                     }
@@ -229,21 +262,9 @@ namespace codeLess.Studio {
                    a == "--workspace" || a == "-w" || a == "--wait";
         }
 
-        public static void HandleWait(ApplicationIpcMessage msg, IWorkbenchWindow w) {
-            bool wait = false;
-            if (msg.Args != null) {
-                foreach (var a in msg.Args) if (a == "-w" || a == "--wait") wait = true;
-            }
-            if (wait && w != null) {
-                if (OnWaitRequested != null) {
-                    OnWaitRequested(msg, () => {
-                        // Action invoked when w closes.
-                    });
-                }
-            }
-        }
 
-        public static void ProcessArgs(string[] args, string cwd, IWindowManager wm) {
+
+        public static void ProcessArgs(string[] args, string cwd, IWindowManager wm, Action onClosed = null) {
             if (args == null || args.Length == 0) {
                 var last = wm.GetLastActiveWindow();
                 if (last != null) last.FocusWindow();
@@ -285,7 +306,7 @@ namespace codeLess.Studio {
 
             if (diffA != null && diffB != null) {
                 var w = wm.GetLastActiveWindow() ?? wm.CreateNewWindow(null);
-                w.DiffFiles(GetFullPath(diffA, cwd), GetFullPath(diffB, cwd));
+                w.DiffFiles(GetFullPath(diffA, cwd), GetFullPath(diffB, cwd), onClosed);
                 w.FocusWindow();
                 return;
             }
@@ -311,7 +332,7 @@ namespace codeLess.Studio {
                     }
                 }
                 var w = wm.GetLastActiveWindow() ?? wm.CreateNewWindow(null);
-                w.OpenFileAtLine(GetFullPath(p, cwd), line, col);
+                w.OpenFileAtLine(GetFullPath(p, cwd), line, col, onClosed);
                 w.FocusWindow();
                 return;
             }
@@ -320,6 +341,7 @@ namespace codeLess.Studio {
                 var w = wm.GetLastActiveWindow();
                 if (w != null && newWindow) w = wm.CreateNewWindow(null);
                 else if (w == null) w = wm.CreateNewWindow(null);
+                if (onClosed != null) w.WindowClosed += (s, e) => onClosed();
                 w.FocusWindow();
                 return;
             }
@@ -330,17 +352,19 @@ namespace codeLess.Studio {
                 if (System.IO.Directory.Exists(fullPath)) {
                     var existing = wm.GetOpenWindows().FirstOrDefault(x => string.Equals(x.WorkspaceRoot, fullPath, StringComparison.OrdinalIgnoreCase) || (x.WorkspaceRoot != null && string.Equals(x.WorkspaceRoot.TrimEnd('\\', '/'), fullPath.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)));
                     if (existing != null && !newWindow) {
+                        if (onClosed != null) existing.WindowClosed += (s, e) => onClosed();
                         existing.FocusWindow();
                         lastW = existing;
                     } else {
                         var w = wm.CreateNewWindow(fullPath);
+                        if (onClosed != null) w.WindowClosed += (s, e) => onClosed();
                         w.FocusWindow();
                         lastW = w;
                     }
                 } else {
                     var w = wm.GetLastActiveWindow();
                     if (w == null || newWindow) w = wm.CreateNewWindow(null);
-                    w.OpenFileInTab(fullPath);
+                    w.OpenFileInTab(fullPath, onClosed);
                     w.FocusWindow();
                     lastW = w;
                 }

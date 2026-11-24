@@ -54,7 +54,7 @@ namespace codeLess.AvaloniaApp
                 ["app.hide"] = () => MacAppNative.Send("hide:"),
                 ["app.hideOthers"] = () => MacAppNative.Send("hideOtherApplications:"),
                 ["app.showAll"] = () => MacAppNative.Send("unhideAllApplications:"),
-                ["app.quit"] = Close,
+                ["app.quit"] = () => { var l = Avalonia.Application.Current.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime; if (l != null) new AvaloniaWindowManager(l).QuitApplication(); else Close(); },
                 ["pref.settings"] = ShowSettingsModal,
                 ["pref.keyboardShortcuts"] = ShowKeyboardShortcutsModal,
                 ["pref.colorTheme"] = OpenThemePickerPalette,

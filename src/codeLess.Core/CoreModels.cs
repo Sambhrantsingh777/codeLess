@@ -507,6 +507,7 @@ namespace codeLess.Studio
         public string EolSequence = Environment.NewLine;
         public Encoding FileEncoding = new UTF8Encoding(false);
         public bool HasBom = false;
+        public Action OnClosed;
         public bool HasFinalNewline = false;
     }
 
@@ -777,6 +778,7 @@ namespace codeLess.Studio
         public string EolSequence = "\r\n";
         public Encoding FileEncoding = new UTF8Encoding(false);
         public bool HasBom = false;
+        public Action OnClosed;
         public bool HasFinalNewline = true;
 
         // Per-line gutter diff sets (0-based document line indices)

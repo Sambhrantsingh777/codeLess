@@ -79,7 +79,7 @@ namespace codeLess.AvaloniaApp
                     {
                         App.ScreenshotOutputPath = args[++i];
                     }
-                    else if ((a == "--workspace" || a == "-w") && i + 1 < args.Length)
+                    else if (a == "--workspace" && i + 1 < args.Length)
                     {
                         App.StartupWorkspacePath = args[++i];
                     }

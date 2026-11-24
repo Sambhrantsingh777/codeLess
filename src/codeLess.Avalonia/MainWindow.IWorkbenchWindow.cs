@@ -16,14 +16,16 @@ namespace codeLess.AvaloniaApp
             this.Activate();
         }
 
-        void IWorkbenchWindow.OpenFileInTab(string filePath)
-        {
-            this.OpenFileInTab(filePath);
-        }
-
-        void IWorkbenchWindow.OpenFileAtLine(string filePath, int line, int col)
+        void IWorkbenchWindow.OpenFileInTab(string filePath, Action onClosed)
         {
             var tab = this.OpenFileInTab(filePath);
+            if (tab != null && onClosed != null) tab.OnClosed += onClosed;
+        }
+
+        void IWorkbenchWindow.OpenFileAtLine(string filePath, int line, int col, Action onClosed)
+        {
+            var tab = this.OpenFileInTab(filePath);
+            if (tab != null && onClosed != null) tab.OnClosed += onClosed;
             if (tab != null && this.PrimaryEditor != null)
             {
                 this.PrimaryEditor.GoToLine(line);
@@ -49,10 +51,16 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        void IWorkbenchWindow.DiffFiles(string fileA, string fileB)
+        void IWorkbenchWindow.DiffFiles(string fileA, string fileB, Action onClosed)
         {
-            this.OpenFileInTab(fileA);
-            this.OpenFileInTab(fileB);
+            var t1 = this.OpenFileInTab(fileA);
+            var t2 = this.OpenFileInTab(fileB);
+            if (t1 != null && onClosed != null) t1.OnClosed += onClosed;
+        }
+
+        event EventHandler IWorkbenchWindow.WindowClosed {
+            add { this.Closed += value; }
+            remove { this.Closed -= value; }
         }
 
         void IWorkbenchWindow.CloseWindow()
