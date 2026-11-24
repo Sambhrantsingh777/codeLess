@@ -19,6 +19,8 @@ namespace codeLess.Core
         private static readonly List<KeybindingEntry> defaults = new List<KeybindingEntry>();
         private readonly List<KeybindingEntry> activeBindings = new List<KeybindingEntry>();
 
+        private string chordPrefix = null;
+
         public static void InitializeDefaults()
         {
             defaults.Clear();
@@ -35,7 +37,7 @@ namespace codeLess.Core
                 {
                     defaults.Add(new KeybindingEntry
                     {
-                        Key = key,
+                        Key = key.ToLowerInvariant(),
                         Command = cmd.Id,
                         When = cmd.When,
                         WhenParsed = WhenParser.Parse(cmd.When)
@@ -76,25 +78,66 @@ namespace codeLess.Core
                     else
                     {
                         user.WhenParsed = WhenParser.Parse(user.When);
+                        user.Key = user.Key?.ToLowerInvariant();
                         activeBindings.Add(user);
                     }
                 }
             }
         }
 
-        public bool Dispatch(string keyGesture, IContextKeyService ctx)
+        public bool HasChordPrefix(string keyGesture)
         {
+            foreach (var b in activeBindings)
+            {
+                if (b.Key.StartsWith(keyGesture + " ", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        public bool Dispatch(string keyGesture, IContextKeyService ctx, Action<string> showStatus)
+        {
+            if (keyGesture == "escape" && chordPrefix != null)
+            {
+                chordPrefix = null;
+                showStatus("");
+                return true;
+            }
+
+            string fullGesture = chordPrefix != null ? (chordPrefix + " " + keyGesture) : keyGesture;
+
+            bool foundAnyMatch = false;
             for (int i = activeBindings.Count - 1; i >= 0; i--)
             {
                 var entry = activeBindings[i];
-                if (string.Equals(entry.Key, keyGesture, StringComparison.OrdinalIgnoreCase))
+                if (entry.Key == fullGesture)
                 {
                     if (WhenParser.Evaluate(entry.WhenParsed, ctx))
                     {
+                        chordPrefix = null;
+                        showStatus("");
                         return CommandRegistry.ExecuteCommand(entry.Command);
                     }
                 }
             }
+
+            if (chordPrefix != null)
+            {
+                // Wait, if it's the second key of a chord and no match, VS Code swallows it and resets
+                string msg = $"The key combination ({chordPrefix}, {keyGesture}) is not a command.";
+                chordPrefix = null;
+                showStatus(msg);
+                return true; // swallowed
+            }
+
+            // Check if it's a prefix
+            if (HasChordPrefix(keyGesture))
+            {
+                chordPrefix = keyGesture;
+                showStatus($"({keyGesture}) was pressed. Waiting for second key of chord...");
+                return true;
+            }
+
             return false;
         }
     }
