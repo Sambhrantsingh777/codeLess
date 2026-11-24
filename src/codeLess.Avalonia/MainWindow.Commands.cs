@@ -2960,10 +2960,10 @@ namespace codeLess.AvaloniaApp
             // Ensure the default (Savatarr Graphite) theme & clean workspace
             ApplyTheme(StudioTheme.GetById(StudioTheme.DefaultThemeId), persistSetting: false);
             // An explicit --workspace wins; otherwise the codeLess repo in the current directory, else the current directory.
-            string repoDir = !string.IsNullOrEmpty(App.StartupWorkspacePath) && Directory.Exists(App.StartupWorkspacePath)
-                ? App.StartupWorkspacePath
+            string repoDir = !string.IsNullOrEmpty(this.workspaceRoot) && Directory.Exists(this.workspaceRoot)
+                ? this.workspaceRoot
                 : workspaceRoot;
-            if (string.IsNullOrEmpty(App.StartupWorkspacePath) && File.Exists(Path.Combine(Environment.CurrentDirectory, "src", "codeLess.Core", "CoreModels.cs")))
+            if (string.IsNullOrEmpty(this.workspaceRoot) && File.Exists(Path.Combine(Environment.CurrentDirectory, "src", "codeLess.Core", "CoreModels.cs")))
                 repoDir = Environment.CurrentDirectory;
             else if (string.IsNullOrEmpty(repoDir) || !Directory.Exists(repoDir))
                 repoDir = Environment.CurrentDirectory;

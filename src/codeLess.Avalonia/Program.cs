@@ -15,6 +15,13 @@ namespace codeLess.AvaloniaApp
         public static void Main(string[] args)
         {
             App.MainEnteredUtc = DateTime.UtcNow;
+            if (codeLess.Studio.ApplicationSession.TryForwardToPrimaryInstance(args))
+            {
+                Environment.Exit(0);
+                return;
+            }
+            codeLess.Studio.ApplicationSession.StartPrimaryServer();
+
             EnsureDeveloperPathOnUnix();
             RegisterCrashGuards();
 

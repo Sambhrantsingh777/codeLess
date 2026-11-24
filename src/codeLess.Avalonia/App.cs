@@ -111,8 +111,20 @@ namespace codeLess.AvaloniaApp
                 // Finder/Dock launches get a minimal PATH: import the user's login-shell environment (nvm, pyenv, Homebrew...)
                 // in the background so tasks, language servers and debug adapters find the user's tools (VS Code parity).
                 UserShellEnvironment.StartResolve();
-                var mainWindow = new MainWindow(StartupWorkspacePath);
-                desktop.MainWindow = mainWindow;
+                
+                var wm = new AvaloniaWindowManager(desktop);
+                
+                codeLess.Studio.ApplicationSession.OnMessageReceived = msg => {
+                    Dispatcher.UIThread.Post(() => {
+                        codeLess.Studio.ApplicationSession.ProcessArgs(msg.Args, msg.Cwd, wm);
+                    });
+                };
+                
+                // If it's a first launch but we want to restore previous windows, we can do it here.
+                // But for now, just process the args.
+                codeLess.Studio.ApplicationSession.ProcessArgs(desktop.Args, Environment.CurrentDirectory, wm);
+                
+                var mainWindow = desktop.MainWindow as MainWindow;
 
                 // macOS delivers "Open With", dock-icon drops and `open -a codeLess <path>` as Apple Events,
                 // not argv; they were silently ignored.
@@ -127,7 +139,11 @@ namespace codeLess.AvaloniaApp
                             {
                                 string path = item?.TryGetLocalPath();
                                 if (!string.IsNullOrEmpty(path) && !IsEchoedStartupArgument(path))
-                                    Dispatcher.UIThread.Post(() => mainWindow.OpenPathFromOs(path));
+                                {
+                                    Dispatcher.UIThread.Post(() => {
+                                        codeLess.Studio.ApplicationSession.ProcessArgs(new string[] { path }, Environment.CurrentDirectory, wm);
+                                    });
+                                }
                             }
                         }
                     };

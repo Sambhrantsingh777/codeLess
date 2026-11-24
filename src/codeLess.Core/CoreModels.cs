@@ -1853,12 +1853,16 @@ namespace codeLess.Studio
         public List<string> RecentWorkspaces { get; set; }
         public List<string> RecentFiles { get; set; }
         public List<string> OpenTabPaths { get; set; }
+        public string WindowRestoreWindows { get; set; }
+        public List<string> RestoreWindowPaths { get; set; }
         public List<SavedVendorEntry> Vendors { get; set; }
 
         public const string DefaultExcludedFoldersList = ".git, node_modules, bin, obj, dist, build, out, .venv, __pycache__, .next, target, packages";
 
         public IdePersistentSettings()
         {
+            WindowRestoreWindows = "all";
+            RestoreWindowPaths = new List<string>();
             ActiveThemeId = StudioTheme.DefaultThemeId;
             // NOTE: ThemeDefaultMigrated is intentionally left false here. The JSON deserializer runs this constructor
             // and only overwrites fields present in the file, so defaulting it to true would skip the migration for
