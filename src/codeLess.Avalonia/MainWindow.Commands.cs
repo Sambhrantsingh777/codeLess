@@ -72,6 +72,7 @@ namespace codeLess.AvaloniaApp
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
             if (DispatchKeybinding(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
+            if (DispatchKeybinding(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
 
         {
             if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(e.Key, e.KeyModifiers)) { e.Handled = true; return; }

@@ -43,7 +43,7 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.clipboardCutAction", "Cut", "Editor", "cmd+x", "ctrl+x", "ctrl+x", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.clipboardCopyAction", "Copy", "Editor", "cmd+c", "ctrl+c", "ctrl+c", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.clipboardPasteAction", "Paste", "Editor", "cmd+v", "ctrl+v", "ctrl+v", "editorTextFocus"));
-            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.jumpToBracket", "Jump to Bracket", "Editor", "cmd+shift+\", "ctrl+shift+\", "ctrl+shift+\", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.jumpToBracket", "Jump to Bracket", "Editor", "cmd+shift+\\", "ctrl+shift+\\", "ctrl+shift+\\", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.indentLines", "Indent Line", "Editor", "cmd+]", "ctrl+]", "ctrl+]", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.outdentLines", "Outdent Line", "Editor", "cmd+[", "ctrl+[", "ctrl+[", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("cursorHome", "Line Start", "Editor", "home", "home", "home", "editorTextFocus"));
@@ -96,7 +96,7 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.closeAllEditors", "Close All Editors", "View", "cmd+k cmd+w", "ctrl+k ctrl+w", "ctrl+k ctrl+w", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.closeUnmodifiedEditors", "Close Saved Editors", "View", "cmd+k u", "ctrl+k u", "ctrl+k u", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.reopenClosedEditor", "Reopen Closed Editor", "View", "cmd+shift+t", "ctrl+shift+t", "ctrl+shift+t", ""));
-            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.splitEditor", "Split Editor", "View", "cmd+\", "ctrl+\", "ctrl+\", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.splitEditor", "Split Editor", "View", "cmd+\\", "ctrl+\\", "ctrl+\\", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.focusFirstEditorGroup", "Focus First Editor Group", "View", "cmd+1", "ctrl+1", "ctrl+1", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.focusSecondEditorGroup", "Focus Second Editor Group", "View", "cmd+2", "ctrl+2", "ctrl+2", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.zoomIn", "Zoom In", "View", "cmd+=", "ctrl+=", "ctrl+=", ""));
