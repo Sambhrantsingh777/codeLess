@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace codeLess.Core
@@ -16,11 +14,10 @@ namespace codeLess.Core
         public WhenNode WhenParsed { get; set; }
     }
 
-    public static class KeybindingManager
+    public class KeybindingManager
     {
         private static readonly List<KeybindingEntry> defaults = new List<KeybindingEntry>();
-        private static readonly List<KeybindingEntry> userBindings = new List<KeybindingEntry>();
-        private static readonly List<KeybindingEntry> activeBindings = new List<KeybindingEntry>();
+        private readonly List<KeybindingEntry> activeBindings = new List<KeybindingEntry>();
 
         public static void InitializeDefaults()
         {
@@ -32,7 +29,7 @@ namespace codeLess.Core
             {
                 string key = isMac ? cmd.DefaultKeyMac : (isLinux ? cmd.DefaultKeyLinux : cmd.DefaultKeyWin);
                 if (string.IsNullOrEmpty(key) && !isMac)
-                    key = cmd.DefaultKeyWin; // fallback
+                    key = cmd.DefaultKeyWin;
                 
                 if (!string.IsNullOrEmpty(key))
                 {
@@ -45,42 +42,47 @@ namespace codeLess.Core
                     });
                 }
             }
-            UpdateActiveBindings();
         }
 
-        public static void LoadUserBindings(string jsonContent)
+        public KeybindingManager()
         {
-            userBindings.Clear();
-            if (string.IsNullOrWhiteSpace(jsonContent))
-            {
-                UpdateActiveBindings();
-                return;
-            }
-            
-            UpdateActiveBindings();
+            UpdateActiveBindings(null);
         }
 
-        private static void UpdateActiveBindings()
+        public void LoadUserBindings(string jsonContent)
+        {
+            var userBindings = new List<KeybindingEntry>();
+            if (!string.IsNullOrWhiteSpace(jsonContent))
+            {
+                // Dummy parsing for C# 5 compilation
+            }
+            UpdateActiveBindings(userBindings);
+        }
+
+        private void UpdateActiveBindings(List<KeybindingEntry> userBindings)
         {
             activeBindings.Clear();
             activeBindings.AddRange(defaults);
             
-            foreach (var user in userBindings)
+            if (userBindings != null)
             {
-                if (user.Command.StartsWith("-"))
+                foreach (var user in userBindings)
                 {
-                    string toRemove = user.Command.Substring(1);
-                    activeBindings.RemoveAll(b => b.Command == toRemove && (string.IsNullOrEmpty(user.When) || b.When == user.When));
-                }
-                else
-                {
-                    user.WhenParsed = WhenParser.Parse(user.When);
-                    activeBindings.Add(user);
+                    if (user.Command.StartsWith("-"))
+                    {
+                        string toRemove = user.Command.Substring(1);
+                        activeBindings.RemoveAll(b => b.Command == toRemove && (string.IsNullOrEmpty(user.When) || b.When == user.When));
+                    }
+                    else
+                    {
+                        user.WhenParsed = WhenParser.Parse(user.When);
+                        activeBindings.Add(user);
+                    }
                 }
             }
         }
 
-        public static bool Dispatch(string keyGesture, IWhenContext ctx)
+        public bool Dispatch(string keyGesture, IContextKeyService ctx)
         {
             for (int i = activeBindings.Count - 1; i >= 0; i--)
             {
