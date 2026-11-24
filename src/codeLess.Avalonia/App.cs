@@ -77,7 +77,13 @@ namespace codeLess.AvaloniaApp
             // Quit closes via the window so the unsaved-changes prompt in MainWindow.OnClosing can run.
             NativeMenu.SetMenu(this, AppNativeMenu.Build(
                 ActiveWorkbenchWindow,
-                () => (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.TryShutdown(0)));
+                () => {
+                    var lifetime = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+                    if (lifetime != null) {
+                        var wm = new AvaloniaWindowManager(lifetime);
+                        wm.QuitApplication();
+                    }
+                }));
         }
 
         /// <summary>The focused workbench window (New Window opens more), else the main one.</summary>
@@ -144,6 +150,16 @@ namespace codeLess.AvaloniaApp
                                         codeLess.Studio.ApplicationSession.ProcessArgs(new string[] { path }, Environment.CurrentDirectory, wm);
                                     });
                                 }
+                            }
+                        }
+                        else if (e.Kind == ActivationKind.Background || e.Kind == ActivationKind.OpenUri || e is ActivatedEventArgs)
+                        {
+                            // Dock click when no windows are open
+                            if (!System.Linq.Enumerable.Any(System.Linq.Enumerable.OfType<MainWindow>(desktop.Windows)))
+                            {
+                                Dispatcher.UIThread.Post(() => {
+                                    wm.CreateNewWindow(null);
+                                });
                             }
                         }
                     };

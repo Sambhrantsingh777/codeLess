@@ -21,7 +21,9 @@ namespace codeLess.Studio
     {
         private static string GetStorageDir()
         {
-            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "codeLess", "workspaceStorage");
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string overrideDir = Environment.GetEnvironmentVariable("CODELESS_SETTINGS_DIR");
+            string dir = Path.Combine(!string.IsNullOrEmpty(overrideDir) ? overrideDir : Path.Combine(appData, "codeLess"), "workspaceStorage");
             Directory.CreateDirectory(dir);
             return dir;
         }
@@ -31,7 +33,7 @@ namespace codeLess.Studio
             if (string.IsNullOrEmpty(input)) return "empty";
             using (var md5 = MD5.Create())
             {
-                byte[] data = md5.ComputeHash(Encoding.UTF8.GetBytes(input.ToLowerInvariant()));
+                byte[] data = md5.ComputeHash(Encoding.UTF8.GetBytes(input.TrimEnd('\\', '/').ToLowerInvariant()));
                 StringBuilder sb = new StringBuilder();
                 foreach (byte b in data) sb.Append(b.ToString("x2"));
                 return sb.ToString();
