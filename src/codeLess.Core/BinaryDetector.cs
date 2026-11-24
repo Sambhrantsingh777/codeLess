@@ -7,7 +7,7 @@ namespace codeLess.Studio
     {
         public static bool IsBinaryFile(string path, string content = null)
         {
-            string ext = Path.GetExtension(path)?.ToLowerInvariant();
+            string ext = Path.GetExtension(path) != null ? Path.GetExtension(path).ToLowerInvariant() : null;
             if (ext == ".zip" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".exe" || 
                 ext == ".dll" || ext == ".so" || ext == ".class" || ext == ".jar" || ext == ".pdf")
                 return true;

@@ -1833,6 +1833,10 @@ namespace codeLess.Studio
         public bool WordWrap { get; set; }
         public bool AutoSave { get; set; }
         public bool RequireAgentToolApproval { get; set; }
+        public string AgentPermissionEdit { get; set; }
+        public string AgentPermissionWebfetch { get; set; }
+        public Dictionary<string, string> AgentPermissionBash { get; set; }
+
         /// <summary>Check GitHub Releases for a newer codeLess at most once a day (anonymous request, can be disabled).</summary>
         public bool AutoCheckForUpdates { get; set; }
         public bool ThemeDefaultMigrated { get; set; }
@@ -1873,6 +1877,10 @@ namespace codeLess.Studio
             WordWrap = false;
             AutoSave = false;
             RequireAgentToolApproval = true;
+            AgentPermissionEdit = "allow";
+            AgentPermissionWebfetch = "allow";
+            AgentPermissionBash = new Dictionary<string, string>();
+
             AutoCheckForUpdates = true;
             EnableInlineGhostText = true;
             ShowMinimap = true;

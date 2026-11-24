@@ -83,8 +83,10 @@ namespace codeLess.Studio
         public int AgentLoopTimeoutMs = 60000;
         public int HttpTimeoutMs = 60000;
 
+        public IdePersistentSettings _settings;
         public LlmHarnessAndAgentEngine(IdePersistentSettings settings)
         {
+            _settings = settings;
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             InitializeHarnesses();
             InitializeVendors(settings);
@@ -2830,7 +2832,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             }
                         }
 
-                        AgentToolCallResult tr = ExecuteWorkspaceTool(toolName, args, workspaceRoot, workspaceFiles, activeTab, result.StagedFileContents);
+                        AgentToolCallResult tr = ExecuteWorkspaceTool(toolName, args, workspaceRoot, workspaceFiles, activeTab, result.StagedFileContents, mode, _settings);
                         doomLoopHistory.Add(new Tuple<string, string>(signature, tr.Output));
 
                         result.ToolCalls.Add(tr);
@@ -2989,8 +2991,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             string workspaceRoot,
             List<string> workspaceFiles,
             EditorTabBuffer activeTab,
-            Dictionary<string, string> stagedFiles
-        )
+            Dictionary<string, string> stagedFiles,
+            string agentMode,
+            IdePersistentSettings settings)
         {
             if (args == null) args = new Dictionary<string, object>();
             try

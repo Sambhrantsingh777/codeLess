@@ -33,7 +33,7 @@ namespace codeLess.Avalonia.Tests
             
             // "list_dirr" instead of "list_dir"
             var args = new Dictionary<string, object> { { "path", "/tmp" } };
-            var result = harness.ExecuteWorkspaceTool("list_dirr", args, "/tmp", new List<string>(), null, null);
+            var result = harness.ExecuteWorkspaceTool("list_dirr", args, "/tmp", new List<string>(), null, null, "agent", null);
             
             Assert.False(result.Success);
             Assert.Equal("invalid", result.ToolName);

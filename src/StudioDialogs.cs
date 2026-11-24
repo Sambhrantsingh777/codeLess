@@ -878,7 +878,7 @@ namespace codeLess.Studio
             );
 
             LlmHarnessProfile harness = engine.Harnesses[0];
-            string sysPrompt = LlmHarnessAndAgentEngine.BuildSystemHarnessPrompt("agent", harness);
+            string sysPrompt = LlmHarnessAndAgentEngine.BuildSystemHarnessPrompt("agent", harness, null, null);
             int sysTokens = LlmHarnessAndAgentEngine.EstimateTokens(sysPrompt);
             int rulesTokens = LlmHarnessAndAgentEngine.EstimateTokens(engine.ProjectRulesText);
             int repoMapTokens = LlmHarnessAndAgentEngine.EstimateTokens(engine.CompactRepoMap);
