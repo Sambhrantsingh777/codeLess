@@ -1,8 +1,13 @@
 using System;
-using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace codeLess.Core
 {
+    public interface IContextKeyService
+    {
+        object GetValue(string key);
+    }
+
     public enum WhenNodeType
     {
         Variable,
@@ -11,7 +16,9 @@ namespace codeLess.Core
         And,
         Or,
         Eq,
-        NotEq
+        NotEq,
+        Regex,
+        In
     }
 
     public class WhenNode
@@ -26,7 +33,7 @@ namespace codeLess.Core
     {
         public static WhenNode Parse(string expr)
         {
-            if (string.IsNullOrEmpty(expr)) return null;
+            if (string.IsNullOrWhiteSpace(expr)) return null;
             int pos = 0;
             return ParseOr(expr, ref pos);
         }
@@ -75,16 +82,36 @@ namespace codeLess.Core
         {
             WhenNode left = ParseUnary(expr, ref pos);
             SkipWhitespace(expr, ref pos);
+            
             if (Match(expr, ref pos, "=="))
             {
                 WhenNode right = ParseUnary(expr, ref pos);
+                if (right != null && right.Type == WhenNodeType.Variable) right.Type = WhenNodeType.Value;
                 return new WhenNode { Type = WhenNodeType.Eq, Left = left, Right = right };
             }
             if (Match(expr, ref pos, "!="))
             {
                 WhenNode right = ParseUnary(expr, ref pos);
+                if (right != null && right.Type == WhenNodeType.Variable) right.Type = WhenNodeType.Value;
                 return new WhenNode { Type = WhenNodeType.NotEq, Left = left, Right = right };
             }
+            if (Match(expr, ref pos, "=~"))
+            {
+                WhenNode right = ParseUnary(expr, ref pos);
+                if (right != null && right.Type == WhenNodeType.Variable) right.Type = WhenNodeType.Value;
+                return new WhenNode { Type = WhenNodeType.Regex, Left = left, Right = right };
+            }
+            if (Match(expr, ref pos, "in"))
+            {
+                WhenNode right = ParseUnary(expr, ref pos);
+                return new WhenNode { Type = WhenNodeType.In, Left = left, Right = right };
+            }
+            if (Match(expr, ref pos, "not in"))
+            {
+                WhenNode right = ParseUnary(expr, ref pos);
+                return new WhenNode { Type = WhenNodeType.Not, Left = new WhenNode { Type = WhenNodeType.In, Left = left, Right = right } };
+            }
+
             return left;
         }
 
@@ -112,27 +139,41 @@ namespace codeLess.Core
             }
 
             char c = expr[pos];
-            if (c == '\'' || c == '"')
+            if (c == '\'' || c == '"' || c == '/')
             {
                 char q = expr[pos++];
                 int start = pos;
-                while (pos < expr.Length && expr[pos] != q) pos++;
+                bool isRegex = (q == '/');
+                
+                while (pos < expr.Length && expr[pos] != q)
+                {
+                    if (expr[pos] == '\\' && pos + 1 < expr.Length) pos += 2;
+                    else pos++;
+                }
                 string val = expr.Substring(start, pos - start);
-                if (pos < expr.Length) pos++;
+                if (pos < expr.Length) pos++; // skip closing char
+                
+                // if regex, maybe flags
+                if (isRegex)
+                {
+                    while (pos < expr.Length && char.IsLetter(expr[pos])) pos++;
+                }
+                
+                // We don't unescape here, keep simple for this scope, or just rely on regex passing it raw
                 return new WhenNode { Type = WhenNodeType.Value, Text = val };
             }
 
             int identStart = pos;
-            while (pos < expr.Length && (char.IsLetterOrDigit(expr[pos]) || expr[pos] == '_' || expr[pos] == '-')) pos++;
+            while (pos < expr.Length && (char.IsLetterOrDigit(expr[pos]) || expr[pos] == '_' || expr[pos] == '-' || expr[pos] == '.')) pos++;
             string ident = expr.Substring(identStart, pos - identStart);
 
-            if (ident == "true" || ident == "false")
-                return new WhenNode { Type = WhenNodeType.Value, Text = ident };
+            if (string.Equals(ident, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(ident, "false", StringComparison.OrdinalIgnoreCase))
+                return new WhenNode { Type = WhenNodeType.Value, Text = ident.ToLowerInvariant() };
 
             return new WhenNode { Type = WhenNodeType.Variable, Text = ident };
         }
 
-        public static bool Evaluate(WhenNode node, IWhenContext ctx)
+        public static bool Evaluate(WhenNode node, IContextKeyService ctx)
         {
             if (node == null) return true;
             switch (node.Type)
@@ -140,24 +181,54 @@ namespace codeLess.Core
                 case WhenNodeType.And: return Evaluate(node.Left, ctx) && Evaluate(node.Right, ctx);
                 case WhenNodeType.Or: return Evaluate(node.Left, ctx) || Evaluate(node.Right, ctx);
                 case WhenNodeType.Not: return !Evaluate(node.Left, ctx);
-                case WhenNodeType.Eq: return GetString(node.Left, ctx) == GetString(node.Right, ctx);
-                case WhenNodeType.NotEq: return GetString(node.Left, ctx) != GetString(node.Right, ctx);
+                case WhenNodeType.Eq: 
+                    return string.Equals(GetString(node.Left, ctx), GetString(node.Right, ctx), StringComparison.OrdinalIgnoreCase);
+                case WhenNodeType.NotEq: 
+                    return !string.Equals(GetString(node.Left, ctx), GetString(node.Right, ctx), StringComparison.OrdinalIgnoreCase);
+                case WhenNodeType.Regex:
+                    string valToMatch = GetString(node.Left, ctx);
+                    string pattern = GetString(node.Right, ctx);
+                    if (string.IsNullOrEmpty(pattern)) return false;
+                    try
+                    {
+                        return Regex.IsMatch(valToMatch, pattern, RegexOptions.IgnoreCase);
+                    }
+                    catch { return false; }
+                case WhenNodeType.In:
+                    // VS Code: 'in' means value is a key in the object or item in array. We just check if the string contains it for simplicity if it's a string, or split.
+                    string item = GetString(node.Left, ctx);
+                    string list = GetString(node.Right, ctx);
+                    if (string.IsNullOrEmpty(list)) return false;
+                    // simplified implementation of IN for C# 5
+                    return list.IndexOf(item, StringComparison.OrdinalIgnoreCase) >= 0;
+                    
                 case WhenNodeType.Variable:
-                    string val = GetString(node, ctx);
-                    if (string.Equals(val, "true", StringComparison.OrdinalIgnoreCase)) return true;
-                    if (string.Equals(val, "false", StringComparison.OrdinalIgnoreCase)) return false;
-                    return !string.IsNullOrEmpty(val); 
+                    object v = ctx?.GetValue(node.Text);
+                    if (v is bool b) return b;
+                    if (v is string s)
+                    {
+                        if (s == "true") return true;
+                        if (s == "false") return false;
+                        return !string.IsNullOrEmpty(s);
+                    }
+                    return v != null;
                 case WhenNodeType.Value:
                     return string.Equals(node.Text, "true", StringComparison.OrdinalIgnoreCase);
                 default: return false;
             }
         }
 
-        private static string GetString(WhenNode node, IWhenContext ctx)
+        private static string GetString(WhenNode node, IContextKeyService ctx)
         {
             if (node == null) return "";
             if (node.Type == WhenNodeType.Value) return node.Text;
-            if (node.Type == WhenNodeType.Variable) return ctx.GetValue(node.Text) ? "true" : "false";
+            if (node.Type == WhenNodeType.Variable)
+            {
+                object v = ctx?.GetValue(node.Text);
+                if (v == null) return "";
+                if (v is bool b) return b ? "true" : "false";
+                return v.ToString();
+            }
             return Evaluate(node, ctx) ? "true" : "false";
         }
     }

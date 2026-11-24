@@ -22,12 +22,8 @@ namespace codeLess.Avalonia.Tests
             ctx.Set("A", true);
             ctx.Set("B", false);
             ctx.Set("C", true);
-
-            // !A || B && C => false || false && true => false
             Assert.False(WhenParser.Evaluate(WhenParser.Parse("!A || B && C"), ctx));
-            // (!A || B) && C => false && true => false
             Assert.False(WhenParser.Evaluate(WhenParser.Parse("(!A || B) && C"), ctx));
-            // A || B && C => true || (false && true) => true
             Assert.True(WhenParser.Evaluate(WhenParser.Parse("A || B && C"), ctx));
         }
 
@@ -38,12 +34,19 @@ namespace codeLess.Avalonia.Tests
             ctx.Set("lang", "csharp");
             ctx.Set("num", 10);
 
-            Assert.True(WhenParser.Evaluate(WhenParser.Parse("lang == csharp"), ctx));
-            Assert.True(WhenParser.Evaluate(WhenParser.Parse("lang == 'csharp'"), ctx));
-            Assert.True(WhenParser.Evaluate(WhenParser.Parse("lang != python"), ctx));
-            Assert.True(WhenParser.Evaluate(WhenParser.Parse("lang =~ /^cs.*/"), ctx));
-            Assert.False(WhenParser.Evaluate(WhenParser.Parse("lang =~ /^py.*/"), ctx));
-            Assert.True(WhenParser.Evaluate(WhenParser.Parse("num == 10"), ctx));
+            var node1 = WhenParser.Parse("lang == csharp");
+            Assert.True(WhenParser.Evaluate(node1, ctx), "1");
+            Assert.True(WhenParser.Evaluate(WhenParser.Parse("lang == 'csharp'"), ctx), "2");
+            Assert.True(WhenParser.Evaluate(WhenParser.Parse("lang != python"), ctx), "3");
+            
+            var n = WhenParser.Parse("lang =~ /^cs.*/");
+            string left = n.Left?.Text;
+            string right = n.Right?.Text;
+            object val = ctx.GetValue(left);
+            Assert.True(WhenParser.Evaluate(n, ctx), $"4: left={left}, right={right}, val={val}");
+            
+            Assert.False(WhenParser.Evaluate(WhenParser.Parse("lang =~ /^py.*/"), ctx), "5");
+            Assert.True(WhenParser.Evaluate(WhenParser.Parse("num == 10"), ctx), "6");
         }
 
         [Fact]
