@@ -52,7 +52,7 @@ namespace codeLess.Studio
         /// Runs an approved agent command. Returns the combined output (with a leading note when it ran in the copy or
         /// when the staged edits couldn't be applied).
         /// </summary>
-        public string RunAgentTerminalCommand(string cmd, string workspaceRoot, IDictionary<string, string> stagedFiles, out int exitCode, out bool timedOut)
+        public string RunAgentTerminalCommand(string cmd, string workspaceRoot, IDictionary<string, string> stagedFiles, int timeoutMs, out int exitCode, out bool timedOut)
         {
             exitCode = 0;
             timedOut = false;
@@ -99,9 +99,9 @@ namespace codeLess.Studio
                     Dictionary<string, string> env = overlay != null ? VerificationRunner.VerificationEnvironment() : null;
                     if (env != null) env.Remove("CODELESS_VERIFY");
                     if (ConPtyNative.IsWindowsPlatform())
-                        output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command " + QuoteProcessArgument(cmd), runDir, AgentTerminalTimeoutMs, env, out exitCode, out timedOut);
+                        output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command " + QuoteProcessArgument(cmd), runDir, timeoutMs, env, out exitCode, out timedOut);
                     else
-                        output = RunProcessCaptureWithExitCode(ConPtyTerminalSession.GetUserUnixShell(), "-c " + QuoteProcessArgument(cmd), runDir, AgentTerminalTimeoutMs, env, out exitCode, out timedOut);
+                        output = RunProcessCaptureWithExitCode(ConPtyTerminalSession.GetUserUnixShell(), "-c " + QuoteProcessArgument(cmd), runDir, timeoutMs, env, out exitCode, out timedOut);
                 }
                 if (overlay != null && !string.IsNullOrEmpty(output))
                     output = output.Replace(overlay.OverlayWorkspace, workspaceRoot); // paths in errors point at the real files

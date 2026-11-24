@@ -16,6 +16,48 @@ namespace codeLess.Studio
 {
     public partial class LlmHarnessAndAgentEngine
     {
+        private WorkspaceIgnoreRules GetIgnoreRules(string workspaceRoot)
+        {
+            if (string.IsNullOrEmpty(workspaceRoot)) return null;
+            return new WorkspaceIgnoreRules(workspaceRoot, new string[] { ".git", "node_modules", "bin", "obj", "dist", "build", "target", "vendor", ".venv", "venv", "__pycache__", ".idea", ".vs", "coverage", ".cache", "tmp" }, true);
+        }
+
+        private IEnumerable<string> WalkDirectory(string root, WorkspaceIgnoreRules ignoreRules)
+        {
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) yield break;
+            
+            var stack = new Stack<string>();
+            stack.Push(root);
+            while (stack.Count > 0)
+            {
+                string dir = stack.Pop();
+                string[] files = null;
+                string[] dirs = null;
+                try {
+                    files = Directory.GetFiles(dir);
+                    dirs = Directory.GetDirectories(dir);
+                } catch { continue; }
+
+                if (files != null)
+                {
+                    foreach (string f in files)
+                    {
+                        if (ignoreRules != null && ignoreRules.IsGitIgnoredEntry(f, false)) continue;
+                        yield return f;
+                    }
+                }
+                
+                if (dirs != null)
+                {
+                    foreach (string d in dirs)
+                    {
+                        if (ignoreRules != null && ignoreRules.IsExcludedDirectory(d)) continue;
+                        stack.Push(d);
+                    }
+                }
+            }
+        }
+
         public List<ByokVendor> Vendors = new List<ByokVendor>();
         public List<LlmHarnessProfile> Harnesses = new List<LlmHarnessProfile>();
         public List<Bm25CodeChunk> IndexedChunks = new List<Bm25CodeChunk>();
@@ -1567,7 +1609,7 @@ namespace codeLess.Studio
             if (output.Length <= maxChars || maxChars < 200) return output;
             int head = maxChars / 4;
             int tail = maxChars - head;
-            return output.Substring(0, head) + "\n…[" + (output.Length - head - tail) + " characters omitted]…\n" + output.Substring(output.Length - tail);
+            return output.Substring(0, head) + "\n... [" + (output.Length - head - tail) + " chars truncated] ...\n" + output.Substring(output.Length - tail);
         }
 
         public static string StripAnsiCodes(string input)
@@ -2929,13 +2971,29 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     if (!Directory.Exists(fullDir))
                         return new AgentToolCallResult { ToolName = "list_dir", Success = false, Summary = "Directory not found: " + relPath, Output = "Directory does not exist." };
 
-                    var entries = Directory.GetFileSystemEntries(fullDir).Take(60).Select(Path.GetFileName).ToList();
+                    var ignoreRules = GetIgnoreRules(workspaceRoot);
+                    var files = new List<string>();
+                    var dirs = new List<string>();
+                    try {
+                        foreach (var f in Directory.GetFiles(fullDir)) {
+                            if (ignoreRules == null || !ignoreRules.IsGitIgnoredEntry(f, false)) files.Add(f);
+                        }
+                        foreach (var d in Directory.GetDirectories(fullDir)) {
+                            if (ignoreRules == null || !ignoreRules.IsExcludedDirectory(d)) dirs.Add(d);
+                        }
+                    } catch {}
+                    
+                    var entries = dirs.Select(d => Path.GetFileName(d) + "/").Concat(files.Select(Path.GetFileName)).Take(100).ToList();
+                    string outMsg = string.Join("\n", entries);
+
+                    if (entries.Count == 100) outMsg += "\n(Results are truncated. Consider using a more specific path or pattern.)";
+                    
                     return new AgentToolCallResult
                     {
                         ToolName = "list_dir",
                         Success = true,
                         Summary = string.Format("Listed {0} ({1} entries)", string.IsNullOrEmpty(relPath) ? "workspace root" : relPath, entries.Count),
-                        Output = string.Join("\n", entries)
+                        Output = outMsg
                     };
                 }
                 else if (toolName == "ast_outline")
@@ -3302,7 +3360,9 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
                     // temporary copy of the workspace (LlmAgentEngine.Terminal.cs).
                     int exitCode;
                     bool timedOut;
-                    string output = RunAgentTerminalCommand(cmd, workspaceRoot, stagedFiles, out exitCode, out timedOut);
+                    int reqTimeout = args.ContainsKey("timeout") ? Convert.ToInt32(args["timeout"]) * 1000 : 120000;
+                    reqTimeout = Math.Min(reqTimeout, 600000);
+                    string output = RunAgentTerminalCommand(cmd, workspaceRoot, stagedFiles, reqTimeout, out exitCode, out timedOut);
 
                     if (exitCode != 0 && !output.Contains("[EXIT_CODE:"))
                     {
@@ -3315,7 +3375,7 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
                         ToolName = "run_terminal",
                         Success = ok,
                         Summary = "Ran command: " + cmd + (exitCode != 0 ? " (exit " + exitCode + ")" : ""),
-                        Output = TrimToolOutputKeepingTail(output, 1600)
+                        Output = TrimToolOutputKeepingTail(output, 30000)
                     };
                 }
             }
