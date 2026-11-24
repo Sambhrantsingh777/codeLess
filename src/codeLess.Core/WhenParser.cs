@@ -203,10 +203,11 @@ namespace codeLess.Core
                     return list.IndexOf(item, StringComparison.OrdinalIgnoreCase) >= 0;
                     
                 case WhenNodeType.Variable:
-                    object v = ctx?.GetValue(node.Text);
-                    if (v is bool b) return b;
-                    if (v is string s)
+                    object v = ctx != null ? ctx.GetValue(node.Text) : null;
+                    if (v is bool) return (bool)v;
+                    if (v is string)
                     {
+                        string s = (string)v;
                         if (s == "true") return true;
                         if (s == "false") return false;
                         return !string.IsNullOrEmpty(s);
@@ -224,9 +225,9 @@ namespace codeLess.Core
             if (node.Type == WhenNodeType.Value) return node.Text;
             if (node.Type == WhenNodeType.Variable)
             {
-                object v = ctx?.GetValue(node.Text);
+                object v = ctx != null ? ctx.GetValue(node.Text) : null;
                 if (v == null) return "";
-                if (v is bool b) return b ? "true" : "false";
+                if (v is bool) return ((bool)v) ? "true" : "false";
                 return v.ToString();
             }
             return Evaluate(node, ctx) ? "true" : "false";

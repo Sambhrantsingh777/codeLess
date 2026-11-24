@@ -11122,6 +11122,9 @@ if __name__ == '__main__':
             using (var dlg = new KeyboardShortcutsDialog(activeTheme))
             {
                 dlg.ShowDialog(this);
+                if (dlg.OpenJsonRequested) {
+                    OpenFileInTab(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath());
+                }
             }
         }
 

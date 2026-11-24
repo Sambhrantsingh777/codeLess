@@ -1072,7 +1072,7 @@ namespace codeLess.AvaloniaApp
             {
                 ItemsSource = BuildParityEditorContextItems(tab).Concat(new object[]
                 {
-                    MakeCtxItem($"✦ Inline AI Edit / Generate...   ({scK})", () => PrimaryEditor.ShowInlineAiBar()),
+                    MakeCtxItem($"✦ Inline AI Edit / Generate...   ({scI})", () => PrimaryEditor.ShowInlineAiBar()),
                     MakeCtxItem("✦ Explain Selection in AI Chat", () =>
                     {
                         if (!rightChatDockBorder.IsVisible) ToggleRightChatDock();
@@ -2593,7 +2593,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Terminal", Title = "Split Terminal", Shortcut = "Ctrl+Shift+5", Execute = ToggleSplitTerminal },
                 new PaletteEntryItem { Category = "Terminal", Title = "Rename Active Terminal...", Execute = PromptRenameActiveTerminalSession },
                 new PaletteEntryItem { Category = "Terminal", Title = "Kill Active Terminal", Execute = () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); } },
-                new PaletteEntryItem { Category = "AI", Title = "Inline AI Edit / Generate", Shortcut = "Ctrl+K", Execute = () => PrimaryEditor.ShowInlineAiBar() },
+                new PaletteEntryItem { Category = "AI", Title = "Inline AI Edit / Generate", Shortcut = "Ctrl+I", Execute = () => PrimaryEditor.ShowInlineAiBar() },
                 new PaletteEntryItem { Category = "AI", Title = "Configure BYOK AI Providers & Keys...", Execute = ShowByokAndHarnessModal },
                 new PaletteEntryItem { Category = "Preferences", Title = "Color Theme", Shortcut = "Ctrl+K Ctrl+T", Execute = OpenThemePickerPalette },
                 new PaletteEntryItem { Category = "Preferences", Title = "Open Settings", Shortcut = "Ctrl+,", Execute = ShowSettingsModal },
@@ -2711,7 +2711,10 @@ namespace codeLess.AvaloniaApp
 
         public void ShowKeyboardShortcutsModal()
         {
-            var view = AvaloniaDialogBuilder.BuildKeyboardShortcutsView(currentTheme);
+            var view = AvaloniaDialogBuilder.BuildKeyboardShortcutsView(currentTheme, () => {
+                ModalHost.CloseModal();
+                OpenFileInTab(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath());
+            });
             ModalHost.ShowModal("keyboard-shortcuts", "Keyboard Shortcuts Reference — codeLess", view, 700);
         }
 

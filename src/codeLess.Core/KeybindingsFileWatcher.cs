@@ -29,13 +29,13 @@ namespace codeLess.Core
 
         private void OnChanged(object sender, FileSystemEventArgs e)
         {
-            debounceTimer?.Dispose();
+            if (debounceTimer != null) debounceTimer.Dispose();
             debounceTimer = new Timer(_ => 
             {
                 try 
                 { 
                     string content = File.ReadAllText(filePath);
-                    onChange?.Invoke(content);
+                    if (onChange != null) onChange(content);
                 }
                 catch { }
             }, null, 300, Timeout.Infinite);

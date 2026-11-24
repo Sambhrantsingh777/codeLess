@@ -3050,6 +3050,8 @@ namespace codeLess.Studio
         public CodeLessListBox ShortcutsList;
         private List<string> allShortcutRows = new List<string>();
 
+        public bool OpenJsonRequested { get; private set; }
+
         public KeyboardShortcutsDialog(StudioTheme theme)
         {
             this.Text = "codeLess IDE — Keyboard Shortcuts Reference";
@@ -3070,6 +3072,10 @@ namespace codeLess.Studio
             };
             FilterInput.ApplyTheme(theme);
             topBar.Controls.Add(FilterInput);
+            Button btnJson = new Button { Text = "JSON", Dock = DockStyle.Right, Width = 60, FlatStyle = FlatStyle.Flat, ForeColor = theme.FgPrimary, BackColor = theme.BgActivity };
+            btnJson.FlatAppearance.BorderSize = 0;
+            btnJson.Click += (s, e) => { this.Close();  /* We need a way to open it, we can just execute the command */ codeLess.Core.KeybindingManager dummy = new codeLess.Core.KeybindingManager(); dummy.ExecuteCommand("workbench.action.openGlobalKeybindingsFile"); };
+            topBar.Controls.Add(btnJson);
 
             ShortcutsList = new CodeLessListBox
             {
@@ -3081,103 +3087,14 @@ namespace codeLess.Studio
             };
             ShortcutsList.ApplyTheme(theme);
 
-            string[][] bindings = new string[][]
+            
+            var cmds = codeLess.Core.CommandRegistry.AllCommands;
+            foreach (var cmd in cmds)
             {
-                // Selection & Caret
-                new[] { "Shift+Arrow / Home / End", "Extend Selection by Character / Line Boundary" },
-                new[] { "Shift+PageUp / PageDown", "Extend Selection by Viewport Page" },
-                new[] { "Ctrl+Left / Ctrl+Right", "Move Cursor by Word Left / Right" },
-                new[] { "Ctrl+Shift+Left / Right", "Extend Selection by Word Left / Right" },
-                new[] { "Ctrl+A", "Select All" },
-                new[] { "Ctrl+L", "Expand Line Selection (Select Current Line)" },
-                new[] { "Ctrl+D", "Add Selection to Next Find Match (Multi-Cursor)" },
-                new[] { "Ctrl+K Ctrl+D", "Move Last Selection to Next Find Match (Skip Occurrence)" },
-                new[] { "Ctrl+U", "Cursor Undo (Revert Last Multi-Cursor Addition)" },
-                new[] { "Ctrl+Shift+L", "Select All Occurrences of Current Selection" },
-                new[] { "Ctrl+F2", "Change All Occurrences of Current Word" },
-                new[] { "Alt+Click", "Insert Additional Cursor at Clicked Position" },
-                new[] { "Ctrl+Alt+Up / Down", "Insert Cursor Above / Below" },
-                new[] { "Shift+Alt+Drag / Arrow", "Column (Box) Selection" },
-                new[] { "Shift+Alt+I", "Insert Cursor at End of Each Line Selected" },
-                new[] { "Shift+Alt+Right / Left", "Expand / Shrink AST Smart Selection" },
-                new[] { "Escape", "Collapse Multi-Cursor / Dismiss Popups" },
-                // Editing
-                new[] { "Ctrl+X / Ctrl+C", "Cut / Copy Selection (or Entire Line when Empty)" },
-                new[] { "Ctrl+V", "Paste from Clipboard" },
-                new[] { "Ctrl+Shift+K", "Delete Entire Active Line" },
-                new[] { "Alt+Up / Alt+Down", "Move Active Line Up / Down" },
-                new[] { "Shift+Alt+Up / Alt+Down", "Copy (Duplicate) Active Line Up / Down" },
-                new[] { "Ctrl+Enter / Ctrl+Shift+Enter", "Insert Blank Line Below / Above" },
-                new[] { "Ctrl+] / Ctrl+[", "Indent / Outdent Line or Selection" },
-                new[] { "Tab / Shift+Tab", "Indent / Unindent Selection or Line" },
-                new[] { "Ctrl+/", "Toggle Line Comment (// or #)" },
-                new[] { "Shift+Alt+A", "Toggle Block Comment (/* ... */)" },
-                new[] { "Ctrl+Shift+\\", "Jump to Matching Bracket" },
-                new[] { "Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z", "Undo / Redo (with Typing Coalescing)" },
-                new[] { "Ctrl+Backspace / Ctrl+Delete", "Delete Word Left / Delete Word Right" },
-                new[] { "Shift+Alt+F", "Format Document Indentation" },
-                new[] { "Ctrl+K Ctrl+F", "Format Selected Lines" },
-                new[] { "Ctrl+Space", "Trigger Suggest / IntelliSense Completion Popup" },
-                new[] { "Ctrl+Shift+Space", "Trigger Parameter Hints" },
-                // Folding
-                new[] { "Ctrl+Shift+[ / ]", "Fold / Unfold Current Region" },
-                new[] { "Ctrl+K Ctrl+[ / ]", "Fold / Unfold Subregions" },
-                new[] { "Ctrl+K Ctrl+0 / Ctrl+K Ctrl+J", "Fold All / Unfold All Regions in Document" },
-                // Navigation
-                new[] { "Ctrl+P", "Quick Open File by Fuzzy Filename (: Line, @ Symbol)" },
-                new[] { "Ctrl+G", "Go to Line Number (:)" },
-                new[] { "Ctrl+Shift+O", "Go to Symbol in Editor (@)" },
-                new[] { "Ctrl+T", "Show All Symbols in Workspace" },
-                new[] { "Ctrl+Shift+P / F1", "Show Command Palette (All IDE Commands)" },
-                new[] { "F12 / Ctrl+Click", "Go to Symbol Definition" },
-                new[] { "Alt+F12 / Shift+F12", "Peek Definition / Show Symbol References" },
-                new[] { "Alt+Left / Alt+Right", "Navigate Back / Forward Cursor History" },
-                new[] { "Ctrl+Shift+M", "Toggle Problems Panel" },
-                new[] { "F8 / Shift+F8", "Go to Next / Previous Error or Warning" },
-                new[] { "Ctrl+Home / Ctrl+End", "Jump to Beginning / End of File" },
-                new[] { "Ctrl+Up / Ctrl+Down", "Scroll Editor Line Up / Down Without Moving Caret" },
-                new[] { "Alt+PageUp / Alt+PageDown", "Scroll Page Up / Down" },
-                new[] { "F2", "Rename Symbol Across Current Buffer" },
-                // Search
-                new[] { "Ctrl+F / Ctrl+H", "Find / Replace in Active Editor" },
-                new[] { "F3 / Shift+F3", "Find Next / Find Previous Occurrence" },
-                new[] { "Alt+Enter", "Select All Matches of Find Query" },
-                new[] { "Alt+C / Alt+W / Alt+R", "Toggle Match Case / Whole Word / Regex in Find" },
-                new[] { "Ctrl+Shift+F / Ctrl+Shift+H", "Search / Replace Across Workspace Files" },
-                // Workbench
-                new[] { "Ctrl+B", "Toggle Primary Left Sidebar" },
-                new[] { "Ctrl+J", "Toggle Bottom Panel Dock" },
-                new[] { "Ctrl+`", "Toggle Integrated Terminal" },
-                new[] { "Ctrl+Shift+`", "Create New Integrated Terminal Session" },
-                new[] { "Ctrl+Shift+5", "Split Integrated Terminal Pane" },
-                new[] { "Ctrl+Shift+E / F / G / D / X", "Focus Explorer / Search / Source Control / Run / AI" },
-                new[] { "Ctrl+\\", "Split Editor Right" },
-                new[] { "Ctrl+1 / Ctrl+2 / Ctrl+3", "Focus First / Second Editor Group" },
-                new[] { "Ctrl+W / Ctrl+F4", "Close Active Editor Tab" },
-                new[] { "Ctrl+K W", "Close All Open Editor Tabs" },
-                new[] { "Ctrl+Shift+T", "Reopen Last Closed Editor Tab" },
-                new[] { "Ctrl+Tab / Ctrl+Shift+Tab", "Open Recently Used Editor (hold Ctrl, Tab to cycle)" },
-                new[] { "Ctrl+PageDown / Ctrl+PageUp", "Next / Previous Editor (tab order)" },
-                new[] { "Ctrl+PageDown / Ctrl+PageUp", "Switch Next / Previous Tab (or Terminal when Focused)" },
-                new[] { "Alt+1 .. Alt+9", "Switch to Editor Tab 1..9 by Index" },
-                new[] { "Ctrl+K Ctrl+S", "Open Keyboard Shortcuts Reference" },
-                new[] { "Ctrl+,", "Open IDE Settings & Preferences" },
-                new[] { "Ctrl+K Ctrl+T", "Select Color Theme" },
-                new[] { "Ctrl+= / Ctrl+- / Ctrl+0", "Zoom In / Zoom Out / Reset Editor Font Zoom" },
-                new[] { "Ctrl+K Z / F11", "Toggle Zen Mode / Full Screen" },
-                new[] { "Alt+Z", "Toggle Word Wrap" },
-                new[] { "Ctrl+N / Ctrl+O / Ctrl+K Ctrl+O", "New File / Open File / Open Folder" },
-                new[] { "Ctrl+S / Ctrl+Shift+S / Ctrl+K S", "Save / Save As / Save All Files" },
-                new[] { "Ctrl+Shift+N", "New codeLess IDE Window" },
-                // AI Copilot & Agent
-                new[] { "Ctrl+I", "Inline AI Edit & Diff Preview (Accept / Reject)" },
-                new[] { "Ctrl+Alt+I", "Toggle AI Agent / Composer Right Dock" },
-                new[] { "Tab / Esc / Ctrl+Right", "Accept Ghost Text / Dismiss / Accept Next Word" }
-            };
-
-            foreach (var b in bindings)
-            {
-                allShortcutRows.Add(string.Format("  {0,-28}  │  {1}", b[0], b[1]));
+                string key = cmd.DefaultKeyWin;
+                if (!string.IsNullOrEmpty(key)) {
+                    allShortcutRows.Add(string.Format("  {0,-28}  |  {1}", key, cmd.Title ?? cmd.Id));
+                }
             }
 
             Action refreshList = () =>

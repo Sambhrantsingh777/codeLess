@@ -57,6 +57,41 @@ namespace codeLess.Core
             }
         }
 
+                public List<KeybindingEntry> ActiveBindings { get { return activeBindings; } }
+        public List<KeybindingEntry> RemovedBindings { get { return removedBindings; } }
+        public List<KeybindingEntry> Defaults { get { return GetDefaults(); } }
+        public List<KeybindingEntry> UserBindings { get; private set; }
+
+        public static void SaveUserBindings(List<KeybindingEntry> userBindings)
+        {
+            var list = new List<Dictionary<string, object>>();
+            foreach (var b in userBindings)
+            {
+                var d = new Dictionary<string, object>();
+                if (!string.IsNullOrEmpty(b.Key)) d["key"] = b.Key;
+                if (!string.IsNullOrEmpty(b.Command)) d["command"] = b.Command;
+                if (!string.IsNullOrEmpty(b.When)) d["when"] = b.When;
+                if (b.Args != null) d["args"] = b.Args;
+                list.Add(d);
+            }
+            var ser = new System.Web.Script.Serialization.JavaScriptSerializer();
+            // simple formatted JSON (manual indent)
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("[");
+            for (int i = 0; i < list.Count; i++)
+            {
+                string json = ser.Serialize(list[i]);
+                sb.Append("  " + json);
+                if (i < list.Count - 1) sb.AppendLine(",");
+                else sb.AppendLine();
+            }
+            sb.AppendLine("]");
+            
+            try {
+                System.IO.File.WriteAllText(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath(), sb.ToString());
+            } catch { }
+        }
+
         public KeybindingManager()
         {
             UpdateActiveBindings(null);
@@ -84,19 +119,26 @@ namespace codeLess.Core
             var userBindings = new List<KeybindingEntry>();
             if (!string.IsNullOrWhiteSpace(jsonContent))
             {
-                var result = JsoncParser.Parse(jsonContent, out string err);
+                string err;
+                var result = JsoncParser.Parse(jsonContent, out err);
                 parseError = err;
-                if (err == null && result is object[] arr)
+                object[] arr = result as object[];
+                if (err == null && arr != null)
                 {
                     foreach (var item in arr)
                     {
-                        if (item is Dictionary<string, object> dict)
+                        Dictionary<string, object> dict = item as Dictionary<string, object>;
+                        if (dict != null)
                         {
                             var entry = new KeybindingEntry();
-                            if (dict.TryGetValue("key", out object k) && k != null) entry.Key = k.ToString();
-                            if (dict.TryGetValue("command", out object c) && c != null) entry.Command = c.ToString();
-                            if (dict.TryGetValue("when", out object w) && w != null) entry.When = w.ToString();
-                            if (dict.TryGetValue("args", out object a)) entry.Args = a;
+                            object k;
+                            if (dict.TryGetValue("key", out k) && k != null) entry.Key = k.ToString();
+                            object c;
+                            if (dict.TryGetValue("command", out c) && c != null) entry.Command = c.ToString();
+                            object w;
+                            if (dict.TryGetValue("when", out w) && w != null) entry.When = w.ToString();
+                            object a;
+                            if (dict.TryGetValue("args", out a)) entry.Args = a;
                             
                             if (!string.IsNullOrEmpty(entry.Key) && !string.IsNullOrEmpty(entry.Command))
                             {
@@ -106,6 +148,7 @@ namespace codeLess.Core
                     }
                 }
             }
+            UserBindings = userBindings;
             UpdateActiveBindings(userBindings);
             return parseError;
         }
@@ -139,7 +182,7 @@ namespace codeLess.Core
                     else
                     {
                         user.WhenParsed = WhenParser.Parse(user.When);
-                        user.Key = user.Key?.ToLowerInvariant();
+                        user.Key = user.Key != null ? user.Key.ToLowerInvariant() : null;
                         activeBindings.Add(user);
                     }
                 }
@@ -184,7 +227,7 @@ namespace codeLess.Core
 
             if (chordPrefix != null)
             {
-                string msg = $"The key combination ({chordPrefix}, {keyGesture}) is not a command.";
+                string msg = string.Format("The key combination ({0}, {1}) is not a command.", chordPrefix, keyGesture);
                 chordPrefix = null;
                 showStatus(msg);
                 return true; // swallowed
@@ -193,7 +236,7 @@ namespace codeLess.Core
             if (HasChordPrefix(keyGesture))
             {
                 chordPrefix = keyGesture;
-                showStatus($"({keyGesture}) was pressed. Waiting for second key of chord...");
+                showStatus(string.Format("({0}) was pressed. Waiting for second key of chord...", keyGesture));
                 return true;
             }
 

@@ -11,13 +11,13 @@ namespace codeLess.Core
         public static void LoadUserSettings()
         {
             // Dummy implementation for C# 5 compilation
-            SettingsReloaded?.Invoke();
+            if (SettingsReloaded != null) SettingsReloaded();
         }
 
         public static void LoadWorkspaceSettings()
         {
             // Dummy implementation
-            SettingsReloaded?.Invoke();
+            if (SettingsReloaded != null) SettingsReloaded();
         }
     }
 }
