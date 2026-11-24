@@ -264,6 +264,7 @@ namespace codeLess.AvaloniaApp
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
+            InitializeKeybindings();
             // Preferences: "Show Welcome page on startup" (both UIs); off -> the empty-editor watermark like VS Code.
             showWelcomeTab = settings == null || settings.ShowWelcomeOnStartup;
             PrimaryEditor.WelcomeEnabled = showWelcomeTab;
@@ -394,6 +395,9 @@ namespace codeLess.AvaloniaApp
         {
             windowClosed = true; // late background results (analysis) must not touch this window any more
             StopWorkspaceWatcher();
+            if (workspaceSettingsWatcher != null) { workspaceSettingsWatcher.Dispose(); workspaceSettingsWatcher = null; }
+            if (userSettingsWatcher != null) { userSettingsWatcher.Dispose(); userSettingsWatcher = null; }
+            if (keybindingsWatcher != null) { keybindingsWatcher.Dispose(); keybindingsWatcher = null; }
             ShutdownLanguageServers();
             try { workspaceLoadCts?.Cancel(); } catch { }
             if (debouncedUiSyncTimer != null)
@@ -2079,6 +2083,7 @@ namespace codeLess.AvaloniaApp
                 additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, newRoot));
             }
             workspaceRoot = newRoot;
+            InitializeWorkspaceSettingsWatcher();
             settings.AddRecentWorkspace(workspaceRoot);
             OnDebugWorkspaceChanged();
             LspOnWorkspaceChanged();

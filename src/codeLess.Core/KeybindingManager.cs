@@ -88,6 +88,7 @@ namespace codeLess.Core
             sb.AppendLine("]");
             
             try {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath()));
                 System.IO.File.WriteAllText(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath(), sb.ToString());
             } catch { }
         }
@@ -122,7 +123,7 @@ namespace codeLess.Core
                 string err;
                 var result = JsoncParser.Parse(jsonContent, out err);
                 parseError = err;
-                object[] arr = result as object[];
+                System.Collections.IEnumerable arr = result as System.Collections.IEnumerable;
                 if (err == null && arr != null)
                 {
                     foreach (var item in arr)
@@ -140,7 +141,7 @@ namespace codeLess.Core
                             object a;
                             if (dict.TryGetValue("args", out a)) entry.Args = a;
                             
-                            if (!string.IsNullOrEmpty(entry.Key) && !string.IsNullOrEmpty(entry.Command))
+                            if (!string.IsNullOrEmpty(entry.Command))
                             {
                                 userBindings.Add(entry);
                             }

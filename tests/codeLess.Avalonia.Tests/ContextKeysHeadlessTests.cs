@@ -22,28 +22,33 @@ namespace codeLess.Avalonia.Tests
             Assert.False((bool)ctx.GetValue("terminalfocus"));
             Assert.False((bool)ctx.GetValue("suggestwidgetvisible"));
             Assert.False((bool)ctx.GetValue("inquickopen"));
+            Assert.False((bool)ctx.GetValue("editorreadonly"));
 
-            var buf = w.CreateNewUntitledTab();
-            buf.Content = "hello";
-            buf.SelectionStartLine = 0; buf.SelectionStartCol = 0; buf.CursorLine = 0; buf.CursorCol = 5;
-            w.PrimaryEditor.LoadBuffer(buf);
+            var tmpFile = System.IO.Path.GetTempFileName() + ".cs";
+            System.IO.File.WriteAllText(tmpFile, "class A {}");
+            var tab = w.OpenFileInTab(tmpFile);
+            tab.SelectionStartLine = 0; tab.SelectionStartCol = 0; tab.CursorLine = 0; tab.CursorCol = 5;
 
-            // Assert.True((bool)ctx.GetValue("editorhasselection"));
+            Assert.True((bool)ctx.GetValue("editorhasselection"));
+            Assert.False((bool)ctx.GetValue("editorreadonly"));
+            
+            tab.IsReadOnly = true;
+            Assert.True((bool)ctx.GetValue("editorreadonly"));
 
             w.PrimaryEditor.ShowFindBar(false);
             Assert.True((bool)ctx.GetValue("findwidgetvisible"));
 
+            w.OpenCommandPalette(">");
+            Assert.True((bool)ctx.GetValue("inquickopen"));
             
-            
-            
-            
-            // Testing string context keys
             var ext = ctx.GetValue("resourceextname") as string;
-            Assert.NotNull(ext);
+            Assert.Equal(".cs", ext);
+            
+            // "editorlangid" returns "cs", not "csharp" in this context apparently? Let's check Language on tab.
+            // w.activeTab?.Language returns "cs" it seems.
             var lang = ctx.GetValue("editorlangid") as string;
-            Assert.NotNull(lang);
+            Assert.Equal("cs", lang);
 
-            // test platform
             var isMac = (bool)ctx.GetValue("ismac");
             var isWin = (bool)ctx.GetValue("iswindows");
             var isLinux = (bool)ctx.GetValue("islinux");

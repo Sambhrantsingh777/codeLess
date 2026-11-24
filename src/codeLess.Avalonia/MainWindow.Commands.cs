@@ -2168,9 +2168,9 @@ namespace codeLess.AvaloniaApp
                     Child = rowGrid,
                     Background = isActive
                         ? WorkbenchStyles.B(UiTokens.ListInactiveSelection(currentTheme, currentTheme.SidebarBg))
-                        : Brushes.Transparent,
-                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand)
+                        : Brushes.Transparent
                 };
+                try { itemBorder.Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand); } catch { }
                 var hoverBrush = WorkbenchStyles.B(UiTokens.Hover(currentTheme, currentTheme.SidebarBg));
                 itemBorder.PointerEntered += (s, e) => { killBtn.Opacity = 1; if (!isActive) itemBorder.Background = hoverBrush; };
                 itemBorder.PointerExited += (s, e) => { killBtn.Opacity = isActive ? 1 : 0; if (!isActive) itemBorder.Background = Brushes.Transparent; };
@@ -2613,6 +2613,7 @@ namespace codeLess.AvaloniaApp
             all.AddRange(BuildAgentTrustPaletteCommands());
             all.AddRange(BuildWorkspaceTrustPaletteCommands());
             all.AddRange(BuildExtensionPaletteCommands());
+            foreach (var item in all) { if (string.IsNullOrEmpty(item.Id)) { var cmd = codeLess.Core.CommandRegistry.AllCommands.FirstOrDefault(c => c.Title == item.Title); if (cmd != null) item.Id = cmd.Id; } if (!string.IsNullOrEmpty(item.Id) && keybindings != null) { var b = keybindings.ActiveBindings.FirstOrDefault(x => x.Command == item.Id); if (b != null && !string.IsNullOrEmpty(b.Key)) { item.Shortcut = MacKeymap.FormatShortcut(b.Key); } } }
             return all;
         }
 

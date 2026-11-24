@@ -27,6 +27,7 @@ namespace codeLess.Core
             watcher.EnableRaisingEvents = true;
         }
 
+        public void Dispose() { if (watcher != null) { watcher.EnableRaisingEvents = false; watcher.Dispose(); watcher = null; } if (debounceTimer != null) { debounceTimer.Dispose(); debounceTimer = null; } }
         private void OnChanged(object sender, FileSystemEventArgs e)
         {
             if (debounceTimer != null) debounceTimer.Dispose();
@@ -42,3 +43,5 @@ namespace codeLess.Core
         }
     }
 }
+
+    // Add Dispose to KeybindingsFileWatcher.cs

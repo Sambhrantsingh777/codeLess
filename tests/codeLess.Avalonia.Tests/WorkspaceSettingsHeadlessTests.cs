@@ -12,25 +12,26 @@ namespace codeLess.Avalonia.Tests
     public class WorkspaceSettingsHeadlessTests
     {
         [AvaloniaFact]
-        public async Task WorkspaceSettings_ApplyInMemory_AndDoNotLeak()
+        public void WorkspaceSettings_ApplyInMemory_AndDoNotLeak()
         {
             string w1Root = Path.Combine(Path.GetTempPath(), "w1_test_" + Guid.NewGuid());
             Directory.CreateDirectory(w1Root);
-            var w1 = new MainWindow(w1Root);
-            var w2 = new MainWindow(null);
+            
+            string w3Root = Path.Combine(Path.GetTempPath(), "w3_test_" + Guid.NewGuid());
+            Directory.CreateDirectory(w3Root);
             
             string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(w1Root);
             Directory.CreateDirectory(Path.GetDirectoryName(wsPath));
-            File.WriteAllText(wsPath, "{ \"editor.tabSize\": 8 }");
+            File.WriteAllText(wsPath, "{\n  \"editor.tabSize\": 8\n}");
             
-            // We need to wait for watcher debounce, but we can also manually trigger apply
-            var clone1 = IdePersistentSettings.Load();
-            VscodeSettingsManager.ApplySettings(File.ReadAllText(wsPath), clone1);
+            var baseSettings = StudioSettings.Load();
+            int baseTabSize = baseSettings.TabSize;
             
-            Assert.Equal(8, clone1.TabSize);
+            var w1 = new MainWindow(w1Root);
+            Assert.Equal(8, AvaloniaVirtualEditorCanvas.DisplayTabSize);
             
-            var clone2 = IdePersistentSettings.Load();
-            Assert.NotEqual(8, clone2.TabSize); // did not leak globally
+            var w3 = new MainWindow(w3Root);
+            Assert.Equal(baseTabSize, AvaloniaVirtualEditorCanvas.DisplayTabSize);
         }
     }
 }

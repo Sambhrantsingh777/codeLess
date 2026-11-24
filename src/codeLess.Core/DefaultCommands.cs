@@ -108,6 +108,55 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.tasks.build", "Run Build Task", "Tasks", "cmd+shift+b", "ctrl+shift+b", "ctrl+shift+b", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.terminal.new", "New Terminal", "Terminal", "ctrl+shift+`", "ctrl+shift+`", "ctrl+shift+`", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.terminal.split", "Split Terminal", "Terminal", "cmd+shift+5", "ctrl+shift+5", "ctrl+shift+5", ""));
-        }
-    }
+                CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.terminal.new", "Create New Terminal", "Terminal", "cmd+shift+`", "ctrl+shift+`", "ctrl+shift+`", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.terminal.kill", "Kill Terminal", "Terminal", "", "", "", "terminalFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.debug.start", "Start Debugging", "Debug", "f5", "f5", "f5", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.debug.stop", "Stop Debugging", "Debug", "shift+f5", "shift+f5", "shift+f5", "inDebugMode"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.debug.stepOver", "Step Over", "Debug", "f10", "f10", "f10", "inDebugMode"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.debug.stepInto", "Step Into", "Debug", "f11", "f11", "f11", "inDebugMode"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.debug.stepOut", "Step Out", "Debug", "shift+f11", "shift+f11", "shift+f11", "inDebugMode"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.view.scm", "View: Show Source Control", "View", "ctrl+shift+g", "ctrl+shift+g", "ctrl+shift+g", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.view.search", "View: Show Search", "View", "cmd+shift+f", "ctrl+shift+f", "ctrl+shift+f", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.view.explorer", "View: Show Explorer", "View", "cmd+shift+e", "ctrl+shift+e", "ctrl+shift+e", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.view.extensions", "View: Show Extensions", "View", "cmd+shift+x", "ctrl+shift+x", "ctrl+shift+x", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.closeAllEditors", "Close All Editors", "View", "cmd+k cmd+w", "ctrl+k ctrl+w", "ctrl+k ctrl+w", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.closeOtherEditors", "Close Other Editors", "View", "cmd+option+t", "", "", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.splitEditor", "Split Editor", "View", "cmd+\\", "ctrl+\\", "ctrl+\\", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.togglePanel", "Toggle Panel", "View", "cmd+j", "ctrl+j", "ctrl+j", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.findInFiles", "Find in Files", "Search", "cmd+shift+f", "ctrl+shift+f", "ctrl+shift+f", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.replaceInFiles", "Replace in Files", "Search", "cmd+shift+h", "ctrl+shift+h", "ctrl+shift+h", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.formatDocument", "Format Document", "Editor", "shift+option+f", "shift+alt+f", "shift+ctrl+i", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.rename", "Rename Symbol", "Editor", "f2", "f2", "f2", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.goToDeclaration", "Go to Definition", "Editor", "f12", "f12", "f12", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.goToReferences", "Go to References", "Editor", "shift+f12", "shift+f12", "shift+f12", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.marker.next", "Go to Next Problem", "Editor", "f8", "f8", "f8", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.marker.prev", "Go to Previous Problem", "Editor", "shift+f8", "shift+f8", "shift+f8", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.toggleActivityBarVisibility", "Toggle Activity Bar Visibility", "View", "", "", "", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.toggleFullScreen", "Toggle Full Screen", "View", "ctrl+cmd+f", "f11", "f11", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.zoomIn", "Zoom In", "View", "cmd+=", "ctrl+=", "ctrl+=", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.zoomOut", "Zoom Out", "View", "cmd+-", "ctrl+-", "ctrl+-", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.zoomReset", "Reset Zoom", "View", "cmd+numpad0", "ctrl+numpad0", "ctrl+numpad0", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.joinLines", "Join Lines", "Editor", "ctrl+j", "", "", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transformToUppercase", "Transform to Uppercase", "Editor", "", "", "", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transformToLowercase", "Transform to Lowercase", "Editor", "", "", "", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorAbove", "Add Cursor Above", "Multi-cursor", "option+cmd+up", "ctrl+alt+up", "shift+alt+up", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorBelow", "Add Cursor Below", "Multi-cursor", "option+cmd+down", "ctrl+alt+down", "shift+alt+down", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorAtEndOfEachLineSelected", "Add Cursors to Line Ends", "Multi-cursor", "shift+option+i", "shift+alt+i", "shift+alt+i", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.selectHighlights", "Select All Occurrences of Find Match", "Multi-cursor", "option+enter", "alt+enter", "alt+enter", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.changeAll", "Change All Occurrences", "Multi-cursor", "cmd+f2", "ctrl+f2", "ctrl+f2", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("cursorUndo", "Undo Cursor", "Multi-cursor", "cmd+u", "ctrl+u", "ctrl+u", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.trimTrailingWhitespace", "Trim Trailing Whitespace", "Editor", "", "", "", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.newUntitledFile", "New Untitled File", "File", "cmd+n", "ctrl+n", "ctrl+n", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFile", "Open File...", "File", "cmd+o", "ctrl+o", "ctrl+o", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFolder", "Open Folder...", "File", "", "ctrl+k ctrl+o", "ctrl+k ctrl+o", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.saveAs", "Save As...", "File", "cmd+shift+s", "ctrl+shift+s", "ctrl+shift+s", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.saveAll", "Save All", "File", "option+cmd+s", "ctrl+k s", "ctrl+k s", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.quit", "Exit", "File", "cmd+q", "", "", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.reopenClosedEditor", "Reopen Closed Editor", "View", "cmd+shift+t", "ctrl+shift+t", "ctrl+shift+t", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.openRecent", "Open Recent...", "File", "ctrl+r", "ctrl+r", "ctrl+r", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.revealActiveFileInWindows", "Reveal in File Explorer", "File", "", "", "", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.copyPathOfActiveFile", "Copy Path of Active File", "File", "cmd+k p", "ctrl+k p", "ctrl+k p", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.showAllEditors", "Show All Editors", "View", "", "", "", ""));
+}
+}
 }

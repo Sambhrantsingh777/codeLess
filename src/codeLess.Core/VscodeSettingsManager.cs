@@ -18,7 +18,6 @@ namespace codeLess.Core
             return Path.Combine(workspaceRoot, ".vscode", "settings.json");
         }
 
-        
         public static void WriteSetting(string key, object value)
         {
             string path = GetUserSettingsPath();
@@ -26,42 +25,143 @@ namespace codeLess.Core
             try { if (File.Exists(path)) json = File.ReadAllText(path); } catch { }
             if (string.IsNullOrWhiteSpace(json)) json = "{\n}";
             
-            // Minimal text edit preserving comments
-            // We'll use a very simple regex replacement or insertion before the last }
             string valStr = "";
             if (value is bool) valStr = ((bool)value) ? "true" : "false";
             else if (value is string) valStr = "\"" + ((string)value).Replace("\"", "\\\"") + "\"";
             else if (value != null) valStr = value.ToString();
             else valStr = "null";
+
+            // Simple scanner to find the top-level property and its value span.
+            int keyStart = -1;
+            int valueStart = -1;
+            int valueEnd = -1;
             
-            var regex = new System.Text.RegularExpressions.Regex(@"""" + key.Replace(".", @"\.") + @"""\s*:\s*([^,}]+)");
-            if (regex.IsMatch(json))
+            int depth = 0;
+            bool inString = false;
+            bool escape = false;
+            int i = 0;
+            bool foundKey = false;
+            int propertyValueStart = -1;
+            
+            while (i < json.Length)
             {
-                json = regex.Replace(json, "\"" + key + "\": " + valStr);
+                char c = json[i];
+                if (inString)
+                {
+                    if (escape) escape = false;
+                    else if (c == '\\') escape = true;
+                    else if (c == '"')
+                    {
+                        inString = false;
+                        if (depth == 1 && !foundKey && keyStart != -1)
+                        {
+                            string s = json.Substring(keyStart + 1, i - keyStart - 1);
+                            if (s == key)
+                            {
+                                foundKey = true;
+                            }
+                            keyStart = -1;
+                        }
+                    }
+                    i++;
+                }
+                else
+                {
+                    if (c == '/' && i + 1 < json.Length && (json[i + 1] == '/' || json[i + 1] == '*'))
+                    {
+                        if (json[i + 1] == '/')
+                        {
+                            while (i < json.Length && json[i] != '\n') i++;
+                        }
+                        else
+                        {
+                            i += 2;
+                            while (i + 1 < json.Length && !(json[i] == '*' && json[i + 1] == '/')) i++;
+                            i += 2;
+                        }
+                        continue;
+                    }
+
+                    if (c == '{') depth++;
+                    else if (c == '}') depth--;
+                    else if (c == '"')
+                    {
+                        inString = true;
+                        if (depth == 1 && !foundKey) keyStart = i;
+                        
+                        if (foundKey && valueStart != -1 && propertyValueStart == -1)
+                        {
+                            propertyValueStart = i;
+                        }
+                    }
+                    else if (foundKey)
+                    {
+                        if (valueStart == -1)
+                        {
+                            if (c == ':') valueStart = i + 1;
+                        }
+                        else
+                        {
+                            if (propertyValueStart == -1)
+                            {
+                                if (!char.IsWhiteSpace(c))
+                                {
+                                    propertyValueStart = i;
+                                }
+                            }
+                            
+                            if (propertyValueStart != -1)
+                            {
+                                if (depth == 1 && (c == ',' || c == '}'))
+                                {
+                                    valueEnd = i;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    i++;
+                }
+            }
+
+            if (foundKey && propertyValueStart != -1 && valueEnd != -1)
+            {
+                // Trim trailing whitespace from the value range if we hit a comma
+                int end = valueEnd - 1;
+                while (end >= propertyValueStart && char.IsWhiteSpace(json[end])) end--;
+                json = json.Substring(0, propertyValueStart) + valStr + json.Substring(end + 1);
             }
             else
             {
+                // Insert before the last '}'
                 int lastBrace = json.LastIndexOf('}');
                 if (lastBrace >= 0)
                 {
                     string insert = "\"" + key + "\": " + valStr;
                     // check if we need a comma
-                    string before = json.Substring(0, lastBrace).Trim();
-                    if (before.Length > 0 && before[before.Length - 1] != '{' && before[before.Length - 1] != ',')
+                    string before = json.Substring(0, lastBrace);
+                    int b = before.Length - 1;
+                    while (b >= 0 && char.IsWhiteSpace(before[b])) b--;
+                    
+                    bool needsComma = false;
+                    if (b >= 0 && before[b] != '{' && before[b] != ',')
                     {
-                        insert = ",\n  " + insert + "\n";
+                        needsComma = true;
                     }
-                    else
-                    {
-                        insert = "  " + insert + "\n";
-                    }
+                    
+                    if (needsComma) insert = ",\n  " + insert + "\n";
+                    else insert = "  " + insert + "\n";
+                    
                     json = json.Substring(0, lastBrace) + insert + json.Substring(lastBrace);
                 }
             }
-            
-            try { File.WriteAllText(path, json); } catch { }
-        }
 
+            string tempPath = path + ".tmp";
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(tempPath, json);
+            if (File.Exists(path)) File.Replace(tempPath, path, null);
+            else File.Move(tempPath, path);
+        }
 
         public static string ApplySettings(string jsonContent, IdePersistentSettings target)
         {
@@ -82,13 +182,10 @@ namespace codeLess.Core
                     target.WordWrap = w != null && (w.ToString() == "on" || w.ToString() == "bounded" || w.ToString() == "wordWrapColumn" || w.ToString() == "True");
                 }
                 if (dict.ContainsKey("editor.minimap.enabled")) target.ShowMinimap = Convert.ToBoolean(dict["editor.minimap.enabled"]);
-                
                 if (dict.ContainsKey("editor.rulers")) {
                     var rulers = dict["editor.rulers"] as object[];
                     if (rulers != null && rulers.Length > 0) target.TabSize = Convert.ToInt32(rulers[0]);
                 }
-                
-                
                 if (dict.ContainsKey("search.exclude")) {
                     Dictionary<string, object> sx = dict["search.exclude"] as Dictionary<string, object>;
                     if (sx != null) {
@@ -97,8 +194,7 @@ namespace codeLess.Core
                         if (keys.Count > 0) target.ExcludedFolders = string.Join(", ", keys);
                     }
                 }
-                
-                                if (dict.ContainsKey("editor.renderWhitespace")) {
+                if (dict.ContainsKey("editor.renderWhitespace")) {
                     string s = dict["editor.renderWhitespace"] != null ? dict["editor.renderWhitespace"].ToString() : null;
                     target.ShowRenderWhitespace = s == "all";
                 }
@@ -114,9 +210,7 @@ namespace codeLess.Core
                     target.ShowWelcomeOnStartup = s == "welcomePage" || s == "newUntitledFile";
                 }
                 if (dict.ContainsKey("editor.cursorBlinking")) target.EditorCursorBlinking = dict["editor.cursorBlinking"] != null ? dict["editor.cursorBlinking"].ToString() : null;
-                // terminal
                 if (dict.ContainsKey("terminal.integrated.fontSize")) target.TerminalFontSize = Convert.ToSingle(dict["terminal.integrated.fontSize"]);
-                
                 if (dict.ContainsKey("editor.formatOnSave")) target.FormatOnSave = Convert.ToBoolean(dict["editor.formatOnSave"]);
                 if (dict.ContainsKey("files.autoSave")) {
                     string mode = dict["files.autoSave"] != null ? dict["files.autoSave"].ToString() : null;
