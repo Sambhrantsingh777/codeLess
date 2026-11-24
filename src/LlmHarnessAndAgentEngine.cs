@@ -2229,9 +2229,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
             bool partOfTurn = InTurnOfThisEngine;
 
-            return await Task.Run(() =>
+            return await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
             {
-                JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                return await Task.Run(() =>
+                {
+                    JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
                 string endpoint = vendor.Id == "anthropic"
                     ? vendor.BaseUrl.TrimEnd('/') + "/messages"
                     : vendor.BaseUrl.TrimEnd('/') + "/chat/completions";
@@ -2436,11 +2438,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         if (errRes != null) ledger.Status = (int)errRes.StatusCode;
                         using (StreamReader esr = new StreamReader(ledger.WrapResponseStream(wex.Response.GetResponseStream())))
                         {
-                            throw new Exception("Vendor HTTP Error " + statusPrefix + esr.ReadToEnd());
+                            throw new Exception("Vendor HTTP Error " + statusPrefix + esr.ReadToEnd(), wex);
                         }
                     }
                     ledger.Fail(wex);
-                    throw new Exception("Network/Endpoint Error (" + vendor.Name + "): " + wex.Message);
+                    throw new Exception("Network/Endpoint Error (" + vendor.Name + "): " + wex.Message, wex);
                 }
                 }
                 catch (Exception ex)
@@ -2452,7 +2454,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 {
                     ledger.Complete();
                 }
-            });
+                });
+            }, () => partOfTurn && CancelStreamingRequested);
         }
 
         public async Task<string> RequestModelGhostCompletionAsync(ByokVendor preferredVendor, EditorTabBuffer buf)
@@ -2719,6 +2722,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             try
             {
                 string finalReply = "";
+                var doomLoopHistory = new List<Tuple<string, string>>();
                 int maxSteps = Math.Max(1, MaxAgentIterations);
                 for (int step = 0; step < maxSteps; step++)
                 {
@@ -2767,7 +2771,38 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     {
                         string toolName = Convert.ToString(tc["tool"]);
                         var args = tc.ContainsKey("args") ? tc["args"] as Dictionary<string, object> : new Dictionary<string, object>();
+
+                        string signature = toolName + ":" + new JavaScriptSerializer().Serialize(args);
+                        
+                        bool isDoomLoop = false;
+                        if (doomLoopHistory.Count >= 3)
+                        {
+                            var t1 = doomLoopHistory[doomLoopHistory.Count - 1];
+                            var t2 = doomLoopHistory[doomLoopHistory.Count - 2];
+                            var t3 = doomLoopHistory[doomLoopHistory.Count - 3];
+                            if (t1.Item1 == signature && t2.Item1 == signature && t3.Item1 == signature)
+                            {
+                                if (t1.Item2 == t2.Item2 && t2.Item2 == t3.Item2)
+                                {
+                                    isDoomLoop = true;
+                                }
+                            }
+                        }
+
+                        if (isDoomLoop)
+                        {
+                            bool approved = OnRequestToolApproval != null && OnRequestToolApproval("doom_loop", "");
+                            if (!approved)
+                            {
+                                toolOutputsSb.AppendLine("<tool_error>\nDoom loop detected. You have repeatedly called this tool with the identical arguments and received the identical failure. You MUST stop using this exact tool/arguments combination and try a different approach, read a different file, or think about why it is failing.\n</tool_error>");
+                                doomLoopHistory.Clear();
+                                continue;
+                            }
+                        }
+
                         AgentToolCallResult tr = ExecuteWorkspaceTool(toolName, args, workspaceRoot, workspaceFiles, activeTab, result.StagedFileContents);
+                        doomLoopHistory.Add(new Tuple<string, string>(signature, tr.Output));
+
                         result.ToolCalls.Add(tr);
                         if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath)) stagedThisTurn = true;
                         toolOutputsSb.AppendLine(string.Format("<tool_result tool=\"{0}\" success=\"{1}\">\n{2}\n</tool_result>", toolName, tr.Success, tr.Output));
@@ -2859,23 +2894,66 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         private List<Dictionary<string, object>> ParseToolCalls(string text)
         {
             var list = new List<Dictionary<string, object>>();
-            if (string.IsNullOrEmpty(text)) return list;
-            JavaScriptSerializer ser = new JavaScriptSerializer();
-            MatchCollection matches = Regex.Matches(text, @"<tool_call>\s*([\s\S]*?)\s*</tool_call>");
-            foreach (Match m in matches)
+            int startIndex = 0;
+            while ((startIndex = text.IndexOf("<tool_call>", startIndex, StringComparison.OrdinalIgnoreCase)) != -1)
             {
-                try
+                startIndex += "<tool_call>".Length;
+                int endIndex = text.IndexOf("</tool_call>", startIndex, StringComparison.OrdinalIgnoreCase);
+                if (endIndex != -1)
                 {
-                    var obj = ser.Deserialize<Dictionary<string, object>>(m.Groups[1].Value.Trim());
-                    if (obj != null && obj.ContainsKey("tool"))
-                        list.Add(obj);
+                    string json = text.Substring(startIndex, endIndex - startIndex).Trim();
+                    try
+                    {
+                        var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                        var tc = js.Deserialize<Dictionary<string, object>>(json);
+                        if (tc == null || !tc.ContainsKey("tool"))
+                        {
+                            list.Add(new Dictionary<string, object>
+                            {
+                                { "tool", "invalid" },
+                                { "args", new Dictionary<string, object> { { "error", "JSON parsed but missing 'tool' field: " + json } } }
+                            });
+                        }
+                        else
+                        {
+                            list.Add(tc);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        list.Add(new Dictionary<string, object>
+                        {
+                            { "tool", "invalid" },
+                            { "args", new Dictionary<string, object> { { "error", "Invalid JSON inside tool_call: " + ex.Message + "\n" + json } } }
+                        });
+                    }
+                    startIndex = endIndex + "</tool_call>".Length;
                 }
-                catch { }
             }
             return list;
         }
 
-        public AgentToolCallResult ExecuteWorkspaceTool(
+        
+        private int ComputeLevenshteinDistance(string s, string t)
+        {
+            if (string.IsNullOrEmpty(s)) return string.IsNullOrEmpty(t) ? 0 : t.Length;
+            if (string.IsNullOrEmpty(t)) return s.Length;
+            int[] v0 = new int[t.Length + 1];
+            int[] v1 = new int[t.Length + 1];
+            for (int i = 0; i < v0.Length; i++) v0[i] = i;
+            for (int i = 0; i < s.Length; i++)
+            {
+                v1[0] = i + 1;
+                for (int j = 0; j < t.Length; j++)
+                {
+                    int cost = (s[i] == t[j]) ? 0 : 1;
+                    v1[j + 1] = Math.Min(v1[j] + 1, Math.Min(v0[j + 1] + 1, v0[j] + cost));
+                }
+                for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
+            }
+            return v1[t.Length];
+        }
+    public AgentToolCallResult ExecuteWorkspaceTool(
             string toolName,
             Dictionary<string, object> args,
             string workspaceRoot,
@@ -3384,7 +3462,26 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
                 return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = ex.Message, Output = ex.Message };
             }
 
-            return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Unknown tool", Output = "Unknown tool" };
+            
+            string[] knownTools = new string[] { "read_file", "search_web", "run_command", "list_dir", "edit_replacers", "grep_search", "webfetch", "task" };
+            string closest = null;
+            int minDistance = int.MaxValue;
+            foreach (string k in knownTools)
+            {
+                int dist = ComputeLevenshteinDistance(toolName, k);
+                if (dist < minDistance)
+                {
+                    minDistance = dist;
+                    closest = k;
+                }
+            }
+            string msg = "Unknown tool: " + toolName;
+            if (minDistance <= 3 && closest != null)
+            {
+                msg += ". Did you mean '" + closest + "'?";
+            }
+            return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = msg };
+
         }
 
         private void ExtractAndStageSearchReplaceBlocks(
