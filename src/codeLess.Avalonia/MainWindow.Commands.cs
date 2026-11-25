@@ -2376,6 +2376,9 @@ namespace codeLess.AvaloniaApp
                     if (!rightChatDockBorder.IsVisible) ToggleRightChatDock();
                     chatPromptInput.Focus();
                     break;
+                case "codeless.agent.compact":
+                    _ = SendChatMessageAsync("/compact");
+                    break;
                 case "command-palette": OpenCommandPalette(">"); break;
                 case "byok-dialog": ShowByokAndHarnessModal(); break;
                 case "arena-dialog": ShowMultiHarnessArenaModal(); break;
@@ -2554,6 +2557,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "File", Title = "Close Folder", Shortcut = "Ctrl+K F", Execute = CloseWorkspaceFolder },
                 new PaletteEntryItem { Category = "Edit", Title = "Find", Shortcut = "Ctrl+F", Execute = () => PrimaryEditor.ShowFindBar(false) },
                 new PaletteEntryItem { Category = "Edit", Title = "Replace", Shortcut = "Ctrl+H", Execute = () => PrimaryEditor.ShowFindBar(true) },
+                new PaletteEntryItem { Category = "Agent", Title = "Agent: Compact Context", Execute = () => { _ = SendChatMessageAsync("/compact"); } },
                 new PaletteEntryItem { Category = "Edit", Title = "Find in Files", Shortcut = "Ctrl+Shift+F", Execute = () => ShowSearchView(false) },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Line Comment", Shortcut = "Ctrl+/", Execute = () => PrimaryEditor.Canvas.ToggleLineComment() },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Block Comment", Shortcut = "Shift+Alt+A", Execute = () => PrimaryEditor.Canvas.ToggleBlockComment() },

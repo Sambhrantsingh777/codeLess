@@ -58,6 +58,22 @@ namespace codeLess.Studio
             }
         }
 
+        public static readonly AgentToolDefinition[] Tools = new AgentToolDefinition[]
+        {
+            new AgentToolDefinition { Name = "read_file", Aliases = new string[] { "read" }, Description = "Read the contents of a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"start_line\":{\"type\":\"integer\"},\"end_line\":{\"type\":\"integer\"},\"offset\":{\"type\":\"integer\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "write_file", Aliases = new string[] { "write" }, Description = "Write new content to a file, overwriting it entirely.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "edit_file", Aliases = new string[] { "edit" }, Description = "Edit a file using search and replace blocks.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"search\":{\"type\":\"string\"},\"replace\":{\"type\":\"string\"},\"oldString\":{\"type\":\"string\"},\"newString\":{\"type\":\"string\"},\"replaceAll\":{\"type\":\"boolean\"}},\"required\":[\"path\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "multiedit", Aliases = new string[] { }, Description = "Apply multiple edits to a file atomically.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"search\":{\"type\":\"string\"},\"replace\":{\"type\":\"string\"},\"oldString\":{\"type\":\"string\"},\"newString\":{\"type\":\"string\"},\"replaceAll\":{\"type\":\"boolean\"}}}}},\"required\":[\"path\",\"edits\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "list_dir", Aliases = new string[] { "list" }, Description = "List files and directories in a folder.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "grep_search", Aliases = new string[] { "grep" }, Description = "Search for a regex pattern across files.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"include\":{\"type\":\"string\"}},\"required\":[\"query\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "glob", Aliases = new string[] { }, Description = "Find files matching a glob pattern.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"}},\"required\":[\"pattern\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "run_terminal", Aliases = new string[] { "run_command", "bash" }, Description = "Run a shell command in the terminal.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout\":{\"type\":\"integer\"},\"description\":{\"type\":\"string\"}},\"required\":[\"command\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "get_diagnostics", Aliases = new string[] { }, Description = "Get language server diagnostics (errors/warnings) for a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "ast_outline", Aliases = new string[] { }, Description = "Get an AST outline of a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "webfetch", Aliases = new string[] { }, Description = "Fetch content from a URL.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\"},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "task", Aliases = new string[] { }, Description = "Run a nested read-only subagent task.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"prompt\"]}", IsReadOnly = true }
+        };
+
         public List<ByokVendor> Vendors = new List<ByokVendor>();
         public List<LlmHarnessProfile> Harnesses = new List<LlmHarnessProfile>();
         public List<Bm25CodeChunk> IndexedChunks = new List<Bm25CodeChunk>();
@@ -76,6 +92,7 @@ namespace codeLess.Studio
         public bool EnableSseStreaming = true;
         public volatile bool CancelStreamingRequested = false;
         public event Action<string> OnStreamingChunk;
+        public Action<string> OnAgentFeedStatus;
         public Func<string, string, bool> OnRequestToolApproval;
         public Func<string, string> OnExecuteTerminalCommandInConPty;
         public Func<string, List<Dictionary<string, string>>, Task<string>> CustomModelResponder;
@@ -1810,13 +1827,14 @@ namespace codeLess.Studio
             return Path.GetFileName(fullPath);
         }
 
-        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot)
+        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab)
         {
             string hName = harness != null ? harness.Name : "codeLess Adaptive Harness";
             string hDirective = harness != null ? harness.SystemPromptDirective : "";
 
             string providerRules = vendor != null ? AgentContextBuilder.GetProviderPrompt(vendor.Id) : AgentContextBuilder.GetProviderPrompt("");
-            string instructions = AgentContextBuilder.DiscoverInstructions(workspaceRoot ?? "");
+            string startDir = activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath) ? Path.GetDirectoryName(activeTab.FilePath) : (workspaceRoot ?? "");
+            string instructions = AgentContextBuilder.DiscoverInstructions(startDir, workspaceRoot);
             string envBlock = AgentContextBuilder.BuildEnvBlock(workspaceRoot ?? "");
             
             string basePrompt = string.Format(
@@ -1841,34 +1859,16 @@ updated replacement lines
             string normMode = (mode ?? "").Trim().ToLowerInvariant();
             if (normMode == "agent" || normMode == "autofix")
             {
-                return basePrompt + @"
-
-[AUTONOMOUS 8-TOOL EXECUTION PROTOCOL]
-You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:
-<tool_call>
-{""tool"": ""read_file"", ""args"": {""path"": ""relative/path"", ""start_line"": 1, ""end_line"": 120}}
-</tool_call>
-<tool_call>
-{""tool"": ""write_file"", ""args"": {""path"": ""relative/path"", ""content"": ""full file content""}}
-</tool_call>
-<tool_call>
-{""tool"": ""edit_file"", ""args"": {""path"": ""relative/path"", ""search"": ""old code"", ""replace"": ""new code""}}
-</tool_call>
-<tool_call>
-{""tool"": ""list_dir"", ""args"": {""path"": ""relative/dir""}}
-</tool_call>
-<tool_call>
-{""tool"": ""grep_search"", ""args"": {""query"": ""pattern""}}
-</tool_call>
-<tool_call>
-{""tool"": ""ast_outline"", ""args"": {""path"": ""relative/path""}}
-</tool_call>
-<tool_call>
-{""tool"": ""get_diagnostics"", ""args"": {""path"": ""relative/path""}}
-</tool_call>
-<tool_call>
-{""tool"": ""run_terminal"", ""args"": {""command"": ""command to run""}}
-</tool_call>";
+                var sb = new StringBuilder();
+                sb.AppendLine("[AUTONOMOUS TOOL EXECUTION PROTOCOL]");
+                sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
+                foreach (var t in Tools)
+                {
+                    sb.AppendLine("<tool_call>");
+                    sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
+                    sb.AppendLine("</tool_call>");
+                }
+                return basePrompt + "\n\n" + sb.ToString();
             }
             else if (mode == "ctrl_k")
             {
@@ -2720,7 +2720,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot);
+            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab);
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
@@ -2745,8 +2745,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     AgentContextBuilder.PruneHistory(messages);
                     
                     int currentTokens = EstimateTokens(sysPrompt + "\n" + string.Join("\n", messages.ConvertAll(m => m["content"])));
-                    int ctxWindow = (activeVendor != null && false) ? 128000 : 128000;
-                    int maxOut = (activeVendor != null && false) ? 4096 : 4096;
+                    int ctxWindow = (activeVendor != null) ? activeVendor.ContextWindow : 128000;
+                    int maxOut = (activeVendor != null) ? activeVendor.MaxOutputTokens : 4096;
                     
                     if (currentTokens > ctxWindow - maxOut)
                     {
@@ -2757,10 +2757,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         
                         var lastMsg = messages[messages.Count - 1];
                         messages.Clear();
-                        messages.Add(new Dictionary<string, string> { { "role", "assistant" }, { "content", summary } });
+                        messages.Add(new Dictionary<string, string> { { "role", "user" }, { "content", "Summary of the conversation so far: " + summary } });
                         messages.Add(lastMsg);
                         
-                        // Fake feed msg "Context compacted"
+                        if (OnAgentFeedStatus != null) OnAgentFeedStatus("Context compacted");
                     }
                     
                     string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp).ConfigureAwait(false);
@@ -2996,6 +2996,18 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             IdePersistentSettings settings)
         {
             if (args == null) args = new Dictionary<string, object>();
+            
+            string originalName = toolName;
+            foreach (var t in Tools)
+            {
+                if (string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase) ||
+                    (t.Aliases != null && t.Aliases.Contains(toolName, StringComparer.OrdinalIgnoreCase)))
+                {
+                    toolName = t.Name;
+                    break;
+                }
+            }
+
             try
             {
                 if (toolName == "read_file")
@@ -3009,7 +3021,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     {
                         var allPaths = workspaceFiles != null ? workspaceFiles : new List<string>();
                         var suggestions = MissingFileSuggestions.SuggestSimilarFiles(fullPath, allPaths);
-                        string outputMsg = "File does not exist.";
+                        string outputMsg = "File not found: " + relPath;
                         if (suggestions.Count > 0)
                         {
                             outputMsg += "\nDid you mean one of these?\n" + string.Join("\n", suggestions.Select(s => s.StartsWith(workspaceRoot) ? s.Substring(workspaceRoot.Length).TrimStart('/', '\\') : s));
@@ -3496,19 +3508,19 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
             }
 
             
-            string[] knownTools = new string[] { "read_file", "search_web", "run_command", "list_dir", "edit_replacers", "grep_search", "webfetch", "task" };
+            string[] knownTools = Tools.Select(t => t.Name).ToArray();
             string closest = null;
             int minDistance = int.MaxValue;
             foreach (string k in knownTools)
             {
-                int dist = ComputeLevenshteinDistance(toolName, k);
+                int dist = ComputeLevenshteinDistance(originalName, k);
                 if (dist < minDistance)
                 {
                     minDistance = dist;
                     closest = k;
                 }
             }
-            string msg = "Unknown tool: " + toolName;
+            string msg = "Invalid tool \"" + originalName + "\". Available tools: " + string.Join(", ", knownTools);
             if (minDistance <= 3 && closest != null)
             {
                 msg += ". Did you mean '" + closest + "'?";

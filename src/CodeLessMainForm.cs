@@ -294,7 +294,7 @@ namespace codeLess.Studio
 
         // Right AI Agent & Multi-File Composer Dock
         private Panel rightDock;
-        private string currentAgentMode = "agent";
+        private string currentAgentMode = "build";
         private Button modeAgentBtn;
         private Button modeComposerBtn;
         private Button modeArchitectBtn;
@@ -342,6 +342,10 @@ namespace codeLess.Studio
             this.themes = StudioTheme.GetBuiltInThemes();
             this.activeTheme = StudioTheme.ResolveTheme(themes, settings.ActiveThemeId);
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
+            this.aiEngine.OnAgentFeedStatus = msg => this.BeginInvoke(new Action(() => {
+                if (this.agentFeedControl != null)
+                    this.agentFeedControl.AddMessage(false, "System", "", msg);
+            }));
             this.vsixEngine = new VsixAndPluginHostEngine(themes);
             this.networkPrivacy = new WinFormsNetworkPrivacyController(this, settings, () => activeTheme);
             InitLanguageServerController();
@@ -6822,10 +6826,7 @@ if __name__ == '__main__':
                 e.Graphics.Clear(bg);
                 using (Pen bp = new Pen(border, 1f))
                     e.Graphics.DrawRectangle(bp, 0, 0, composerModePillBtn.Width - 1, composerModePillBtn.Height - 1);
-                string modeLabel = currentAgentMode == "composer" ? "Ask"
-                    : currentAgentMode == "architect" ? "Edit"
-                    : currentAgentMode == "autofix" ? "Fix"
-                    : "Agent";
+                string modeLabel = currentAgentMode == "plan" ? "Plan" : "Build";
                 CodeLessVectorIcons.DrawIcon(e.Graphics, "agent", new Rectangle(6, 5, 13, 13), accent, 1.35f);
                 TextRenderer.DrawText(
                     e.Graphics,
@@ -7100,6 +7101,12 @@ if __name__ == '__main__':
                 {
                     e.SuppressKeyPress = true;
                     await SubmitAgentPromptAsync();
+                }
+                else if (e.KeyCode == Keys.Tab)
+                {
+                    e.SuppressKeyPress = true;
+                    currentAgentMode = currentAgentMode == "build" ? "plan" : "build";
+                    composerModePillBtn.Invalidate();
                 }
             };
 
@@ -10778,6 +10785,7 @@ if __name__ == '__main__':
             else if (cmdId == "toggle_bottom") ToggleBottomDockVisibility();
             else if (cmdId == "toggle_wrap") { editorControl.ToggleWordWrap(); UpdateTelemetryBadges(); }
             else if (cmdId == "open_byok") OpenByokConfigurationDialog();
+            else if (cmdId == "codeless.agent.compact") { promptInputBox.Text = "/compact"; var _ = SubmitAgentPromptAsync(); }
             else if (cmdId == "open_settings") OpenSettingsDialog();
             else if (cmdId == "open_shortcuts") OpenKeyboardShortcutsDialog();
             else if (cmdId == "rename_symbol") PromptRenameSymbolInEditor();

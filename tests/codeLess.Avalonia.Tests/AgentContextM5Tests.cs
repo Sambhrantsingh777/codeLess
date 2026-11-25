@@ -88,14 +88,19 @@ namespace codeLess.Avalonia.Tests
         [Fact]
         public async Task Compaction_TriggersOnThreshold()
         {
-            var harness = new LlmHarnessAndAgentEngine(null);
+            var harness = new LlmHarnessAndAgentEngine(new IdePersistentSettings());
             harness.MaxAgentIterations = 2;
+            
+            bool compactionEventFired = false;
+            harness.OnAgentFeedStatus = (msg) => {
+                if (msg == "Context compacted") compactionEventFired = true;
+            };
             
             int attempts = 0;
             harness.CustomModelResponder = (sys, msgs) =>
             {
                 attempts++;
-                if (msgs.Count > 1 && msgs[1]["content"].Contains("Provide a detailed prompt for continuing our conversation"))
+                if (msgs.Count > 1 && msgs[0]["content"].Contains("Provide a detailed prompt for continuing our conversation"))
                 {
                     return Task.FromResult("COMPACTED_SUMMARY");
                 }
@@ -109,10 +114,28 @@ namespace codeLess.Avalonia.Tests
             var buf = new EditorTabBuffer { FilePath = "/tmp/test.cs" };
             var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             
-            // To force compaction, we set a small context window
-            var mockVendor = new ByokVendor { Id = "test", BaseUrl = "test" }; // No ContextWindow in ByokVendor, using 128k fallback in our code?
-            // Actually our hardcoded fake context window is 128000, so we can't easily force it unless we add a lot of text.
-            // Let's just test that the manual compact command works, or we assume it's covered by the Engine's method.
+            var mockVendor = new ByokVendor { Id = "test", BaseUrl = "test" }; 
+            
+            // Generate a huge instruction to trigger compaction
+            string hugeInstruction = new string('A', 500000); 
+
+            var task = (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] {
+                "edit",
+                hugeInstruction,
+                mockVendor,
+                "auto",
+                buf,
+                testRoot,
+                new List<string>(),
+                new List<string>(),
+                "",
+                new Dictionary<string, string>()
+            });
+            
+            var result = await task;
+            
+            Assert.True(compactionEventFired, "Compaction event should have fired");
+            Assert.True(attempts >= 2, "Should have called model multiple times");
         }
     }
 }

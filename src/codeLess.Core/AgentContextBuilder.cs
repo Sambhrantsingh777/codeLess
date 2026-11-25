@@ -3,63 +3,74 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Linq;
 
 namespace codeLess.Studio
 {
     public static class AgentContextBuilder
     {
-        public static string DiscoverInstructions(string workspaceRoot)
+        public static string DiscoverInstructions(string startDir, string workspaceRoot = null)
         {
             var instructions = new List<string>();
-            var seen = new HashSet<string>();
+            var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int totalLength = 0;
-            
+            int maxChars = 16384; // 16 KB
+
+            string[] targetFiles = new[] { "AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md", ".cursorrules", ".codelessrules" };
+
             try
             {
-                string currentDir = workspaceRoot;
+                string currentDir = startDir;
                 while (!string.IsNullOrEmpty(currentDir))
                 {
-                    string path = Path.Combine(currentDir, ".codeless", "instructions.md");
-                    if (File.Exists(path))
+                    foreach (var tf in targetFiles)
                     {
-                        string text = File.ReadAllText(path).Trim();
-                        if (!string.IsNullOrEmpty(text) && !seen.Contains(text))
+                        string path = Path.Combine(currentDir, tf.Replace('/', Path.DirectorySeparatorChar));
+                        if (File.Exists(path) && !seenPaths.Contains(path))
                         {
-                            seen.Add(text);
-                            if (totalLength + text.Length <= 10000)
+                            seenPaths.Add(path);
+                            string text = File.ReadAllText(path).Trim();
+                            if (!string.IsNullOrEmpty(text))
                             {
-                                instructions.Add(text);
-                                totalLength += text.Length;
+                                string labeled = "### " + path + "\n" + text;
+                                if (totalLength + labeled.Length <= maxChars)
+                                {
+                                    instructions.Add(labeled);
+                                    totalLength += labeled.Length;
+                                }
                             }
                         }
                     }
-                    
-                    if (Directory.Exists(Path.Combine(currentDir, ".git")))
+
+                    if (Directory.Exists(Path.Combine(currentDir, ".git")) || 
+                        (!string.IsNullOrEmpty(workspaceRoot) && string.Equals(currentDir, workspaceRoot, StringComparison.OrdinalIgnoreCase)))
+                    {
                         break;
-                        
+                    }
+
                     var parent = Directory.GetParent(currentDir);
                     if (parent == null) break;
                     currentDir = parent.FullName;
                 }
 
-                // User home
-                string homePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codeless", "instructions.md");
-                if (File.Exists(homePath))
+                string globalPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codeless", "AGENTS.md");
+                if (File.Exists(globalPath) && !seenPaths.Contains(globalPath))
                 {
-                    string text = File.ReadAllText(homePath).Trim();
-                    if (!string.IsNullOrEmpty(text) && !seen.Contains(text))
+                    seenPaths.Add(globalPath);
+                    string text = File.ReadAllText(globalPath).Trim();
+                    if (!string.IsNullOrEmpty(text))
                     {
-                        seen.Add(text);
-                        if (totalLength + text.Length <= 10000)
+                        string labeled = "### " + globalPath + "\n" + text;
+                        if (totalLength + labeled.Length <= maxChars)
                         {
-                            instructions.Add(text);
-                            totalLength += text.Length;
+                            instructions.Add(labeled);
+                            totalLength += labeled.Length;
                         }
                     }
                 }
             }
             catch { }
-            
+
             return string.Join("\n\n", instructions);
         }
 
@@ -67,35 +78,71 @@ namespace codeLess.Studio
         {
             var sb = new StringBuilder();
             sb.AppendLine("<env>");
-            sb.AppendLine("OS: " + Environment.OSVersion.ToString());
-            sb.AppendLine("PWD: " + workspaceRoot);
-            sb.AppendLine("SHELL: " + (Environment.GetEnvironmentVariable("SHELL") ?? "/bin/sh"));
-            sb.AppendLine("HOME: " + Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
-            sb.AppendLine("USER: " + Environment.UserName);
+            sb.AppendLine("PWD: " + (workspaceRoot ?? ""));
+            bool isGit = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(Path.Combine(workspaceRoot, ".git"));
+            sb.AppendLine("Is directory a git repo: " + (isGit ? "yes" : "no"));
+            
+            string platform = "linux";
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) platform = "win32";
+            else if (Environment.OSVersion.Platform == PlatformID.MacOSX || System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX)) platform = "darwin";
+            sb.AppendLine("Platform: " + platform);
+            sb.AppendLine("Today's date: " + DateTime.Now.ToString("yyyy-MM-dd"));
             sb.AppendLine("</env>");
+            
+            sb.AppendLine("<files>");
+            if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
+            {
+                int count = 0;
+                foreach (var f in WalkDirectory(workspaceRoot))
+                {
+                    if (count >= 200) break;
+                    sb.AppendLine(f.Substring(workspaceRoot.Length).TrimStart(Path.DirectorySeparatorChar));
+                    count++;
+                }
+            }
+            sb.AppendLine("</files>");
             return sb.ToString();
+        }
+
+        private static IEnumerable<string> WalkDirectory(string root)
+        {
+            var stack = new Stack<string>();
+            stack.Push(root);
+            while (stack.Count > 0)
+            {
+                string dir = stack.Pop();
+                string[] files = null, dirs = null;
+                try {
+                    files = Directory.GetFiles(dir);
+                    dirs = Directory.GetDirectories(dir);
+                } catch { continue; }
+
+                if (files != null) foreach (var f in files) yield return f;
+                if (dirs != null) foreach (var d in dirs) stack.Push(d);
+            }
         }
 
         public static string GetProviderPrompt(string family)
         {
-            string basePrompt = "You are an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.\n" +
-                                "Output text to communicate with the user; all text you output outside of tool use is displayed to the user.\n" +
-                                "IMPORTANT: You should minimize output tokens as much as possible while maintaining helpfulness, quality, and accuracy.\n" +
-                                "Keep your responses short, since they will be displayed on a command line interface.\n" +
-                                "MIT License - adapted from opencode.\n";
-            if (family == "anthropic")
+            string basePrompt = "You are codeLess Autonomous Software Engineering Agent.\n" +
+                                "Rules:\n" +
+                                "- Concise answers.\n" +
+                                "- Read before edit.\n" +
+                                "- No placeholders.\n" +
+                                "- Verify by running tests when possible.\n";
+            if (string.Equals(family, "anthropic", StringComparison.OrdinalIgnoreCase))
             {
-                return basePrompt + "As an Anthropic model, pay special attention to avoiding preamble and postamble.";
+                return basePrompt + "As an Anthropic model, pay special attention to avoiding preamble and postamble. MIT License - adapted from opencode.";
             }
-            else if (family == "openai")
+            else if (string.Equals(family, "openai", StringComparison.OrdinalIgnoreCase))
             {
-                return basePrompt + "As an OpenAI model, ensure strict adherence to JSON tool calling formats if applicable.";
+                return basePrompt + "As an OpenAI model, ensure strict adherence to JSON tool calling formats if applicable. MIT License - adapted from opencode.";
             }
-            else if (family == "gemini")
+            else if (string.Equals(family, "gemini", StringComparison.OrdinalIgnoreCase))
             {
-                return basePrompt + "As a Gemini model, use clear and direct language.";
+                return basePrompt + "As a Gemini model, use clear and direct language. MIT License - adapted from opencode.";
             }
-            return basePrompt;
+            return basePrompt + "MIT License - adapted from opencode.";
         }
 
         public static void PruneHistory(List<Dictionary<string, string>> messages)
@@ -103,12 +150,9 @@ namespace codeLess.Studio
             int protectedChars = 0;
             int prunableCharsSeen = 0;
             
-            // Limit to 40,000 tokens -> 160,000 chars protected. 
-            // 20,000 tokens -> 80,000 chars threshold for pruning.
             int protectedCharLimit = 40000 * 4;
             int pruningThreshold = 20000 * 4;
             
-            // Walk backwards
             for (int i = messages.Count - 1; i >= 0; i--)
             {
                 var msg = messages[i];

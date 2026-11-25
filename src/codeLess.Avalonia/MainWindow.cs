@@ -48,7 +48,7 @@ namespace codeLess.AvaloniaApp
         private bool showWelcomeTab = true;
         private string activeSidebarView = "explorer";
         private string activeBottomTab = "terminal";
-        private string currentAgentMode = "agent";
+        private string currentAgentMode = "build";
         private bool isZenMode = false;
         private bool isFullScreen = false;
         private bool isBottomDockMaximized = false;
@@ -258,6 +258,10 @@ namespace codeLess.AvaloniaApp
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
             EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
+            aiEngine.OnAgentFeedStatus = msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                if (AgentFeed != null)
+                    AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
+            });
             InitNetworkPrivacy();
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
@@ -1551,7 +1555,7 @@ namespace codeLess.AvaloniaApp
                 Background = Brushes.Transparent
             };
             ScrollViewer.SetVerticalScrollBarVisibility(chatPromptInput, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
-            // Enter sends, Shift+Enter inserts a newline (handled before the TextBox inserts one itself).
+            // Enter sends, Shift+Enter inserts a newline. Tab cycles modes.
             chatPromptInput.AddHandler(KeyDownEvent, (s, e) =>
             {
                 if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
@@ -1559,12 +1563,17 @@ namespace codeLess.AvaloniaApp
                     SubmitChatMessage();
                     e.Handled = true;
                 }
+                else if (e.Key == Key.Tab)
+                {
+                    SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
+                    e.Handled = true;
+                }
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
             composerStack.Children.Add(chatPromptInput);
 
-            // Mode pills row: ✦ Agent | Ask | Edit | Auto-Fix
+            // Mode pills row: ✦ Build | Plan
             var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            foreach (var m in new (string Id, string Label)[] { ("agent", "Agent"), ("ask", "Ask"), ("edit", "Edit"), ("autofix", "Auto-Fix") })
+            foreach (var m in new (string Id, string Label)[] { ("build", "Build"), ("plan", "Plan") })
             {
                 string modeId = m.Id;
                 var mb = new Button

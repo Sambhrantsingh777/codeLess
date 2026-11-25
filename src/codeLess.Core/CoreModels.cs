@@ -28,6 +28,15 @@ namespace codeLess.Studio
             catch { }
         }
     }
+    public class AgentToolDefinition
+    {
+        public string Name;
+        public string[] Aliases;
+        public string Description;
+        public string JsonSchema;
+        public bool IsReadOnly;
+    }
+
     public partial class StudioTheme
     {
         public string Id;
@@ -1671,6 +1680,32 @@ namespace codeLess.Studio
         public string DefaultHarnessId;
         public string[] Models;
         public string EnvVarName;
+
+        private int _contextWindow = 0;
+        public int ContextWindow
+        {
+            get
+            {
+                if (_contextWindow > 0) return _contextWindow;
+                string m = SelectedModel ?? "";
+                if (m.IndexOf("gemini-1.5", StringComparison.OrdinalIgnoreCase) >= 0 || m.IndexOf("gemini-2.", StringComparison.OrdinalIgnoreCase) >= 0) return 1000000;
+                if (m.IndexOf("claude", StringComparison.OrdinalIgnoreCase) >= 0) return 200000;
+                return 128000;
+            }
+            set { _contextWindow = value; }
+        }
+
+        private int _maxOutputTokens = 0;
+        public int MaxOutputTokens
+        {
+            get
+            {
+                if (_maxOutputTokens > 0) return _maxOutputTokens;
+                // Use a safe default for output tokens
+                return 4096;
+            }
+            set { _maxOutputTokens = value; }
+        }
 
         public string VendorName
         {
