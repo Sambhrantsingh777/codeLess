@@ -2793,15 +2793,16 @@ namespace codeLess.Studio
     /// Renders styled User/Assistant cards, collapsible Thinking drawers, Tool Call chips,
     /// Markdown headings/lists/bold, and interactive fenced Code Blocks with [Copy] & [Apply].
     /// </summary>
-            public List<Dictionary<string, object>> AgentTodos = new List<Dictionary<string, object>>();
+        public class CodeLessAgentFeedControl : Control
+    {
+        public List<Dictionary<string, object>> AgentTodos = new List<Dictionary<string, object>>();
         public void UpdateTodos(List<Dictionary<string, object>> todos)
         {
             AgentTodos = todos ?? new List<Dictionary<string, object>>();
             RecalculateLayout();
             if (this.Visible) this.Invalidate();
         }
-        public class CodeLessAgentFeedControl : Control
-    {
+        
         public class AgentToolChip
         {
             public string Name;

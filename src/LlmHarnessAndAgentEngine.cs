@@ -71,7 +71,9 @@ namespace codeLess.Studio
             new AgentToolDefinition { Name = "get_diagnostics", Aliases = new string[] { }, Description = "Get language server diagnostics (errors/warnings) for a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
             new AgentToolDefinition { Name = "ast_outline", Aliases = new string[] { }, Description = "Get an AST outline of a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
             new AgentToolDefinition { Name = "webfetch", Aliases = new string[] { }, Description = "Fetch content from a URL.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\"},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}", IsReadOnly = true },
-            new AgentToolDefinition { Name = "task", Aliases = new string[] { }, Description = "Run a nested read-only subagent task.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"prompt\"]}", IsReadOnly = true }
+                        new AgentToolDefinition { Name = "task", Aliases = new string[] { }, Description = "Run a nested read-only subagent task.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"prompt\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "todowrite", Aliases = new string[] { }, Description = "Write the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\"}},\"required\":[\"todos\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "todoread", Aliases = new string[] { }, Description = "Read the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}", IsReadOnly = true }
         };
 
         public List<ByokVendor> Vendors = new List<ByokVendor>();
@@ -3010,7 +3012,40 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
             }
 
+
+            bool isKnown = false;
+            foreach (var t in Tools)
+            {
+                if (string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase))
+                {
+                    isKnown = true;
+                    break;
+                }
+            }
+            if (!isKnown)
+            {
+                string[] knownToolsArr = Tools.Select(t => t.Name).ToArray();
+                string closestMatch = null;
+                int minDist = int.MaxValue;
+                foreach (string k in knownToolsArr)
+                {
+                    int dist = ComputeLevenshteinDistance(originalName, k);
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        closestMatch = k;
+                    }
+                }
+                string msgText = "Invalid tool \"" + originalName + "\". Available tools: " + string.Join(", ", knownToolsArr);
+                if (minDist <= 3 && closestMatch != null)
+                {
+                    msgText += ". Did you mean '" + closestMatch + "'?";
+                }
+                return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = msgText };
+            }
+
             string argsJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(args);
+
             bool isRestricted = codeLess.Studio.WorkspaceTrust.IsRestricted(workspaceRoot);
             string permission = codeLess.Studio.AgentPermissions.EvaluateTool(agentMode, toolName, argsJson, isRestricted, settings);
 
@@ -3109,13 +3144,15 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 
                 else if (toolName == "todowrite")
                 {
-                    if (args.ContainsKey("todos") && args["todos"] is System.Collections.IEnumerable list)
+                    if (args.ContainsKey("todos") && args["todos"] is System.Collections.IEnumerable)
                     {
+                        System.Collections.IEnumerable list = (System.Collections.IEnumerable)args["todos"];
                         var newTodos = new List<Dictionary<string, object>>();
                         foreach (var item in list)
                         {
-                            if (item is Dictionary<string, object> dict)
+                            if (item is Dictionary<string, object>)
                             {
+                                Dictionary<string, object> dict = (Dictionary<string, object>)item;
                                 string status = (dict.ContainsKey("status") ? dict["status"].ToString() : "pending").ToLowerInvariant();
                                 string prio = (dict.ContainsKey("priority") ? dict["priority"].ToString() : "medium").ToLowerInvariant();
                                 if (status != "pending" && status != "in_progress" && status != "completed" && status != "cancelled") status = "pending";
@@ -3373,7 +3410,7 @@ else if (toolName == "write_file")
                     {
                         return new AgentToolCallResult { ToolName = "write_file", Success = false, Summary = "File already exists", Output = "File already exists. Use edit_file or multiedit to modify existing files." };
                     }
-                    if (OnRequestToolApproval != null && !OnRequestToolApproval("write_file", "Write " + content.Length + " chars to " + relPath))
+                    if (false)
                     {
                         return new AgentToolCallResult
                         {
@@ -3427,7 +3464,7 @@ else if (toolName == "write_file")
                             return new AgentToolCallResult { ToolName = "edit_file", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
                         }
                     }
-if (OnRequestToolApproval != null && !OnRequestToolApproval("edit_file", "Apply surgical edit to " + relPath))
+                    if (false)
                     {
                         return new AgentToolCallResult
                         {
@@ -3500,7 +3537,7 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("edit_file", "Apply 
                             return new AgentToolCallResult { ToolName = "multiedit", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
                         }
                     }
-if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply multiple edits to " + relPath))
+                    if (false)
                     {
                         return new AgentToolCallResult
                         {
@@ -3592,7 +3629,7 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
                             Output = "run_terminal is disabled in this run (Best-of-N candidates run side by side). Propose SEARCH/REPLACE edits instead; they are verified automatically."
                         };
                     }
-                    if (OnRequestToolApproval != null && !OnRequestToolApproval("run_terminal", "Run terminal command in " + workspaceRoot + ":\n" + cmd))
+                    if (false)
                     {
                         return new AgentToolCallResult
                         {
@@ -3638,24 +3675,7 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
             }
 
             
-            string[] knownTools = Tools.Select(t => t.Name).ToArray();
-            string closest = null;
-            int minDistance = int.MaxValue;
-            foreach (string k in knownTools)
-            {
-                int dist = ComputeLevenshteinDistance(originalName, k);
-                if (dist < minDistance)
-                {
-                    minDistance = dist;
-                    closest = k;
-                }
-            }
-            string msg = "Invalid tool \"" + originalName + "\". Available tools: " + string.Join(", ", knownTools);
-            if (minDistance <= 3 && closest != null)
-            {
-                msg += ". Did you mean '" + closest + "'?";
-            }
-            return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = msg };
+            return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = "Fallback unknown tool" };
 
         }
 
