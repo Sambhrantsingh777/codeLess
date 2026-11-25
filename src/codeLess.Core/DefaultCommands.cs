@@ -170,7 +170,92 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.editor.changeLanguageMode", "Change Language Mode", "Editor", "cmd+k m", "ctrl+k m", "ctrl+k m", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("markdown.showPreviewToSide", "Markdown: Open Preview to the Side", "Markdown", "cmd+k v", "ctrl+k v", "ctrl+k v", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.inlineAiBar", "Inline AI Edit", "AI", "cmd+i", "ctrl+i", "ctrl+i", ""));
+        }
 
-}
-}
+        public static string FormatKeybindingsMarkdown()
+        {
+            Register();
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.Append("# codeLess Keyboard Shortcuts\n\n");
+            sb.Append("This file is generated from the default keybindings registry (`DefaultCommands` / `CommandRegistry.AllCommands`) and `WorkbenchMenuModel`.\n\n");
+            sb.Append("## Default Keybindings (`CommandRegistry`)\n\n");
+            sb.Append("| Command ID | Command | Category | macOS | Windows | Linux | When |\n");
+            sb.Append("| --- | --- | --- | --- | --- | --- | --- |\n");
+
+            System.Collections.Generic.List<CommandDefinition> list = new System.Collections.Generic.List<CommandDefinition>(CommandRegistry.AllCommands);
+            list.Sort(delegate(CommandDefinition a, CommandDefinition b)
+            {
+                return string.CompareOrdinal(a.Id ?? "", b.Id ?? "");
+            });
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                CommandDefinition c = list[i];
+                sb.Append("| ");
+                sb.Append(EscapeMarkdownCell(c.Id));
+                sb.Append(" | ");
+                sb.Append(EscapeMarkdownCell(c.Title));
+                sb.Append(" | ");
+                sb.Append(EscapeMarkdownCell(c.Category));
+                sb.Append(" | ");
+                sb.Append(EscapeMarkdownCell(c.DefaultKeyMac));
+                sb.Append(" | ");
+                sb.Append(EscapeMarkdownCell(c.DefaultKeyWin));
+                sb.Append(" | ");
+                sb.Append(EscapeMarkdownCell(c.DefaultKeyLinux));
+                sb.Append(" | ");
+                sb.Append(EscapeMarkdownCell(c.When));
+                sb.Append(" |\n");
+            }
+
+            sb.Append("\n## Workbench Menu Shortcuts (`WorkbenchMenuModel`)\n\n");
+            sb.Append("| Menu | Item | Command ID | macOS | Windows / Linux |\n");
+            sb.Append("| --- | --- | --- | --- | --- |\n");
+
+            System.Collections.Generic.List<codeLess.Studio.WorkbenchMenu> menus = codeLess.Studio.WorkbenchMenuModel.Build();
+            for (int m = 0; m < menus.Count; m++)
+            {
+                AppendMenuEntriesMarkdown(sb, menus[m].Title, menus[m].Items);
+            }
+
+            return sb.ToString();
+        }
+
+        private static void AppendMenuEntriesMarkdown(System.Text.StringBuilder sb, string menuPath, System.Collections.Generic.List<codeLess.Studio.WorkbenchMenuEntry> items)
+        {
+            if (items == null) return;
+            for (int i = 0; i < items.Count; i++)
+            {
+                codeLess.Studio.WorkbenchMenuEntry e = items[i];
+                if (e == null || e.IsSeparator) continue;
+                if (e.IsSubmenu)
+                {
+                    AppendMenuEntriesMarkdown(sb, menuPath + " > " + (e.Label ?? ""), e.Children);
+                }
+                else
+                {
+                    string macSc = e.VisibleOn(true) ? (e.ShortcutFor(true) ?? "") : "";
+                    string winSc = e.VisibleOn(false) ? (e.ShortcutFor(false) ?? "") : "";
+                    if (macSc.Length == 0 && winSc.Length == 0) continue;
+                    sb.Append("| ");
+                    sb.Append(EscapeMarkdownCell(menuPath));
+                    sb.Append(" | ");
+                    sb.Append(EscapeMarkdownCell(e.Label));
+                    sb.Append(" | ");
+                    sb.Append(EscapeMarkdownCell(e.Id));
+                    sb.Append(" | ");
+                    sb.Append(EscapeMarkdownCell(macSc));
+                    sb.Append(" | ");
+                    sb.Append(EscapeMarkdownCell(winSc));
+                    sb.Append(" |\n");
+                }
+            }
+        }
+
+        private static string EscapeMarkdownCell(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Replace("\\", "\\\\").Replace("|", "\\|");
+        }
+    }
 }
