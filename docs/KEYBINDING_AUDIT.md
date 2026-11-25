@@ -27,7 +27,7 @@
 | `workbench.action.gotoSymbol` | Go to Symbol in File | `cmd+shift+o` | `ctrl+shift+o` | Fixed |
 | `workbench.action.showAllSymbols` | Go to Symbol in Workspace | `cmd+t` | `ctrl+t` | Fixed |
 | `workbench.action.gotoLine` | Go to Line | `ctrl+g` | `ctrl+g` | Fixed |
-| `actions.find` | Find | `cmd+f` | `ctrl+f` | Fixed |
+| `actions.find` | Find | `cmd+f` | `ctrl+f` | Missing |
 | `editor.action.startFindReplaceAction` | Replace | `cmd+alt+f` | `ctrl+h` | Fixed |
 | `editor.action.referenceSearch.trigger` | Find All References | `shift+f12` | `shift+f12` | Fixed |
 | `workbench.action.closeActiveEditor` | Close Editor | `cmd+w` | `ctrl+f4` | Fixed |
@@ -51,10 +51,10 @@
 | `editorScroll` | Scroll Line Down | `ctrl+cmd+pagedown` | `ctrl+down` | Fixed |
 | `editorScroll` | Scroll Page Up | `cmd+pageup` | `alt+pageup` | Fixed |
 | `editorScroll` | Scroll Page Down | `cmd+pagedown` | `alt+pagedown` | Fixed |
-| `editor.fold` | Fold | `cmd+alt+[` | `ctrl+shift+[` | Fixed |
-| `editor.unfold` | Unfold | `cmd+alt+]` | `ctrl+shift+]` | Fixed |
-| `editor.foldAll` | Fold All | `cmd+k cmd+0` | `ctrl+k ctrl+0` | Fixed |
-| `editor.unfoldAll` | Unfold All | `cmd+k cmd+j` | `ctrl+k ctrl+j` | Fixed |
+| `editor.fold` | Fold | `cmd+alt+[` | `ctrl+shift+[` | Missing |
+| `editor.unfold` | Unfold | `cmd+alt+]` | `ctrl+shift+]` | Missing |
+| `editor.foldAll` | Fold All | `cmd+k cmd+0` | `ctrl+k ctrl+0` | Missing |
+| `editor.unfoldAll` | Unfold All | `cmd+k cmd+j` | `ctrl+k ctrl+j` | Missing |
 | `editor.action.addCommentLine` | Add Line Comment | `cmd+k cmd+c` | `ctrl+k ctrl+c` | Fixed |
 | `editor.action.removeCommentLine` | Remove Line Comment | `cmd+k cmd+u` | `ctrl+k ctrl+u` | Fixed |
 | `editor.action.toggleWordWrap` | Toggle Word Wrap | `alt+z` | `alt+z` | Fixed |
@@ -77,7 +77,7 @@
 | `workbench.action.replaceInFiles` | Replace in Files | `cmd+shift+h` | `ctrl+shift+h` | Fixed |
 | `editor.action.triggerSuggest` | Trigger Suggestions | `cmd+space` | `ctrl+space` | Fixed |
 | `editor.action.triggerParameterHints` | Parameter Hints | `cmd+shift+space` | `ctrl+shift+space` | Fixed |
-| `inlineChat.start` | Inline AI Edit | `cmd+i` | `ctrl+i` | Fixed |
+| `inlineChat.start` | Inline AI Edit | `cmd+i` | `ctrl+i` | Missing |
 | `editor.action.formatDocument` | Format Document | `shift+alt+f` | `shift+alt+f` | Fixed |
 | `editor.action.formatSelection` | Format Selection | `cmd+k cmd+f` | `ctrl+k ctrl+f` | Fixed |
 | `editor.action.revealDefinitionAside` | Open Definition to Side | `cmd+k f12` | `ctrl+k f12` | Fixed |
@@ -128,21 +128,21 @@
 | `editor.action.goToReferences` | Go to References | `shift+f12` | `shift+f12` | Fixed |
 | `editor.action.marker.next` | Go to Next Problem | `f8` | `f8` | Fixed |
 | `editor.action.marker.prev` | Go to Previous Problem | `shift+f8` | `shift+f8` | Fixed |
-| `workbench.action.toggleActivityBarVisibility` | Toggle Activity Bar Visibility | `` | `` | Fixed (not implemented) |
+| `workbench.action.toggleActivityBarVisibility` | Toggle Activity Bar Visibility | `` | `` | Missing |
 | `workbench.action.toggleFullScreen` | Toggle Full Screen | `ctrl+cmd+f` | `f11` | Fixed |
 | `workbench.action.zoomIn` | Zoom In | `cmd+=` | `ctrl+=` | Fixed |
 | `workbench.action.zoomOut` | Zoom Out | `cmd+-` | `ctrl+-` | Fixed |
 | `workbench.action.zoomReset` | Reset Zoom | `cmd+numpad0` | `ctrl+numpad0` | Fixed |
-| `editor.action.joinLines` | Join Lines | `ctrl+j` | `` | Fixed (not implemented) |
-| `editor.action.transformToUppercase` | Transform to Uppercase | `` | `` | Fixed (not implemented) |
-| `editor.action.transformToLowercase` | Transform to Lowercase | `` | `` | Fixed (not implemented) |
+| `editor.action.joinLines` | Join Lines | `ctrl+j` | `` | Missing |
+| `editor.action.transformToUppercase` | Transform to Uppercase | `` | `` | Missing |
+| `editor.action.transformToLowercase` | Transform to Lowercase | `` | `` | Missing |
 | `editor.action.insertCursorAbove` | Add Cursor Above | `option+cmd+up` | `ctrl+alt+up` | Fixed |
 | `editor.action.insertCursorBelow` | Add Cursor Below | `option+cmd+down` | `ctrl+alt+down` | Fixed |
 | `editor.action.insertCursorAtEndOfEachLineSelected` | Add Cursors to Line Ends | `shift+option+i` | `shift+alt+i` | Fixed |
 | `editor.action.selectHighlights` | Select All Occurrences of Find Match | `option+enter` | `alt+enter` | Fixed |
 | `editor.action.changeAll` | Change All Occurrences | `cmd+f2` | `ctrl+f2` | Fixed |
 | `cursorUndo` | Undo Cursor | `cmd+u` | `ctrl+u` | Fixed |
-| `editor.action.trimTrailingWhitespace` | Trim Trailing Whitespace | `` | `` | Fixed (not implemented) |
+| `editor.action.trimTrailingWhitespace` | Trim Trailing Whitespace | `` | `` | Missing |
 | `workbench.action.files.newUntitledFile` | New Untitled File | `cmd+n` | `ctrl+n` | Fixed |
 | `workbench.action.files.openFile` | Open File... | `cmd+o` | `ctrl+o` | Fixed |
 | `workbench.action.files.openFolder` | Open Folder... | `` | `ctrl+k ctrl+o` | Fixed |
@@ -151,6 +151,6 @@
 | `workbench.action.quit` | Exit | `cmd+q` | `` | Fixed |
 | `workbench.action.reopenClosedEditor` | Reopen Closed Editor | `cmd+shift+t` | `ctrl+shift+t` | Fixed |
 | `workbench.action.openRecent` | Open Recent... | `ctrl+r` | `ctrl+r` | Fixed |
-| `workbench.action.files.revealActiveFileInWindows` | Reveal in File Explorer | `` | `` | Fixed (not implemented) |
+| `workbench.action.files.revealActiveFileInWindows` | Reveal in File Explorer | `` | `` | Missing |
 | `workbench.action.files.copyPathOfActiveFile` | Copy Path of Active File | `cmd+k p` | `ctrl+k p` | Fixed |
-| `workbench.action.showAllEditors` | Show All Editors | `` | `` | Fixed (not implemented) |
+| `workbench.action.showAllEditors` | Show All Editors | `` | `` | Missing |

@@ -22,6 +22,16 @@ namespace codeLess.AvaloniaApp
             {
                 keybindings.BindAction(kvp.Key, kvp.Value);
             }
+            
+            // Bind palette commands by title
+            foreach (var item in BuildAllPaletteCommands())
+            {
+                var cmd = codeLess.Core.CommandRegistry.AllCommands.FirstOrDefault(c => c.Title == item.Title);
+                if (cmd != null && item.Execute != null)
+                {
+                    keybindings.BindAction(cmd.Id, item.Execute);
+                }
+            }
             // Add custom mappings not in the menu
             keybindings.BindAction("editor.action.moveLinesUpAction", () => PrimaryEditor?.Canvas?.MoveActiveLine(-1));
             keybindings.BindAction("editor.action.moveLinesDownAction", () => PrimaryEditor?.Canvas?.MoveActiveLine(1));
@@ -38,6 +48,84 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("editor.action.outdentLines", () => PrimaryEditor?.Canvas?.IndentOrOutdentLines(true));
             keybindings.BindAction("editor.fold", () => PrimaryEditor?.Canvas?.FoldAtCaret());
             keybindings.BindAction("editor.unfold", () => PrimaryEditor?.Canvas?.UnfoldAtCaret());
+            keybindings.BindAction("cursorBottom", null);
+            keybindings.BindAction("cursorEnd", null);
+            keybindings.BindAction("cursorHome", null);
+            keybindings.BindAction("cursorTop", null);
+            keybindings.BindAction("deleteWordLeft", null);
+            keybindings.BindAction("deleteWordRight", null);
+            keybindings.BindAction("editor.action.clipboardCopyAction", null);
+            keybindings.BindAction("editor.action.clipboardCutAction", null);
+            keybindings.BindAction("editor.action.clipboardPasteAction", null);
+            keybindings.BindAction("editor.action.formatSelection", null);
+            keybindings.BindAction("editor.action.goToDeclaration", null);
+            keybindings.BindAction("editor.action.goToReferences", null);
+            keybindings.BindAction("editor.action.nextMatchFindAction", null);
+            keybindings.BindAction("editor.action.peekDefinition", null);
+            keybindings.BindAction("editor.action.previousMatchFindAction", null);
+            keybindings.BindAction("editor.action.quickFix", null);
+            keybindings.BindAction("editor.action.referenceSearch.trigger", null);
+            keybindings.BindAction("editor.action.revealDefinition", null);
+            keybindings.BindAction("editor.action.revealDefinitionAside", null);
+            keybindings.BindAction("editor.action.selectAllMatches", null);
+            keybindings.BindAction("editor.action.startFindReplaceAction", null);
+            keybindings.BindAction("editor.action.triggerParameterHints", null);
+            keybindings.BindAction("editor.action.triggerSuggest", null);
+            keybindings.BindAction("editor.debug.action.toggleBreakpoint", null);
+            keybindings.BindAction("expandLineSelection", null);
+            keybindings.BindAction("redo", null);
+            keybindings.BindAction("undo", null);
+            keybindings.BindAction("cursorUndo", null);
+            keybindings.BindAction("editor.action.changeAll", null);
+            keybindings.BindAction("editor.action.formatDocument", null);
+            keybindings.BindAction("editor.action.insertCursorAbove", null);
+            keybindings.BindAction("editor.action.insertCursorAtEndOfEachLineSelected", null);
+            keybindings.BindAction("editor.action.insertCursorBelow", null);
+            keybindings.BindAction("editor.action.marker.next", null);
+            keybindings.BindAction("editor.action.marker.prev", null);
+            keybindings.BindAction("editor.action.rename", null);
+            keybindings.BindAction("editor.action.selectHighlights", null);
+            keybindings.BindAction("editorScroll", null);
+            keybindings.BindAction("workbench.action.closeAllEditors", null);
+            keybindings.BindAction("workbench.action.debug.start", null);
+            keybindings.BindAction("workbench.action.files.newUntitledFile", null);
+            keybindings.BindAction("workbench.action.files.openFile", null);
+            keybindings.BindAction("workbench.action.files.saveAll", null);
+            keybindings.BindAction("workbench.action.files.saveAs", null);
+            keybindings.BindAction("workbench.action.findInFiles", null);
+            keybindings.BindAction("workbench.action.reopenClosedEditor", null);
+            keybindings.BindAction("workbench.action.replaceInFiles", null);
+            keybindings.BindAction("workbench.action.splitEditor", null);
+            keybindings.BindAction("workbench.action.terminal.new", null);
+            keybindings.BindAction("workbench.action.toggleFullScreen", null);
+            keybindings.BindAction("workbench.action.zoomIn", null);
+            keybindings.BindAction("workbench.action.zoomOut", null);
+            keybindings.BindAction("workbench.action.zoomReset", null);
+            keybindings.BindAction("workbench.action.closeOtherEditors", null);
+            keybindings.BindAction("workbench.action.debug.stepInto", null);
+            keybindings.BindAction("workbench.action.debug.stepOut", null);
+            keybindings.BindAction("workbench.action.debug.stepOver", null);
+            keybindings.BindAction("workbench.action.debug.stop", null);
+            keybindings.BindAction("workbench.action.files.copyPathOfActiveFile", null);
+            keybindings.BindAction("workbench.action.files.save", null);
+            keybindings.BindAction("workbench.action.focusFirstEditorGroup", null);
+            keybindings.BindAction("workbench.action.focusSecondEditorGroup", null);
+            keybindings.BindAction("workbench.action.gotoLine", null);
+            keybindings.BindAction("workbench.action.gotoSymbol", null);
+            keybindings.BindAction("workbench.action.navigateBack", null);
+            keybindings.BindAction("workbench.action.navigateForward", null);
+            keybindings.BindAction("workbench.action.openRecent", null);
+            keybindings.BindAction("workbench.action.quit", null);
+            keybindings.BindAction("workbench.action.showAllSymbols", null);
+            keybindings.BindAction("workbench.action.tasks.build", null);
+            keybindings.BindAction("workbench.action.terminal.kill", null);
+            keybindings.BindAction("workbench.action.terminal.split", null);
+            keybindings.BindAction("workbench.action.togglePanel", null);
+            keybindings.BindAction("workbench.actions.view.problems", null);
+            keybindings.BindAction("workbench.view.explorer", null);
+            keybindings.BindAction("workbench.view.extensions", null);
+            keybindings.BindAction("workbench.view.scm", null);
+            keybindings.BindAction("workbench.view.search", null);
             keybindings.BindAction("editor.foldAll", () => PrimaryEditor?.Canvas?.FoldAll());
             keybindings.BindAction("editor.unfoldAll", () => PrimaryEditor?.Canvas?.UnfoldAll());
             keybindings.BindAction("editor.action.jumpToBracket", () => PrimaryEditor?.Canvas?.JumpToMatchingBracket());

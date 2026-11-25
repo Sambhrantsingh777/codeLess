@@ -251,6 +251,7 @@ namespace codeLess.Core
             Action action;
             if (actions.TryGetValue(id, out action))
             {
+                if (action == null) return false;
                 action();
                 return true;
             }

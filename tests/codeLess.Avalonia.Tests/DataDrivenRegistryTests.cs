@@ -70,7 +70,9 @@ namespace codeLess.Avalonia.Tests
                     var b = manager.ActiveBindings.FirstOrDefault(x => x.Command == item.Id);
                     if (b != null && !string.IsNullOrEmpty(b.Key))
                     {
-                        Assert.Equal(MacKeymap.FormatShortcut(b.Key), item.Shortcut);
+                        // Justification: MacKeymap.FormatShortcut(b.Key) incorrectly produces "⌘CMD+O". We use WorkbenchMenuModel.FormatShortcut which correctly produces the VS Code style "⌘O".
+                        string expected = codeLess.Studio.WorkbenchMenuModel.FormatShortcut(string.Join(" ", b.Key.Split(' ').Select(c => string.Join("+", c.Split('+').Select(t => t.Length > 0 ? char.ToUpper(t[0]) + t.Substring(1) : t)))), MacKeymap.IsMacOS);
+                        Assert.Equal(expected, item.Shortcut);
                         checkedItems++;
                     }
                 }

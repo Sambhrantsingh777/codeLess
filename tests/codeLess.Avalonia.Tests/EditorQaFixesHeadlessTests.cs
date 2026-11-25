@@ -21,6 +21,7 @@ namespace codeLess.Avalonia.Tests
     public class EditorQaFixesHeadlessTests : IDisposable
     {
         private readonly string dir;
+        // Justification: AvaloniaVirtualEditorCanvas.DisplayTabSize is no longer static. Tab size is now read from per-canvas EditorTabBuffer, defaulting to VscodeSettingsManager workspace settings. Test defaults are isolated by xUnit session directory.
         private readonly int savedTab = 4;
         private readonly bool savedSpaces = AvaloniaVirtualEditorCanvas.InsertSpacesSetting;
         private readonly string settingsPath;

@@ -2624,7 +2624,7 @@ namespace codeLess.AvaloniaApp
             all.AddRange(BuildAgentTrustPaletteCommands());
             all.AddRange(BuildWorkspaceTrustPaletteCommands());
             all.AddRange(BuildExtensionPaletteCommands());
-            foreach (var item in all) { if (string.IsNullOrEmpty(item.Id)) { var cmd = codeLess.Core.CommandRegistry.AllCommands.FirstOrDefault(c => c.Title == item.Title); if (cmd != null) item.Id = cmd.Id; } if (!string.IsNullOrEmpty(item.Id) && keybindings != null) { var b = keybindings.ActiveBindings.FirstOrDefault(x => x.Command == item.Id); if (b != null && !string.IsNullOrEmpty(b.Key)) { item.Shortcut = MacKeymap.FormatShortcut(b.Key); } } }
+            foreach (var item in all) { if (string.IsNullOrEmpty(item.Id)) { var cmd = codeLess.Core.CommandRegistry.AllCommands.FirstOrDefault(c => c.Title == item.Title); if (cmd != null) item.Id = cmd.Id; } if (!string.IsNullOrEmpty(item.Id) && keybindings != null) { var b = keybindings.ActiveBindings.FirstOrDefault(x => x.Command == item.Id); if (b != null && !string.IsNullOrEmpty(b.Key)) { item.Shortcut = codeLess.Studio.WorkbenchMenuModel.FormatShortcut(string.Join(" ", b.Key.Split(' ').Select(c => string.Join("+", c.Split('+').Select(t => t.Length > 0 ? char.ToUpper(t[0]) + t.Substring(1) : t)))), MacKeymap.IsMacOS); } } }
             return all;
         }
 
