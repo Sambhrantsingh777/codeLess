@@ -88,6 +88,7 @@ namespace codeLess.Studio
         public string ProjectRulesText = "";
         public string CompactRepoMap = "";
         public bool LocalOllamaDetected = false;
+        private HashSet<string> NativeToolsUnsupportedVendors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public string ActiveGitBranch = "";
         public bool EnableSseStreaming = true;
         public volatile bool CancelStreamingRequested = false;
@@ -98,6 +99,7 @@ namespace codeLess.Studio
         public Func<string, string, bool> OnRequestToolApproval;
         public Func<string, string> OnExecuteTerminalCommandInConPty;
         public Func<string, List<Dictionary<string, string>>, Task<string>> CustomModelResponder;
+        public Func<string, ByokVendor, IEnumerable<string>> NativeTransportOverride;
         public int MaxAgentIterations = 8;
         public IDiagnosticsProvider DiagnosticsProvider { get; set; }
         public HashSet<string> PendingPostApplyDiagnosticsPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1832,7 +1834,7 @@ namespace codeLess.Studio
             return Path.GetFileName(fullPath);
         }
 
-        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab)
+        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab, bool useNative = false)
         {
             string hName = harness != null ? harness.Name : "codeLess Adaptive Harness";
             string hDirective = harness != null ? harness.SystemPromptDirective : "";
@@ -1862,16 +1864,23 @@ updated replacement lines
                 envBlock, providerRules, instructions, hName, hDirective);
 
             string normMode = (mode ?? "").Trim().ToLowerInvariant();
-            if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan")
+                        if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan")
             {
                 var sb = new StringBuilder();
                 sb.AppendLine("[AUTONOMOUS TOOL EXECUTION PROTOCOL]");
-                sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
-                foreach (var t in Tools)
+                if (useNative)
                 {
-                    sb.AppendLine("<tool_call>");
-                    sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
-                    sb.AppendLine("</tool_call>");
+                    sb.AppendLine("You can invoke native workspace tools using the provided tool definitions.");
+                }
+                else
+                {
+                    sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
+                    foreach (var t in Tools)
+                    {
+                        sb.AppendLine("<tool_call>");
+                        sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
+                        sb.AppendLine("</tool_call>");
+                    }
                 }
                 return basePrompt + "\n\n" + sb.ToString();
             }
@@ -2244,8 +2253,13 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
             bool partOfTurn = InTurnOfThisEngine;
 
-            string ret = await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
-            {
+                        string ret = null;
+            bool retryTextMode = false;
+            do {
+                retryTextMode = false;
+                try {
+                    ret = await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
+                    {
                 return await Task.Run(() =>
                 {
                     JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
@@ -2268,40 +2282,120 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 req.Timeout = Math.Max(2000, HttpTimeoutMs);
                 req.ReadWriteTimeout = Math.Max(2000, HttpTimeoutMs);
 
-                string payload;
+                bool useNative = false;
+                List<object> nativeMessages = new List<object>();
+                if (conversationMessages != null && conversationMessages.Count > 0 && conversationMessages[0].ContainsKey("__json"))
+                {
+                    useNative = true;
+                    foreach(var m in conversationMessages) {
+                        if (m.ContainsKey("__json")) {
+                            var obj = ser.DeserializeObject(m["__json"]);
+                            if (obj is System.Collections.ArrayList) {
+                                foreach(var item in (System.Collections.ArrayList)obj) nativeMessages.Add(item);
+                            } else if (obj is object[]) {
+                                foreach(var item in (object[])obj) nativeMessages.Add(item);
+                            } else {
+                                nativeMessages.Add(obj);
+                            }
+                        }
+                        else {
+                            var textMsg = new Dictionary<string, object>();
+                            textMsg["role"] = m["role"];
+                            textMsg["content"] = m["content"];
+                            nativeMessages.Add(textMsg);
+                        }
+                    }
+                }
+
+                Dictionary<string, object> reqObj;
                 if (vendor.Id == "anthropic")
                 {
                     req.Headers["x-api-key"] = vendor.ApiKey.Trim();
                     req.Headers["anthropic-version"] = "2023-06-01";
-                    var reqObj = new Dictionary<string, object>
+                    reqObj = new Dictionary<string, object>
                     {
                         { "model", vendor.SelectedModel },
-                        { "max_tokens", 4096 },
+                        { "max_tokens", 8192 },
                         { "system", systemPrompt },
-                        { "messages", conversationMessages },
+                        { "messages", useNative ? nativeMessages : conversationMessages.Select(m => (object)new Dictionary<string, string> { { "role", m["role"] }, { "content", m["content"] } }).ToList() },
                         { "stream", EnableSseStreaming }
                     };
-                    payload = ser.Serialize(reqObj);
+                    if (useNative) reqObj["tools"] = NativeToolCalling.BuildAnthropicTools(Tools);
+                    if (!IsReasoningModelWithoutTemperature(vendor.SelectedModel)) reqObj["temperature"] = temperature;
                 }
                 else
                 {
                     if (!string.IsNullOrWhiteSpace(vendor.ApiKey))
                         req.Headers["Authorization"] = "Bearer " + vendor.ApiKey.Trim();
 
-                    var fullMsgs = new List<Dictionary<string, string>>();
-                    fullMsgs.Add(new Dictionary<string, string> { { "role", "system" }, { "content", systemPrompt } });
-                    fullMsgs.AddRange(conversationMessages);
+                    reqObj = new Dictionary<string, object>();
+                    reqObj["model"] = vendor.SelectedModel;
+                    reqObj["stream"] = EnableSseStreaming;
+                    
+                    if (!useNative) {
+                        var fullMsgs = new List<Dictionary<string, string>>();
+                        fullMsgs.Add(new Dictionary<string, string> { { "role", "system" }, { "content", systemPrompt } });
+                        fullMsgs.AddRange(conversationMessages);
+                        reqObj["messages"] = fullMsgs;
+                    } else {
+                        var fullMsgs = new List<object>();
+                        fullMsgs.Add(new Dictionary<string, string> { { "role", "system" }, { "content", systemPrompt } });
+                        fullMsgs.AddRange(nativeMessages);
+                        reqObj["messages"] = fullMsgs;
+                        reqObj["tools"] = NativeToolCalling.BuildOpenAiTools(Tools);
+                        reqObj["tool_choice"] = "auto";
+                    }
 
-                    var reqObj = new Dictionary<string, object>
-                    {
-                        { "model", vendor.SelectedModel },
-                        { "messages", fullMsgs },
-                        { "stream", EnableSseStreaming }
-                    };
-                    // OpenAI reasoning models (o1/o3/o4, gpt-5) reject a non-default temperature with HTTP 400.
                     if (!IsReasoningModelWithoutTemperature(vendor.SelectedModel))
                         reqObj["temperature"] = temperature;
-                    payload = ser.Serialize(reqObj);
+                }
+
+                string payload = ser.Serialize(reqObj);
+
+                if (NativeTransportOverride != null)
+                {
+                    var lines = NativeTransportOverride(payload, vendor);
+                    
+                    var sb = new StringBuilder();
+                    codeLess.Studio.OpenAiToolCallAccumulator oaiAcc = null;
+                    codeLess.Studio.AnthropicToolCallAccumulator anthAcc = null;
+                    if (vendor.Id == "anthropic") anthAcc = new codeLess.Studio.AnthropicToolCallAccumulator();
+                    else oaiAcc = new codeLess.Studio.OpenAiToolCallAccumulator();
+                    
+                    foreach (var l in lines)
+                    {
+                        if (partOfTurn && CancelStreamingRequested) throw new OperationCanceledException();
+                        
+                        if (l.StartsWith("data:"))
+                        {
+                            string data = l.Substring(5).Trim();
+                            if (data == "[DONE]") continue;
+                            if (string.IsNullOrEmpty(data)) continue;
+                            
+                            var chunk = ser.DeserializeObject(data) as Dictionary<string, object>;
+                            if (vendor.Id == "anthropic") anthAcc.Accumulate(chunk);
+                            else oaiAcc.Accumulate(chunk);
+                        }
+                    }
+                    
+                    if (vendor.Id == "anthropic")
+                    {
+                        if (!useNative) return anthAcc.Text;
+                        var resMsg = new Dictionary<string, object>();
+                        resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseAnthropicHistory(anthAcc.Text, anthAcc.Calls, null)[0]);
+                        resMsg["__calls"] = ser.Serialize(anthAcc.Calls);
+                        resMsg["content"] = anthAcc.Text;
+                        return ser.Serialize(resMsg);
+                    }
+                    else
+                    {
+                        if (!useNative) return oaiAcc.Text;
+                        var resMsg = new Dictionary<string, object>();
+                        resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseOpenAiHistory(oaiAcc.Text, oaiAcc.Calls, null)[0]);
+                        resMsg["__calls"] = ser.Serialize(oaiAcc.Calls);
+                        resMsg["content"] = oaiAcc.Text;
+                        return ser.Serialize(resMsg);
+                    }
                 }
 
                 byte[] bytes = Encoding.UTF8.GetBytes(payload);
@@ -2444,7 +2538,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         return rawJson;
                     }
                 }
-                catch (WebException wex)
+                                catch (WebException wex)
                 {
                     if (wex.Response != null)
                     {
@@ -2453,16 +2547,25 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         if (errRes != null) ledger.Status = (int)errRes.StatusCode;
                         using (StreamReader esr = new StreamReader(ledger.WrapResponseStream(wex.Response.GetResponseStream())))
                         {
-                            throw new Exception("Vendor HTTP Error " + statusPrefix + esr.ReadToEnd(), wex);
+                            string errBody = esr.ReadToEnd();
+                            if (useNative && errRes != null && (int)errRes.StatusCode == 400 && 
+                                (errBody.Contains("tool") || errBody.Contains("function") || errBody.Contains("does not support")))
+                            {
+                                NativeToolsUnsupportedVendors.Add(vendor.Id);
+                                if (OnAgentFeedStatus != null) OnAgentFeedStatus("Vendor rejected tools. Falling back to text mode...");
+                                throw new Exception("NATIVE_FALLBACK");
+                            }
+                            throw new Exception("Vendor HTTP Error " + statusPrefix + errBody, wex);
                         }
                     }
                     ledger.Fail(wex);
                     throw new Exception("Network/Endpoint Error (" + vendor.Name + "): " + wex.Message, wex);
                 }
                 }
-                catch (Exception ex)
+                                catch (Exception ex)
                 {
                     if (ledger.Status <= 0) ledger.Fail(ex);
+                    if (ex.Message == "NATIVE_FALLBACK") throw;
                     throw;
                 }
                 finally
@@ -2471,6 +2574,16 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
                 });
             }, () => partOfTurn && CancelStreamingRequested);
+                } catch (Exception ex) {
+                    if (ex.Message == "NATIVE_FALLBACK") {
+                        retryTextMode = true;
+                        if (conversationMessages != null && conversationMessages.Count > 0 && conversationMessages[0].ContainsKey("__json")) {
+                            foreach (var m in conversationMessages) m.Remove("__json");
+                        }
+                    } else throw;
+                }
+            } while (retryTextMode);
+            
             return ret ?? "";
         }
 
@@ -2726,14 +2839,20 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab);
+            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, _settings != null && _settings.NativeToolCalling && (activeVendor == null || !NativeToolsUnsupportedVendors.Contains(activeVendor.Id)));
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
-            var messages = new List<Dictionary<string, string>>
+            bool initialNative = _settings != null && _settings.NativeToolCalling && (activeVendor == null || !NativeToolsUnsupportedVendors.Contains(activeVendor.Id));
+            var initialMsg = new Dictionary<string, string> { { "role", "user" }, { "content", fullUserPayload } };
+            if (initialNative)
             {
-                new Dictionary<string, string> { { "role", "user" }, { "content", fullUserPayload } }
-            };
+                var j = new Dictionary<string, object>();
+                j["role"] = "user";
+                j["content"] = fullUserPayload;
+                initialMsg["__json"] = new JavaScriptSerializer().Serialize(j);
+            }
+            var messages = new List<Dictionary<string, string>> { initialMsg };
 
             try
             {
@@ -2804,18 +2923,58 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         result.ThinkingProcess = thinkMatch.Groups[1].Value.Trim();
                     }
 
-                    List<Dictionary<string, object>> toolCalls = ParseToolCalls(llmOutput);
+                                        bool nativeMode = _settings != null && _settings.NativeToolCalling;
+                    if (nativeMode && activeVendor != null && NativeToolsUnsupportedVendors.Contains(activeVendor.Id)) nativeMode = false;
+                    
+                    List<Dictionary<string, object>> toolCalls = new List<Dictionary<string, object>>();
+                    bool turnUseNative = nativeMode;
+                    
+                    // Parse llmOutput for native
+                    string assistantContent = llmOutput;
+                    string assistantJson = null;
+                    if (turnUseNative && llmOutput.TrimStart().StartsWith("{"))
+                    {
+                        try {
+                            var dict = new JavaScriptSerializer().DeserializeObject(llmOutput) as Dictionary<string, object>;
+                            if (dict != null && dict.ContainsKey("__json"))
+                            {
+                                assistantJson = dict["__json"] as string;
+                                if (dict.ContainsKey("content") && dict["content"] != null) assistantContent = dict["content"].ToString();
+                                
+                                if (dict.ContainsKey("__calls") && dict["__calls"] != null)
+                                {
+                                    var callsJson = dict["__calls"].ToString();
+                                    var callsList = new JavaScriptSerializer().Deserialize<List<codeLess.Studio.NativeToolCall>>(callsJson);
+                                    if (callsList != null)
+                                    {
+                                        foreach (var c in callsList)
+                                        {
+                                            var tc = new Dictionary<string, object>();
+                                            tc["tool"] = c.Name;
+                                            tc["args"] = c.GetArguments();
+                                            tc["_native_id"] = c.Id;
+                                            toolCalls.Add(tc);
+                                        }
+                                    }
+                                }
+                            }
+                        } catch { }
+                    }
+
+                    if (toolCalls.Count == 0) toolCalls = ParseToolCalls(assistantContent);
+
                     if (toolCalls.Count == 0)
                     {
-                        // Validate/stage SEARCH/REPLACE blocks; if any fail or have syntax errors, feed back to the model to self-fix
-                        if (llmOutput != null && llmOutput.Contains("<<<<<<< SEARCH"))
+                        if (assistantContent != null && assistantContent.Contains("<<<<<<< SEARCH"))
                         {
                             string blockError;
-                            bool blocksOk = TryExtractAndStageSearchReplaceBlocks(llmOutput, activeTab, workspaceRoot, result, out blockError, mode);
+                            bool blocksOk = TryExtractAndStageSearchReplaceBlocks(assistantContent, activeTab, workspaceRoot, result, out blockError, mode);
                             if (blocksOk) stagedThisTurn = true;
                             if (!blocksOk && step + 1 < maxSteps)
                             {
-                                messages.Add(new Dictionary<string, string> { { "role", "assistant" }, { "content", llmOutput } });
+                                var msg = new Dictionary<string, string> { { "role", "assistant" }, { "content", assistantContent } };
+                                if (assistantJson != null) msg["__json"] = assistantJson;
+                                messages.Add(msg);
                                 messages.Add(new Dictionary<string, string>
                                 {
                                     { "role", "user" },
@@ -2827,8 +2986,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         break;
                     }
 
-                    messages.Add(new Dictionary<string, string> { { "role", "assistant" }, { "content", llmOutput } });
+                    var asstMsg = new Dictionary<string, string> { { "role", "assistant" }, { "content", assistantContent } };
+                    if (assistantJson != null) asstMsg["__json"] = assistantJson;
+                    messages.Add(asstMsg);
+
                     StringBuilder toolOutputsSb = new StringBuilder();
+                    var nativeResults = new List<codeLess.Studio.NativeToolResult>();
 
                     foreach (var tc in toolCalls)
                     {
@@ -2894,13 +3057,37 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         result.ToolCalls.Add(tr);
                         if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath)) stagedThisTurn = true;
                         toolOutputsSb.AppendLine(string.Format("<tool_result tool=\"{0}\" success=\"{1}\">\n{2}\n</tool_result>", toolName, tr.Success, tr.Output));
+
+                        if (turnUseNative && tc.ContainsKey("_native_id"))
+                        {
+                            var ntr = new codeLess.Studio.NativeToolResult();
+                            ntr.CallId = tc["_native_id"].ToString();
+                            ntr.Content = tr.Output;
+                            ntr.IsError = !tr.Success;
+                            nativeResults.Add(ntr);
+                        }
                     }
 
-                    messages.Add(new Dictionary<string, string>
+                    var userMsg = new Dictionary<string, string>
                     {
                         { "role", "user" },
                         { "content", toolOutputsSb.ToString() + "\nContinue and provide final response or SEARCH/REPLACE blocks." }
-                    });
+                    };
+                    
+                    if (turnUseNative && nativeResults.Count > 0)
+                    {
+                        if (activeVendor != null && activeVendor.Id == "anthropic")
+                        {
+                            var anthRes = codeLess.Studio.NativeToolCalling.SerialiseAnthropicHistory(null, new List<codeLess.Studio.NativeToolCall>(), nativeResults);
+                            userMsg["__json"] = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(anthRes);
+                        }
+                        else
+                        {
+                            var oaiRes = codeLess.Studio.NativeToolCalling.SerialiseOpenAiHistory(null, new List<codeLess.Studio.NativeToolCall>(), nativeResults);
+                            userMsg["__json"] = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(oaiRes);
+                        }
+                    }
+                    messages.Add(userMsg);
                 }
 
                 if (!stagedThisTurn && result.StagedFileContents.Count == baseStagedCount)
@@ -3108,9 +3295,13 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             if (permission == "ask")
             {
-                if (OnRequestToolApproval == null || !OnRequestToolApproval(toolName, argsJson))
+                if (OnRequestToolApproval == null)
                 {
-                    return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Approval Denied", Output = "The user rejected the tool execution." };
+                    return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Approval Denied", Output = "The user rejected the tool execution (OnRequestToolApproval was null)." };
+                }
+                if (!OnRequestToolApproval(toolName, argsJson))
+                {
+                    return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Approval Denied", Output = "The user rejected the tool execution (OnRequestToolApproval returned false)." };
                 }
             }
 

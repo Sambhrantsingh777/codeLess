@@ -1868,6 +1868,7 @@ namespace codeLess.Studio
         public bool WordWrap { get; set; }
         public bool AutoSave { get; set; }
         public bool RequireAgentToolApproval { get; set; }
+        public bool NativeToolCalling { get; set; }
         public string AgentPermissionEdit { get; set; }
         public string AgentPermissionWebfetch { get; set; }
         public Dictionary<string, string> AgentPermissionBash { get; set; }
@@ -1912,6 +1913,7 @@ namespace codeLess.Studio
             WordWrap = false;
             AutoSave = false;
             RequireAgentToolApproval = true;
+            NativeToolCalling = true;
             AgentPermissionEdit = "allow";
             AgentPermissionWebfetch = "allow";
             AgentPermissionBash = new Dictionary<string, string>();

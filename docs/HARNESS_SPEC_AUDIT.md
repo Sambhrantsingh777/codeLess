@@ -52,3 +52,4 @@
 
 | M7b: Diagnostics appended after edit | Done | src/LlmHarnessAndAgentEngine.cs:2844 | `DiagnosticsProviderM7bTests.Diagnostics_AppendsErrors_CapsAt20_IgnoresWarnings_AndDoesNotHang` |
 | M7c-1: Native Tool Calling Core | Done | src/codeLess.Core/NativeToolCalling.cs | `NativeToolCallingTests.ToolsTable_MatchesExecuteWorkspaceTool` |
+| M7c-2: Engine Wiring (Native) | Done | src/LlmHarnessAndAgentEngine.cs | `NativeToolCallingEngineTests.Engine_Native_OpenAi_ExecutesAndMaintainsHistory` |
