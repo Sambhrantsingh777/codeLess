@@ -686,5 +686,71 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("c = 300", tab.Lines[2]);
             }
         }
+
+        [AvaloniaFact]
+        public void B46_B49_W20B2_SettingsErrorToleranceStartupAndLiveReloadRecovery_AndReplaceUndoSkipsPostModifiedDiskFiles()
+        {
+            // B46: Startup with malformed .vscode/settings.json (missing }, stray comma, missing quote)
+            // still applies every parsable setting and surfaces the error notification once
+            string ws1 = CreateWorkspace("settings_startup_malformed");
+            string vscode1 = Path.Combine(ws1, ".vscode");
+            Directory.CreateDirectory(vscode1);
+            string wsSettings1 = Path.Combine(vscode1, "settings.json");
+            File.WriteAllText(wsSettings1, "{\n" +
+                "  \"editor.tabSize\": 8,,\n" +
+                "  \"editor.fontFamily\": \"Monaco\n" +
+                "  \"files.autoSave\": \"afterDelay\"\n"); // missing closing '}' AND missing closing quote AND stray comma
+
+            var w1 = Track(new MainWindow(ws1));
+            w1.Show();
+            Assert.Equal(8, w1.PrimaryEditor.Canvas.DisplayTabSize);
+            Assert.True(w1.IsSettingsOrKeybindingsErrorVisible);
+            Assert.Contains("parse error", w1.ActiveSettingsOrKeybindingsErrorText, StringComparison.OrdinalIgnoreCase);
+
+            // B47: Live reload when settings.json is broken keeps last known good settings (never resets to default 4),
+            // surfaces error once, and recovers automatically when fixed
+            File.WriteAllText(wsSettings1, "{\n  \"editor.tabSize\": 10\n}");
+            Assert.Null(w1.ReloadAllVscodeSettingsFromDisk());
+            Assert.Equal(10, w1.PrimaryEditor.Canvas.DisplayTabSize);
+            Assert.False(w1.IsSettingsOrKeybindingsErrorVisible);
+
+            // User introduces a syntax error that makes editor.tabSize unparsable
+            File.WriteAllText(wsSettings1, "{\n  \"editor.tabSize\": \n");
+            Assert.NotNull(w1.ReloadAllVscodeSettingsFromDisk());
+            Assert.Equal(10, w1.PrimaryEditor.Canvas.DisplayTabSize); // kept last known good value (10), did NOT reset to 4
+            Assert.True(w1.IsSettingsOrKeybindingsErrorVisible);
+
+            // Fixing the file clears the notification and applies the new value
+            File.WriteAllText(wsSettings1, "{\n  \"editor.tabSize\": 12\n}");
+            Assert.Null(w1.ReloadAllVscodeSettingsFromDisk());
+            Assert.Equal(12, w1.PrimaryEditor.Canvas.DisplayTabSize);
+            Assert.False(w1.IsSettingsOrKeybindingsErrorVisible);
+
+            // B48 & B49: UndoLastWorkspaceReplace never overwrites a file that changed on disk after the replace
+            string ws2 = CreateWorkspace("replace_undo_safety");
+            string fUnchangedAfterReplace = Path.Combine(ws2, "first.txt");
+            string fModifiedAfterReplace = Path.Combine(ws2, "second.txt");
+            File.WriteAllText(fUnchangedAfterReplace, "foo = 1\n");
+            File.WriteAllText(fModifiedAfterReplace, "foo = 2\n");
+
+            var w2 = Track(new MainWindow(ws2));
+            w2.Show();
+            w2.RunWorkspaceSearch("foo");
+            Assert.Equal(2, w2.ExecuteWorkspaceReplaceAll("foo", "bar"));
+            Assert.Equal("bar = 1\n", File.ReadAllText(fUnchangedAfterReplace).Replace("\r\n", "\n"));
+            Assert.Equal("bar = 2\n", File.ReadAllText(fModifiedAfterReplace).Replace("\r\n", "\n"));
+
+            // External edit happens to second.txt AFTER the replace
+            File.WriteAllText(fModifiedAfterReplace, "bar = 2\nuser_post_replace_edit = 999\n");
+
+            List<string> skipped;
+            int restored = w2.UndoLastWorkspaceReplace(out skipped);
+            Assert.Equal(1, restored);
+            Assert.Single(skipped);
+            Assert.Equal(fModifiedAfterReplace, skipped[0]);
+            Assert.Equal("foo = 1\n", File.ReadAllText(fUnchangedAfterReplace).Replace("\r\n", "\n"));
+            // Post-replace edit on second.txt is preserved intact!
+            Assert.Equal("bar = 2\nuser_post_replace_edit = 999\n", File.ReadAllText(fModifiedAfterReplace).Replace("\r\n", "\n"));
+        }
     }
 }

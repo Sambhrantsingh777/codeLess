@@ -4969,6 +4969,98 @@ if __name__ == '__main__':
             else { searchInput.Focus(); searchInput.SelectAll(); }
         }
 
+        private readonly List<WorkspaceReplaceUndoEntry> lastWorkspaceReplaceUndoWin = new List<WorkspaceReplaceUndoEntry>();
+
+        /// <summary>
+        /// Undoes the most recent Replace in Files batch across closed disk files and open tabs in WinForms.
+        /// Never overwrites a file that changed on disk after the replace (skips it and reports).
+        /// </summary>
+        public int UndoLastWorkspaceReplace()
+        {
+            List<string> skipped;
+            return UndoLastWorkspaceReplace(out skipped);
+        }
+
+        public int UndoLastWorkspaceReplace(out List<string> skippedFiles)
+        {
+            skippedFiles = new List<string>();
+            if (lastWorkspaceReplaceUndoWin.Count == 0) return 0;
+            List<WorkspaceReplaceUndoEntry> snapshot = lastWorkspaceReplaceUndoWin.ToList();
+            lastWorkspaceReplaceUndoWin.Clear();
+            int restored = 0;
+            foreach (WorkspaceReplaceUndoEntry entry in snapshot)
+            {
+                try
+                {
+                    EditorTabBuffer open = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FilePath, StringComparison.OrdinalIgnoreCase));
+                    if (WorkspaceSearchEngine.HasFileChangedSinceReplace(entry, open))
+                    {
+                        if (!string.IsNullOrEmpty(entry.FilePath))
+                            skippedFiles.Add(entry.FilePath);
+                        continue;
+                    }
+                    if (entry.TouchedDisk && !string.IsNullOrEmpty(entry.FilePath))
+                    {
+                        lock (internalSaveTimestamps) { internalSaveTimestamps[entry.FilePath] = DateTime.UtcNow; }
+                        EditorTabBuffer.WriteFilePreservingMetadata(
+                            entry.FilePath,
+                            entry.PreDiskRaw,
+                            entry.PreEncoding,
+                            entry.PreHasBom,
+                            entry.PreEol,
+                            entry.PreHasFinalNewline);
+                    }
+                    if (open != null && entry.WasOpen)
+                    {
+                        open.PushUndoSnapshot();
+                        open.Content = entry.PreOpenContent;
+                        open.SavedContent = entry.PreOpenSavedContent;
+                        open.SyncLinesFromContent();
+                        open.IsDirty = entry.WasDirty;
+                        if (entry.TouchedDisk && File.Exists(entry.FilePath))
+                            open.RecordDiskBaseline(entry.FilePath);
+                        if (!open.IsDirty)
+                        {
+                            pendingHotExitBackupsWin.Remove(open);
+                            HotExitService.DeleteBackup(workspaceRoot, open);
+                        }
+                        if (!open.IsLargeFile)
+                        {
+                            open.RefreshGutterDiff();
+                            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(open);
+                        }
+                    }
+                    restored++;
+                }
+                catch { }
+            }
+            if (activeTab != null)
+            {
+                activeTab.CursorLine = Math.Max(0, Math.Min(activeTab.CursorLine, activeTab.Lines.Count - 1));
+                activeTab.CursorCol = Math.Max(0, Math.Min(activeTab.CursorCol, activeTab.Lines[activeTab.CursorLine].Length));
+                activeTab.ClearSelection();
+                if (editorControl != null) editorControl.LoadBuffer(activeTab);
+            }
+            if (splitEditorControl != null && splitEditorControl.CurrentBuffer != null)
+                splitEditorControl.LoadBuffer(splitEditorControl.CurrentBuffer);
+            RefreshTabStrip();
+            if (!string.IsNullOrEmpty(workspaceRoot))
+                RefreshGitSidebarStatus();
+            UpdateWindowTitle();
+            if (skippedFiles.Count > 0)
+            {
+                string names = string.Join(", ", skippedFiles.Select(Path.GetFileName));
+                string msg = string.Format("Undid replace in {0} file(s); skipped {1} modified file(s): {2}", restored, skippedFiles.Count, names);
+                if (statusLeftLabel != null) statusLeftLabel.Text = msg;
+                ShowToastNotification("Undo Replace in Files", msg);
+            }
+            else
+            {
+                if (statusLeftLabel != null) statusLeftLabel.Text = string.Format("Undid replace in {0} file(s)", restored);
+            }
+            return restored;
+        }
+
         private void ExecuteSidebarReplaceAllWin()
         {
             string q = searchInput.Text ?? "";
@@ -5010,6 +5102,7 @@ if __name__ == '__main__':
                         .Matches.Select(m => m.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 }
                 Dictionary<string, string> updatedOnDisk = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                List<WorkspaceReplaceUndoEntry> diskUndoEntries = new List<WorkspaceReplaceUndoEntry>();
                 List<string> dirtyTargets = new List<string>();
                 int replacedTotal = 0;
                 foreach (string fp in targets)
@@ -5030,7 +5123,25 @@ if __name__ == '__main__':
                         if (n == 0) continue;
                         lock (internalSaveTimestamps) internalSaveTimestamps[fp] = DateTime.UtcNow;
                         EditorTabBuffer.WriteFilePreservingMetadata(fp, next, fEnc, fBom, fEol, fFinalNl);
-                        updatedOnDisk[fp] = EditorTabBuffer.ReadFilePreservingMetadata(fp, out fEnc, out fBom, out fEol, out fFinalNl);
+                        Encoding wEnc; bool wBom; string wEol; bool wNl;
+                        string written = EditorTabBuffer.ReadFilePreservingMetadata(fp, out wEnc, out wBom, out wEol, out wNl);
+                        updatedOnDisk[fp] = written;
+                        diskUndoEntries.Add(new WorkspaceReplaceUndoEntry
+                        {
+                            FilePath = fp,
+                            TouchedDisk = true,
+                            PreDiskRaw = raw,
+                            PostDiskRaw = written,
+                            PreEncoding = fEnc,
+                            PreHasBom = fBom,
+                            PreEol = fEol,
+                            PreHasFinalNewline = fFinalNl,
+                            WasOpen = false,
+                            WasDirty = false,
+                            PreOpenContent = raw,
+                            PreOpenSavedContent = raw,
+                            PostOpenContent = written
+                        });
                         replacedTotal += n;
                     }
                     catch { }
@@ -5038,6 +5149,7 @@ if __name__ == '__main__':
 
                 PostToUiWin(() =>
                 {
+                    List<WorkspaceReplaceUndoEntry> batchUndo = new List<WorkspaceReplaceUndoEntry>(diskUndoEntries);
                     int modified = updatedOnDisk.Count;
                     int total = replacedTotal;
                     foreach (string fp in dirtyTargets)
@@ -5045,8 +5157,19 @@ if __name__ == '__main__':
                         EditorTabBuffer buf = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fp, StringComparison.OrdinalIgnoreCase));
                         if (buf == null) continue;
                         int n;
-                        string next = WorkspaceSearchEngine.ReplaceInText(buf.Content ?? "", rx, rep, out n);
+                        string preContent = buf.Content ?? "";
+                        string next = WorkspaceSearchEngine.ReplaceInText(preContent, rx, rep, out n);
                         if (n == 0) continue;
+                        batchUndo.Add(new WorkspaceReplaceUndoEntry
+                        {
+                            FilePath = fp,
+                            TouchedDisk = false,
+                            WasOpen = true,
+                            WasDirty = true,
+                            PreOpenContent = preContent,
+                            PreOpenSavedContent = buf.SavedContent,
+                            PostOpenContent = next
+                        });
                         // Unsaved editor: edit the buffer (undoable, stays dirty) instead of clobbering the unsaved text.
                         buf.PushUndoSnapshot();
                         buf.Content = next;
@@ -5059,13 +5182,26 @@ if __name__ == '__main__':
                     {
                         EditorTabBuffer openBuf = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, kvp.Key, StringComparison.OrdinalIgnoreCase));
                         if (openBuf == null) continue;
+                        WorkspaceReplaceUndoEntry matchEntry = batchUndo.FirstOrDefault(e => string.Equals(e.FilePath, kvp.Key, StringComparison.OrdinalIgnoreCase));
+                        if (matchEntry != null)
+                        {
+                            matchEntry.WasOpen = true;
+                            matchEntry.PreOpenContent = openBuf.Content;
+                            matchEntry.PreOpenSavedContent = openBuf.SavedContent;
+                        }
                         openBuf.PushUndoSnapshot();
                         openBuf.Content = kvp.Value;
                         openBuf.SavedContent = kvp.Value;
+                        openBuf.RecordDiskBaseline(kvp.Key);
                         openBuf.SyncLinesFromContent();
                         openBuf.IsDirty = false;
                         openBuf.RefreshGutterDiff();
                         LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(openBuf);
+                    }
+                    if (batchUndo.Count > 0)
+                    {
+                        lastWorkspaceReplaceUndoWin.Clear();
+                        lastWorkspaceReplaceUndoWin.AddRange(batchUndo);
                     }
                     if (searchProgressBar != null) searchProgressBar.StopProgress();
                     if (activeTab != null)

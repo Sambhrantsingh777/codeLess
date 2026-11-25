@@ -11,6 +11,23 @@ using System.Threading.Tasks;
 // (no string interpolation, no ?., no expression-bodied members, no out var, no auto-property initializers).
 namespace codeLess.Studio
 {
+    public sealed class WorkspaceReplaceUndoEntry
+    {
+        public string FilePath;
+        public bool TouchedDisk;
+        public string PreDiskRaw;
+        public string PostDiskRaw;
+        public Encoding PreEncoding;
+        public bool PreHasBom;
+        public string PreEol;
+        public bool PreHasFinalNewline;
+        public bool WasOpen;
+        public bool WasDirty;
+        public string PreOpenContent;
+        public string PreOpenSavedContent;
+        public string PostOpenContent;
+    }
+
     /// <summary>One match occurrence (VS Code shows one result row per occurrence, highlighting its range).</summary>
     public class WorkspaceSearchMatch
     {
@@ -849,6 +866,42 @@ namespace codeLess.Studio
                 catch { }
             }
             return updatedFiles;
+        }
+
+        /// <summary>
+        /// Checks whether a file touched by Replace in Files has been modified on disk or in an open editor since
+        /// the replacement was applied. Undo must never overwrite a file that changed after the replace.
+        /// </summary>
+        public static bool HasFileChangedSinceReplace(WorkspaceReplaceUndoEntry entry, EditorTabBuffer openTab)
+        {
+            if (entry == null) return true;
+            if (entry.TouchedDisk)
+            {
+                if (string.IsNullOrEmpty(entry.FilePath) || !File.Exists(entry.FilePath))
+                    return true;
+                try
+                {
+                    Encoding cEnc;
+                    bool cBom;
+                    string cEol;
+                    bool cNl;
+                    string currentDisk = EditorTabBuffer.ReadFilePreservingMetadata(entry.FilePath, out cEnc, out cBom, out cEol, out cNl);
+                    if (entry.PostDiskRaw != null && !string.Equals(currentDisk, entry.PostDiskRaw, StringComparison.Ordinal))
+                        return true;
+                }
+                catch
+                {
+                    return true;
+                }
+                if (openTab != null && !entry.WasDirty && openTab.IsDirty)
+                    return true;
+                if (openTab != null && entry.PostOpenContent != null && !string.Equals(openTab.Content ?? "", entry.PostOpenContent, StringComparison.Ordinal))
+                    return true;
+                return false;
+            }
+            if (openTab != null && entry.PostOpenContent != null && !string.Equals(openTab.Content ?? "", entry.PostOpenContent, StringComparison.Ordinal))
+                return true;
+            return false;
         }
 
         /// <summary>
