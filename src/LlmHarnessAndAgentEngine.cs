@@ -2243,18 +2243,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
             bool partOfTurn = InTurnOfThisEngine;
 
-            System.Threading.CancellationTokenSource cts = new System.Threading.CancellationTokenSource();
-            if (partOfTurn) {
-                Task.Run(async () => {
-                    while (!cts.IsCancellationRequested) {
-                        if (CancelStreamingRequested) { cts.Cancel(); break; }
-                        await Task.Delay(100);
-                    }
-                });
-            }
-
-            try {
-                return await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
+            return await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
             {
                 return await Task.Run(() =>
                 {
@@ -2480,8 +2469,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     ledger.Complete();
                 }
                 });
-            }, cts.Token);
-            } finally { cts.Cancel(); }
+            }, () => partOfTurn && CancelStreamingRequested);
         }
 
         public async Task<string> RequestModelGhostCompletionAsync(ByokVendor preferredVendor, EditorTabBuffer buf)

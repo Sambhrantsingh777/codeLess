@@ -1,3 +1,4 @@
+using System.Linq;
 using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
@@ -113,6 +114,11 @@ namespace codeLess.Avalonia.Tests
             var res = RunTool("grep_search", new Dictionary<string, object>{{"query", "match"}, {"path", "test.txt"}});
             Assert.Contains("Found 150 matches", res.Output);
             Assert.Contains("Results are truncated", res.Output);
+            
+            // Assert the output contains at most 100 match lines
+            int matchLineCount = res.Output.Split('\n').Count(l => l.Contains("Line "));
+            Assert.True(matchLineCount <= 100, "Output contained " + matchLineCount + " match lines, expected <= 100.");
+            Assert.Equal(100, matchLineCount);
         }
 
         [Fact]

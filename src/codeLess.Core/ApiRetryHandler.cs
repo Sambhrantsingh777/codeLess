@@ -11,7 +11,7 @@ namespace codeLess.Studio
         public static Func<int, CancellationToken, Task> DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
         public static Action<int, int> OnRetryStatus = null; // (seconds, attempt)
 
-        public static async Task<string> ExecuteWithRetriesAsync(Func<Task<string>> apiCall, CancellationToken cancellationToken)
+        public static async Task<string> ExecuteWithRetriesAsync(Func<Task<string>> apiCall, Func<bool> isCancelled = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             // For C# 5 sync-over-async fallback or await inside harness
             // Since this class is pure Core, we can just return strings.
@@ -22,7 +22,8 @@ namespace codeLess.Studio
 
             while (true)
             {
-                if (cancellationToken.IsCancellationRequested) break;
+                if (isCancelled != null && isCancelled()) break;
+                cancellationToken.ThrowIfCancellationRequested();
 
                 int delayMsToWait = 0;
                 try
@@ -31,7 +32,7 @@ namespace codeLess.Studio
                 }
                 catch (Exception ex)
                 {
-                    if (attempt >= maxAttempts || cancellationToken.IsCancellationRequested)
+                    if (attempt >= maxAttempts || cancellationToken.IsCancellationRequested || (isCancelled != null && isCancelled()))
                         throw;
 
                     int delayMs = GetDelayMs(ex, attempt);
@@ -51,7 +52,8 @@ namespace codeLess.Studio
                         try {
                             await DelayTaskAsync(delayMsToWait, cancellationToken);
                         } catch (OperationCanceledException) {
-                            break;
+                            if (isCancelled != null && isCancelled()) break;
+                cancellationToken.ThrowIfCancellationRequested();
                         }
                     }
                     attempt++;
@@ -62,6 +64,7 @@ namespace codeLess.Studio
 
         private static int GetDelayMs(Exception ex, int attempt)
         {
+            int delay = -1;
             var wex = ex as WebException ?? ex.InnerException as WebException;
             if (wex != null && wex.Response != null)
             {
@@ -80,20 +83,24 @@ namespace codeLess.Studio
                     if (!string.IsNullOrEmpty(retryAfterMs))
                     {
                         int ms;
-                        if (int.TryParse(retryAfterMs, out ms)) return ms;
+                        if (int.TryParse(retryAfterMs, out ms)) { delay = ms; }
                     }
 
-                    string retryAfter = resp.Headers["retry-after"];
-                    if (!string.IsNullOrEmpty(retryAfter))
-                    {
-                        int s;
-                        if (int.TryParse(retryAfter, out s)) return s * 1000;
-
-                        DateTime dt;
-                        if (DateTime.TryParse(retryAfter, out dt))
+                    if (delay < 0) {
+                        string retryAfter = resp.Headers["retry-after"];
+                        if (!string.IsNullOrEmpty(retryAfter))
                         {
-                            var span = dt.ToUniversalTime() - DateTime.UtcNow;
-                            if (span.TotalMilliseconds > 0) return (int)span.TotalMilliseconds;
+                            int s;
+                            if (int.TryParse(retryAfter, out s)) { delay = s * 1000; }
+                            else {
+                                DateTime dt;
+                                if (DateTime.TryParse(retryAfter, out dt))
+                                {
+                                    var span = dt.ToUniversalTime() - DateTime.UtcNow;
+                                    if (span.TotalMilliseconds > 0) delay = (int)span.TotalMilliseconds;
+                                    else delay = 0;
+                                }
+                            }
                         }
                     }
                 }
@@ -115,9 +122,12 @@ namespace codeLess.Studio
                 return -1; // Not a retryable exception
             }
 
-            int backoff = 2000 * (int)Math.Pow(2, attempt - 1);
-            if (backoff > 30000) backoff = 30000;
-            return backoff;
+            if (delay < 0) {
+                delay = 2000 * (int)Math.Pow(2, attempt - 1);
+            }
+            
+            if (delay > 30000) delay = 30000;
+            return delay;
         }
     }
 }
