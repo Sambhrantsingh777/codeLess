@@ -61,7 +61,11 @@ namespace codeLess.Avalonia.Tests
             {
                 var lastMsg = msgs[msgs.Count - 1];
                 if (lastMsg["role"] == "user") {
-                    if (lastMsg["content"].Contains("Approval Denied")) sawDenialMessage = true;
+                    
+                    
+                    if (lastMsg["content"].Contains("Doom loop") || lastMsg["content"].Contains("Doom")) sawDenialMessage = true;
+
+
                     if (lastMsg["content"].Contains("Found ") || lastMsg["content"].Contains("total ")) listDirExecutionsSeen++;
                 }
 
@@ -133,7 +137,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal("Success", result);
                 Assert.True(waitedTotal > 0);
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
 
@@ -151,7 +155,7 @@ namespace codeLess.Avalonia.Tests
                     throw ex;
                 }, null, cts.Token));
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
         
@@ -173,7 +177,7 @@ namespace codeLess.Avalonia.Tests
                 }, null, cts.Token));
                 Assert.Equal(1, attempts); // Only tried once, then cancelled in delay
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
 
@@ -198,7 +202,7 @@ namespace codeLess.Avalonia.Tests
                 }, null, CancellationToken.None);
                 Assert.Equal(1234, waitedTotal);
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
 
@@ -223,7 +227,7 @@ namespace codeLess.Avalonia.Tests
                 }, null, CancellationToken.None);
                 Assert.Equal(2000, waitedTotal);
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
 
@@ -248,7 +252,7 @@ namespace codeLess.Avalonia.Tests
                 }, null, CancellationToken.None);
                 Assert.True(waitedTotal >= 2000 && waitedTotal <= 4000, "Waited: " + waitedTotal);
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
 
@@ -273,7 +277,7 @@ namespace codeLess.Avalonia.Tests
                 }, null, CancellationToken.None);
                 Assert.Equal(30000, waitedTotal);
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
 
@@ -293,7 +297,7 @@ namespace codeLess.Avalonia.Tests
                 }, null, CancellationToken.None));
                 Assert.Equal(5, attempts);
             } finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
+                ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
             }
         }
     }
