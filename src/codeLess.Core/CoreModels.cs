@@ -836,6 +836,9 @@ namespace codeLess.Studio
         public bool IsDirty = false;
         public bool IsUntitled = false;
         public bool IsDeletedOnDisk = false;
+        public bool HasExternalDiskConflict = false;
+        public long DiskLastWriteUtcTicks = 0;
+        public long DiskLastLength = 0;
         public bool IsPreview = false;
         public bool IsPinned = false;
         public int? CustomTabSize = null;
@@ -871,7 +874,68 @@ namespace codeLess.Studio
                 if (cp == 1201) return "UTF-16 BE";
                 if (cp == 12000) return "UTF-32 LE";
                 if (cp == 12001) return "UTF-32 BE";
+                if (cp == 28591) return "ISO-8859-1";
                 return FileEncoding.WebName.ToUpperInvariant();
+            }
+        }
+
+        public string StatusEncodingDisplayName
+        {
+            get
+            {
+                if (FileEncoding == null) return "UTF-8";
+                int cp = FileEncoding.CodePage;
+                if (cp == 65001) return HasBom ? "UTF-8 with BOM" : "UTF-8";
+                if (cp == 1200) return "UTF-16 LE";
+                if (cp == 1201) return "UTF-16 BE";
+                if (cp == 12000) return "UTF-32 LE";
+                if (cp == 12001) return "UTF-32 BE";
+                if (cp == 28591) return "ISO-8859-1";
+                return (FileEncoding.WebName ?? "UTF-8").ToUpperInvariant();
+            }
+        }
+
+        public void RecordDiskBaseline(string filePath)
+        {
+            string p = string.IsNullOrEmpty(filePath) ? FilePath : filePath;
+            if (string.IsNullOrEmpty(p) || !File.Exists(p))
+            {
+                DiskLastWriteUtcTicks = 0;
+                DiskLastLength = 0;
+                return;
+            }
+            try
+            {
+                FileInfo fi = new FileInfo(p);
+                DiskLastWriteUtcTicks = fi.LastWriteTimeUtc.Ticks;
+                DiskLastLength = fi.Length;
+            }
+            catch { }
+        }
+
+        public bool HasDiskModifiedExternally(out string currentDiskContent)
+        {
+            currentDiskContent = null;
+            if (IsUntitled || string.IsNullOrEmpty(FilePath) || !File.Exists(FilePath))
+                return false;
+            try
+            {
+                Encoding enc;
+                bool bom;
+                string eol;
+                bool finalNl;
+                currentDiskContent = ReadFilePreservingMetadata(FilePath, out enc, out bom, out eol, out finalNl);
+                string normDisk = (currentDiskContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+                string normSaved = (SavedContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+                if (!string.Equals(normDisk, normSaved, StringComparison.Ordinal))
+                    return true;
+                if (HasExternalDiskConflict)
+                    return true;
+                return false;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -881,8 +945,21 @@ namespace codeLess.Studio
         /// </summary>
         public static Encoding DetectFileEncoding(byte[] rawBytes, out bool hasBom, out int bomLen)
         {
+            int unused;
+            return DetectFileEncoding(rawBytes, false, out hasBom, out unused, out bomLen);
+        }
+
+        public static Encoding DetectFileEncoding(byte[] rawBytes, bool autoGuessEncoding, out bool hasBom, out int bomLen)
+        {
+            int unused;
+            return DetectFileEncoding(rawBytes, autoGuessEncoding, out hasBom, out unused, out bomLen);
+        }
+
+        private static Encoding DetectFileEncoding(byte[] rawBytes, bool autoGuessEncoding, out bool hasBom, out int codeUnitSize, out int bomLen)
+        {
             hasBom = false;
             bomLen = 0;
+            codeUnitSize = 1;
             if (rawBytes == null || rawBytes.Length == 0) return new UTF8Encoding(false);
             if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
             {
@@ -891,23 +968,44 @@ namespace codeLess.Studio
             }
             if (rawBytes.Length >= 4 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE && rawBytes[2] == 0x00 && rawBytes[3] == 0x00)
             {
-                hasBom = true; bomLen = 4;
+                hasBom = true; bomLen = 4; codeUnitSize = 4;
                 return new UTF32Encoding(false, true);
             }
             if (rawBytes.Length >= 4 && rawBytes[0] == 0x00 && rawBytes[1] == 0x00 && rawBytes[2] == 0xFE && rawBytes[3] == 0xFF)
             {
-                hasBom = true; bomLen = 4;
+                hasBom = true; bomLen = 4; codeUnitSize = 4;
                 return new UTF32Encoding(true, true);
             }
             if (rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE)
             {
-                hasBom = true; bomLen = 2;
+                hasBom = true; bomLen = 2; codeUnitSize = 2;
                 return new UnicodeEncoding(false, true);
             }
             if (rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF)
             {
-                hasBom = true; bomLen = 2;
+                hasBom = true; bomLen = 2; codeUnitSize = 2;
                 return new UnicodeEncoding(true, true);
+            }
+            int sampleLen = Math.Min(rawBytes.Length, 8192);
+            int pairs = sampleLen / 2;
+            if (pairs >= 4)
+            {
+                int zeroEven = 0, zeroOdd = 0;
+                for (int i = 0; i + 1 < sampleLen; i += 2)
+                {
+                    if (rawBytes[i] == 0) zeroEven++;
+                    if (rawBytes[i + 1] == 0) zeroOdd++;
+                }
+                if (zeroOdd > pairs * 0.3 && zeroEven < pairs * 0.05)
+                {
+                    codeUnitSize = 2;
+                    return new UnicodeEncoding(false, false);
+                }
+                if (zeroEven > pairs * 0.3 && zeroOdd < pairs * 0.05)
+                {
+                    codeUnitSize = 2;
+                    return new UnicodeEncoding(true, false);
+                }
             }
             try
             {
@@ -917,6 +1015,10 @@ namespace codeLess.Studio
             }
             catch
             {
+                if (autoGuessEncoding)
+                {
+                    return Encoding.GetEncoding(28591);
+                }
 #if NETFRAMEWORK
                 return Encoding.Default;
 #else
@@ -984,6 +1086,17 @@ namespace codeLess.Studio
             out bool hasBom,
             out bool hasFinalNewline)
         {
+            return ReadFilePreservingMetadata(filePath, false, out eolSequence, out encoding, out hasBom, out hasFinalNewline);
+        }
+
+        public static string ReadFilePreservingMetadata(
+            string filePath,
+            bool autoGuessEncoding,
+            out string eolSequence,
+            out Encoding encoding,
+            out bool hasBom,
+            out bool hasFinalNewline)
+        {
             eolSequence = "\r\n";
             encoding = new UTF8Encoding(false);
             hasBom = false;
@@ -1000,7 +1113,7 @@ namespace codeLess.Studio
             }
 
             int bomLen;
-            encoding = DetectFileEncoding(rawBytes, out hasBom, out bomLen);
+            encoding = DetectFileEncoding(rawBytes, autoGuessEncoding, out hasBom, out bomLen);
 
             string decoded = encoding.GetString(rawBytes, bomLen, rawBytes.Length - bomLen);
 
@@ -1058,7 +1171,18 @@ namespace codeLess.Studio
             out string eolSequence,
             out bool hasFinalNewline)
         {
-            return ReadFilePreservingMetadata(filePath, out eolSequence, out encoding, out hasBom, out hasFinalNewline);
+            return ReadFilePreservingMetadata(filePath, false, out eolSequence, out encoding, out hasBom, out hasFinalNewline);
+        }
+
+        public static string ReadFilePreservingMetadata(
+            string filePath,
+            bool autoGuessEncoding,
+            out Encoding encoding,
+            out bool hasBom,
+            out string eolSequence,
+            out bool hasFinalNewline)
+        {
+            return ReadFilePreservingMetadata(filePath, autoGuessEncoding, out eolSequence, out encoding, out hasBom, out hasFinalNewline);
         }
 
         public string GetNormalizedContentRespectingFinalNewline()
@@ -1105,6 +1229,9 @@ namespace codeLess.Studio
                 FileEncoding = used;
                 HasBom = false;
             }
+            HasExternalDiskConflict = false;
+            IsDeletedOnDisk = false;
+            RecordDiskBaseline(path);
         }
 
         public static void WriteFilePreservingMetadata(
@@ -2038,6 +2165,9 @@ namespace codeLess.Studio
             InsertSpaces = true;
             WordWrap = false;
             AutoSave = false;
+            HotExit = HotExitOnExit;
+            FilesEol = "auto";
+            AutoGuessEncoding = false;
             RequireAgentToolApproval = true;
             NativeToolCalling = true;
             AgentPermissionEdit = "allow";

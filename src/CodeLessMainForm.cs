@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Savatarr")]
 [assembly: AssemblyProduct("codeLess")]
 [assembly: AssemblyCopyright("Copyright © 2026 Savatarr. All rights reserved.")]
-[assembly: AssemblyVersion("3.3.5.0")]
-[assembly: AssemblyFileVersion("3.3.5.0")]
+[assembly: AssemblyVersion("3.4.0.0")]
+[assembly: AssemblyFileVersion("3.4.0.0")]
 
 namespace codeLess.Studio
 {
@@ -46,6 +46,7 @@ namespace codeLess.Studio
         private static readonly Font TabBadgeFont = new Font("Consolas", 7.8f, FontStyle.Bold);
         private static readonly Font TabTitleFont = new Font("Segoe UI", 8.8f, FontStyle.Regular);
         private static readonly Font TabItalicTitleFont = new Font("Segoe UI", 8.8f, FontStyle.Italic);
+        private static readonly Font TabStrikeoutTitleFont = new Font("Segoe UI", 8.8f, FontStyle.Strikeout);
         private static readonly Font TabSubtitleFont = new Font("Segoe UI", 7.6f, FontStyle.Regular);
         private static readonly Font TabCloseGlyphFont = new Font("Segoe UI", 9.0f, FontStyle.Regular);
         private static readonly Font TabPlusBtnFont = new Font("Consolas", 10f, FontStyle.Bold);
@@ -342,6 +343,7 @@ namespace codeLess.Studio
             this.themes = StudioTheme.GetBuiltInThemes();
             this.activeTheme = StudioTheme.ResolveTheme(themes, settings.ActiveThemeId);
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
+            this.aiEngine.DiagnosticsProvider = new LspDiagnosticsProvider();
                         this.aiEngine.OnAgentFeedStatus = msg => this.BeginInvoke(new Action(() => {
                 if (this.agentFeedControl != null)
                     this.agentFeedControl.AddMessage(false, "System", "", msg);
@@ -427,6 +429,7 @@ namespace codeLess.Studio
             InitDebugWorkbench();
             InitDevTools();
             InitWorkbenchParity();
+            InitKeybindingsWin();
             editorControl.ShowWelcomePage = IsWelcomeTabOpen;
             splitEditorControl.ShowWelcomePage = false;
             ApplySettingsToEditors();
@@ -1587,9 +1590,127 @@ namespace codeLess.Studio
         /// <summary>An edit restarts that buffer's delay (and the timer).</summary>
         private void NoteAutoSaveEditWin(EditorTabBuffer buf)
         {
+            if (buf != null && HotExitService.IsEnabled(settings))
+                ScheduleHotExitBackupWin(buf);
             if (buf == null || autoSaveTimer == null || !AutoSavePolicy.SavesAfterDelay(settings)) return;
             autoSaveDebouncerWin.NoteEdit(buf, AutoSaveDebouncer.NowMs());
             RestartAutoSaveTimer(settings.EffectiveAutoSaveDelayMs);
+        }
+
+        private System.Windows.Forms.Timer hotExitBackupTimer;
+        private readonly HashSet<EditorTabBuffer> pendingHotExitBackupsWin = new HashSet<EditorTabBuffer>();
+        public Func<EditorTabBuffer, ExternalConflictAction> ExternalConflictDecisionOverride;
+        public Func<EditorTabBuffer, ExternalConflictAction> SaveConflictDecisionOverride;
+        public string SaveConflictSaveAsPath;
+
+        public void ScheduleHotExitBackupWin(EditorTabBuffer buf)
+        {
+            if (buf == null || !HotExitService.IsEnabled(settings)) return;
+            if (!UntitledFileDefaults.NeedsSavePrompt(buf))
+            {
+                pendingHotExitBackupsWin.Remove(buf);
+                HotExitService.DeleteBackup(workspaceRoot, buf);
+                return;
+            }
+            pendingHotExitBackupsWin.Add(buf);
+            if (hotExitBackupTimer == null)
+            {
+                hotExitBackupTimer = new System.Windows.Forms.Timer();
+                hotExitBackupTimer.Interval = HotExitService.DefaultDebounceDelayMs;
+                hotExitBackupTimer.Tick += (s, e) =>
+                {
+                    hotExitBackupTimer.Stop();
+                    FlushPendingHotExitBackups();
+                };
+            }
+            hotExitBackupTimer.Stop();
+            hotExitBackupTimer.Start();
+        }
+
+        public void FlushPendingHotExitBackups()
+        {
+            if (hotExitBackupTimer != null) hotExitBackupTimer.Stop();
+            if (!HotExitService.IsEnabled(settings))
+            {
+                pendingHotExitBackupsWin.Clear();
+                return;
+            }
+            if (pendingHotExitBackupsWin.Count == 0) return;
+            foreach (EditorTabBuffer buf in pendingHotExitBackupsWin.ToList())
+            {
+                int idx = openTabs.IndexOf(buf);
+                if (idx >= 0 && UntitledFileDefaults.NeedsSavePrompt(buf))
+                    HotExitService.WriteTabBackup(workspaceRoot, buf, idx);
+                else
+                    HotExitService.DeleteBackup(workspaceRoot, buf);
+            }
+            pendingHotExitBackupsWin.Clear();
+        }
+
+        public void RestoreHotExitBackupsWin()
+        {
+            if (!HotExitService.IsEnabled(settings)) return;
+            List<HotExitBackupEntry> backups = HotExitService.LoadBackups(workspaceRoot);
+            if (backups == null || backups.Count == 0) return;
+            EditorTabBuffer lastRestored = null;
+            foreach (HotExitBackupEntry entry in backups)
+            {
+                if (entry == null) continue;
+                EditorTabBuffer tab = null;
+                if (entry.IsUntitled || string.IsNullOrEmpty(entry.FilePath))
+                {
+                    tab = openTabs.FirstOrDefault(t => t.IsUntitled && string.Equals(t.FileName, entry.FileName, StringComparison.OrdinalIgnoreCase));
+                    if (tab == null)
+                    {
+                        tab = new EditorTabBuffer
+                        {
+                            FilePath = "",
+                            RelativePath = entry.FileName ?? "Untitled-1",
+                            FileName = entry.FileName ?? "Untitled-1",
+                            Language = entry.Language ?? UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
+                            WordWrap = settings != null ? settings.WordWrap : false,
+                            IsUntitled = true
+                        };
+                        openTabs.Add(tab);
+                    }
+                }
+                else
+                {
+                    tab = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FilePath, StringComparison.OrdinalIgnoreCase));
+                    if (tab == null)
+                    {
+                        if (File.Exists(entry.FilePath))
+                            tab = OpenFileInTab(entry.FilePath);
+                        else
+                        {
+                            tab = new EditorTabBuffer
+                            {
+                                FilePath = entry.FilePath,
+                                RelativePath = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, entry.FilePath),
+                                FileName = Path.GetFileName(entry.FilePath),
+                                Language = Path.GetExtension(entry.FilePath).TrimStart('.'),
+                                WordWrap = settings != null ? settings.WordWrap : false,
+                                IsDeletedOnDisk = true
+                            };
+                            openTabs.Add(tab);
+                        }
+                    }
+                }
+                if (tab != null)
+                {
+                    HotExitService.ApplyBackupToTab(entry, tab);
+                    if (!tab.IsLargeFile) tab.RefreshGutterDiff();
+                    lastRestored = tab;
+                }
+            }
+            if (lastRestored != null)
+            {
+                activeTab = activeTab ?? lastRestored;
+                if (editorControl != null) editorControl.LoadBuffer(activeTab);
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+                UpdateWindowTitle();
+            }
         }
 
         private void RestartAutoSaveTimer(long delayMs)
@@ -1635,7 +1756,7 @@ namespace codeLess.Studio
                 Language = UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
                 Content = "",
                 SavedContent = "",
-                EolSequence = "\r\n",
+                EolSequence = settings != null ? settings.EffectiveNewFileEol : "\r\n",
                 WordWrap = settings != null ? settings.WordWrap : false,
                 IsDirty = false,
                 IsUntitled = true
@@ -4342,7 +4463,15 @@ if __name__ == '__main__':
             searchResultsList.KeyDown += (s, e) =>
             {
                 int idx = searchResultsList.SelectedIndex;
-                if (e.KeyCode != Keys.Enter || idx < 0 || idx >= searchRowsWin.Count) return;
+                if (idx < 0 || idx >= searchRowsWin.Count) return;
+                if (e.KeyCode == Keys.Delete)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    DismissSearchRowWin(idx);
+                    return;
+                }
+                if (e.KeyCode != Keys.Enter) return;
                 e.Handled = true;
                 e.SuppressKeyPress = true;
                 WinSearchRow row = searchRowsWin[idx];
@@ -4660,6 +4789,48 @@ if __name__ == '__main__':
             bool collapse = searchGroupsWin.Any(g => !g.IsCollapsed);
             foreach (WinSearchGroup g in searchGroupsWin) g.IsCollapsed = collapse;
             RebuildSearchResultItemsWin(false);
+        }
+
+        public bool DismissSearchRowWin(int rowIdx)
+        {
+            if (rowIdx < 0 || rowIdx >= searchRowsWin.Count) return false;
+            WinSearchRow row = searchRowsWin[rowIdx];
+            if (row.IsHeader && row.Group != null)
+            {
+                searchMatchCountWin = Math.Max(0, searchMatchCountWin - row.Group.Matches.Count);
+                searchGroupsWin.Remove(row.Group);
+            }
+            else if (row.Match != null && row.Group != null)
+            {
+                if (row.Group.Matches.Remove(row.Match))
+                    searchMatchCountWin = Math.Max(0, searchMatchCountWin - 1);
+                if (row.Group.Matches.Count == 0)
+                    searchGroupsWin.Remove(row.Group);
+            }
+            else return false;
+            RebuildSearchResultItemsWin(true);
+            SetSearchSummaryWin(searchMatchCountWin + " result(s) in " + searchGroupsWin.Count + " file(s)");
+            return true;
+        }
+
+        public bool ReplaceSingleSearchMatchWin(WorkspaceSearchMatch m, string replacement)
+        {
+            if (m == null || string.IsNullOrEmpty(m.FilePath)) return false;
+            EditorTabBuffer tab = OpenFileInTab(m.FilePath);
+            if (tab == null || m.LineNumber < 1 || m.LineNumber > tab.Lines.Count) return false;
+            string line = tab.Lines[m.LineNumber - 1] ?? "";
+            int col0 = Math.Max(0, Math.Min(line.Length, m.Column - 1));
+            int len = Math.Max(0, Math.Min(line.Length - col0, m.MatchLength));
+            tab.PushUndoSnapshot();
+            tab.Lines[m.LineNumber - 1] = line.Substring(0, col0) + (replacement ?? "") + line.Substring(col0 + len);
+            tab.SyncContentFromLines();
+            tab.IsDirty = true;
+            SaveTabBuffer(tab);
+            for (int i = 0; i < searchRowsWin.Count; i++)
+            {
+                if (ReferenceEquals(searchRowsWin[i].Match, m)) { DismissSearchRowWin(i); break; }
+            }
+            return true;
         }
 
         private void ActivateSearchMatchWin(WorkspaceSearchMatch m)
@@ -7342,12 +7513,18 @@ if __name__ == '__main__':
             }
 
             AppendTaskProblemsWin(buf);
+            if (explorerTree != null && buf != null && !string.IsNullOrEmpty(buf.FilePath))
+            {
+                explorerTree.ProblemCountByFullPath[buf.FilePath] = buf.Diagnostics != null ? buf.Diagnostics.Count : 0;
+                explorerTree.Invalidate();
+            }
             if (problemsListBox != null)
             {
                 problemsListBox.Items.Clear();
                 int count = WorkspaceDiagnostics.Count;
                 int errCount = 0;
                 int warnCount = 0;
+                string probFilter = (ProblemsFilterText ?? "").Trim();
                 if (count == 0)
                 {
                     problemsListBox.Items.Add("No problems have been detected in the workspace.");
@@ -7358,8 +7535,11 @@ if __name__ == '__main__':
                     if (sev.StartsWith("ERR")) errCount++;
                     else warnCount++;
                     string rel = !string.IsNullOrEmpty(d.RelativePath) ? d.RelativePath : Path.GetFileName(d.FilePath ?? "");
-                    problemsListBox.Items.Add(string.Format("[{0}] {1}:Ln {2}, Col {3} — {4} ({5})",
-                        sev, rel, d.Line, d.Column, d.Message, d.Source));
+                    string rowText = string.Format("[{0}] {1}:Ln {2}, Col {3} — {4} ({5})",
+                        sev, rel, d.Line, d.Column, d.Message, d.Source);
+                    if (!string.IsNullOrEmpty(probFilter) && rowText.IndexOf(probFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    problemsListBox.Items.Add(rowText);
                 }
                 lastErrorCount = errCount;
                 lastWarningCount = warnCount;
@@ -8696,6 +8876,10 @@ if __name__ == '__main__':
 
             if (shouldReload)
             {
+                int prevLine = tab.CursorLine;
+                int prevCol = tab.CursorCol;
+                int prevScrollTop = tab.ScrollTopLine;
+                int prevScrollLeft = tab.ScrollLeftCol;
                 tab.PushUndoSnapshot();
                 tab.FileEncoding = diskEnc;
                 tab.HasBom = diskBom;
@@ -8703,7 +8887,13 @@ if __name__ == '__main__':
                 tab.HasFinalNewline = diskFinalNl;
                 tab.Content = diskContent;
                 tab.SavedContent = diskContent;
+                tab.RecordDiskBaseline(fullPath);
+                tab.HasExternalDiskConflict = false;
                 tab.SyncLinesFromContent();
+                tab.CursorLine = Math.Max(0, Math.Min(prevLine, tab.Lines.Count - 1));
+                tab.CursorCol = Math.Max(0, Math.Min(prevCol, tab.Lines[tab.CursorLine].Length));
+                tab.ScrollTopLine = Math.Max(0, Math.Min(prevScrollTop, tab.Lines.Count - 1));
+                tab.ScrollLeftCol = Math.Max(0, prevScrollLeft);
                 tab.IsDirty = false;
                 tab.RefreshGutterDiff();
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
@@ -8714,6 +8904,10 @@ if __name__ == '__main__':
                 RefreshOutlineAndProblems(activeTab);
                 RefreshTabStrip();
                 statusLeftLabel.Text = "Reloaded " + tab.FileName;
+            }
+            else if (tab.IsDirty)
+            {
+                tab.HasExternalDiskConflict = true;
             }
         }
 
@@ -8758,10 +8952,20 @@ if __name__ == '__main__':
 
         public EditorTabBuffer OpenFileInTab(string filePath)
         {
+            return OpenFileInTab(filePath, false);
+        }
+
+        public EditorTabBuffer OpenBinaryFileAnyway(string filePath)
+        {
+            return OpenFileInTab(filePath, true);
+        }
+
+        public EditorTabBuffer OpenFileInTab(string filePath, bool openBinaryAnyway)
+        {
             EditorTabBuffer existing = openTabs.FirstOrDefault(
                 t => string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase)
             );
-            if (existing == null && !string.IsNullOrEmpty(filePath) && File.Exists(filePath) && IsLikelyBinaryFile(filePath))
+            if (existing == null && !string.IsNullOrEmpty(filePath) && File.Exists(filePath) && !openBinaryAnyway && IsLikelyBinaryFile(filePath))
             {
                 // Binary content would be corrupted by the text editor on save. Only passive media types are handed to
                 // the OS viewer: shell-executing arbitrary binaries would RUN .exe/.msi/.lnk/.jar... on a single click
@@ -8774,7 +8978,7 @@ if __name__ == '__main__':
                 }
                 else if (statusLeftLabel != null)
                 {
-                    statusLeftLabel.Text = Path.GetFileName(filePath) + " is a binary file and was not opened (use Reveal in File Explorer).";
+                    statusLeftLabel.Text = HotExitService.BinaryPlaceholderMessage;
                 }
                 return null;
             }
@@ -8820,11 +9024,13 @@ if __name__ == '__main__':
                 }
                 Encoding fileEnc = new UTF8Encoding(false);
                 bool hasBom = false;
-                string eol = "\r\n";
+                string eol = settings != null ? settings.EffectiveNewFileEol : "\r\n";
                 bool hasFinalNl = false;
                 string content = File.Exists(filePath)
-                    ? EditorTabBuffer.ReadFilePreservingMetadata(filePath, out fileEnc, out hasBom, out eol, out hasFinalNl)
+                    ? EditorTabBuffer.ReadFilePreservingMetadata(filePath, settings != null && settings.AutoGuessEncoding, out fileEnc, out hasBom, out eol, out hasFinalNl)
                     : "";
+                if (openBinaryAnyway && content.IndexOf('\0') >= 0)
+                    content = content.Replace('\0', '\uFFFD');
                 string gitHeadContent = (!isLarge && File.Exists(filePath))
                     ? LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, filePath)
                     : null;
@@ -8845,6 +9051,7 @@ if __name__ == '__main__':
                     IsDirty = false,
                     IsLargeFile = isLarge
                 };
+                tab.RecordDiskBaseline(filePath);
                 tab.SyncLinesFromContent();
                 EditorIndentation.ApplyOnOpen(tab, settings); // .editorconfig, else detectIndentation (QA #12)
                 if (!tab.IsLargeFile)
@@ -9013,11 +9220,23 @@ if __name__ == '__main__':
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (!ConfirmSaveOrDiscardAllDirtyBuffers(openTabs))
+            if (HotExitService.ShouldBackupWithoutPrompt(settings, true))
+            {
+                FlushPendingHotExitBackups();
+                HotExitService.WriteWorkspaceBackups(workspaceRoot, openTabs);
+            }
+            else if (!ConfirmSaveOrDiscardAllDirtyBuffers(openTabs))
             {
                 e.Cancel = true;
                 return;
             }
+            if (hotExitBackupTimer != null)
+            {
+                hotExitBackupTimer.Stop();
+                hotExitBackupTimer.Dispose();
+                hotExitBackupTimer = null;
+            }
+            pendingHotExitBackupsWin.Clear();
             KillAllTerminalChildProcesses();
             if (aiEngine != null)
             {
@@ -9032,6 +9251,11 @@ if __name__ == '__main__':
             {
                 try { workspaceFileWatcher.Dispose(); } catch { }
                 workspaceFileWatcher = null;
+            }
+            if (keybindingsWatcherWin != null)
+            {
+                try { keybindingsWatcherWin.Dispose(); } catch { }
+                keybindingsWatcherWin = null;
             }
             editorMruWin.Clear();
             if (editorControl != null && editorControl.Canvas != null)
@@ -9390,7 +9614,7 @@ if __name__ == '__main__':
 
                     Color diffTitleCol = activeTheme.IsLight ? Color.FromArgb(4, 120, 87) : Color.FromArgb(74, 222, 128);
                     TextRenderer.DrawText(g, badgeText, TabBadgeFont, new Point(8, 10), badgeCol);
-                    Font activeTitleFont = captured.IsPreview ? TabItalicTitleFont : TabTitleFont;
+                    Font activeTitleFont = captured.IsDeletedOnDisk ? TabStrikeoutTitleFont : (captured.IsPreview ? TabItalicTitleFont : TabTitleFont);
                     Rectangle titleRect = new Rectangle(30, 0, Math.Max(22, tabBtn.Width - 48), tabBtn.Height);
                     Color titleFg = pendingDiffs > 0 ? diffTitleCol : (isCurrent ? activeTheme.FgPrimary : activeTheme.FgSecondary);
                     TextRenderer.DrawText(g, title, activeTitleFont, titleRect, titleFg,
@@ -9574,7 +9798,10 @@ if __name__ == '__main__':
                 EndAgentTrackedSaveWin(agentSave, buf);
                 buf.IsUntitled = false;
                 buf.IsDeletedOnDisk = false;
+                buf.HasExternalDiskConflict = false;
                 buf.IsPreview = false;
+                pendingHotExitBackupsWin.Remove(buf);
+                HotExitService.DeleteBackup(workspaceRoot, buf);
                 if (!buf.IsLargeFile && buf.GitHeadContent == null && !string.IsNullOrEmpty(workspaceRoot))
                     buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, buf.FilePath);
                 buf.RefreshGutterDiff();
@@ -12149,6 +12376,128 @@ if __name__ == '__main__':
         {
             if (toastAutoHideTimer != null) toastAutoHideTimer.Stop();
             if (toastNotificationPanel != null) toastNotificationPanel.Visible = false;
+        }
+
+        public string ProblemsFilterText { get; private set; }
+        public readonly HashSet<string> SuppressedNotificationIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private codeLess.Core.KeybindingManager keybindingsWin;
+        private codeLess.Core.KeybindingsFileWatcher keybindingsWatcherWin;
+        private bool isDispatchingKeyWin;
+        public codeLess.Core.KeybindingManager KeybindingManager { get { return keybindingsWin; } }
+
+        public void SetProblemsFilter(string filter)
+        {
+            ProblemsFilterText = filter ?? "";
+            RefreshOutlineAndProblems(activeTab);
+        }
+
+        public bool ShowWorkbenchNotificationWin(string id, string title, string message, string actionText, Action onAction, bool canDoNotShowAgain)
+        {
+            if (!string.IsNullOrEmpty(id) && SuppressedNotificationIds.Contains(id))
+                return false;
+            if (canDoNotShowAgain && !string.IsNullOrEmpty(id) && string.IsNullOrEmpty(actionText))
+            {
+                string capturedId = id;
+                ShowToastNotification(title, message, "Do Not Show Again", delegate { SuppressedNotificationIds.Add(capturedId); });
+                return true;
+            }
+            ShowToastNotification(title, message, actionText, onAction);
+            return true;
+        }
+
+        private sealed class WinFormsContextKeyService : codeLess.Core.IContextKeyService
+        {
+            private readonly CodeLessMainForm form;
+            public WinFormsContextKeyService(CodeLessMainForm form) { this.form = form; }
+            public object GetValue(string key)
+            {
+                if (key == "editorTextFocus" || key == "editorFocus") return form.editorControl != null && form.editorControl.ContainsFocus;
+                if (key == "terminalFocus") return form.IsTerminalFocusedForDebug();
+                if (key == "findWidgetVisible") return form.editorControl != null && form.editorControl.IsFindBarVisible;
+                if (key == "inQuickOpen") return false;
+                if (key == "explorerViewletFocus" || key == "filesExplorerFocus") return form.explorerTree != null && form.explorerTree.Focused;
+                if (key == "searchViewletFocus") return form.searchPanel != null && form.searchPanel.ContainsFocus;
+                if (key == "isMac") return false;
+                if (key == "isWindows") return true;
+                return false;
+            }
+        }
+
+        private void InitKeybindingsWin()
+        {
+            codeLess.Core.DefaultCommands.Register();
+            keybindingsWin = new codeLess.Core.KeybindingManager(false);
+            keybindingsWin.BindAction("workbench.action.showCommands", delegate { OpenCommandPalette(">"); });
+            keybindingsWin.BindAction("workbench.action.quickOpen", delegate { OpenCommandPalette(""); });
+            keybindingsWin.BindAction("workbench.action.files.save", delegate { if (activeTab != null) SaveTabBufferUser(activeTab); });
+            keybindingsWin.BindAction("workbench.action.files.saveAll", delegate { SaveAllDirtyFileBuffersWin(false); });
+            keybindingsWin.BindAction("workbench.action.closeActiveEditor", delegate { if (activeTab != null) CloseTabBuffer(activeTab); });
+            keybindingsWin.BindAction("workbench.action.closeAllEditors", delegate { CloseAllTabs(); });
+            keybindingsWin.BindAction("workbench.action.reopenClosedEditor", delegate { ReopenLastClosedTab(); });
+            keybindingsWin.BindAction("workbench.action.toggleSidebarVisibility", delegate { ToggleLeftSidebarVisibility(); });
+            keybindingsWin.BindAction("workbench.action.togglePanel", delegate { ToggleBottomDockVisibility(); });
+            keybindingsWin.BindAction("workbench.action.terminal.toggleTerminal", delegate { ToggleBottomDockVisibility(); });
+            keybindingsWin.BindAction("workbench.action.terminal.new", delegate { RequestNewTerminal(null, null); });
+            keybindingsWin.BindAction("workbench.action.findInFiles", delegate { ShowSearchViewWin(false); });
+            keybindingsWin.BindAction("workbench.action.replaceInFiles", delegate { ShowSearchViewWin(true); });
+            keybindingsWin.BindAction("workbench.view.explorer", delegate { SwitchSidebarView("explorer"); });
+            keybindingsWin.BindAction("workbench.view.search", delegate { ShowSearchViewWin(false); });
+            keybindingsWin.BindAction("workbench.view.scm", delegate { SwitchSidebarView("git"); });
+            keybindingsWin.BindAction("workbench.view.extensions", delegate { SwitchSidebarView("extensions"); });
+            keybindingsWin.BindAction("workbench.actions.view.problems", delegate { SwitchBottomDockTab("problems"); });
+            keybindingsWin.BindAction("workbench.action.gotoLine", delegate { OpenCommandPalette(":"); });
+            keybindingsWin.BindAction("workbench.action.gotoSymbol", delegate { OpenCommandPalette("@"); });
+            keybindingsWin.BindAction("workbench.action.showAllSymbols", delegate { OpenCommandPalette("#"); });
+            keybindingsWin.BindAction("workbench.action.openSettings", delegate { OpenSettingsDialog(); });
+            keybindingsWin.BindAction("workbench.action.openGlobalKeybindings", delegate { OpenKeyboardShortcutsDialog(); });
+            keybindingsWin.BindAction("workbench.action.toggleZenMode", delegate { ToggleZenMode(); });
+            keybindingsWin.BindAction("workbench.action.toggleFullScreen", delegate { ToggleFullScreenMode(); });
+            keybindingsWin.BindAction("inlineChat.start", delegate { if (editorControl != null) editorControl.ToggleCtrlKBar(); });
+
+            string kbPath = IdePersistentSettings.GetKeybindingsFilePath();
+            keybindingsWatcherWin = new codeLess.Core.KeybindingsFileWatcher(kbPath, delegate (string content)
+            {
+                PostToUiWin(delegate
+                {
+                    if (IsDisposed || keybindingsWin == null) return;
+                    string err = keybindingsWin.LoadUserBindings(content);
+                    if (err != null) ShowToastNotification("Keybindings Error", "Keybindings parse error: " + err);
+                });
+            });
+            try
+            {
+                if (File.Exists(kbPath))
+                    keybindingsWin.LoadUserBindings(File.ReadAllText(kbPath));
+            }
+            catch { }
+        }
+
+        private bool DispatchKeybindingWin(Keys keyData)
+        {
+            if (keybindingsWin == null || isDispatchingKeyWin) return false;
+            Control focused = this.ActiveControl;
+            if (focused is TextBox || focused is CodeLessDarkInputBox) return false;
+            Keys keyCode = keyData & Keys.KeyCode;
+            if (keyCode == Keys.ControlKey || keyCode == Keys.ShiftKey || keyCode == Keys.Menu) return false;
+            int mods = 0;
+            if ((keyData & Keys.Alt) != 0) mods |= 1;
+            if ((keyData & Keys.Control) != 0) mods |= 2;
+            if ((keyData & Keys.Shift) != 0) mods |= 4;
+            string ks = codeLess.Core.KeyStringParser.FromKeyName(keyCode.ToString(), mods);
+            if (string.IsNullOrEmpty(ks)) return false;
+            isDispatchingKeyWin = true;
+            try
+            {
+                return keybindingsWin.Dispatch(ks, new WinFormsContextKeyService(this), delegate (string msg)
+                {
+                    if (statusLeftLabel != null && !string.IsNullOrEmpty(msg))
+                        statusLeftLabel.Text = msg;
+                }, IsTerminalFocusedForDebug());
+            }
+            finally
+            {
+                isDispatchingKeyWin = false;
+            }
         }
     }
 

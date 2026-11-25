@@ -441,7 +441,7 @@ namespace codeLess.Core
                 return true; // swallowed
             }
 
-            if (HasChordPrefix(keyGesture))
+            if (!isTerminalFocus && HasChordPrefix(keyGesture))
             {
                 chordPrefix = keyGesture;
                 showStatus(string.Format("({0}) was pressed. Waiting for second key of chord...", keyGesture));

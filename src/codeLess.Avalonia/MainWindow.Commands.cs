@@ -2854,7 +2854,11 @@ namespace codeLess.AvaloniaApp
                 }
                 else
                 {
-                    foreach (var d in dirty) d.IsDirty = false;
+                    foreach (var d in dirty)
+                    {
+                        d.IsDirty = false;
+                        HotExitService.DeleteBackup(workspaceRoot, d);
+                    }
                 }
                 return true;
             }
@@ -2880,6 +2884,7 @@ namespace codeLess.AvaloniaApp
                     foreach (var d in dirty)
                     {
                         d.IsDirty = false;
+                        HotExitService.DeleteBackup(workspaceRoot, d);
                         CloseTab(d, forceWithoutPrompt: true);
                     }
                 }
@@ -2957,7 +2962,7 @@ namespace codeLess.AvaloniaApp
             var stack = new StackPanel { Spacing = 8 };
             stack.Children.Add(new TextBlock
             {
-                Text = "codeLess v3.3.5",
+                Text = "codeLess v3.4.0",
                 FontSize = 18,
                 FontWeight = FontWeight.Bold,
                 Foreground = new SolidColorBrush(textPrimary)

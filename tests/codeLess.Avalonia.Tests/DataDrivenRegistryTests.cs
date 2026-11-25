@@ -87,6 +87,27 @@ namespace codeLess.Avalonia.Tests
             }
         }
 
+        [Fact]
+        public void KeybindingsDocMatchesCode()
+        {
+            Assert.Equal("3.4.0", MainWindow.CurrentAppVersion);
+
+            string docPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory, "../../../../../docs/KEYBINDINGS.md"));
+            if (!System.IO.File.Exists(docPath))
+            {
+                docPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(Environment.CurrentDirectory, "docs/KEYBINDINGS.md"));
+            }
+            if (!System.IO.File.Exists(docPath))
+            {
+                docPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(Environment.CurrentDirectory, "../../docs/KEYBINDINGS.md"));
+            }
+            Assert.True(System.IO.File.Exists(docPath), "docs/KEYBINDINGS.md must exist at " + docPath);
+
+            string expected = DefaultCommands.FormatKeybindingsMarkdown().Replace("\r\n", "\n").Trim();
+            string actual = System.IO.File.ReadAllText(docPath).Replace("\r\n", "\n").Trim();
+            Assert.Equal(expected, actual);
+        }
+
         private class MockContext : IContextKeyService
         {
             public object GetValue(string key) => true;

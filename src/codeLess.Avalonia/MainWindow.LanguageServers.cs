@@ -832,6 +832,7 @@ namespace codeLess.AvaloniaApp
                         break; // caret moves; OnCaretMoved re-filters or closes
                 }
             }
+            if (e.Key == Key.Escape && Completion.IsVisible) { CloseCompletion(); return true; }
             if (e.Key == Key.Escape && SignatureTip.IsVisible) { HideSignature(); return true; }
             // Ctrl+Space on every platform (Cmd+Space is Spotlight on macOS), like VS Code; Cmd+Shift+Space / Ctrl+Shift+Space triggers Parameter Hints.
             if (e.Key == Key.Space && (ctrl || meta) && !alt)

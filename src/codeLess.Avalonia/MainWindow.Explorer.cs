@@ -438,43 +438,131 @@ namespace codeLess.AvaloniaApp
             }
             if (git)
                 RefreshGitStatusInBackground();
+            foreach (var t in openTabs.ToList())
+            {
+                if (!t.IsUntitled && !string.IsNullOrEmpty(t.FilePath) && !File.Exists(t.FilePath) && !t.IsDeletedOnDisk)
+                    HandleExternalFileDeleted(t.FilePath);
+            }
             foreach (string f in changed)
-                ReloadOpenTabIfChangedOnDisk(f);
+            {
+                if (File.Exists(f)) HandleExternalFileChanged(f);
+                else HandleExternalFileDeleted(f);
+            }
         }
 
-        /// <summary>VS Code behaviour: a clean editor silently follows external changes; a dirty one is left alone.</summary>
+        public void HandleExternalFileDeleted(string fullPath)
+        {
+            if (string.IsNullOrEmpty(fullPath)) return;
+            bool any = false;
+            foreach (var tab in openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison)))
+            {
+                if (!File.Exists(fullPath))
+                {
+                    tab.IsDeletedOnDisk = true;
+                    any = true;
+                }
+            }
+            if (any)
+            {
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+                UpdateWindowTitle();
+            }
+        }
+
+        /// <summary>VS Code behaviour: a clean editor silently follows external changes keeping cursor &amp; scroll; a dirty one prompts Compare / Overwrite / Revert.</summary>
+        public void HandleExternalFileChanged(string fullPath)
+        {
+            ReloadOpenTabIfChangedOnDisk(fullPath);
+        }
+
         private void ReloadOpenTabIfChangedOnDisk(string fullPath)
         {
             var tab = openTabs.FirstOrDefault(t => !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison));
-            if (tab == null || tab.IsDirty || !File.Exists(fullPath)) return;
-            if (AutoSavePolicy.IsUnderReview(tab)) return; // an inline proposal is being reviewed against this text
+            if (tab == null) return;
+            if (!File.Exists(fullPath))
+            {
+                HandleExternalFileDeleted(fullPath);
+                return;
+            }
+            if (tab.IsDeletedOnDisk)
+            {
+                tab.IsDeletedOnDisk = false;
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+                UpdateWindowTitle();
+            }
+            if (!tab.HasExternalDiskConflict && AutoSavePolicy.IsUnderReview(tab)) return; // an inline proposal is being reviewed against this text
             if (tab.IsLargeFileViewer) return; // the viewer pages from disk; Follow mode handles growth
             try
             {
-                string content = EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out var enc, out bool bom, out string eol, out bool finalNl);
+                string content = EditorTabBuffer.ReadFilePreservingMetadata(fullPath, settings != null && settings.AutoGuessEncoding, out var enc, out bool bom, out string eol, out bool finalNl);
                 string norm = (content ?? "").Replace("\r\n", "\n");
                 string current = (tab.Content ?? "").Replace("\r\n", "\n");
-                if (string.Equals(norm, current, StringComparison.Ordinal)) return;
+                if (string.Equals(norm, current, StringComparison.Ordinal) && tab.EolSequence == eol && tab.HasBom == bom && tab.HasFinalNewline == finalNl)
+                {
+                    tab.RecordDiskBaseline(fullPath);
+                    return;
+                }
+                if (tab.IsDirty)
+                {
+                    string normSaved = (tab.SavedContent ?? "").Replace("\r\n", "\n");
+                    if (string.Equals(norm, normSaved, StringComparison.Ordinal)) return;
+                    tab.HasExternalDiskConflict = true;
+                    RecordConflictNotification(
+                        $"'{tab.FileName}' has been modified on disk. Do you want to compare, overwrite, or revert?",
+                        new[] { "Compare", "Overwrite", "Revert" });
+                    if (ExternalConflictDecisionOverride != null)
+                    {
+                        var choice = ExternalConflictDecisionOverride(tab);
+                        if (choice == ExternalConflictAction.Compare)
+                            OpenDiskConflictDiff(tab);
+                        else if (choice == ExternalConflictAction.Overwrite)
+                            SaveBufferToDisk(tab, forceOverwriteConflict: true);
+                        else if (choice == ExternalConflictAction.Revert)
+                            RevertTabToDisk(tab);
+                    }
+                    else
+                    {
+                        ShowWorkbenchNotification(
+                            $"conflict:{tab.FilePath}",
+                            "warning",
+                            $"'{tab.FileName}' has changed on disk.",
+                            "Compare",
+                            () => OpenDiskConflictDiff(tab));
+                    }
+                    return;
+                }
                 int line = tab.CursorLine;
                 int col = tab.CursorCol;
+                int scrollTop = tab.ScrollTopLine;
+                int scrollLeft = tab.ScrollLeftCol;
                 tab.Content = content;
                 tab.SavedContent = content;
                 tab.FileEncoding = enc;
                 tab.HasBom = bom;
                 tab.EolSequence = eol;
                 tab.HasFinalNewline = finalNl;
+                tab.HasExternalDiskConflict = false;
+                tab.RecordDiskBaseline(fullPath);
                 tab.SyncLinesFromContent();
                 tab.CursorLine = Math.Max(0, Math.Min(line, tab.Lines.Count - 1));
                 tab.CursorCol = Math.Max(0, Math.Min(col, tab.Lines[tab.CursorLine].Length));
+                tab.ScrollTopLine = Math.Max(0, Math.Min(scrollTop, tab.Lines.Count - 1));
+                tab.ScrollLeftCol = Math.Max(0, scrollLeft);
                 tab.IsDirty = false;
                 if (!tab.IsLargeFile) tab.RefreshGutterDiff();
                 if (ReferenceEquals(activeTab, tab))
                 {
                     PrimaryEditor.LoadBuffer(tab);
+                    tab.ScrollTopLine = Math.Max(0, Math.Min(scrollTop, tab.Lines.Count - 1));
+                    tab.ScrollLeftCol = Math.Max(0, scrollLeft);
+                    PrimaryEditor.Canvas.InvalidateVisual();
                 }
                 if (isEditorSplit && ReferenceEquals(SplitEditor.CurrentBuffer, tab))
                     SplitEditor.LoadBuffer(tab);
                 RefreshTabStrip();
+                UpdateStatusBar();
             }
             catch { }
         }

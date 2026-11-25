@@ -31,6 +31,12 @@ namespace codeLess.Studio
         public string AutoSaveMode { get; set; }
         /// <summary>files.autoSaveDelay in milliseconds (default 1000; 0 = default).</summary>
         public int AutoSaveDelayMs { get; set; }
+        /// <summary>files.hotExit: "off" | "onExit" (default) | "onExitAndWindowClose".</summary>
+        public string HotExit { get; set; }
+        /// <summary>files.eol: "\n" | "\r\n" | "auto" (default "auto" = OS newline).</summary>
+        public string FilesEol { get; set; }
+        /// <summary>files.autoGuessEncoding (default false).</summary>
+        public bool AutoGuessEncoding { get; set; }
 
         public const int DefaultAutoFetchPeriodSeconds = 180;
         public const int DefaultAutoSaveDelayMs = 1000;
@@ -39,6 +45,40 @@ namespace codeLess.Studio
         public const string AutoSaveAfterDelay = "afterDelay";
         public const string AutoSaveOnFocusChange = "onFocusChange";
         public const string AutoSaveOnWindowChange = "onWindowChange";
+
+        public const string HotExitOff = "off";
+        public const string HotExitOnExit = "onExit";
+        public const string HotExitOnExitAndWindowClose = "onExitAndWindowClose";
+
+        public string EffectiveHotExit
+        {
+            get
+            {
+                string m = (HotExit ?? "").Trim();
+                if (string.Equals(m, HotExitOff, StringComparison.OrdinalIgnoreCase)) return HotExitOff;
+                if (string.Equals(m, HotExitOnExitAndWindowClose, StringComparison.OrdinalIgnoreCase)) return HotExitOnExitAndWindowClose;
+                return HotExitOnExit;
+            }
+        }
+
+        public void SetHotExitMode(string mode)
+        {
+            string m = (mode ?? "").Trim();
+            if (string.Equals(m, HotExitOff, StringComparison.OrdinalIgnoreCase)) HotExit = HotExitOff;
+            else if (string.Equals(m, HotExitOnExitAndWindowClose, StringComparison.OrdinalIgnoreCase)) HotExit = HotExitOnExitAndWindowClose;
+            else HotExit = HotExitOnExit;
+        }
+
+        public string EffectiveNewFileEol
+        {
+            get
+            {
+                string e = FilesEol;
+                if (e == "\n" || string.Equals(e, "LF", StringComparison.OrdinalIgnoreCase)) return "\n";
+                if (e == "\r\n" || string.Equals(e, "CRLF", StringComparison.OrdinalIgnoreCase)) return "\r\n";
+                return Environment.NewLine == "\n" ? "\n" : "\r\n";
+            }
+        }
 
         /// <summary>Effective files.autoSave value (the legacy AutoSave bool maps to afterDelay).</summary>
         public string EffectiveAutoSaveMode
@@ -82,6 +122,12 @@ namespace codeLess.Studio
             TrimFinalNewlinesOnSave = other.TrimFinalNewlinesOnSave;
             AutoSaveMode = other.AutoSaveMode;
             AutoSaveDelayMs = other.AutoSaveDelayMs;
+            HotExit = other.HotExit;
+            FilesEol = other.FilesEol;
+            AutoGuessEncoding = other.AutoGuessEncoding;
+            LargeFileThresholdMB = other.LargeFileThresholdMB;
+            LargeFileLineThreshold = other.LargeFileLineThreshold;
+            LargeFileEditLimitMB = other.LargeFileEditLimitMB;
             // Fields from other feature areas that the Avalonia settings loader did not copy before.
             DisableInlineGitBlame = other.DisableInlineGitBlame;
             ShowInlineGitBlame = other.ShowInlineGitBlame;

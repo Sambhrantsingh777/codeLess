@@ -947,9 +947,55 @@ namespace codeLess.Studio
         public string ActiveEditorFilePath { get; set; }
         public bool ShowEmptyWorkspaceState { get; set; }
         public bool HideRootFolderRow = true;
+        public bool CompactFoldersEnabled { get; set; }
+        public string TypeFilterText { get; private set; }
         public readonly Dictionary<string, string> GitStatusByFile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, int> ProblemCountByFullPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         /// <summary>Full paths rendered greyed-out (gitignored / build output / dependency folders), like VS Code.</summary>
         public readonly HashSet<string> DimmedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public static string GetCompactDisplayText(TreeNode node, bool compactEnabled)
+        {
+            if (node == null) return "";
+            if (!compactEnabled || node.Nodes.Count == 0) return node.Text ?? "";
+            List<string> segments = new List<string>();
+            TreeNode cur = node;
+            while (cur != null)
+            {
+                segments.Add(cur.Text ?? "");
+                if (cur.Nodes.Count == 1 && cur.Nodes[0].Nodes.Count > 0)
+                    cur = cur.Nodes[0];
+                else
+                    break;
+            }
+            return string.Join(" / ", segments.ToArray());
+        }
+
+        public TreeNode ApplyTypeFilter(string query)
+        {
+            TypeFilterText = query ?? "";
+            string q = TypeFilterText.Trim();
+            if (string.IsNullOrEmpty(q))
+            {
+                this.Invalidate();
+                return SelectedNode;
+            }
+            if (flatRows.Count == 0 && backingTree.Nodes.Count > 0)
+                RebuildTreeLayout(true);
+            for (int i = 0; i < flatRows.Count; i++)
+            {
+                TreeNode n = flatRows[i].Node;
+                if (n != null && !string.IsNullOrEmpty(n.Text) && n.Text.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    SelectedNode = n;
+                    EnsureVisible(i);
+                    this.Invalidate();
+                    return n;
+                }
+            }
+            this.Invalidate();
+            return null;
+        }
         public event TreeNodeMouseClickEventHandler NodeMouseClick;
         public event Action OpenFolderRequested;
         public event Action OnOpenFolderEmptyStateClicked;
@@ -1705,7 +1751,7 @@ namespace codeLess.Studio
                             ? (theme != null ? theme.FgSecondary : Color.FromArgb(148, 163, 184))
                             : (isSel ? (theme != null ? theme.FgPrimary : Color.White)
                                 : (nodePath != null && DimmedPaths.Contains(nodePath) ? (theme != null ? theme.FgMuted : Color.FromArgb(120, 128, 140)) : this.ForeColor));
-                        string folderDisplay = isRootHeaderRow ? rawName.ToUpperInvariant() : rawName;
+                        string folderDisplay = isRootHeaderRow ? rawName.ToUpperInvariant() : GetCompactDisplayText(row.Node, CompactFoldersEnabled);
                         TextRenderer.DrawText(g, folderDisplay, ff, new Rectangle(x, r.Y, Math.Max(10, r.Width - x - 6), r.Height),
                             folderFg, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                     }
@@ -1772,6 +1818,15 @@ namespace codeLess.Studio
                             gitBadgeFg = theme != null ? theme.TokenControl : Color.FromArgb(241, 76, 76);
                             fileFg = gitBadgeFg;
                         }
+                    }
+
+                    int probCount = 0;
+                    if (!string.IsNullOrEmpty(nodePath)) ProblemCountByFullPath.TryGetValue(nodePath, out probCount);
+                    if (probCount > 0 && string.IsNullOrEmpty(gitStatus))
+                    {
+                        gitStatus = probCount.ToString();
+                        gitBadgeFg = theme != null ? theme.TokenControl : Color.FromArgb(248, 113, 113);
+                        rightReserve = 24;
                     }
 
                     TextRenderer.DrawText(g, rawName, this.Font, new Rectangle(x, r.Y, Math.Max(10, r.Width - x - rightReserve), r.Height),

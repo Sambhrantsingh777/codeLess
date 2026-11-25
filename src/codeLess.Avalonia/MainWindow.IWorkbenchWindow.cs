@@ -133,43 +133,123 @@ namespace codeLess.AvaloniaApp
 
         public void SaveWorkspaceSession()
         {
-            if (string.IsNullOrEmpty(this.workspaceRoot)) return;
             try
             {
-                var state = new WorkspaceSessionState
+                if (!string.IsNullOrEmpty(this.workspaceRoot) || this.openTabs.Count > 0)
                 {
-                    OpenTabPaths = this.openTabs
-                        .Where(t => t != null && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath))
-                        .Select(t => t.FilePath)
-                        .ToList(),
-                    ActiveTabPath = (this.activeTab != null && !this.activeTab.IsUntitled) ? this.activeTab.FilePath : null
-                };
-                WorkspaceSessionStore.Save(this.workspaceRoot, state);
+                    var state = new WorkspaceSessionState
+                    {
+                        OpenTabPaths = this.openTabs
+                            .Where(t => t != null && !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath))
+                            .Select(t => t.FilePath)
+                            .ToList(),
+                        ActiveTabPath = (this.activeTab != null && !this.activeTab.IsUntitled) ? this.activeTab.FilePath : null
+                    };
+                    WorkspaceSessionStore.Save(this.workspaceRoot, state);
+                }
             }
             catch { }
         }
 
         public void RestoreWorkspaceSession()
         {
-            if (string.IsNullOrEmpty(this.workspaceRoot)) return;
             try
             {
-                var state = WorkspaceSessionStore.Load(this.workspaceRoot);
-                if (state?.OpenTabPaths == null || state.OpenTabPaths.Count == 0) return;
-                foreach (var tabPath in state.OpenTabPaths)
+                if (!string.IsNullOrEmpty(this.workspaceRoot))
                 {
-                    if (!string.IsNullOrEmpty(tabPath) && File.Exists(tabPath))
+                    var state = WorkspaceSessionStore.Load(this.workspaceRoot);
+                    if (state?.OpenTabPaths != null && state.OpenTabPaths.Count > 0)
                     {
-                        OpenFileInTab(tabPath, preview: false);
+                        foreach (var tabPath in state.OpenTabPaths)
+                        {
+                            if (!string.IsNullOrEmpty(tabPath) && File.Exists(tabPath))
+                            {
+                                OpenFileInTab(tabPath, preview: false);
+                            }
+                        }
+                        if (!string.IsNullOrEmpty(state.ActiveTabPath))
+                        {
+                            var active = this.openTabs.FirstOrDefault(t => string.Equals(t.FilePath, state.ActiveTabPath, PathKeyComparison));
+                            if (active != null) ActivateTab(active);
+                        }
                     }
                 }
-                if (!string.IsNullOrEmpty(state.ActiveTabPath))
-                {
-                    var active = this.openTabs.FirstOrDefault(t => string.Equals(t.FilePath, state.ActiveTabPath, PathKeyComparison));
-                    if (active != null) ActivateTab(active);
-                }
+                RestoreHotExitBackups();
             }
             catch { }
+        }
+
+        public void RestoreHotExitBackups()
+        {
+            if (!HotExitService.IsEnabled(this.settings)) return;
+            var backups = HotExitService.LoadBackups(this.workspaceRoot);
+            if (backups == null || backups.Count == 0) return;
+
+            EditorTabBuffer lastRestored = null;
+            foreach (var entry in backups)
+            {
+                if (entry == null) continue;
+                EditorTabBuffer tab = null;
+                if (entry.IsUntitled || string.IsNullOrEmpty(entry.FilePath))
+                {
+                    tab = this.openTabs.FirstOrDefault(t => t.IsUntitled && string.Equals(t.FileName, entry.FileName, StringComparison.OrdinalIgnoreCase));
+                    if (tab == null)
+                    {
+                        tab = new EditorTabBuffer
+                        {
+                            FilePath = "",
+                            RelativePath = entry.FileName ?? "Untitled-1",
+                            FileName = entry.FileName ?? "Untitled-1",
+                            Language = entry.Language ?? UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
+                            WordWrap = settings.WordWrap,
+                            IsUntitled = true,
+                            IsPreviewTab = false
+                        };
+                        this.openTabs.Add(tab);
+                    }
+                }
+                else
+                {
+                    tab = this.openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FilePath, PathKeyComparison));
+                    if (tab == null)
+                    {
+                        if (File.Exists(entry.FilePath))
+                        {
+                            tab = OpenFileInTab(entry.FilePath, preview: false);
+                        }
+                        else
+                        {
+                            tab = new EditorTabBuffer
+                            {
+                                FilePath = entry.FilePath,
+                                RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, entry.FilePath) : Path.GetFileName(entry.FilePath),
+                                FileName = Path.GetFileName(entry.FilePath),
+                                Language = Path.GetExtension(entry.FilePath).TrimStart('.'),
+                                WordWrap = settings.WordWrap,
+                                IsUntitled = false,
+                                IsDeletedOnDisk = true,
+                                IsPreviewTab = false
+                            };
+                            this.openTabs.Add(tab);
+                        }
+                    }
+                }
+                if (tab != null)
+                {
+                    HotExitService.ApplyBackupToTab(entry, tab);
+                    if (!tab.IsLargeFile) tab.RefreshGutterDiff();
+                    lastRestored = tab;
+                }
+            }
+            if (lastRestored != null)
+            {
+                ActivateTab(this.activeTab ?? lastRestored);
+                PrimaryEditor?.LoadBuffer(this.activeTab);
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+                UpdateWindowTitle();
+                UpdateStatusBar();
+            }
         }
     }
 }

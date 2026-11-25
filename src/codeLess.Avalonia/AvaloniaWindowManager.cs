@@ -160,10 +160,7 @@ namespace codeLess.AvaloniaApp
             var w = new MainWindow(workspacePath);
             RegisterWindow(w);
             w.Show();
-            if (!string.IsNullOrEmpty(workspacePath))
-            {
-                w.RestoreWorkspaceSession();
-            }
+            w.RestoreWorkspaceSession();
             return w;
         }
 
@@ -212,8 +209,7 @@ namespace codeLess.AvaloniaApp
                 {
                     try
                     {
-                        w.SuppressUnsavedPrompts = true;
-                        w.Close();
+                        w.CloseForApplicationExit();
                     }
                     catch { }
                 }
