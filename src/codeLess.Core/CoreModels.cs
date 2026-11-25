@@ -60,9 +60,23 @@ namespace codeLess.Studio
         /// <summary>Default theme id (Savatarr brand: neutral graphite greys + Savatarr blue #1978E5).</summary>
         public const string DefaultThemeId = "savatarr-graphite";
 
+        private static StudioTheme[] _cachedBuiltInThemes;
+
+        internal static StudioTheme[] GetBuiltInThemesSharedArray()
+        {
+            if (_cachedBuiltInThemes != null) return _cachedBuiltInThemes;
+            _cachedBuiltInThemes = CreateBuiltInThemesArray();
+            return _cachedBuiltInThemes;
+        }
+
         public static List<StudioTheme> GetBuiltInThemes()
         {
-            return new List<StudioTheme>
+            return new List<StudioTheme>(GetBuiltInThemesSharedArray());
+        }
+
+        private static StudioTheme[] CreateBuiltInThemesArray()
+        {
+            return new StudioTheme[]
             {
                 new StudioTheme
                 {
@@ -380,23 +394,66 @@ namespace codeLess.Studio
         public static StudioTheme ResolveTheme(List<StudioTheme> list, string idOrName)
         {
             if (list == null || list.Count == 0)
-                list = GetBuiltInThemes();
+                return ResolveThemeFromShared(idOrName, null);
             if (!string.IsNullOrWhiteSpace(idOrName))
             {
                 string q = idOrName.Trim();
-                StudioTheme exact = list.FirstOrDefault(t =>
-                    string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase));
-                if (exact != null) return exact;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    StudioTheme t = list[i];
+                    if (t != null && (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
+                                      string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase)))
+                        return t;
+                }
 
                 if (q.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0 ||
                     q.IndexOf("daylight", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    StudioTheme light = list.FirstOrDefault(t => t.IsLight);
-                    if (light != null) return light;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        if (list[i] != null && list[i].IsLight) return list[i];
+                    }
                 }
             }
             return list[0];
+        }
+
+        internal static StudioTheme ResolveThemeFromShared(string idOrName, List<StudioTheme> extensionThemes)
+        {
+            StudioTheme[] builtIn = GetBuiltInThemesSharedArray();
+            if (!string.IsNullOrWhiteSpace(idOrName))
+            {
+                string q = idOrName.Trim();
+                for (int i = 0; i < builtIn.Length; i++)
+                {
+                    StudioTheme t = builtIn[i];
+                    if (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase))
+                        return t;
+                }
+                if (extensionThemes != null)
+                {
+                    lock (extensionThemes)
+                    {
+                        for (int i = 0; i < extensionThemes.Count; i++)
+                        {
+                            StudioTheme t = extensionThemes[i];
+                            if (t != null && (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
+                                              string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase)))
+                                return t;
+                        }
+                    }
+                }
+                if (q.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    q.IndexOf("daylight", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    for (int i = 0; i < builtIn.Length; i++)
+                    {
+                        if (builtIn[i].IsLight) return builtIn[i];
+                    }
+                }
+            }
+            return builtIn[0];
         }
 
         public static Color Hex(string hex, Color? fallback = null)
@@ -1192,11 +1249,17 @@ namespace codeLess.Studio
         {
             string baseText = (GitHeadContent != null) ? GitHeadContent : SavedContent;
             if (baseText == null) return null;
+            if (ReferenceEquals(baseText, savedLinesRef) && savedLinesCache != null)
+            {
+                _cachedBaseRef = baseText;
+                _cachedBaseLines = savedLinesCache;
+                return _cachedBaseLines;
+            }
             if (!ReferenceEquals(baseText, _cachedBaseRef) || _cachedBaseLines == null)
             {
                 _cachedBaseRef = baseText;
                 string norm = baseText.IndexOf('\r') >= 0 ? baseText.Replace("\r\n", "\n").Replace("\r", "\n") : baseText;
-                _cachedBaseLines = norm.Split('\n');
+                _cachedBaseLines = SplitNormalizedLines(norm);
             }
             return _cachedBaseLines;
         }
@@ -1207,7 +1270,28 @@ namespace codeLess.Studio
             if (raw.IndexOf('\r') >= 0)
                 raw = raw.Replace("\r\n", "\n").Replace("\r", "\n");
             Content = raw;
-            Lines = new List<string>(SplitNormalizedLines(raw));
+            string[] split = SplitNormalizedLines(raw);
+            Lines = new List<string>(split);
+            if (SavedContent != null)
+            {
+                string normSaved = SavedContent.IndexOf('\r') >= 0 ? SavedContent.Replace("\r\n", "\n").Replace("\r", "\n") : SavedContent;
+                if (ReferenceEquals(normSaved, raw) || string.Equals(normSaved, raw, StringComparison.Ordinal))
+                {
+                    SavedContent = raw;
+                    savedLinesRef = raw;
+                    savedLinesCache = split;
+                }
+            }
+            if (GitHeadContent != null)
+            {
+                string normHead = GitHeadContent.IndexOf('\r') >= 0 ? GitHeadContent.Replace("\r\n", "\n").Replace("\r", "\n") : GitHeadContent;
+                if (ReferenceEquals(normHead, raw) || string.Equals(normHead, raw, StringComparison.Ordinal))
+                {
+                    GitHeadContent = raw;
+                    _cachedBaseRef = raw;
+                    _cachedBaseLines = split;
+                }
+            }
             OnLinesReplaced();
             IsLargeFile = ComputeIsLargeFile(raw.Length);
             ClampCursor();
@@ -1248,8 +1332,12 @@ namespace codeLess.Studio
             ChangedLineCount = 0;
             GutterDiffVersion++;
 
+            string baseText = (GitHeadContent != null) ? GitHeadContent : SavedContent;
+            if (baseText == null || Lines == null) return;
+            if (!contentStale && ReferenceEquals(baseText, contentText)) return;
+
             string[] oldLines = GetCachedBaseLines();
-            if (oldLines == null || Lines == null) return;
+            if (oldLines == null) return;
 
             int newCount = Lines.Count;
             if (newCount > 1 && HasFinalNewline && string.IsNullOrEmpty(Lines[newCount - 1]) && oldLines.Length > 0 && !string.IsNullOrEmpty(oldLines[oldLines.Length - 1]))

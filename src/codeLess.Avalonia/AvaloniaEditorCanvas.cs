@@ -278,6 +278,8 @@ namespace codeLess.AvaloniaApp
                 Canvas.IsVisible = false;
                 breadcrumbBar.IsVisible = false;
                 diffReviewBanner.IsVisible = false;
+                Canvas.ReleaseBufferReferences(null);
+                RefreshBreadcrumbs();
                 RefreshRecentFoldersOnWelcome();
                 return;
             }
@@ -307,7 +309,20 @@ namespace codeLess.AvaloniaApp
             Canvas.IsVisible = false;
             breadcrumbBar.IsVisible = false;
             diffReviewBanner.IsVisible = false;
+            Canvas.ReleaseBufferReferences(null);
+            RefreshBreadcrumbs();
             RefreshRecentFoldersOnWelcome();
+        }
+
+        internal void ReleaseBufferReferences(EditorTabBuffer tab)
+        {
+            if (tab != null && ReferenceEquals(CurrentBuffer, tab))
+            {
+                CurrentBuffer = null;
+                FindMatches.Clear();
+                RefreshBreadcrumbs();
+            }
+            Canvas?.ReleaseBufferReferences(tab);
         }
 
         public void ApplyTheme(StudioTheme theme)
@@ -1166,6 +1181,30 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        private static Bitmap s_sharedWelcomeLogoBitmap;
+        private static bool s_sharedWelcomeLogoProbed;
+
+        private static Bitmap GetSharedWelcomeLogoBitmap()
+        {
+            if (s_sharedWelcomeLogoProbed) return s_sharedWelcomeLogoBitmap;
+            s_sharedWelcomeLogoProbed = true;
+            try
+            {
+                string[] logoCandidates = new[]
+                {
+                    Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_bolt.png"),
+                    Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_bolt.png"),
+                    Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_bolt.png"),
+                    Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "assets", "savatarr_bolt.png"))
+                };
+                string logoPath = logoCandidates.FirstOrDefault(File.Exists);
+                if (!string.IsNullOrEmpty(logoPath))
+                    s_sharedWelcomeLogoBitmap = new Bitmap(logoPath);
+            }
+            catch { }
+            return s_sharedWelcomeLogoBitmap;
+        }
+
         private Border BuildWelcomePage()
         {
             var outerGrid = new Grid
@@ -1183,15 +1222,8 @@ namespace codeLess.AvaloniaApp
             bool addedBitmapLogo = false;
             try
             {
-                string[] logoCandidates = new[]
-                {
-                    Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_bolt.png"),
-                    Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_bolt.png"),
-                    Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_bolt.png"),
-                    Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "assets", "savatarr_bolt.png"))
-                };
-                string logoPath = logoCandidates.FirstOrDefault(File.Exists);
-                if (!string.IsNullOrEmpty(logoPath))
+                var logoBmp = GetSharedWelcomeLogoBitmap();
+                if (logoBmp != null)
                 {
                     var logoBadge = new Border
                     {
@@ -1203,7 +1235,7 @@ namespace codeLess.AvaloniaApp
                         VerticalAlignment = VerticalAlignment.Center,
                         Child = new Image
                         {
-                            Source = new Bitmap(logoPath),
+                            Source = logoBmp,
                             Width = 44,
                             Height = 44,
                             Stretch = Stretch.Uniform,
@@ -4987,6 +5019,49 @@ namespace codeLess.AvaloniaApp
                 null,
                 new Pen(new SolidColorBrush(Color.FromArgb(110, accent.R, accent.G, accent.B)), 1),
                 vpRect);
+        }
+        /// <summary>Forgets all shaped text (font family / size changes elsewhere, buffer switch).</summary>
+        internal void ReleaseBufferReferences(EditorTabBuffer tab)
+        {
+            if (tab != null)
+            {
+                tab.ExtraCaretsForUndo = null;
+            }
+            if (tab == null || ReferenceEquals(occBuf, tab)) { occBuf = null; occurrenceTarget = null; }
+            if (tab == null || ReferenceEquals(guideBuf, tab)) { guideBuf = null; activeGuide = ActiveIndentGuide.None; }
+            if (tab == null || ReferenceEquals(animBuf, tab)) { animBuf = null; vAnim.Finish(); hAnim.Finish(); }
+            if (tab == null || ReferenceEquals(lastRevealBuf, tab)) { lastRevealBuf = null; }
+            if (tab == null || ReferenceEquals(widthLinesRef, tab?.Lines)) { widthLinesRef = null; widthVersion = int.MinValue; }
+            if (tab == null || ReferenceEquals(zonesHunksRef, tab?.DiffHunks))
+            {
+                zonesHunksRef = null;
+                zonesByLine.Clear();
+                zoneRowsByLine.Clear();
+            }
+            frameSession = null;
+            hoveredAnnotation = null;
+            annotationHitBoxes.Clear();
+            hunkActionHitBoxes.Clear();
+            lastRulerMarks.Clear();
+            lastFrameRows.Clear();
+            caretOverlay?.ReleaseBuffer(tab);
+            if (tab == null || ReferenceEquals(Buffer, tab))
+            {
+                ClearRenderCaches();
+            }
+        }
+
+        internal void StopAllTimersAndCaches()
+        {
+            blinkTimer?.Stop();
+            dragScrollTimer?.Stop();
+            nicetiesBgTimer?.Stop();
+            occurrenceTimer?.Stop();
+            foldTimer?.Stop();
+            scrollbarHideTimer?.Stop();
+            ReleaseBufferReferences(null);
+            ClearRenderCaches();
+            runBrushCache.Clear();
         }
     }
 

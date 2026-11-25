@@ -53,7 +53,7 @@ namespace codeLess.Studio
             return all;
         }
 
-        public static StudioTheme GetById(string idOrName) => ResolveTheme(GetAllBuiltInThemes(), idOrName);
+        public static StudioTheme GetById(string idOrName) => ResolveThemeFromShared(idOrName, ExtensionThemes);
     }
 
     public partial class DiagnosticItem
