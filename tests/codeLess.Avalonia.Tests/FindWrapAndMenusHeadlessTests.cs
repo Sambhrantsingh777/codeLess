@@ -272,7 +272,7 @@ namespace codeLess.Avalonia.Tests
                 var tops = WorkbenchMenuModel.Build().Where(m => m.VisibleOn(mac)).Select(m => m.Title).ToArray();
                 Assert.Equal(mac
                     ? new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }
-                    : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }, tops);
+                    : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }, tops);
             }
             Assert.Equal("⌥⌘F", WorkbenchMenuModel.FormatShortcut("Cmd+Alt+F", true));
             Assert.Equal("⌘K ⌘O", WorkbenchMenuModel.FormatShortcut("Cmd+K Cmd+O", true));
