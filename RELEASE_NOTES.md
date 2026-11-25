@@ -1,3 +1,22 @@
+# codeLess v3.4.1
+
+A visual polish, editor selection parity, and cross-platform CI reliability release.
+
+## New
+
+- **Seti file icons everywhere**: Embedded the VS Code Seti UI icon font and mapping (`SetiIconTheme`, `seti.ttf`) and wired file-type icons across the Explorer tree (`AvaloniaExplorerTree`, `CodeLessExplorerTree`), editor tabs, breadcrumbs, Open Editors list, Source Control (SCM) changed files, Problems panel entries, Quick Open / location pickers (`AvaloniaCommandPaletteOverlay`), and AI chat composer context pills.
+- **VS Code Dark Modern, Dark+, Light Modern & Light+ themes**: Added VS Code's **Dark Modern** (now the default theme), **Dark+**, **Light Modern**, and **Light+** themes (`VsCodeDefaultThemes`, `StudioTheme`, `TextMateTheme`), along with pixel-rounded glyph draw coordinates (`Math.Round`), `UseLayoutRounding`, and `TextRenderingMode.SubpixelAntialias` on `AvaloniaVirtualEditorCanvas`.
+
+## Fixed
+
+- **Syntax highlighting (C# numeric literals & Python f-strings)**: Truncated capture sub-tokenization line text at the capture end in `TextMateTokenizer.ApplyCaptures` so `$`-anchored capture patterns (such as C# and Go numeric literals) match instead of falling through to `invalid.illegal.numeric.cs`; and stripped balanced `(?#...)` Oniguruma comment groups across newlines before `#` line-comment stripping in `OnigurumaTranslator.StripExtended` (`TextMateRegex`) so Python f-string (`f"...{expr}..."`) literal rules compile and highlight properly.
+- **Line & word boundary selection parity (`Cmd+Shift+Right/Left`, `Shift+End/Home`)**: `Cmd+Shift+Right/Left` and `Shift+End/Home` (`cursorEndSelect` / `cursorHomeSelect`) now match VS Code's `_moveToLineEnd` and `_moveToLineStart` semantics in both UIs (`AvaloniaVirtualEditorCanvas` and `CodeLessVirtualCanvas`)—stopping at the wrapped visual row boundary first (with row-end caret affinity) before advancing to the model line boundary, toggling between the first non-whitespace column and column `0` (`EditorWrapNavigation.FirstNonWhitespaceColumn`, moving directly to column `0` on all-whitespace lines), preserving forward and backward selection anchors, merging overlapping multi-cursor selections into their union range (`EditorWrapNavigation.NormalizeAndMergeCarets`), and stepping cleanly across UTF-16 surrogate pairs and folded regions. Added `Ctrl+A`/`Ctrl+E` (`cursorLineStart`/`cursorLineEnd` and `cursorLineStartSelect`/`cursorLineEndSelect`) model-line movement on macOS, and registered all `cursor*Select` and word-navigation commands (`cursorHomeSelect`, `cursorEndSelect`, `cursorTopSelect`, `cursorBottomSelect`, `cursorWordLeft`, `cursorWordLeftSelect`, `cursorWordEndRight`, `cursorWordEndRightSelect`) in `DefaultCommands` and `KeybindingManager`.
+- **Windows & Linux keymap, file-locking & shell reliability**: Fixed per-platform default keybindings (`KeybindingManager` platform-aware defaults) and duplicate shortcut collisions in `DefaultCommands`; eliminated a 5,000 ms stall on Windows caused by `CrossProcessFile.ReadModifyWrite` attempting to delete `.lock` files before closing the lock `FileStream`; wrote long (`> 8,000` char) Windows PowerShell commands in `LlmAgentEngine.Terminal.cs` to a temporary `codeless-cmd-<guid>.ps1` script executed via `-File`; skipped `WindowsApps` stub shims during language-server binary discovery (`LanguageServerRegistry.FindOnPath`); and fixed `IdeSettingsWatcher` / `FileSystemWatcher` race conditions and `WeakReference` window lifecycle cleanup.
+- **Windows `netstandard2.0` build**: Guarded `WindowsIdentity.GetCurrent()` in `ApplicationSession.cs` with `#if !NETSTANDARD2_0` so the `netstandard2.0` target of `codeLess.Core` compiles cleanly in Release solution builds without extra package dependencies.
+- False syntax errors: <W18>
+
+---
+
 # codeLess v3.4.0
 
 A major feature and performance release bringing full VS Code multi-window/multi-instance parity (`W1`), data-driven keybindings and settings (`W3`), a complete `sst/opencode`-derived autonomous agent harness (`M1–M9d` including local stdio MCP servers, custom Markdown agents/commands, `@file` fuzzy completion, and per-turn `/undo` & `/redo`), 100% audited editor, workbench, cross-cutting QA, and file/hot-exit parity (`W5`, `W6`, `W7`, `W10`), and a 74%–99% reduction in in-process managed memory usage (`W4`, `docs/MEMORY.md`).

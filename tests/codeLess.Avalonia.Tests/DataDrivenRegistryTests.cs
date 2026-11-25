@@ -90,7 +90,7 @@ namespace codeLess.Avalonia.Tests
         [Fact]
         public void KeybindingsDocMatchesCode()
         {
-            Assert.Equal("3.4.0", MainWindow.CurrentAppVersion);
+            Assert.Equal("3.4.1", MainWindow.CurrentAppVersion);
 
             string docPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory, "../../../../../docs/KEYBINDINGS.md"));
             if (!System.IO.File.Exists(docPath))
