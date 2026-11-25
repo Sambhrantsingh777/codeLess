@@ -40,6 +40,25 @@ namespace codeLess.Studio
             col = (b.Lines[line] ?? "").Length;
         }
 
+        /// <summary>
+        /// VS Code multi-cursor paste distribution: when pasting N lines onto N carets (or N lines with a single trailing
+        /// newline from whole-line copy), returns the N lines in document order; otherwise returns null so the full text
+        /// is inserted at every caret. Preserves empty lines (e.g. when the last copied selection was empty).
+        /// </summary>
+        public static string[] TrySplitPasteForCarets(string normalizedText, int caretCount)
+        {
+            if (string.IsNullOrEmpty(normalizedText) || caretCount <= 1) return null;
+            string[] raw = normalizedText.Split('\n');
+            if (raw.Length == caretCount) return raw;
+            if (raw.Length == caretCount + 1 && raw[caretCount].Length == 0)
+            {
+                string[] trimmed = new string[caretCount];
+                Array.Copy(raw, 0, trimmed, 0, caretCount);
+                return trimmed;
+            }
+            return null;
+        }
+
         private static long TotalLength(EditorTabBuffer b)
         {
             long t = Math.Max(0, b.Lines.Count - 1);

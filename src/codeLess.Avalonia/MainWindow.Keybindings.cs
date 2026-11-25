@@ -257,6 +257,12 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("cursorWordLeftSelect", () => ActiveEditorCanvas?.MoveCaretHorizontal(-1, true, true));
             keybindings.BindAction("cursorWordEndRight", () => ActiveEditorCanvas?.MoveCaretHorizontal(1, false, true));
             keybindings.BindAction("cursorWordEndRightSelect", () => ActiveEditorCanvas?.MoveCaretHorizontal(1, true, true));
+            keybindings.BindAction("cursorWordPartLeft", () => ActiveEditorCanvas?.MoveCaretSubword(-1, false));
+            keybindings.BindAction("cursorWordPartLeftSelect", () => ActiveEditorCanvas?.MoveCaretSubword(-1, true));
+            keybindings.BindAction("cursorWordPartRight", () => ActiveEditorCanvas?.MoveCaretSubword(1, false));
+            keybindings.BindAction("cursorWordPartRightSelect", () => ActiveEditorCanvas?.MoveCaretSubword(1, true));
+            keybindings.BindAction("deleteWordPartLeft", () => ActiveEditorCanvas?.DeleteSubwordLeft());
+            keybindings.BindAction("deleteWordPartRight", () => ActiveEditorCanvas?.DeleteSubwordRight());
 
             contextKeyService = new WindowContextKeyService(this);
             InitializeVscodeSettingsWatcher();
