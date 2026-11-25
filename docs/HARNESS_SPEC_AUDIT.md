@@ -34,14 +34,7 @@
 | M4: tool-name repair (case, alias, invalid) | Done | src/LlmHarnessAndAgentEngine.cs:3005 | `AgentRobustnessM4Tests.ToolName_Repair_CaseInsensitive_And_Unknown` |
 | M4: invalid JSON feedback | Done | src/LlmHarnessAndAgentEngine.cs:2961 | `AgentRobustnessM4Tests.ParseToolCalls_InvalidJson_SynthesizesError` |
 | M4: doom loop with and without approval | Done | src/LlmHarnessAndAgentEngine.cs:2838 | `AgentRobustnessM4Tests.DoomLoop_TestsBothGrantedAndDenied` |
-| M4: retry schedule with retry-after-ms / seconds / date / cap / 5 attempts / cancellation | Done | src/codeLess.Core/ApiRetryHandler.cs:10 | `AgentRobustnessM4Tests.ApiRetry_BasicRetries
-- [x] ApiRetryHandlerTests.ApiRetry_Cancellation_BeforeWait
-- [x] ApiRetryHandlerTests.ApiRetry_Cancellation_DuringWait
-- [x] ApiRetryHandlerTests.ApiRetry_Headers_Ms
-- [x] ApiRetryHandlerTests.ApiRetry_Headers_Seconds
-- [x] ApiRetryHandlerTests.ApiRetry_Headers_Date
-- [x] ApiRetryHandlerTests.ApiRetry_Headers_DelayCap
-- [x] ApiRetryHandlerTests.ApiRetry_Max5Attempts` |
+| M4: retry schedule with retry-after-ms / seconds / date / cap / 5 attempts / cancellation | Done | src/codeLess.Core/ApiRetryHandler.cs:10 | `ApiRetryHandlerTests.ApiRetry_BasicRetries`, `ApiRetryHandlerTests.ApiRetry_Cancellation_BeforeWait`, `ApiRetryHandlerTests.ApiRetry_Cancellation_DuringWait`, `ApiRetryHandlerTests.ApiRetry_Headers_Ms`, `ApiRetryHandlerTests.ApiRetry_Headers_Seconds`, `ApiRetryHandlerTests.ApiRetry_Headers_Date`, `ApiRetryHandlerTests.ApiRetry_Headers_DelayCap`, `ApiRetryHandlerTests.ApiRetry_Max5Attempts` |
 | M5: instruction discovery (16KB) | Done | src/codeLess.Core/AgentContextBuilder.cs:10 | `AgentContextM5Tests.DiscoverInstructions_DedupesAndCaps` |
 | M5: env block | Done | src/codeLess.Core/AgentContextBuilder.cs:10 | `AgentContextM5Tests.BuildEnvBlock_ContainsExpectedFields` |
 | M5: per-family prompts | Done | src/codeLess.Core/AgentContextBuilder.cs:10 | `AgentContextM5Tests.GetProviderPrompt_SelectsFamily` |
