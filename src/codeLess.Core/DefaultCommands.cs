@@ -159,7 +159,7 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.showAllEditors", "Show All Editors", "View", "", "", "", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFolder", "Open Folder...", "File", "cmd+k o", "ctrl+k o", "ctrl+k o", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.closeFolder", "Close Folder", "File", "cmd+k f", "ctrl+k f", "ctrl+k f", ""));
-            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.selectTheme", "Preferences: Color Theme", "Preferences", "cmd+k t", "ctrl+k t", "ctrl+k t", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.selectTheme", "Preferences: Color Theme", "Preferences", "cmd+k cmd+t", "ctrl+k ctrl+t", "ctrl+k ctrl+t", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.keepEditor", "Keep Editor", "View", "cmd+k enter", "ctrl+k enter", "ctrl+k enter", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("copyFilePath", "Copy Path", "File", "cmd+k p", "ctrl+k p", "ctrl+k p", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("revealFileInOS", "Reveal in OS", "File", "cmd+k r", "ctrl+k r", "ctrl+k r", ""));
