@@ -48,7 +48,7 @@ namespace codeLess.AvaloniaApp
         private bool showWelcomeTab = true;
         private string activeSidebarView = "explorer";
         private string activeBottomTab = "terminal";
-        private string currentAgentMode = "build";
+        private string currentAgentMode = "agent";
         private bool isZenMode = false;
         private bool isFullScreen = false;
         private bool isBottomDockMaximized = false;
@@ -1565,7 +1565,7 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (e.Key == Key.Tab)
                 {
-                    SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
+                    SetAgentMode(currentAgentMode == "agent" ? "plan" : "agent");
                     e.Handled = true;
                 }
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
@@ -1573,7 +1573,7 @@ namespace codeLess.AvaloniaApp
 
             // Mode pills row: ✦ Build | Plan
             var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            foreach (var m in new (string Id, string Label)[] { ("build", "Build"), ("plan", "Plan") })
+            foreach (var m in new (string Id, string Label)[] { ("agent", "Build"), ("plan", "Plan") })
             {
                 string modeId = m.Id;
                 var mb = new Button

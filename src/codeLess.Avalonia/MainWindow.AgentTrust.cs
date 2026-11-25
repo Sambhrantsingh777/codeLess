@@ -82,7 +82,7 @@ namespace codeLess.AvaloniaApp
 
         private void AddAgentTrustComposerControls()
         {
-            if (!agentModeButtons.TryGetValue("build", out var anyMode) || anyMode.Parent is not StackPanel modeRow) return;
+            if (!agentModeButtons.TryGetValue("agent", out var anyMode) || anyMode.Parent is not StackPanel modeRow) return;
             verifyModeButton = new Button { FontSize = UiTokens.FontSmall, Padding = new Thickness(8, 2), MinHeight = 22, BorderThickness = new Thickness(0) };
             verifyModeButton.Classes.Add("flat");
             verifyModeButton.Name = "AgentVerifyModeButton";
