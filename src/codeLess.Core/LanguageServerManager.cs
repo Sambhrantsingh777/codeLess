@@ -1575,6 +1575,12 @@ namespace codeLess.Studio
             return i != null && i.State == LanguageServerState.Running ? i.GetTriggerCharacters("completionProvider", "triggerCharacters") : new List<string>();
         }
 
+        public List<string> GetCompletionCommitCharacters(string path)
+        {
+            LanguageServerInstance i = GetInstanceForPath(path);
+            return i != null && i.State == LanguageServerState.Running ? i.GetTriggerCharacters("completionProvider", "allCommitCharacters") : new List<string>();
+        }
+
         public List<string> GetSignatureTriggerCharacters(string path, bool retrigger)
         {
             LanguageServerInstance i = GetInstanceForPath(path);

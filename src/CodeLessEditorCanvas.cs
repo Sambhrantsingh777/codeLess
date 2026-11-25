@@ -59,6 +59,13 @@ namespace codeLess.Studio
         public readonly List<SearchMatch> ActiveSearchMatches = new List<SearchMatch>();
         public int ActiveSearchMatchIndex = -1;
         public bool IsFindBarVisible { get { return findBar != null && findBar.Visible; } }
+        public void HideFindBar()
+        {
+            if (findBar != null) findBar.Visible = false;
+            ActiveSearchMatches.Clear();
+            ActiveSearchMatchIndex = -1;
+            if (virtualCanvas != null) virtualCanvas.Invalidate();
+        }
         private Panel findBar;
         private CodeLessDarkInputBox findInput;
         private CodeLessDarkInputBox replaceInput;
@@ -2033,10 +2040,18 @@ namespace codeLess.Studio
                 selBadge = string.Format(" ({0} ch)", selTxt.Length);
             }
             string wrapBadge = CurrentBuffer.WordWrap ? "  •  Wrap" : "";
+            int effTabSize = (CurrentBuffer.CustomTabSize.HasValue && CurrentBuffer.CustomTabSize.Value > 0)
+                ? CurrentBuffer.CustomTabSize.Value
+                : (TabSize > 0 ? TabSize : 4);
+            string curLineText = (CurrentBuffer.Lines != null && CurrentBuffer.CursorLine >= 0 && CurrentBuffer.CursorLine < CurrentBuffer.Lines.Count)
+                ? (CurrentBuffer.Lines[CurrentBuffer.CursorLine] ?? "")
+                : "";
+            int clampedCol = Math.Max(0, Math.Min(CurrentBuffer.CursorCol, curLineText.Length));
+            int visualCol1 = EditorTextLayout.VisualColumn(curLineText, clampedCol, effTabSize) + 1;
             cursorPosLabel.Text = string.Format(
                 "Ln {0}, Col {1}{2}{3}  •  {4}{5}",
                 CurrentBuffer.CursorLine + 1,
-                CurrentBuffer.CursorCol + 1,
+                visualCol1,
                 selBadge,
                 wrapBadge,
                 (CurrentBuffer.Language ?? "TXT").ToUpperInvariant(),
@@ -5161,6 +5176,7 @@ namespace codeLess.Studio
             int line = buf.CursorLine;
             for (int l = line; l >= 0; l--)
             {
+                if (buf.FoldedLines != null && buf.FoldedLines.Contains(l)) continue;
                 int endL = FindFoldEndLine(buf.Lines, l);
                 if (endL > l && endL >= line)
                 {
@@ -5204,8 +5220,16 @@ namespace codeLess.Studio
             if (buf == null) return;
             for (int l = 0; l < buf.Lines.Count; l++)
             {
-                if (FindFoldEndLine(buf.Lines, l) > l)
+                int endL = FindFoldEndLine(buf.Lines, l);
+                if (endL > l)
+                {
                     buf.FoldedLines.Add(l);
+                    if (buf.CursorLine > l && buf.CursorLine <= endL)
+                    {
+                        buf.CursorLine = l;
+                        buf.ClearSelection();
+                    }
+                }
             }
             buf.ClampCursor();
             this.Invalidate();
@@ -6443,7 +6467,9 @@ namespace codeLess.Studio
             if (e.KeyCode == Keys.Escape)
             {
                 buf.GhostText = null;
-                if (buf.HasMultiCursors)
+                if (owner.IsFindBarVisible)
+                    owner.HideFindBar();
+                else if (buf.HasMultiCursors)
                     buf.ClearExtraCarets();
                 else
                     buf.ClearSelection();
@@ -6456,6 +6482,11 @@ namespace codeLess.Studio
         protected override void OnKeyPress(KeyPressEventArgs e)
         {
             ClearRowEndAffinityWF();
+            if (!char.IsControl(e.KeyChar) && e.KeyChar != '\x7f' && PreviewCharHandler != null && PreviewCharHandler(e.KeyChar))
+            {
+                e.Handled = true;
+                return;
+            }
             owner.QuickSuggestPending = LspEditing.IsWordChar(e.KeyChar); // typing an identifier opens suggestions (QA #31)
             OnKeyPressCore(e);
             if (e.Handled && !char.IsControl(e.KeyChar) && e.KeyChar != '\x7f' && CharTyped != null) CharTyped(e.KeyChar);
@@ -6463,6 +6494,8 @@ namespace codeLess.Studio
 
         /// <summary>Called before the editor handles a key; return true to swallow it (LSP completion / shortcuts).</summary>
         public Func<KeyEventArgs, bool> PreviewKeyHandler;
+        /// <summary>Called before a typed character is inserted; return true to swallow it (LSP commit characters).</summary>
+        public Func<char, bool> PreviewCharHandler;
         /// <summary>Raised after a typed character was inserted (as-you-type completion, signature help).</summary>
         public event Action<char> CharTyped;
         /// <summary>Raised on mouse moves over the canvas (client coordinates); used for LSP hover.</summary>

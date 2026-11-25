@@ -34,6 +34,8 @@ namespace codeLess.AvaloniaApp
         public string FilePath { get; set; } = "";
         /// <summary>Recently opened / open editors: listed first when the Quick Open query is empty.</summary>
         public bool IsRecent { get; set; }
+        /// <summary>1-based line number for live preview in Go to Symbol in Editor (@).</summary>
+        public int PreviewLine { get; set; }
 
         public string DisplayLabel => string.IsNullOrEmpty(Category) ? Title : $"{Category}: {Title}";
     }
@@ -47,12 +49,21 @@ namespace codeLess.AvaloniaApp
         public List<PaletteEntryItem> FilteredEntries { get; private set; } = new List<PaletteEntryItem>();
         public string InitialPrefix { get; private set; } = ">";
         private string originalThemeIdBeforePreview = null;
+        private bool symbolPreviewActive = false;
 
         public event Action<string> ThemePreviewRequested;
         public event Action<int> GoToLineRequested;
+        public event Action<int, int> GoToLineAndColumnRequested;
+        public event Action<int> SymbolLinePreviewRequested;
+        public event Action SymbolPreviewCaptureRequested;
+        public event Action SymbolPreviewRestoreRequested;
         /// <summary>(path, 1-based line or 0, 1-based column or 0)</summary>
         public event Action<string, int, int> FileOpenRequested;
         public event Action<string, int, int> FileOpenToSideRequested;
+        public Func<List<PaletteEntryItem>> FileEntriesProvider { get; set; }
+        public Func<List<PaletteEntryItem>> CommandEntriesProvider { get; set; }
+        public Func<List<PaletteEntryItem>> EditorSymbolEntriesProvider { get; set; }
+        public Func<List<PaletteEntryItem>> WorkspaceSymbolEntriesProvider { get; set; }
         public List<string> RecentCommandTitles { get; } = new List<string>();
         private int pendingQuickOpenLine;
         private int pendingQuickOpenColumn;
@@ -102,7 +113,11 @@ namespace codeLess.AvaloniaApp
             rootStack.Children.Add(ResultsListBox);
             Child = rootStack;
 
-            SearchInput.TextChanged += (s, e) => RefreshFilter();
+            SearchInput.PropertyChanged += (s, e) =>
+            {
+                if (e.Property == TextBox.TextProperty)
+                    RefreshFilter();
+            };
             SearchInput.KeyDown += OnSearchKeyDown;
             SearchInput.AddHandler(InputElement.KeyDownEvent, (s, e) =>
             {
@@ -120,6 +135,15 @@ namespace codeLess.AvaloniaApp
                     var item = FilteredEntries[idx];
                     if (!string.IsNullOrEmpty(item.PreviewThemeId))
                         ThemePreviewRequested?.Invoke(item.PreviewThemeId);
+                    if (item.PreviewLine > 0 && (SearchInput.Text ?? "").StartsWith("@"))
+                    {
+                        if (!symbolPreviewActive)
+                        {
+                            SymbolPreviewCaptureRequested?.Invoke();
+                            symbolPreviewActive = true;
+                        }
+                        SymbolLinePreviewRequested?.Invoke(item.PreviewLine);
+                    }
                 }
             };
             ResultsListBox.DoubleTapped += (s, e) => ExecuteSelected();
@@ -166,9 +190,16 @@ namespace codeLess.AvaloniaApp
         public void Open(string prefix, List<PaletteEntryItem> entries, string currentThemeId = null)
         {
             QuickOpenFileSearch = null;
+            CustomModeHint = null;
             InitialPrefix = prefix ?? "";
             AllEntries = entries ?? new List<PaletteEntryItem>();
             originalThemeIdBeforePreview = currentThemeId;
+            symbolPreviewActive = false;
+            if (InitialPrefix.StartsWith("@"))
+            {
+                SymbolPreviewCaptureRequested?.Invoke();
+                symbolPreviewActive = true;
+            }
             IsVisible = true;
             SearchInput.Text = InitialPrefix;
             SearchInput.CaretIndex = SearchInput.Text.Length;
@@ -178,10 +209,13 @@ namespace codeLess.AvaloniaApp
 
         /// <summary>Optional fast file search used by Quick Open for big workspaces (set by the host, cleared on Close).</summary>
         public Func<string, int, List<(PaletteEntryItem Entry, int Score)>> QuickOpenFileSearch { get; set; }
+        /// <summary>Optional custom hint for non-Quick-Open pickers (References, Definitions, Code Actions).</summary>
+        public string CustomModeHint { get; set; }
 
         public void Close(bool restorePreviewTheme = false)
         {
             QuickOpenFileSearch = null;
+            CustomModeHint = null;
             AllEntries.Clear();
             FilteredEntries.Clear();
             ResultsListBox.ItemsSource = null;
@@ -192,6 +226,11 @@ namespace codeLess.AvaloniaApp
             {
                 ThemePreviewRequested?.Invoke(originalThemeIdBeforePreview);
             }
+            if (restorePreviewTheme && symbolPreviewActive)
+            {
+                SymbolPreviewRestoreRequested?.Invoke();
+            }
+            symbolPreviewActive = false;
             originalThemeIdBeforePreview = null;
             Closed?.Invoke();
         }
@@ -214,113 +253,282 @@ namespace codeLess.AvaloniaApp
                 ResultsListBox.SelectedIndex = 0;
                 return;
             }
-            string query = raw;
-            if (query.StartsWith(">") || query.StartsWith("@") || query.StartsWith("#") || query.StartsWith(":"))
-                query = query.Substring(1).Trim();
-            else
-                query = query.Trim();
 
-            if (raw.StartsWith(":"))
-            {
-                ModeHintLabel.Text = "Type a line number and press Enter to jump (e.g. :42 or :42:10)";
-            }
-            else if (raw.StartsWith("@"))
-            {
-                ModeHintLabel.Text = "Go to Symbol in Editor (@)";
-            }
-            else if (raw.StartsWith("#"))
-            {
-                ModeHintLabel.Text = "Go to Symbol in Workspace (#)";
-            }
-            else if (raw.StartsWith(">"))
-            {
-                ModeHintLabel.Text = $"{AllEntries.Count} Commands Available — ↑↓ Navigate • Enter Run • Esc Close";
-            }
+            bool isCmdMode = raw.StartsWith(">");
+            bool isEdSymMode = raw.StartsWith("@");
+            bool isEdSymGrouped = raw.StartsWith("@:");
+            bool isWsSymMode = raw.StartsWith("#");
+            bool isLineMode = raw.StartsWith(":");
+            bool fileMode = string.IsNullOrEmpty(CustomModeHint) && !isCmdMode && !isEdSymMode && !isWsSymMode && !isLineMode;
+
+            string query;
+            if (isEdSymGrouped)
+                query = raw.Substring(2).Trim();
+            else if (isCmdMode || isEdSymMode || isWsSymMode || isLineMode)
+                query = raw.Substring(1).Trim();
             else
+                query = raw.Trim();
+
+            if (!string.IsNullOrEmpty(CustomModeHint))
             {
-                ModeHintLabel.Text = "Quick Open Files by Name (type '>' for commands, '@' for symbols, ':' for line)";
+                ModeHintLabel.Text = CustomModeHint;
             }
 
             pendingQuickOpenLine = 0;
             pendingQuickOpenColumn = 0;
-            bool fileMode = raw.Length == 0 || !(raw.StartsWith(">") || raw.StartsWith("@") || raw.StartsWith("#") || raw.StartsWith(":"));
-            bool hasFileEntries = fileMode && (QuickOpenFileSearch != null || AllEntries.Any(en => !string.IsNullOrEmpty(en.FilePath)));
-            if (hasFileEntries)
+
+            if (isLineMode)
             {
-                // Quick Open (Ctrl/Cmd+P): files only, fuzzy ranked, recent first, optional ":line[:col]" suffix.
-                string fileQuery = WorkspaceSearchEngine.SplitQuickOpenLineSuffix(query, out pendingQuickOpenLine, out pendingQuickOpenColumn);
-                var files = AllEntries.Where(en => !string.IsNullOrEmpty(en.FilePath));
-                if (string.IsNullOrEmpty(fileQuery))
+                ModeHintLabel.Text = "Type a line number and press Enter to jump (e.g. :42 or :42:10)";
+                int parsedLn = 0;
+                int parsedCol = 1;
+                string[] lnParts = query.Split(new[] { ':', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                bool validLn = lnParts.Length >= 1 && int.TryParse(lnParts[0].Trim(), out parsedLn) && parsedLn >= 1;
+                if (lnParts.Length >= 2 && int.TryParse(lnParts[1].Trim(), out int cVal) && cVal >= 1)
+                    parsedCol = cVal;
+                string promptTitle = validLn
+                    ? (lnParts.Length >= 2 ? $"Go to line {parsedLn} and column {parsedCol}" : $"Go to line {parsedLn}")
+                    : "Type a line number to navigate to (e.g. :42 or :42:10)";
+                FilteredEntries = new List<PaletteEntryItem>
                 {
-                    var ordered = files.Where(en => en.IsRecent).Concat(files.Where(en => !en.IsRecent));
-                    if (QuickOpenFileSearch != null) ordered = ordered.Concat(QuickOpenFileSearch("", 120).Select(x => x.Entry));
-                    FilteredEntries = ordered.Take(120).ToList();
+                    new PaletteEntryItem
+                    {
+                        Category = "Go to Line",
+                        Title = promptTitle,
+                        Shortcut = validLn ? $"Ln {parsedLn}, Col {parsedCol}" : "",
+                        Execute = () =>
+                        {
+                            if (validLn)
+                            {
+                                if (GoToLineAndColumnRequested != null)
+                                    GoToLineAndColumnRequested(parsedLn, parsedCol);
+                                else
+                                    GoToLineRequested?.Invoke(parsedLn);
+                            }
+                        }
+                    }
+                };
+                RenderListItems();
+                ResultsListBox.SelectedIndex = 0;
+                return;
+            }
+
+            if (isEdSymMode)
+            {
+                if (!symbolPreviewActive)
+                {
+                    SymbolPreviewCaptureRequested?.Invoke();
+                    symbolPreviewActive = true;
+                }
+                ModeHintLabel.Text = isEdSymGrouped ? "Go to Symbol in Editor by Category (@:)" : "Go to Symbol in Editor (@)";
+                var symItems = AllEntries.Where(en => en.PreviewLine > 0).ToList();
+                if (symItems.Count == 0 && EditorSymbolEntriesProvider != null)
+                    symItems = EditorSymbolEntriesProvider() ?? new List<PaletteEntryItem>();
+
+                if (string.IsNullOrEmpty(query))
+                {
+                    FilteredEntries = (isEdSymGrouped
+                        ? symItems.OrderBy(s => s.Category ?? "", StringComparer.OrdinalIgnoreCase).ThenBy(s => s.PreviewLine)
+                        : symItems.AsEnumerable()).Take(120).ToList();
                 }
                 else
                 {
-                    string[] toks = fileQuery.Replace('\\', '/').Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                    FilteredEntries = files
+                    string[] toks = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    var scored = symItems
                         .Select(en =>
                         {
                             int total = 0;
                             foreach (string t in toks)
                             {
-                                int byName = WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.Title, t);
-                                int byPath = t.IndexOf('/') >= 0 || byName == 0
-                                    ? WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.stringSubtitleOrPath.Replace('\\', '/'), t) / 2
-                                    : 0;
-                                int sc = Math.Max(byName, byPath);
+                                int sc = Math.Max(
+                                    WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.Title ?? "", t),
+                                    WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.DisplayLabel ?? "", t));
                                 if (sc <= 0) return (Entry: en, Score: 0);
                                 total += sc;
                             }
-                            if (en.IsRecent) total += 15;
                             return (Entry: en, Score: total);
                         })
-                        .Where(x => x.Score > 0)
-                        // Large workspaces: the indexed file list is searched by QuickOpenFileIndex (top 120 only).
-                        .Concat(QuickOpenFileSearch != null ? QuickOpenFileSearch(fileQuery, 120) : new List<(PaletteEntryItem Entry, int Score)>())
-                        .OrderByDescending(x => x.Score)
-                        .ThenBy(x => x.Entry.stringSubtitleOrPath.Length)
+                        .Where(x => x.Score > 0);
+                    FilteredEntries = (isEdSymGrouped
+                        ? scored.OrderBy(x => x.Entry.Category ?? "", StringComparer.OrdinalIgnoreCase).ThenByDescending(x => x.Score).ThenBy(x => x.Entry.PreviewLine)
+                        : scored.OrderByDescending(x => x.Score).ThenBy(x => x.Entry.PreviewLine))
                         .Take(120)
                         .Select(x => x.Entry)
                         .ToList();
                 }
-                if (pendingQuickOpenLine > 0)
-                    ModeHintLabel.Text = $"Open file and go to line {pendingQuickOpenLine}" + (pendingQuickOpenColumn > 0 ? $", column {pendingQuickOpenColumn}" : "");
+                RenderListItems();
+                if (FilteredEntries.Count > 0)
+                    ResultsListBox.SelectedIndex = 0;
+                return;
             }
-            else if (raw.StartsWith(">") && string.IsNullOrEmpty(query))
+
+            if (isWsSymMode)
             {
-                var cmdItems = AllEntries.Where(en => string.IsNullOrEmpty(en.FilePath)).ToList();
+                ModeHintLabel.Text = "Go to Symbol in Workspace (#)";
+                var wsItems = (InitialPrefix == "#" && AllEntries.All(en => string.IsNullOrEmpty(en.FilePath) && en.PreviewLine <= 0))
+                    ? AllEntries
+                    : (WorkspaceSymbolEntriesProvider != null ? (WorkspaceSymbolEntriesProvider() ?? new List<PaletteEntryItem>()) : AllEntries);
+                if (string.IsNullOrEmpty(query))
+                {
+                    FilteredEntries = wsItems.Take(120).ToList();
+                }
+                else
+                {
+                    string[] toks = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    FilteredEntries = wsItems
+                        .Select(en =>
+                        {
+                            int total = 0;
+                            foreach (string t in toks)
+                            {
+                                int sc = Math.Max(
+                                    WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.Title ?? "", t),
+                                    WorkspaceSearchEngine.ComputeFuzzySubsequenceScore((en.DisplayLabel + " " + en.stringSubtitleOrPath).Trim(), t));
+                                if (sc <= 0) return (Entry: en, Score: 0);
+                                total += sc;
+                            }
+                            return (Entry: en, Score: total);
+                        })
+                        .Where(x => x.Score > 0)
+                        .OrderByDescending(x => x.Score)
+                        .ThenBy(x => (x.Entry.Title ?? "").Length)
+                        .Take(120)
+                        .Select(x => x.Entry)
+                        .ToList();
+                }
+                RenderListItems();
+                if (FilteredEntries.Count > 0)
+                    ResultsListBox.SelectedIndex = 0;
+                return;
+            }
+
+            if (fileMode)
+            {
+                if (string.IsNullOrEmpty(CustomModeHint))
+                    ModeHintLabel.Text = "Quick Open Files by Name (type '>' for commands, '@' for symbols, ':' for line)";
+                var files = AllEntries.Where(en => !string.IsNullOrEmpty(en.FilePath)).ToList();
+                if (files.Count == 0 && QuickOpenFileSearch == null && (!string.IsNullOrEmpty(InitialPrefix) || AllEntries.Count == 0) && FileEntriesProvider != null)
+                {
+                    files = FileEntriesProvider() ?? new List<PaletteEntryItem>();
+                }
+                if (files.Count > 0 || QuickOpenFileSearch != null)
+                {
+                    // Quick Open (Ctrl/Cmd+P): files only, fuzzy ranked, recent first, optional ":line[:col]" suffix.
+                    string fileQuery = WorkspaceSearchEngine.SplitQuickOpenLineSuffix(query, out pendingQuickOpenLine, out pendingQuickOpenColumn);
+                    if (string.IsNullOrEmpty(fileQuery))
+                    {
+                        var ordered = files.Where(en => en.IsRecent).Concat(files.Where(en => !en.IsRecent));
+                        if (QuickOpenFileSearch != null) ordered = ordered.Concat(QuickOpenFileSearch("", 120).Select(x => x.Entry));
+                        FilteredEntries = ordered.Take(120).ToList();
+                    }
+                    else
+                    {
+                        string[] toks = fileQuery.Replace('\\', '/').Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        FilteredEntries = files
+                            .Select(en =>
+                            {
+                                int total = 0;
+                                foreach (string t in toks)
+                                {
+                                    int byName = WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.Title, t);
+                                    int byPath = t.IndexOf('/') >= 0 || byName == 0
+                                        ? WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(en.stringSubtitleOrPath.Replace('\\', '/'), t) / 2
+                                        : 0;
+                                    int sc = Math.Max(byName, byPath);
+                                    if (sc <= 0) return (Entry: en, Score: 0);
+                                    total += sc;
+                                }
+                                if (en.IsRecent) total += 15;
+                                return (Entry: en, Score: total);
+                            })
+                            .Where(x => x.Score > 0)
+                            // Large workspaces: the indexed file list is searched by QuickOpenFileIndex (top 120 only).
+                            .Concat(QuickOpenFileSearch != null ? QuickOpenFileSearch(fileQuery, 120) : new List<(PaletteEntryItem Entry, int Score)>())
+                            .OrderByDescending(x => x.Score)
+                            .ThenBy(x => x.Entry.stringSubtitleOrPath.Length)
+                            .Take(120)
+                            .Select(x => x.Entry)
+                            .ToList();
+                    }
+                    if (pendingQuickOpenLine > 0)
+                        ModeHintLabel.Text = $"Open file and go to line {pendingQuickOpenLine}" + (pendingQuickOpenColumn > 0 ? $", column {pendingQuickOpenColumn}" : "");
+                    RenderListItems();
+                    if (FilteredEntries.Count > 0)
+                        ResultsListBox.SelectedIndex = 0;
+                    return;
+                }
+            }
+
+            var cmdEntries = isCmdMode
+                ? AllEntries.Where(en => string.IsNullOrEmpty(en.FilePath) && en.PreviewLine <= 0).ToList()
+                : AllEntries.ToList();
+            if (isCmdMode && cmdEntries.Count == 0 && CommandEntriesProvider != null)
+                cmdEntries = CommandEntriesProvider() ?? new List<PaletteEntryItem>();
+
+            if (isCmdMode)
+            {
+                ModeHintLabel.Text = $"{cmdEntries.Count} Commands Available — ↑↓ Navigate • Enter Run • Esc Close";
+            }
+            else if (!string.IsNullOrEmpty(CustomModeHint))
+            {
+                ModeHintLabel.Text = CustomModeHint;
+            }
+
+            if (isCmdMode && string.IsNullOrEmpty(query))
+            {
                 var recentSet = new List<PaletteEntryItem>();
                 foreach (string rt in RecentCommandTitles)
                 {
-                    var found = cmdItems.FirstOrDefault(c => string.Equals(c.Title, rt, StringComparison.OrdinalIgnoreCase));
+                    var found = cmdEntries.FirstOrDefault(c => string.Equals(c.Title, rt, StringComparison.OrdinalIgnoreCase));
                     if (found != null && !recentSet.Contains(found))
                     {
                         found.IsRecent = true;
                         recentSet.Add(found);
                     }
                 }
-                FilteredEntries = recentSet.Concat(cmdItems.Where(c => !recentSet.Contains(c))).Take(120).ToList();
+                FilteredEntries = recentSet.Concat(cmdEntries.Where(c => !recentSet.Contains(c))).Take(120).ToList();
             }
             else if (string.IsNullOrEmpty(query))
             {
-                FilteredEntries = AllEntries.Take(120).ToList();
+                FilteredEntries = cmdEntries.Take(120).ToList();
             }
             else
             {
                 string[] tokens = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                bool commandMode = raw.StartsWith(">");
-                FilteredEntries = AllEntries
-                    .Where(item => !commandMode || string.IsNullOrEmpty(item.FilePath))
-                    .Where(item =>
+                FilteredEntries = cmdEntries
+                    .Select(item =>
                     {
-                        string hay = (item.Category + " " + item.Title + " " + item.stringSubtitleOrPath + " " + item.Shortcut).ToLowerInvariant();
-                        return tokens.All(t => hay.Contains(t.ToLowerInvariant()));
+                        int total = 0;
+                        foreach (string t in tokens)
+                        {
+                            int sTitle = WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(item.Title ?? "", t);
+                            int sLabel = WorkspaceSearchEngine.ComputeFuzzySubsequenceScore(item.DisplayLabel ?? "", t);
+                            int sSub = 0;
+                            if (!string.IsNullOrEmpty(item.stringSubtitleOrPath) && item.stringSubtitleOrPath.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)
+                                sSub = 30;
+                            else if (!string.IsNullOrEmpty(item.Shortcut) && item.Shortcut.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)
+                                sSub = 25;
+                            int sc = Math.Max(sTitle, Math.Max(sLabel, sSub));
+                            if (sc <= 0) return (Entry: item, Score: 0);
+                            total += sc;
+                        }
+                        if ((item.Title ?? "").StartsWith(query, StringComparison.OrdinalIgnoreCase))
+                            total += 80;
+                        else if ((item.DisplayLabel ?? "").StartsWith(query, StringComparison.OrdinalIgnoreCase))
+                            total += 60;
+                        int mruIdx = RecentCommandTitles.FindIndex(rt => string.Equals(rt, item.Title, StringComparison.OrdinalIgnoreCase));
+                        if (mruIdx >= 0)
+                        {
+                            item.IsRecent = true;
+                            total += Math.Max(15, 60 - mruIdx * 5);
+                        }
+                        return (Entry: item, Score: total);
                     })
-                    .OrderByDescending(item => item.Title.StartsWith(query, StringComparison.OrdinalIgnoreCase))
-                    .ThenBy(item => item.DisplayLabel.Length)
+                    .Where(x => x.Score > 0)
+                    .OrderByDescending(x => x.Score)
+                    .ThenBy(x => x.Entry.DisplayLabel.Length)
                     .Take(120)
+                    .Select(x => x.Entry)
                     .ToList();
             }
 
@@ -495,11 +703,18 @@ namespace codeLess.AvaloniaApp
             string raw = (SearchInput.Text ?? "").Trim();
             if (raw.StartsWith(":"))
             {
-                string numPart = raw.Substring(1).Split(':')[0].Trim();
-                if (int.TryParse(numPart, out int lineNum) && lineNum >= 1)
+                string[] parts = raw.Substring(1).Split(new[] { ':', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 1 && int.TryParse(parts[0].Trim(), out int lineNum) && lineNum >= 1)
                 {
+                    int colNum = 1;
+                    if (parts.Length >= 2 && int.TryParse(parts[1].Trim(), out int cVal) && cVal >= 1)
+                        colNum = cVal;
+                    symbolPreviewActive = false;
                     Close(restorePreviewTheme: false);
-                    GoToLineRequested?.Invoke(lineNum);
+                    if (GoToLineAndColumnRequested != null)
+                        GoToLineAndColumnRequested(lineNum, colNum);
+                    else
+                        GoToLineRequested?.Invoke(lineNum);
                     return;
                 }
             }
@@ -520,6 +735,7 @@ namespace codeLess.AvaloniaApp
                     RecentCommandTitles.Insert(0, chosen.Title);
                 }
                 originalThemeIdBeforePreview = null; // keep chosen theme
+                symbolPreviewActive = false;
                 int line = pendingQuickOpenLine, col = pendingQuickOpenColumn;
                 Close(restorePreviewTheme: false);
                 if (!string.IsNullOrEmpty(chosen.FilePath))

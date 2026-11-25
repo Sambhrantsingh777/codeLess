@@ -239,6 +239,21 @@ namespace codeLess.Studio
                     if (e > ws + 1)
                     {
                         Emit(result, ws, e, CodeTokenKind.Keyword);
+                        string dirName = line.Substring(ws + 1, e - (ws + 1));
+                        if (dirName == "include" || dirName == "import" || dirName == "include_next")
+                        {
+                            int p = e;
+                            while (p < n && (line[p] == ' ' || line[p] == '\t')) p++;
+                            if (p < n && line[p] == '<')
+                            {
+                                int closeAngle = line.IndexOf('>', p + 1);
+                                if (closeAngle > p)
+                                {
+                                    Emit(result, p, closeAngle + 1, CodeTokenKind.String);
+                                    e = closeAngle + 1;
+                                }
+                            }
+                        }
                         segStart = i = e;
                     }
                 }
@@ -371,6 +386,11 @@ namespace codeLess.Studio
         private static void AddCode(List<CodeToken> into, string line, int from, int to, Family f)
         {
             if (to <= from) return;
+            if (f == Family.Markup)
+            {
+                TokenizeMarkup(into, line, from, to);
+                return;
+            }
             if (f != Family.Css && f != Family.ScssLess)
             {
                 // no substring: multi-MB minified lines are tokenized in place
@@ -381,6 +401,47 @@ namespace codeLess.Studio
             List<CodeToken> toks = SimpleCodeTokenizer.Tokenize(seg, false, false);
             toks = CssHashTokens(seg, toks);
             foreach (CodeToken t in toks) into.Add(new CodeToken(t.Start + from, t.Length, t.Kind));
+        }
+
+        private static void TokenizeMarkup(List<CodeToken> into, string line, int from, int to)
+        {
+            int i = from;
+            while (i < to)
+            {
+                if (line[i] == '<')
+                {
+                    int p = i + 1;
+                    if (p < to && (line[p] == '/' || line[p] == '!')) p++;
+                    int nameStart = p;
+                    while (p < to && (char.IsLetterOrDigit(line[p]) || line[p] == '-' || line[p] == ':' || line[p] == '_')) p++;
+                    if (p > nameStart)
+                    {
+                        Emit(into, nameStart, p, CodeTokenKind.Keyword);
+                        i = p;
+                        while (i < to && line[i] != '>')
+                        {
+                            while (i < to && char.IsWhiteSpace(line[i])) i++;
+                            if (i >= to || line[i] == '>' || line[i] == '/') { if (i < to && line[i] == '/') i++; break; }
+                            if (line[i] == '"' || line[i] == '\'')
+                            {
+                                char q = line[i];
+                                int qs = i++;
+                                while (i < to && line[i] != q) i++;
+                                if (i < to) i++;
+                                Emit(into, qs, i, CodeTokenKind.String);
+                                continue;
+                            }
+                            int attrStart = i;
+                            while (i < to && (char.IsLetterOrDigit(line[i]) || line[i] == '-' || line[i] == ':' || line[i] == '_' || line[i] == '.')) i++;
+                            if (i > attrStart) Emit(into, attrStart, i, CodeTokenKind.Type);
+                            else i++;
+                        }
+                        if (i < to && line[i] == '>') i++;
+                        continue;
+                    }
+                }
+                i++;
+            }
         }
 
         /// <summary>CSS: "#fff" / "#1e1e1e" are colors (number), "#main" an id selector (type).</summary>

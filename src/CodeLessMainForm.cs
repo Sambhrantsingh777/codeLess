@@ -254,9 +254,10 @@ namespace codeLess.Studio
         private Label statusChordLabel;
 
         // Navigation History (Go -> Back / Forward) & Chord State
-        private List<Tuple<string, int>> navHistory = new List<Tuple<string, int>>();
+        private List<Tuple<string, int, int>> navHistory = new List<Tuple<string, int, int>>();
         private int navHistoryIndex = -1;
         private bool suppressNavRecord = false;
+        private Tuple<string, int, int> lastEditLocation = Tuple.Create("", 0, 0);
         private DateTime lastCtrlKChordTime = DateTime.MinValue;
         private bool isZenMode = false;
         private bool isFullScreen = false;
@@ -714,15 +715,15 @@ namespace codeLess.Studio
                 this.Text = "codeLess";
         }
 
-        public void RecordNavigationHistory(string filePath, int line1Based, bool newEntryForSameFile = false)
+        public void RecordNavigationHistory(string filePath, int line1Based, bool newEntryForSameFile = false, int col1Based = 1)
         {
             if (suppressNavRecord || string.IsNullOrEmpty(filePath)) return;
-            Tuple<string, int> entry = Tuple.Create(filePath, Math.Max(1, line1Based));
+            Tuple<string, int, int> entry = Tuple.Create(filePath, Math.Max(1, line1Based), Math.Max(1, col1Based));
             if (navHistoryIndex >= 0 && navHistoryIndex < navHistory.Count)
             {
                 var cur = navHistory[navHistoryIndex];
                 if (string.Equals(cur.Item1, entry.Item1, StringComparison.OrdinalIgnoreCase) &&
-                    (!newEntryForSameFile || cur.Item2 == entry.Item2))
+                    (!newEntryForSameFile || (cur.Item2 == entry.Item2 && cur.Item3 == entry.Item3)))
                 {
                     navHistory[navHistoryIndex] = entry;
                     return;
@@ -738,7 +739,7 @@ namespace codeLess.Studio
         public bool NavigateBack()
         {
             // Store where the caret is now so Forward returns here.
-            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1, false, activeTab.CursorCol + 1);
             if (navHistoryIndex <= 0 || navHistory.Count == 0) return false;
             navHistoryIndex--;
             var target = navHistory[navHistoryIndex];
@@ -748,7 +749,8 @@ namespace codeLess.Studio
                 if (File.Exists(target.Item1))
                 {
                     OpenFileInTab(target.Item1);
-                    editorControl.JumpToLine(target.Item2);
+                    editorControl.JumpToLineAndColumn(target.Item2, Math.Max(1, target.Item3));
+                    if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.Focus();
                     return true;
                 }
             }
@@ -758,7 +760,7 @@ namespace codeLess.Studio
 
         public bool NavigateForward()
         {
-            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1, false, activeTab.CursorCol + 1);
             if (navHistoryIndex >= navHistory.Count - 1 || navHistory.Count == 0) return false;
             navHistoryIndex++;
             var target = navHistory[navHistoryIndex];
@@ -768,12 +770,20 @@ namespace codeLess.Studio
                 if (File.Exists(target.Item1))
                 {
                     OpenFileInTab(target.Item1);
-                    editorControl.JumpToLine(target.Item2);
+                    editorControl.JumpToLineAndColumn(target.Item2, Math.Max(1, target.Item3));
+                    if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.Focus();
                     return true;
                 }
             }
             finally { suppressNavRecord = false; }
             return false;
+        }
+
+        public void NavigateToLastEditLocation()
+        {
+            if (lastEditLocation == null || string.IsNullOrEmpty(lastEditLocation.Item1) || lastEditLocation.Item2 <= 0) return;
+            OpenFileAtLocation(lastEditLocation.Item1, lastEditLocation.Item2, Math.Max(1, lastEditLocation.Item3), 0);
+            if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.Focus();
         }
 
         public void JumpToProblemOffset(int delta)
@@ -942,13 +952,43 @@ namespace codeLess.Studio
                 : (langRaw == "txt" || langRaw == "plaintext") ? "Plain Text"
                 : langRaw.ToUpperInvariant();
 
-            string extra = "";
-            if (buf.HasMultiCursors)
-                extra = string.Format(" ({0} cursors)", 1 + buf.ExtraCarets.Count);
-            else if (buf.HasSelection())
-                extra = string.Format(" ({0} selected)", buf.GetSelectedText().Length);
-
-            string lnColText = string.Format("Ln {0}, Col {1}{2}", buf.CursorLine + 1, buf.CursorCol + 1, extra);
+            int carets = 1 + (buf.ExtraCarets != null ? buf.ExtraCarets.Count : 0);
+            int selectedChars = buf.HasSelection() ? (buf.GetSelectedText() ?? "").Length : 0;
+            if (buf.ExtraCarets != null && buf.ExtraCarets.Count > 0 && buf.Lines != null)
+            {
+                foreach (var ec in buf.ExtraCarets)
+                {
+                    if (!ec.HasSelection()) continue;
+                    int sLine = ec.AnchorLine, sCol = ec.AnchorCol, eLine = ec.Line, eCol = ec.Col;
+                    if (sLine > eLine || (sLine == eLine && sCol > eCol))
+                    {
+                        int tl = sLine; sLine = eLine; eLine = tl;
+                        int tc = sCol; sCol = eCol; eCol = tc;
+                    }
+                    sLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, sLine));
+                    eLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, eLine));
+                    if (sLine == eLine)
+                    {
+                        string ln = buf.Lines[sLine] ?? "";
+                        selectedChars += Math.Max(0, Math.Min(ln.Length, eCol) - Math.Max(0, Math.Min(ln.Length, sCol)));
+                    }
+                    else
+                    {
+                        string firstLn = buf.Lines[sLine] ?? "";
+                        selectedChars += Math.Max(0, firstLn.Length - Math.Max(0, Math.Min(firstLn.Length, sCol))) + 1;
+                        for (int ml = sLine + 1; ml < eLine; ml++)
+                            selectedChars += (buf.Lines[ml] ?? "").Length + 1;
+                        string lastLn = buf.Lines[eLine] ?? "";
+                        selectedChars += Math.Max(0, Math.Min(lastLn.Length, eCol));
+                    }
+                }
+            }
+            string curLineText = (buf.Lines != null && buf.CursorLine >= 0 && buf.CursorLine < buf.Lines.Count)
+                ? (buf.Lines[buf.CursorLine] ?? "")
+                : "";
+            int clampedCol = Math.Max(0, Math.Min(buf.CursorCol, curLineText.Length));
+            int visualCol1 = EditorTextLayout.VisualColumn(curLineText, clampedCol, effTabSize) + 1;
+            string lnColText = WorkbenchParityHelper.FormatStatusLnCol(buf.CursorLine + 1, visualCol1, selectedChars, carets);
             statusCursorLangLabel.Text = string.Format(
                 "{0}  •  {1}  •  {2}  •  {3}",
                 lnColText,
@@ -985,6 +1025,12 @@ namespace codeLess.Studio
             {
                 e.SuppressKeyPress = true;
                 PromptOpenFolderDialog();
+                return true;
+            }
+            if (e.KeyCode == Keys.Q) // Ctrl+K Ctrl+Q -> Go to Last Edit Location
+            {
+                e.SuppressKeyPress = true;
+                NavigateToLastEditLocation();
                 return true;
             }
             if (e.KeyCode == Keys.S && !e.Control) // Ctrl+K S -> Save All
@@ -1911,23 +1957,32 @@ namespace codeLess.Studio
 
         private void ToggleLeftSidebarVisibility()
         {
+            bool hadFocus = leftSidebar != null && leftSidebar.ContainsFocus;
             leftSidebar.Visible = !leftSidebar.Visible;
             if (leftSplitter != null) leftSplitter.Visible = leftSidebar.Visible;
             if (layoutLeftBtn != null) layoutLeftBtn.Invalidate();
+            if (!leftSidebar.Visible && hadFocus && editorControl != null && editorControl.Canvas != null)
+                editorControl.Canvas.Focus();
         }
 
         private void ToggleBottomDockVisibility()
         {
+            bool hadFocus = bottomDockPanel != null && bottomDockPanel.ContainsFocus;
             bottomDockPanel.Visible = !bottomDockPanel.Visible;
             if (bottomSplitter != null) bottomSplitter.Visible = bottomDockPanel.Visible;
             if (layoutBottomBtn != null) layoutBottomBtn.Invalidate();
+            if (!bottomDockPanel.Visible && hadFocus && editorControl != null && editorControl.Canvas != null)
+                editorControl.Canvas.Focus();
         }
 
         private void ToggleRightDockVisibility()
         {
+            bool hadFocus = rightDock != null && rightDock.ContainsFocus;
             rightDock.Visible = !rightDock.Visible;
             if (rightSplitter != null) rightSplitter.Visible = rightDock.Visible;
             if (layoutRightBtn != null) layoutRightBtn.Invalidate();
+            if (!rightDock.Visible && hadFocus && editorControl != null && editorControl.Canvas != null)
+                editorControl.Canvas.Focus();
         }
 
         private void EnableNativeDarkTitleBar()
@@ -3120,6 +3175,7 @@ namespace codeLess.Studio
             ToolStripMenuItem goMenu = new ToolStripMenuItem("&Go");
             goMenu.DropDownItems.Add(CreateMenuItem("Back", "Alt+Left", () => NavigateBack()));
             goMenu.DropDownItems.Add(CreateMenuItem("Forward", "Alt+Right", () => NavigateForward()));
+            goMenu.DropDownItems.Add(CreateMenuItem("Last Edit Location", "Ctrl+K Ctrl+Q", () => NavigateToLastEditLocation()));
             goMenu.DropDownItems.Add(new ToolStripSeparator());
             goMenu.DropDownItems.Add(CreateMenuItem("Go to File...", "Ctrl+P", () => OpenCommandPalette("")));
             goMenu.DropDownItems.Add(CreateMenuItem("Go to Symbol in Workspace...", "Ctrl+T", () => OpenCommandPalette("#")));
@@ -3374,6 +3430,8 @@ if __name__ == '__main__':
             };
             ctrl.OnBufferModified += (buf) =>
             {
+                if (buf != null && (!string.IsNullOrEmpty(buf.FilePath) || !string.IsNullOrEmpty(buf.FileName)))
+                    lastEditLocation = Tuple.Create(!string.IsNullOrEmpty(buf.FilePath) ? buf.FilePath : buf.FileName, buf.CursorLine + 1, buf.CursorCol + 1);
                 if (buf != null && buf.IsDirty && UntitledFileDefaults.IsEmptyUntitled(buf)) buf.IsDirty = false; // empty untitled: nothing to save (VS Code)
                 if (lspController != null) lspController.OnBufferModified(buf);
                 bool previewCleared = false;
@@ -3893,7 +3951,13 @@ if __name__ == '__main__':
                 if (activeTab != null && activeTab.Symbols != null && activeTab.Symbols.Count > 0)
                 {
                     if (idx < activeTab.Symbols.Count)
+                    {
+                        if (!string.IsNullOrEmpty(activeTab.FilePath))
+                            RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1, false, activeTab.CursorCol + 1);
                         editorControl.JumpToLine(activeTab.Symbols[idx].Line);
+                        if (!string.IsNullOrEmpty(activeTab.FilePath))
+                            RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1, true, activeTab.CursorCol + 1);
+                    }
                 }
                 else if (idx < outlineFallbackTargets.Count)
                 {
@@ -5312,7 +5376,7 @@ if __name__ == '__main__':
             if (string.IsNullOrEmpty(filePath)) return null;
             bool recording = !suppressNavRecord;
             if (recording && activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
-                RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
+                RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1, false, activeTab.CursorCol + 1);
             EditorTabBuffer tab;
             suppressNavRecord = true;
             try { tab = OpenFileInTab(filePath); }
@@ -5336,7 +5400,7 @@ if __name__ == '__main__':
                 editorControl.UpdateCursorStatusLabel();
                 editorControl.Invalidate(true);
             }
-            if (recording) RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1, true);
+            if (recording) RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1, true, tab.CursorCol + 1);
             return tab;
         }
 
@@ -11507,6 +11571,7 @@ if __name__ == '__main__':
             else if (cmdId == "zoom_reset") { ZoomWorkbench(0f); }
             else if (cmdId == "go_back") NavigateBack();
             else if (cmdId == "go_forward") NavigateForward();
+            else if (cmdId == "go_last_edit" || cmdId == "workbench.action.navigateToLastEditLocation") NavigateToLastEditLocation();
             else if (cmdId == "go_to_file") OpenCommandPalette("");
             else if (cmdId == "go_to_symbol_workspace") OpenCommandPalette("#");
             else if (cmdId == "go_to_symbol_editor") OpenCommandPalette("@");
@@ -12768,6 +12833,9 @@ if __name__ == '__main__':
             keybindingsWin.BindAction("workbench.action.gotoLine", delegate { OpenCommandPalette(":"); });
             keybindingsWin.BindAction("workbench.action.gotoSymbol", delegate { OpenCommandPalette("@"); });
             keybindingsWin.BindAction("workbench.action.showAllSymbols", delegate { OpenCommandPalette("#"); });
+            keybindingsWin.BindAction("workbench.action.navigateBack", delegate { NavigateBack(); });
+            keybindingsWin.BindAction("workbench.action.navigateForward", delegate { NavigateForward(); });
+            keybindingsWin.BindAction("workbench.action.navigateToLastEditLocation", delegate { NavigateToLastEditLocation(); });
             keybindingsWin.BindAction("workbench.action.openSettings", delegate { OpenSettingsDialog(); });
             keybindingsWin.BindAction("workbench.action.openGlobalKeybindings", delegate { OpenKeyboardShortcutsDialog(); });
             keybindingsWin.BindAction("workbench.action.toggleZenMode", delegate { ToggleZenMode(); });

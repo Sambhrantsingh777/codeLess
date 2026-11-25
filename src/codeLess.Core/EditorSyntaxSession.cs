@@ -21,6 +21,7 @@ namespace codeLess.Studio
         public static bool EmptySelectionClipboard = true;
         public static bool UseTabStops = true;
         public static bool AcceptSuggestionOnEnter = true;
+        public static bool AcceptSuggestionOnCommitCharacter = true;
         public static int CursorSurroundingLines = 0;
         public static string RenderWhitespace = "selection";
 
@@ -39,6 +40,7 @@ namespace codeLess.Studio
             EmptySelectionClipboard = s.EditorEmptySelectionClipboard;
             UseTabStops = s.EditorUseTabStops;
             AcceptSuggestionOnEnter = s.EditorAcceptSuggestionOnEnter;
+            AcceptSuggestionOnCommitCharacter = s.EditorAcceptSuggestionOnCommitCharacter;
             CursorSurroundingLines = s.EditorCursorSurroundingLines;
             RenderWhitespace = string.IsNullOrEmpty(s.EditorRenderWhitespace) ? (s.ShowRenderWhitespace ? "all" : "selection") : s.EditorRenderWhitespace;
             EditorWordNavigation.WordSeparators = string.IsNullOrEmpty(s.EditorWordSeparators) ? EditorWordNavigation.DefaultWordSeparators : s.EditorWordSeparators;
@@ -61,6 +63,7 @@ namespace codeLess.Studio
             s.EditorEmptySelectionClipboard = EmptySelectionClipboard;
             s.EditorUseTabStops = UseTabStops;
             s.EditorAcceptSuggestionOnEnter = AcceptSuggestionOnEnter;
+            s.EditorAcceptSuggestionOnCommitCharacter = AcceptSuggestionOnCommitCharacter;
             s.EditorCursorSurroundingLines = CursorSurroundingLines;
             s.EditorRenderWhitespace = RenderWhitespace;
             s.EditorWordSeparators = EditorWordNavigation.WordSeparators;
@@ -84,6 +87,7 @@ namespace codeLess.Studio
         private bool editorEmptySelectionClipboard = true;
         private bool editorUseTabStops = true;
         private bool editorAcceptSuggestionOnEnter = true;
+        private bool editorAcceptSuggestionOnCommitCharacter = true;
         private int editorCursorSurroundingLines = 0;
         private string editorRenderWhitespace = "selection";
         private string editorWordSeparators = EditorWordNavigation.DefaultWordSeparators;
@@ -100,6 +104,7 @@ namespace codeLess.Studio
         public bool EditorEmptySelectionClipboard { get { return editorEmptySelectionClipboard; } set { editorEmptySelectionClipboard = value; } }
         public bool EditorUseTabStops { get { return editorUseTabStops; } set { editorUseTabStops = value; } }
         public bool EditorAcceptSuggestionOnEnter { get { return editorAcceptSuggestionOnEnter; } set { editorAcceptSuggestionOnEnter = value; } }
+        public bool EditorAcceptSuggestionOnCommitCharacter { get { return editorAcceptSuggestionOnCommitCharacter; } set { editorAcceptSuggestionOnCommitCharacter = value; } }
         public int EditorCursorSurroundingLines { get { return editorCursorSurroundingLines; } set { editorCursorSurroundingLines = Math.Max(0, value); } }
         public string EditorRenderWhitespace { get { return editorRenderWhitespace; } set { editorRenderWhitespace = value ?? "selection"; } }
         public string EditorWordSeparators { get { return editorWordSeparators; } set { editorWordSeparators = string.IsNullOrEmpty(value) ? EditorWordNavigation.DefaultWordSeparators : value; } }
@@ -178,7 +183,7 @@ namespace codeLess.Studio
             return name;
         }
 
-        private static string EffectiveSyntaxPathFor(EditorTabBuffer buf)
+        public static string EffectiveSyntaxPathFor(EditorTabBuffer buf)
         {
             string p = SyntaxPathFor(buf);
             if (buf != null && buf.LanguageModeOverridden && !string.IsNullOrEmpty(buf.Language))
@@ -230,6 +235,15 @@ namespace codeLess.Studio
         {
             isGuess = false;
             if (lines == null || line < 0 || line >= lines.Count) return null;
+            if (string.IsNullOrEmpty(language) || string.Equals(language, "txt", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    string ext = System.IO.Path.GetExtension(path ?? "").TrimStart('.');
+                    if (!string.IsNullOrEmpty(ext)) language = ext;
+                }
+                catch { }
+            }
             if (fallback == null || !string.Equals(fallback.Language, language ?? "", StringComparison.Ordinal))
             {
                 fallback = new FallbackTokenCache(language);

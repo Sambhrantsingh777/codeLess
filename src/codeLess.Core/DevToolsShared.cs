@@ -109,7 +109,8 @@ namespace codeLess.Studio
             "enum", "namespace", "using", "import", "from", "export", "default", "function", "def", "var", "let", "fn",
             "new", "this", "self", "base", "super", "override", "virtual", "abstract", "sealed", "async", "true", "false",
             "null", "None", "True", "False", "nil", "void", "lambda", "package", "func", "type", "impl", "pub", "mut",
-            "trait", "extends", "implements", "typeof", "instanceof", "delete", "get", "set", "echo", "then", "fi", "esac"
+            "trait", "extends", "implements", "typeof", "instanceof", "delete", "get", "set", "echo", "then", "fi", "esac",
+            "template", "typename", "constexpr", "inline"
         };
 
         private static readonly HashSet<string> Types = new HashSet<string>(StringComparer.Ordinal)

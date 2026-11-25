@@ -157,6 +157,7 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.gotoSymbol", () => OpenCommandPalette("@"));
             keybindings.BindAction("workbench.action.navigateBack", () => NavigateBack());
             keybindings.BindAction("workbench.action.navigateForward", () => NavigateForward());
+            keybindings.BindAction("workbench.action.navigateToLastEditLocation", () => NavigateToLastEditLocation());
             keybindings.BindAction("workbench.action.openRecent", () => { var r = RecentFolders().FirstOrDefault(); if (r != null) LoadWorkspace(r); });
             keybindings.BindAction("workbench.action.quit", () => Close());
             keybindings.BindAction("workbench.action.showAllSymbols", () => OpenCommandPalette("#"));

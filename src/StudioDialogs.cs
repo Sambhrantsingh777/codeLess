@@ -1188,6 +1188,8 @@ namespace codeLess.Studio
                 () => { SelectedCommandId = "go_back"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Go", "Go: Forward", "Alt+Right",
                 () => { SelectedCommandId = "go_forward"; this.DialogResult = DialogResult.OK; this.Close(); });
+            addCmd("Go", "Go: Go to Last Edit Location", "Ctrl+K Ctrl+Q",
+                () => { SelectedCommandId = "go_last_edit"; this.DialogResult = DialogResult.OK; this.Close(); });
             addCmd("Go", "Go: Go to File...", "Ctrl+P",
                 () => { searchBox.Text = ""; searchBox.SelectionStart = 0; });
             addCmd("Go", "Go: Go to Symbol in Workspace...", "Ctrl+T",
@@ -1536,12 +1538,15 @@ namespace codeLess.Studio
                 }
                 else if (rawQ.StartsWith("@"))
                 {
-                    string symQ = rawQ.Substring(1).Trim().ToLowerInvariant();
-                    filtered = entries
+                    bool grouped = rawQ.StartsWith("@:");
+                    string symQ = (grouped ? rawQ.Substring(2) : rawQ.Substring(1)).Trim().ToLowerInvariant();
+                    var matches = entries
                         .Where(x => x.RawText.StartsWith("@"))
                         .Select(x => new { Entry = x, Score = fuzzyScore(x.DisplayTitle, symQ) })
-                        .Where(x => x.Score > 0)
-                        .OrderByDescending(x => x.Score)
+                        .Where(x => x.Score > 0);
+                    filtered = (grouped
+                        ? matches.OrderBy(x => x.Entry.DisplayTitle, StringComparer.OrdinalIgnoreCase).ThenByDescending(x => x.Score)
+                        : matches.OrderByDescending(x => x.Score))
                         .Select(x => x.Entry)
                         .Take(60)
                         .ToList();

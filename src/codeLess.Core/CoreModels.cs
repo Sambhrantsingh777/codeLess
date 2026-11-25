@@ -883,6 +883,8 @@ namespace codeLess.Studio
         public int AnchorCol = -1;
         /// <summary>Extra carets (with their selections) at the time of the snapshot; null when there were none (QA #29).</summary>
         public EditorCaret[] ExtraCarets;
+        /// <summary>Optional cross-file workspace edit undo/redo companion (fires with redo=false on Undo, redo=true on Redo).</summary>
+        internal Action<bool> LinkedUndoRedo;
         internal string[] FullLines;
         internal int DeltaPrefix;
         internal int DeltaSuffix;
@@ -2077,10 +2079,16 @@ namespace codeLess.Studio
             LastTypingUndoTick = 0;
             LastTypingUndoLine = -1;
             List<string> before = Lines;
+            BufferSnapshot popped = PopSnapshot(UndoStack);
             BufferSnapshot redoStep = CaptureSnapshot();
+            redoStep.LinkedUndoRedo = popped.LinkedUndoRedo;
             PushSnapshot(RedoStack, redoStep);
-            RestoreSnapshot(PopSnapshot(UndoStack));
+            RestoreSnapshot(popped);
             ApplyUndoRedoSelection(before, redoStep, true); // EditorUndoReveal.cs
+            if (popped.LinkedUndoRedo != null)
+            {
+                try { popped.LinkedUndoRedo(false); } catch { }
+            }
             return true;
         }
 
@@ -2090,10 +2098,16 @@ namespace codeLess.Studio
             LastTypingUndoTick = 0;
             LastTypingUndoLine = -1;
             List<string> before = Lines;
+            BufferSnapshot popped = PopSnapshot(RedoStack);
             BufferSnapshot undoStep = CaptureSnapshot();
+            undoStep.LinkedUndoRedo = popped.LinkedUndoRedo;
             PushSnapshot(UndoStack, undoStep);
-            RestoreSnapshot(PopSnapshot(RedoStack));
+            RestoreSnapshot(popped);
             ApplyUndoRedoSelection(before, undoStep, false); // EditorUndoReveal.cs
+            if (popped.LinkedUndoRedo != null)
+            {
+                try { popped.LinkedUndoRedo(true); } catch { }
+            }
             return true;
         }
 

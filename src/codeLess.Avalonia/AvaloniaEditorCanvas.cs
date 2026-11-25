@@ -504,7 +504,11 @@ namespace codeLess.AvaloniaApp
                 };
                 mi.Click += (s, e) =>
                 {
-                    GoToLine(captured.LineNumber);
+                    var mw = TopLevel.GetTopLevel(this) as MainWindow;
+                    if (mw != null)
+                        mw.JumpToLineAndColumnWithHistory(captured.LineNumber, 1);
+                    else
+                        GoToLine(captured.LineNumber);
                 };
                 items.Add(mi);
             }
@@ -1955,13 +1959,27 @@ namespace codeLess.AvaloniaApp
             int line = buf.CursorLine;
             if (FindFoldEndLine(buf, line) > line && !buf.FoldedBlockRanges.ContainsKey(line)) { FoldAtLine(line); return; }
             var model = FoldModel(buf, 0);
+            bool closingBracketLine = line >= 0 && line < buf.Lines.Count && IsClosingBracketLine(buf.Lines[line]);
             int best = -1, bestEnd = int.MaxValue;
             foreach (var r in model.Ranges)
             {
-                if (r.Start < line && r.End >= line && !buf.FoldedBlockRanges.ContainsKey(r.Start) && r.End - r.Start < bestEnd - Math.Max(0, best))
+                bool contains = r.Start < line && (r.End >= line || (closingBracketLine && r.End + 1 == line));
+                if (contains && !buf.FoldedBlockRanges.ContainsKey(r.Start) && r.End - r.Start < bestEnd - Math.Max(0, best))
                 { best = r.Start; bestEnd = r.End; }
             }
             if (best >= 0) FoldAtLine(best);
+        }
+
+        private static bool IsClosingBracketLine(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == ' ' || c == '\t') continue;
+                return c == '}' || c == ']';
+            }
+            return false;
         }
 
         /// <summary>Ctrl+Shift+] unfolds the region at the caret line or the innermost folded region containing the caret.</summary>
@@ -4453,12 +4471,17 @@ namespace codeLess.AvaloniaApp
 
             if (e.Key == Key.Escape)
             {
+                var mw = TopLevel.GetTopLevel(this) as MainWindow;
+                if (mw?.PrimaryLspBinding != null && (mw.PrimaryLspBinding.IsCompletionVisible || mw.PrimaryLspBinding.SignatureTip.IsVisible || mw.PrimaryLspBinding.HoverTip.IsVisible))
+                {
+                    mw.PrimaryLspBinding.HideAll();
+                    e.Handled = true;
+                    return;
+                }
                 if (owner.IsFindOverlayVisible) { owner.HideFindBar(); e.Handled = true; return; }
                 if (owner.IsInlineAiBarVisible) { owner.HideInlineAiBar(); e.Handled = true; return; }
-                if (ExtraCursors.Count > 0 || buf.ExtraCarets.Count > 0) { ExtraCursors.Clear(); buf.ExtraCarets.Clear(); InvalidateVisual(); e.Handled = true; return; }
-                if (buf.HasSelection()) { buf.ClearSelection(); InvalidateVisual(); e.Handled = true; return; }
-                var mw = TopLevel.GetTopLevel(this) as MainWindow;
-                if (mw != null && mw.IsBottomPanelVisible) { mw.ToggleBottomPanel(); e.Handled = true; return; }
+                if (ExtraCursors.Count > 0 || buf.ExtraCarets.Count > 0) { ExtraCursors.Clear(); buf.ExtraCarets.Clear(); owner.NotifyCaretMoved(); InvalidateVisual(); e.Handled = true; return; }
+                if (buf.HasSelection()) { buf.ClearSelection(); owner.NotifyCaretMoved(); InvalidateVisual(); e.Handled = true; return; }
             }
 
             // Find & Replace
@@ -5131,6 +5154,7 @@ namespace codeLess.AvaloniaApp
             char ch = e.Text[0];
             if (ch < 32 && ch != '\t') return;
             HidePointerWhileTyping();
+            if (PreviewTextInputHandler != null && PreviewTextInputHandler(e.Text)) { e.Handled = true; return; }
             if (TryHandleNicetyTextInput(e.Text)) { e.Handled = true; return; } // tag auto-close / linked rename
             if (TryHandleAutoClosingInput(e.Text)) { e.Handled = true; return; } // brackets / quotes / surround / overtype
             InsertTextAcrossCursors(e.Text);
@@ -5140,6 +5164,8 @@ namespace codeLess.AvaloniaApp
 
         /// <summary>Called before the editor handles a key; return true to swallow it (LSP completion / signature popups).</summary>
         public Func<KeyEventArgs, bool> PreviewKeyHandler;
+        /// <summary>Called before typed text is inserted into the buffer; return true to swallow it (LSP commit characters).</summary>
+        public Func<string, bool> PreviewTextInputHandler;
         /// <summary>Snippet tab-expansion hook (MainWindow.Extensions.cs), consulted after the language-server popups.</summary>
         public Func<KeyEventArgs, bool> SnippetKeyHandler;
         /// <summary>Raised after typed text was inserted at the caret (as-you-type completion, signature help triggers).</summary>

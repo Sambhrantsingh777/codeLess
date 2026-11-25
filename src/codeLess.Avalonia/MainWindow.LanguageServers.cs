@@ -62,6 +62,7 @@ namespace codeLess.AvaloniaApp
             lsp.ServerMessage += (sev, msg) => SetStatusMessage(msg);
             InitLanguageServerInstalls(); // MainWindow.LanguageServerInstall.cs
             if (!string.IsNullOrEmpty(workspaceRoot)) lsp.SetWorkspaceRoot(workspaceRoot);
+            LspCompletionList.ClearRecentAccepted();
             lspBindings.Add(new LspEditorBinding(this, PrimaryEditor));
             lspBindings.Add(new LspEditorBinding(this, SplitEditor));
             ApplyLanguageServerTheme(currentTheme);
@@ -438,7 +439,9 @@ namespace codeLess.AvaloniaApp
                 });
             }
             CommandPalette.Open("", entries, currentTheme?.Id);
-            CommandPalette.ModeHintLabel.Text = locs.Count + " " + what + (locs.Count > 500 ? " (first 500 shown)" : "") + " — ↑↓ Navigate • Enter Open • Esc Close";
+            string hint = locs.Count + " " + what + (locs.Count > 500 ? " (first 500 shown)" : "") + " — ↑↓ Navigate • Enter Open • Esc Close";
+            CommandPalette.CustomModeHint = hint;
+            CommandPalette.ModeHintLabel.Text = hint;
             SetStatusMessage(locs.Count + " " + what);
         }
 
@@ -463,14 +466,22 @@ namespace codeLess.AvaloniaApp
             string path = LspPathFor(buf);
             if (path == null || !lsp.IsActive(path))
             {
-                SetStatusMessage("Find All References needs a language server for this file.");
+                var fallbackRefs = LspEditing.FindWordReferencesFallback(buf, openTabs, workspaceRoot, 500, 500);
+                if (fallbackRefs.Count == 0) { SetStatusMessage("No references found."); return; }
+                ShowLocationPicker(buf, fallbackRefs, "text matches (no language server)");
                 return;
             }
             SetStatusMessage("Finding references…");
             List<LspLocation> refs;
             try { refs = await lsp.RequestReferencesAsync(path, buf.CursorLine, buf.CursorCol, true, CancellationToken.None); }
             catch { refs = null; }
-            if (refs == null) { SetStatusMessage("The language server could not find references."); return; }
+            if (refs == null)
+            {
+                var fallbackRefs = LspEditing.FindWordReferencesFallback(buf, openTabs, workspaceRoot, 500, 500);
+                if (fallbackRefs.Count == 0) { SetStatusMessage("No references found."); return; }
+                ShowLocationPicker(buf, fallbackRefs, "text matches (no language server)");
+                return;
+            }
             if (refs.Count == 0) { SetStatusMessage("No references found."); return; }
             ShowLocationPicker(buf, refs, "references");
         }
@@ -581,7 +592,22 @@ namespace codeLess.AvaloniaApp
                 tab.FilePath = newPath;
                 tab.FileName = Path.GetFileName(newPath);
                 tab.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, newPath) : tab.FileName;
-            }, guard);
+            }, guard, (touchedBuffers, touchedDisk) =>
+            {
+                foreach (var b in touchedBuffers)
+                {
+                    if (ReferenceEquals(PrimaryEditor.CurrentBuffer, b)) PrimaryEditor.Canvas.CommitExternalEdit();
+                    else if (ReferenceEquals(SplitEditor.CurrentBuffer, b)) SplitEditor.Canvas.CommitExternalEdit();
+                    else
+                    {
+                        AnalyzeBufferSoon(b);
+                        if (lsp != null && !string.IsNullOrEmpty(b.FilePath)) lsp.ChangeDocument(b.FilePath);
+                    }
+                }
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+                UpdateWindowTitle();
+            });
             if (result.Rejected)
             {
                 SetStatusMessage(verb + " not applied: " + result.Errors[0]);
@@ -611,7 +637,12 @@ namespace codeLess.AvaloniaApp
             var buf = activeTab;
             if (buf == null) return;
             string path = LspPathFor(buf);
-            if (path == null || !lsp.IsActive(path)) { SetStatusMessage("No formatter: install a language server for this file type."); return; }
+            string lang = LanguageServerRegistry.LanguageIdForPath(path ?? buf.FileName ?? "") ?? (string.IsNullOrEmpty(buf.Language) ? "plaintext" : buf.Language);
+            if (path == null || !lsp.IsActive(path))
+            {
+                SetStatusMessage("There is no formatter for '" + lang + "' files installed.");
+                return;
+            }
             LspRange range = null;
             if (selectionOnly && buf.HasSelection())
             {
@@ -620,7 +651,11 @@ namespace codeLess.AvaloniaApp
             }
             string before = LspEditing.BufferText(buf);
             var edits = await lsp.RequestFormattingAsync(path, range, settings.TabSize, settings.InsertSpaces, CancellationToken.None);
-            if (edits == null) { SetStatusMessage("The language server does not support formatting this file."); return; }
+            if (edits == null)
+            {
+                SetStatusMessage("There is no formatter for '" + lang + "' files installed.");
+                return;
+            }
             if (!ReferenceEquals(buf, activeTab) || LspEditing.BufferText(buf) != before) { SetStatusMessage("Format skipped: the document changed."); return; }
             if (edits.Count == 0) { SetStatusMessage("Already formatted."); return; }
             if (!LspEditing.ApplyEditsToBuffer(buf, edits, true)) { SetStatusMessage("Format failed: overlapping edits."); return; }
@@ -652,6 +687,7 @@ namespace codeLess.AvaloniaApp
                 Execute = () => { if (a.DisabledReason == null) _ = ApplyCodeActionAsync(path, a, listGuard); }
             }).ToList();
             CommandPalette.Open("", entries, currentTheme?.Id);
+            CommandPalette.CustomModeHint = "Code Actions — Enter to apply";
             CommandPalette.ModeHintLabel.Text = "Code Actions — Enter to apply";
         }
 
@@ -694,11 +730,12 @@ namespace codeLess.AvaloniaApp
             bool primary = MacKeymap.IsPrimary(e.KeyModifiers);
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-            if (e.Key == Key.F2 && !primary && !shift && !alt) { RenameSymbolAtCursor(); return true; }
-            if (e.Key == Key.F12 && shift && !primary && !alt) { FindAllReferencesAtCursor(); return true; }
-            if (e.Key == Key.F12 && primary && !shift && !alt) { GoToImplementationAtCursor(); return true; }
+            if (e.Key == Key.F2 && !primary && !ctrl && !shift && !alt) { RenameSymbolAtCursor(); return true; }
+            if (e.Key == Key.F12 && shift && !primary && !ctrl && !alt) { FindAllReferencesAtCursor(); return true; }
+            if (e.Key == Key.F12 && (primary || ctrl) && !shift && !alt) { GoToImplementationAtCursor(); return true; }
+            if (e.Key == Key.F12 && alt && !primary && !ctrl && !shift) { GoToDefinitionAtCursor(); return true; }
             if (e.Key == Key.F && shift && alt && !primary) { FormatDocumentOrSelection(activeTab != null && activeTab.HasSelection()); return true; }
-            if (e.Key == Key.OemPeriod && primary && !shift && !alt) { ShowQuickFixes(); return true; }
+            if (e.Key == Key.OemPeriod && (primary || ctrl) && !shift && !alt) { ShowQuickFixes(); return true; }
             return false;
         }
 
@@ -751,6 +788,7 @@ namespace codeLess.AvaloniaApp
             symbolsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
             symbolsTimer.Tick += (s, e) => { symbolsTimer.Stop(); _ = RefreshSymbolsAsync(); };
             editor.Canvas.PreviewKeyHandler = OnPreviewKey;
+            editor.Canvas.PreviewTextInputHandler = OnPreviewTextInput;
             editor.Canvas.TextTyped += OnTextTyped;
             editor.Canvas.PointerMovedOverCanvas += OnPointerMoved;
             editor.Canvas.PointerLeftCanvas += OnPointerLeft;
@@ -763,6 +801,7 @@ namespace codeLess.AvaloniaApp
             hoverTimer.Stop();
             symbolsTimer.Stop();
             Editor.Canvas.PreviewKeyHandler = null;
+            Editor.Canvas.PreviewTextInputHandler = null;
             Editor.Canvas.TextTyped -= OnTextTyped;
             Editor.Canvas.PointerMovedOverCanvas -= OnPointerMoved;
             Editor.Canvas.PointerLeftCanvas -= OnPointerLeft;
@@ -896,6 +935,41 @@ namespace codeLess.AvaloniaApp
         }
 
         // ---------------------------------------------------------------- typing / caret
+
+        private bool OnPreviewTextInput(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length != 1 || Buf == null) return false;
+            char ch = text[0];
+            if (session != null && Completion.IsVisible && !LspEditing.IsWordChar(ch))
+            {
+                var lsp = Lsp;
+                string path = PathOrNull;
+                IList<string> serverCommits = lsp != null && path != null ? lsp.GetCompletionCommitCharacters(path) : null;
+                if (session.IsCommitCharacter(ch, serverCommits))
+                {
+                    var s = session;
+                    var item = s.Selected;
+                    var buf = Buf;
+                    CloseCompletion();
+                    if (item != null && buf != null)
+                    {
+                        if (item.Tag is CodeSnippetItem snippet)
+                        {
+                            int typed = Math.Max(0, buf.CursorCol - s.StartCol);
+                            window.InsertSnippetReplacing(buf, snippet, typed);
+                            Editor.Canvas.CommitExternalEdit();
+                        }
+                        else
+                        {
+                            PrepareImportAccept(s, item, buf);
+                            if (LspEditing.ApplyCompletion(buf, item))
+                                Editor.Canvas.CommitExternalEdit();
+                        }
+                    }
+                }
+            }
+            return false;
+        }
 
         private void OnTextTyped(string text)
         {

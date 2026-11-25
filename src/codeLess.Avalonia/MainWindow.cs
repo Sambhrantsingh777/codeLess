@@ -84,9 +84,11 @@ namespace codeLess.AvaloniaApp
         private bool isBottomDockMaximized = false;
         private double savedBottomDockHeight = 225;
         private DateTime lastCtrlKChordTime = DateTime.MinValue;
-        private readonly List<(string FilePath, int Line)> navHistory = new List<(string, int)>();
+        private readonly List<(string FilePath, int Line, int Column)> navHistory = new List<(string, int, int)>();
         private int navHistoryIndex = -1;
         private bool suppressNavRecord = false;
+        private (string FilePath, int Line, int Column) lastEditLocation = ("", 0, 0);
+        private (EditorTabBuffer Tab, int Line, int Col, int ScrollTop) savedSymbolPreviewState;
         private string selectedForComparePath = "";
         private CancellationTokenSource workspaceLoadCts;
         private int workspaceLoadGeneration = 0;
@@ -1002,12 +1004,45 @@ namespace codeLess.AvaloniaApp
 
             // Floating Command Palette Overlay
             CommandPalette = new AvaloniaCommandPaletteOverlay();
+            CommandPalette.FileEntriesProvider = BuildQuickOpenFileEntries;
+            CommandPalette.CommandEntriesProvider = BuildAllPaletteCommands;
+            CommandPalette.EditorSymbolEntriesProvider = BuildEditorSymbolPaletteEntries;
+            CommandPalette.WorkspaceSymbolEntriesProvider = BuildWorkspaceSymbolPaletteEntries;
             CommandPalette.ThemePreviewRequested += previewId =>
             {
                 var t = StudioTheme.GetById(previewId);
                 if (t != null) ApplyTheme(t, persistSetting: false);
             };
-            CommandPalette.GoToLineRequested += lineNum => PrimaryEditor.GoToLine(lineNum);
+            CommandPalette.SymbolPreviewCaptureRequested += () =>
+            {
+                if (activeTab != null)
+                    savedSymbolPreviewState = (activeTab, activeTab.CursorLine, activeTab.CursorCol, activeTab.ScrollTopLine);
+                else
+                    savedSymbolPreviewState = (null, 0, 0, 0);
+            };
+            CommandPalette.SymbolLinePreviewRequested += lineNum =>
+            {
+                if (activeTab != null && lineNum >= 1)
+                {
+                    bool prev = suppressNavRecord;
+                    suppressNavRecord = true;
+                    try { PrimaryEditor.GoToLine(lineNum); }
+                    finally { suppressNavRecord = prev; }
+                }
+            };
+            CommandPalette.SymbolPreviewRestoreRequested += () =>
+            {
+                if (savedSymbolPreviewState.Tab != null && ReferenceEquals(activeTab, savedSymbolPreviewState.Tab) && activeTab.Lines != null && activeTab.Lines.Count > 0)
+                {
+                    activeTab.CursorLine = Math.Max(0, Math.Min(activeTab.Lines.Count - 1, savedSymbolPreviewState.Line));
+                    activeTab.CursorCol = Math.Max(0, savedSymbolPreviewState.Col);
+                    activeTab.ScrollTopLine = Math.Max(0, savedSymbolPreviewState.ScrollTop);
+                    PrimaryEditor.NotifyCaretMoved();
+                    PrimaryEditor.Canvas.InvalidateVisual();
+                }
+            };
+            CommandPalette.GoToLineRequested += lineNum => JumpToLineAndColumnWithHistory(lineNum, 1);
+            CommandPalette.GoToLineAndColumnRequested += (lineNum, colNum) => JumpToLineAndColumnWithHistory(lineNum, colNum);
             CommandPalette.FileOpenRequested += (path, line, col) => OpenFileAtLocation(path, line, Math.Max(1, col), 0, preview: false, focusEditor: true);
             CommandPalette.FileOpenToSideRequested += (path, line, col) =>
             {
@@ -1470,7 +1505,7 @@ namespace codeLess.AvaloniaApp
                 int idx = outlineListBox.SelectedIndex;
                 if (activeTab?.Symbols != null && idx >= 0 && idx < activeTab.Symbols.Count)
                 {
-                    PrimaryEditor.GoToLine(activeTab.Symbols[idx].LineNumber);
+                    JumpToLineAndColumnWithHistory(activeTab.Symbols[idx].LineNumber, 1);
                 }
             };
             Grid.SetRow(outlineHeaderBtn, 4);
@@ -3670,6 +3705,10 @@ namespace codeLess.AvaloniaApp
         private void OnEditorBufferModified(EditorTabBuffer buf)
         {
             if (buf == null) return;
+            if (!string.IsNullOrEmpty(buf.FilePath) || !string.IsNullOrEmpty(buf.FileName))
+            {
+                lastEditLocation = (!string.IsNullOrEmpty(buf.FilePath) ? buf.FilePath : buf.FileName, buf.CursorLine + 1, buf.CursorCol + 1);
+            }
             if (buf.IsDirty && UntitledFileDefaults.IsEmptyUntitled(buf)) buf.IsDirty = false; // empty untitled: nothing to save (VS Code)
             LspOnBufferModified(buf);
             bool previewChanged = false;
@@ -4104,7 +4143,46 @@ namespace codeLess.AvaloniaApp
 
                 int carets = PrimaryEditor.Canvas.TotalCursorCount;
                 int selectedChars = activeTab.HasSelection() ? (activeTab.GetSelectedText() ?? "").Length : 0;
-                statusLnColBtn.Content = new LiteralTextBlock(WorkbenchParityHelper.FormatStatusLnCol(activeTab.CursorLine + 1, activeTab.CursorCol + 1, selectedChars, carets));
+                if (PrimaryEditor.Canvas.ExtraCursors != null && PrimaryEditor.Canvas.ExtraCursors.Count > 0 && activeTab.Lines != null)
+                {
+                    foreach (var ec in PrimaryEditor.Canvas.ExtraCursors)
+                    {
+                        if (!ec.HasSelection) continue;
+                        int sLine = ec.AnchorLine, sCol = ec.AnchorCol, eLine = ec.Line, eCol = ec.Col;
+                        if (sLine > eLine || (sLine == eLine && sCol > eCol))
+                        {
+                            int tl = sLine; sLine = eLine; eLine = tl;
+                            int tc = sCol; sCol = eCol; eCol = tc;
+                        }
+                        sLine = Math.Max(0, Math.Min(activeTab.Lines.Count - 1, sLine));
+                        eLine = Math.Max(0, Math.Min(activeTab.Lines.Count - 1, eLine));
+                        if (sLine == eLine)
+                        {
+                            string ln = activeTab.Lines[sLine] ?? "";
+                            int sc = Math.Max(0, Math.Min(ln.Length, sCol));
+                            int ecCol = Math.Max(0, Math.Min(ln.Length, eCol));
+                            selectedChars += Math.Max(0, ecCol - sc);
+                        }
+                        else
+                        {
+                            string firstLn = activeTab.Lines[sLine] ?? "";
+                            selectedChars += Math.Max(0, firstLn.Length - Math.Max(0, Math.Min(firstLn.Length, sCol))) + 1;
+                            for (int ml = sLine + 1; ml < eLine; ml++)
+                                selectedChars += (activeTab.Lines[ml] ?? "").Length + 1;
+                            string lastLn = activeTab.Lines[eLine] ?? "";
+                            selectedChars += Math.Max(0, Math.Min(lastLn.Length, eCol));
+                        }
+                    }
+                }
+                int effTabSize = (activeTab.CustomTabSize.HasValue && activeTab.CustomTabSize.Value > 0)
+                    ? activeTab.CustomTabSize.Value
+                    : Math.Max(1, settings?.TabSize ?? 4);
+                string curLineText = (activeTab.Lines != null && activeTab.CursorLine >= 0 && activeTab.CursorLine < activeTab.Lines.Count)
+                    ? (activeTab.Lines[activeTab.CursorLine] ?? "")
+                    : "";
+                int clampedCol = Math.Max(0, Math.Min(activeTab.CursorCol, curLineText.Length));
+                int visualCol1 = EditorTextLayout.VisualColumn(curLineText, clampedCol, effTabSize) + 1;
+                statusLnColBtn.Content = new LiteralTextBlock(WorkbenchParityHelper.FormatStatusLnCol(activeTab.CursorLine + 1, visualCol1, selectedChars, carets));
                 statusSpacesBtn.Content = new LiteralTextBlock(StatusIndentationText);
                 statusEncodingBtn.Content = new LiteralTextBlock(activeTab.StatusEncodingDisplayName);
                 statusEolBtn.Content = new LiteralTextBlock(activeTab.EolLabel);

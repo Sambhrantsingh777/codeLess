@@ -265,7 +265,7 @@ namespace codeLess.Studio
         /// </summary>
         public static LspApplyResult ApplyWorkspaceEdit(LspWorkspaceEdit edit, Func<string, EditorTabBuffer> findOpenBuffer, Action<string, string> onRenamed)
         {
-            return ApplyWorkspaceEdit(edit, findOpenBuffer, onRenamed, null);
+            return ApplyWorkspaceEdit(edit, findOpenBuffer, onRenamed, null, null);
         }
 
         /// <summary>
@@ -274,6 +274,11 @@ namespace codeLess.Studio
         /// A stale edit is rejected as a whole - nothing is applied - exactly like VS Code, instead of landing at shifted offsets.
         /// </summary>
         public static LspApplyResult ApplyWorkspaceEdit(LspWorkspaceEdit edit, Func<string, EditorTabBuffer> findOpenBuffer, Action<string, string> onRenamed, LspEditGuard guard)
+        {
+            return ApplyWorkspaceEdit(edit, findOpenBuffer, onRenamed, guard, null);
+        }
+
+        public static LspApplyResult ApplyWorkspaceEdit(LspWorkspaceEdit edit, Func<string, EditorTabBuffer> findOpenBuffer, Action<string, string> onRenamed, LspEditGuard guard, Action<IList<EditorTabBuffer>, IList<string>> onUndoRedoApplied)
         {
             LspApplyResult result = new LspApplyResult();
             if (edit == null) return result;
@@ -288,6 +293,8 @@ namespace codeLess.Studio
                 }
             }
             HashSet<string> touched = new HashSet<string>(StringComparer.Ordinal);
+            List<BufferUndoLink> bufferLinks = new List<BufferUndoLink>();
+            List<DiskFileUndoLink> diskLinks = new List<DiskFileUndoLink>();
             foreach (LspWorkspaceEdit.Step step in edit.Steps)
             {
                 try
@@ -301,17 +308,53 @@ namespace codeLess.Studio
                     EditorTabBuffer buf = findOpenBuffer != null ? findOpenBuffer(step.FilePath) : null;
                     if (buf != null)
                     {
+                        int undoCountBefore = buf.UndoStack.Count;
                         if (!ApplyEditsToBuffer(buf, step.Edits, true))
                         {
                             result.Errors.Add("Overlapping edits for " + Path.GetFileName(step.FilePath));
                             continue;
                         }
-                        if (!result.ChangedBuffers.Contains(buf)) result.ChangedBuffers.Add(buf);
+                        if (!result.ChangedBuffers.Contains(buf))
+                        {
+                            result.ChangedBuffers.Add(buf);
+                            if (buf.UndoStack.Count > undoCountBefore && buf.UndoStack.Count > 0)
+                            {
+                                BufferUndoLink bl = new BufferUndoLink();
+                                bl.Buffer = buf;
+                                bl.UndoSnapshot = buf.UndoStack.Peek();
+                                bufferLinks.Add(bl);
+                            }
+                        }
                     }
                     else
                     {
-                        ApplyEditsToFile(step.FilePath, step.Edits);
+                        byte[] beforeBytes, afterBytes;
+                        ApplyEditsToFile(step.FilePath, step.Edits, out beforeBytes, out afterBytes);
                         if (!result.ChangedFilesOnDisk.Contains(step.FilePath)) result.ChangedFilesOnDisk.Add(step.FilePath);
+                        if (beforeBytes != null && afterBytes != null)
+                        {
+                            DiskFileUndoLink dl = null;
+                            for (int di = 0; di < diskLinks.Count; di++)
+                            {
+                                if (string.Equals(LspText.PathKey(diskLinks[di].FilePath), LspText.PathKey(step.FilePath), StringComparison.Ordinal))
+                                {
+                                    dl = diskLinks[di];
+                                    break;
+                                }
+                            }
+                            if (dl == null)
+                            {
+                                dl = new DiskFileUndoLink();
+                                dl.FilePath = step.FilePath;
+                                dl.BeforeBytes = beforeBytes;
+                                dl.AfterBytes = afterBytes;
+                                diskLinks.Add(dl);
+                            }
+                            else
+                            {
+                                dl.AfterBytes = afterBytes;
+                            }
+                        }
                     }
                     result.EditsApplied += step.Edits.Count;
                     touched.Add(LspText.PathKey(step.FilePath));
@@ -322,7 +365,119 @@ namespace codeLess.Studio
                 }
             }
             result.FilesChanged = touched.Count;
+            if (bufferLinks.Count > 0 && (bufferLinks.Count > 1 || diskLinks.Count > 0))
+            {
+                BindWorkspaceUndoTransaction(bufferLinks, diskLinks, findOpenBuffer, onUndoRedoApplied);
+            }
             return result;
+        }
+
+        private sealed class BufferUndoLink
+        {
+            public EditorTabBuffer Buffer;
+            public BufferSnapshot UndoSnapshot;
+            public BufferSnapshot RedoSnapshot;
+        }
+
+        private sealed class DiskFileUndoLink
+        {
+            public string FilePath;
+            public byte[] BeforeBytes;
+            public byte[] AfterBytes;
+        }
+
+        private static bool BytesEqual(byte[] a, byte[] b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
+        }
+
+        private static void BindWorkspaceUndoTransaction(
+            List<BufferUndoLink> bufferLinks,
+            List<DiskFileUndoLink> diskLinks,
+            Func<string, EditorTabBuffer> findOpenBuffer,
+            Action<IList<EditorTabBuffer>, IList<string>> onUndoRedoApplied)
+        {
+            bool inProgress = false;
+            for (int i = 0; i < bufferLinks.Count; i++)
+            {
+                BufferUndoLink triggerLink = bufferLinks[i];
+                if (triggerLink.UndoSnapshot == null) continue;
+                triggerLink.UndoSnapshot.LinkedUndoRedo = delegate (bool redo)
+                {
+                    if (inProgress) return;
+                    inProgress = true;
+                    try
+                    {
+                        if (!redo)
+                        {
+                            triggerLink.RedoSnapshot = triggerLink.Buffer.RedoStack.Count > 0 ? triggerLink.Buffer.RedoStack.Peek() : null;
+                        }
+                        else
+                        {
+                            triggerLink.UndoSnapshot = triggerLink.Buffer.UndoStack.Count > 0 ? triggerLink.Buffer.UndoStack.Peek() : null;
+                        }
+                        List<EditorTabBuffer> touchedBuffers = new List<EditorTabBuffer>();
+                        for (int j = 0; j < bufferLinks.Count; j++)
+                        {
+                            BufferUndoLink other = bufferLinks[j];
+                            if (ReferenceEquals(other.Buffer, triggerLink.Buffer)) continue;
+                            if (!redo)
+                            {
+                                if (other.Buffer.UndoStack.Count > 0 && ReferenceEquals(other.Buffer.UndoStack.Peek(), other.UndoSnapshot))
+                                {
+                                    if (other.Buffer.Undo())
+                                    {
+                                        other.RedoSnapshot = other.Buffer.RedoStack.Count > 0 ? other.Buffer.RedoStack.Peek() : null;
+                                        touchedBuffers.Add(other.Buffer);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (other.Buffer.RedoStack.Count > 0 && ReferenceEquals(other.Buffer.RedoStack.Peek(), other.RedoSnapshot))
+                                {
+                                    if (other.Buffer.Redo())
+                                    {
+                                        other.UndoSnapshot = other.Buffer.UndoStack.Count > 0 ? other.Buffer.UndoStack.Peek() : null;
+                                        touchedBuffers.Add(other.Buffer);
+                                    }
+                                }
+                            }
+                        }
+                        List<string> touchedDisk = new List<string>();
+                        for (int d = 0; d < diskLinks.Count; d++)
+                        {
+                            DiskFileUndoLink dl = diskLinks[d];
+                            if (string.IsNullOrEmpty(dl.FilePath) || !File.Exists(dl.FilePath)) continue;
+                            if (findOpenBuffer != null && findOpenBuffer(dl.FilePath) != null) continue;
+                            try
+                            {
+                                byte[] current = File.ReadAllBytes(dl.FilePath);
+                                byte[] expected = redo ? dl.BeforeBytes : dl.AfterBytes;
+                                byte[] target = redo ? dl.AfterBytes : dl.BeforeBytes;
+                                // Never overwrite a disk file that was modified externally since the rename / undo.
+                                if (BytesEqual(current, expected))
+                                {
+                                    EditorTabBuffer.WriteBytesInPlace(dl.FilePath, target);
+                                    touchedDisk.Add(dl.FilePath);
+                                }
+                            }
+                            catch { }
+                        }
+                        if (onUndoRedoApplied != null && (touchedBuffers.Count > 0 || touchedDisk.Count > 0))
+                        {
+                            try { onUndoRedoApplied(touchedBuffers, touchedDisk); } catch { }
+                        }
+                    }
+                    finally
+                    {
+                        inProgress = false;
+                    }
+                };
+            }
         }
 
         /// <summary>
@@ -333,7 +488,16 @@ namespace codeLess.Studio
         /// </summary>
         public static void ApplyEditsToFile(string path, IList<LspTextEdit> edits)
         {
+            byte[] beforeBytes, afterBytes;
+            ApplyEditsToFile(path, edits, out beforeBytes, out afterBytes);
+        }
+
+        public static void ApplyEditsToFile(string path, IList<LspTextEdit> edits, out byte[] beforeBytes, out byte[] afterBytes)
+        {
+            beforeBytes = null;
+            afterBytes = null;
             if (!File.Exists(path)) throw new FileNotFoundException("File not found", path);
+            byte[] rawBefore = File.ReadAllBytes(path);
             Encoding enc;
             bool hasBom;
             string text = EditorTabBuffer.ReadFileExact(path, out enc, out hasBom);
@@ -351,6 +515,95 @@ namespace codeLess.Studio
                     enc.WebName + "). Open the file and save it as UTF-8 first.");
             }
             EditorTabBuffer.WriteBytesInPlace(path, bytes);
+            beforeBytes = rawBefore;
+            afterBytes = bytes;
+        }
+
+        /// <summary>
+        /// Bounded, .gitignore-respecting whole-word text search fallback for Find All References when no language server
+        /// serves the file. Results are explicitly labelled by the caller as text matches (not semantic references).
+        /// </summary>
+        public static List<LspLocation> FindWordReferencesFallback(
+            EditorTabBuffer activeBuf,
+            IEnumerable<EditorTabBuffer> openBuffers,
+            string workspaceRoot,
+            int maxFiles,
+            int maxMatches)
+        {
+            List<LspLocation> results = new List<LspLocation>();
+            if (activeBuf == null || activeBuf.Lines == null || activeBuf.Lines.Count == 0) return results;
+            activeBuf.ClampCursor();
+            string word = WordAtOrEmpty(activeBuf.Lines[activeBuf.CursorLine], activeBuf.CursorCol);
+            if (string.IsNullOrEmpty(word)) return results;
+            System.Text.RegularExpressions.Regex rx = new System.Text.RegularExpressions.Regex(
+                @"\b" + System.Text.RegularExpressions.Regex.Escape(word) + @"\b");
+            HashSet<string> searchedPaths = new HashSet<string>(StringComparer.Ordinal);
+            List<EditorTabBuffer> order = new List<EditorTabBuffer>();
+            order.Add(activeBuf);
+            if (openBuffers != null)
+            {
+                foreach (EditorTabBuffer b in openBuffers)
+                    if (b != null && !ReferenceEquals(b, activeBuf)) order.Add(b);
+            }
+            WorkspaceIgnoreRules ignore = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot)
+                ? new WorkspaceIgnoreRules(workspaceRoot, null, true)
+                : null;
+            for (int bi = 0; bi < order.Count && results.Count < maxMatches; bi++)
+            {
+                EditorTabBuffer b = order[bi];
+                if (b.Lines == null || b.IsLargeFileViewer) continue;
+                string bPath = !string.IsNullOrEmpty(b.FilePath) ? b.FilePath : b.FileName;
+                if (string.IsNullOrEmpty(bPath)) continue;
+                if (!ReferenceEquals(b, activeBuf) && ignore != null && !string.IsNullOrEmpty(b.FilePath) && ignore.IsPathExcluded(b.FilePath, false))
+                    continue;
+                if (!string.IsNullOrEmpty(b.FilePath)) searchedPaths.Add(LspText.PathKey(b.FilePath));
+                for (int li = 0; li < b.Lines.Count && results.Count < maxMatches; li++)
+                {
+                    string ln = b.Lines[li];
+                    if (string.IsNullOrEmpty(ln) || ln.IndexOf(word, StringComparison.Ordinal) < 0) continue;
+                    System.Text.RegularExpressions.MatchCollection mc = rx.Matches(ln);
+                    for (int mi = 0; mi < mc.Count && results.Count < maxMatches; mi++)
+                    {
+                        System.Text.RegularExpressions.Match m = mc[mi];
+                        LspLocation loc = new LspLocation();
+                        loc.FilePath = bPath;
+                        loc.Range = new LspRange(li, m.Index, li, m.Index + m.Length);
+                        results.Add(loc);
+                    }
+                }
+            }
+            if (ignore != null && results.Count < maxMatches && maxFiles > 0)
+            {
+                bool capped;
+                List<string> files = ignore.EnumerateFiles(new string[] { workspaceRoot }, maxFiles, System.Threading.CancellationToken.None, out capped);
+                for (int fi = 0; fi < files.Count && results.Count < maxMatches; fi++)
+                {
+                    string fp = files[fi];
+                    if (searchedPaths.Contains(LspText.PathKey(fp))) continue;
+                    try
+                    {
+                        FileInfo info = new FileInfo(fp);
+                        if (!info.Exists || info.Length > 2 * 1024 * 1024) continue;
+                        string[] lines = File.ReadAllLines(fp);
+                        for (int li = 0; li < lines.Length && results.Count < maxMatches; li++)
+                        {
+                            string ln = lines[li];
+                            if (string.IsNullOrEmpty(ln) || ln.IndexOf(word, StringComparison.Ordinal) < 0) continue;
+                            System.Text.RegularExpressions.MatchCollection mc = rx.Matches(ln);
+                            for (int mi = 0; mi < mc.Count && results.Count < maxMatches; mi++)
+                            {
+                                System.Text.RegularExpressions.Match m = mc[mi];
+                                LspLocation loc = new LspLocation();
+                                loc.FilePath = fp;
+                                loc.Range = new LspRange(li, m.Index, li, m.Index + m.Length);
+                                results.Add(loc);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            return results;
         }
 
         private static string DominantEol(string text)

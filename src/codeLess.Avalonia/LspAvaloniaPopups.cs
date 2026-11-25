@@ -216,6 +216,7 @@ namespace codeLess.AvaloniaApp
         }
 
         public string Text => text.Inlines != null && text.Inlines.Count > 0 ? string.Concat(InlineTexts()) : (text.Text ?? "");
+        public int CurrentActiveParameter { get; private set; } = -1;
 
         private IEnumerable<string> InlineTexts()
         {
@@ -260,6 +261,7 @@ namespace codeLess.AvaloniaApp
             if (help.Signatures.Count > 1)
                 text.Inlines.Add(new Run("   (" + (help.ActiveSignature + 1) + "/" + help.Signatures.Count + ")") { Foreground = AvaloniaColorHelper.ToBrush(theme.TextSecondary) });
             int ap = sig.ActiveParameter >= 0 ? sig.ActiveParameter : help.ActiveParameter;
+            CurrentActiveParameter = ap;
             string pdoc = ap >= 0 && ap < sig.ParameterDocs.Count ? sig.ParameterDocs[ap] : null;
             if (!string.IsNullOrEmpty(pdoc)) text.Inlines.Add(new Run("\n" + pdoc) { Foreground = AvaloniaColorHelper.ToBrush(theme.TextSecondary) });
             if (!string.IsNullOrEmpty(sig.Documentation)) text.Inlines.Add(new Run("\n" + sig.Documentation) { FontSize = 12 });
@@ -289,6 +291,7 @@ namespace codeLess.AvaloniaApp
         public void Hide()
         {
             IsVisible = false;
+            CurrentActiveParameter = -1;
         }
     }
 }
