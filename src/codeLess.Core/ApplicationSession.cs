@@ -106,7 +106,11 @@ namespace codeLess.Studio
             if (Environment.OSVersion.Platform == PlatformID.Win32NT)
             {
                 string user = Environment.UserName;
+#if !NETSTANDARD2_0
+                // net48 (WinForms) and net8.0 (Avalonia) both resolve the same per-user SID.
+                // netstandard2.0 has no WindowsIdentity; that build is not used by either app and keeps the user name.
                 try { user = WindowsIdentity.GetCurrent().User.Value; } catch { }
+#endif
                 baseName += "-" + user + "-" + Process.GetCurrentProcess().SessionId;
             }
             else
