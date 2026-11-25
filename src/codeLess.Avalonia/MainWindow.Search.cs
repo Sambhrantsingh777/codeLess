@@ -673,7 +673,69 @@ namespace codeLess.AvaloniaApp
                 case Key.Right:
                     if (row.IsFileHeader && row.Group.IsCollapsed) { ToggleSearchGroup(row.Group); e.Handled = true; }
                     break;
+                case Key.Delete:
+                case Key.Back:
+                    DismissSearchRow(row);
+                    e.Handled = true;
+                    break;
             }
+        }
+
+        public bool DismissSearchRow(SearchResultRow row)
+        {
+            if (row == null) return false;
+            if (row.IsFileHeader)
+            {
+                var g = row.Group;
+                if (g == null || !searchGroups.Contains(g)) return false;
+                lastSearchMatchCount = Math.Max(0, lastSearchMatchCount - g.Matches.Count);
+                foreach (var mr in g.MatchRows)
+                    searchRows.Remove(mr);
+                searchRows.Remove(g.HeaderRow);
+                searchGroups.Remove(g);
+            }
+            else
+            {
+                var g = row.Group;
+                if (g == null) return false;
+                if (g.Matches.Remove(row.Match))
+                    lastSearchMatchCount = Math.Max(0, lastSearchMatchCount - 1);
+                g.MatchRows.Remove(row);
+                searchRows.Remove(row);
+                if (g.Matches.Count == 0)
+                {
+                    searchRows.Remove(g.HeaderRow);
+                    searchGroups.Remove(g);
+                }
+            }
+
+            int total = lastSearchMatchCount;
+            int files = searchGroups.Count;
+            workspaceSearchSummary.Text = total == 0
+                ? "No results found."
+                : $"{total} result{(total == 1 ? "" : "s")} in {files} file{(files == 1 ? "" : "s")}";
+            return true;
+        }
+
+        public bool ReplaceSingleSearchMatch(SearchResultRow row, string overrideReplace = null)
+        {
+            if (row == null || row.IsFileHeader || row.Match == null) return false;
+            if (overrideReplace != null) workspaceReplaceInput.Text = overrideReplace;
+            string repText = workspaceReplaceInput?.Text ?? "";
+            var m = row.Match;
+            var tab = OpenFileInTab(m.FilePath, preview: false);
+            if (tab == null || m.LineNumber < 1 || m.LineNumber > tab.Lines.Count) return false;
+
+            string line = tab.Lines[m.LineNumber - 1] ?? "";
+            int col0 = Math.Max(0, Math.Min(line.Length, m.Column - 1));
+            int len = Math.Max(0, Math.Min(line.Length - col0, m.MatchLength));
+            tab.PushUndoSnapshot();
+            tab.Lines[m.LineNumber - 1] = line.Substring(0, col0) + repText + line.Substring(col0 + len);
+            tab.SyncContentFromLines();
+            tab.IsDirty = true;
+            SaveBufferToDisk(tab);
+            DismissSearchRow(row);
+            return true;
         }
 
         private void FocusSearchResults()

@@ -2851,6 +2851,8 @@ namespace codeLess.Studio
             editMenu.DropDownItems.Add(new ToolStripSeparator());
             editMenu.DropDownItems.Add(CreateMenuItem("Toggle Line Comment", "Ctrl+/", () => editorControl.ToggleCommentActiveDocument()));
             editMenu.DropDownItems.Add(CreateMenuItem("Toggle Block Comment", "Shift+Alt+A", () => editorControl.ToggleBlockCommentActiveDocument()));
+            editMenu.DropDownItems.Add(new ToolStripSeparator());
+            editMenu.DropDownItems.Add(CreateMenuItem("Emoji & Symbols", "Win+.", () => { if (statusLeftLabel != null) statusLeftLabel.Text = "Emoji & Symbols"; }));
 
             // 3. SELECTION MENU
             ToolStripMenuItem selectionMenu = new ToolStripMenuItem("&Selection");

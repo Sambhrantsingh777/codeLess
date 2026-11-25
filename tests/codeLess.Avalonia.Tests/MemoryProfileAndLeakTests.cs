@@ -256,6 +256,8 @@ namespace codeLess.Avalonia.Tests
             var w = new MainWindow(null) { SuppressUnsavedPrompts = true, Width = 1200, Height = 800 };
             w.LoadWorkspace(repo);
             w.OpenFileInTab(Path.Combine(repo, "src", "codeLess.Core", "CoreModels.cs"), preview: false);
+            w.ShowWorkbenchNotification("test-notif", "info", "Test notification", "Action", () => { }, canDoNotShowAgain: true);
+            w.CommandPalette?.RecentCommandTitles?.Add("View: Toggle Terminal");
             var weak = new WeakReference(w);
             w.Close();
             return weak;

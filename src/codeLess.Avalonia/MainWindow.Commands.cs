@@ -974,6 +974,9 @@ namespace codeLess.AvaloniaApp
                 indexCandidateFiles = null;
             }
             aiEngine?.ClearWorkspaceIndex();
+            ExplorerTree.ProblemCountByFullPath.Clear();
+            ExplorerTree.GitStatusByFullPath.Clear();
+            ExplorerTree.ModifiedFolderPaths.Clear();
             ExplorerTree.Nodes.Clear();
             ExplorerTree.RebuildTreeLayout(false);
             var closing = openTabs.ToList();
@@ -1043,6 +1046,11 @@ namespace codeLess.AvaloniaApp
                 }
             }
             items.Add(MakeCtxItem("Find in Folder...", () => FindInFolder(ctxDir)));
+            items.Add(new Separator());
+            items.Add(MakeCtxItem("Cut   (Ctrl+X)", () => CutExplorerNode(node)));
+            items.Add(MakeCtxItem("Copy   (Ctrl+C)", () => CopyExplorerNode(node)));
+            if (!string.IsNullOrEmpty(explorerClipboardPath))
+                items.Add(MakeCtxItem("Paste   (Ctrl+V)", () => PasteExplorerNode(node)));
             items.Add(new Separator());
             items.Add(MakeCtxItem("Copy Path   (Shift+Alt+C)", () => _ = CopyPathToClipboardAsync(fullPath)));
             items.Add(MakeCtxItem($"Copy Relative Path   ({scCopyRel})", () =>
@@ -1453,6 +1461,122 @@ namespace codeLess.AvaloniaApp
                 CloseTab(t, forceWithoutPrompt: true);
             RefreshWorkspaceAfterFileOperation(Path.GetDirectoryName(fullPath.TrimEnd('/', '\\')));
             SetStatusMessage($"Deleted '{Path.GetFileName(fullPath)}'.");
+        }
+
+        public void CopyExplorerNode(ExplorerTreeNode node)
+        {
+            if (node == null || string.IsNullOrEmpty(node.Tag)) return;
+            explorerClipboardPath = node.Tag;
+            explorerClipboardIsCut = false;
+            SetStatusMessage($"Copied '{Path.GetFileName(node.Tag)}' for Explorer paste.");
+        }
+
+        public void CutExplorerNode(ExplorerTreeNode node)
+        {
+            if (node == null || string.IsNullOrEmpty(node.Tag)) return;
+            if (ExplorerTree.Nodes.Contains(node)) return;
+            explorerClipboardPath = node.Tag;
+            explorerClipboardIsCut = true;
+            SetStatusMessage($"Cut '{Path.GetFileName(node.Tag)}' for Explorer move.");
+        }
+
+        public string PasteExplorerNode(ExplorerTreeNode targetNode = null)
+        {
+            if (string.IsNullOrEmpty(explorerClipboardPath)) return null;
+            if (!File.Exists(explorerClipboardPath) && !Directory.Exists(explorerClipboardPath))
+            {
+                explorerClipboardPath = "";
+                explorerClipboardIsCut = false;
+                return null;
+            }
+
+            string targetDir = workspaceRoot;
+            var node = targetNode ?? ExplorerTree.SelectedNode;
+            if (node != null && !string.IsNullOrEmpty(node.Tag))
+            {
+                targetDir = (node.IsDirectory || Directory.Exists(node.Tag))
+                    ? node.Tag
+                    : Path.GetDirectoryName(node.Tag);
+            }
+            if (string.IsNullOrEmpty(targetDir) || !Directory.Exists(targetDir))
+                return null;
+
+            try
+            {
+                if (explorerClipboardIsCut)
+                {
+                    string dest = Path.Combine(targetDir, Path.GetFileName(explorerClipboardPath.TrimEnd('\\', '/')));
+                    if (string.Equals(dest, explorerClipboardPath, PathKeyComparison))
+                        return dest;
+                    if (File.Exists(dest) || Directory.Exists(dest))
+                    {
+                        ReportFileOperationError("Paste", $"A file or folder '{Path.GetFileName(dest)}' already exists in '{Path.GetFileName(targetDir)}'.");
+                        return null;
+                    }
+                    bool isDir = Directory.Exists(explorerClipboardPath);
+                    if (isDir) Directory.Move(explorerClipboardPath, dest);
+                    else File.Move(explorerClipboardPath, dest);
+
+                    string oldPath = explorerClipboardPath;
+                    string oldPrefix = oldPath.TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
+                    foreach (var t in openTabs)
+                    {
+                        if (string.IsNullOrEmpty(t.FilePath)) continue;
+                        if (string.Equals(t.FilePath, oldPath, PathKeyComparison))
+                        {
+                            t.FilePath = dest;
+                            t.FileName = Path.GetFileName(dest);
+                            t.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, dest) : t.FileName;
+                        }
+                        else if (isDir && t.FilePath.StartsWith(oldPrefix, PathKeyComparison))
+                        {
+                            string updated = Path.Combine(dest, t.FilePath.Substring(oldPrefix.Length));
+                            t.FilePath = updated;
+                            t.FileName = Path.GetFileName(updated);
+                            t.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, updated) : t.FileName;
+                        }
+                    }
+
+                    explorerClipboardPath = "";
+                    explorerClipboardIsCut = false;
+                    RefreshWorkspaceAfterFileOperation(dest);
+                    RefreshTabStrip();
+                    return dest;
+                }
+                else
+                {
+                    string dest = WorkbenchParityHelper.GetCopyDestinationPath(explorerClipboardPath, targetDir);
+                    if (string.IsNullOrEmpty(dest)) return null;
+                    if (Directory.Exists(explorerClipboardPath))
+                        CopyExplorerDirectoryRecursive(explorerClipboardPath, dest);
+                    else
+                        File.Copy(explorerClipboardPath, dest, overwrite: false);
+
+                    RefreshWorkspaceAfterFileOperation(dest);
+                    return dest;
+                }
+            }
+            catch (Exception ex)
+            {
+                ReportFileOperationError("Paste", ex.Message);
+                return null;
+            }
+        }
+
+        private static void CopyExplorerDirectoryRecursive(string srcDir, string dstDir)
+        {
+            Directory.CreateDirectory(dstDir);
+            foreach (string f in Directory.GetFiles(srcDir))
+                File.Copy(f, Path.Combine(dstDir, Path.GetFileName(f)), false);
+            foreach (string d in Directory.GetDirectories(srcDir))
+                CopyExplorerDirectoryRecursive(d, Path.Combine(dstDir, Path.GetFileName(d)));
+        }
+
+        public void MoveExplorerNodeToDirectory(ExplorerTreeNode sourceNode, ExplorerTreeNode targetDirNode)
+        {
+            if (sourceNode == null || targetDirNode == null) return;
+            CutExplorerNode(sourceNode);
+            PasteExplorerNode(targetDirNode);
         }
 
         private string GetSelectedExplorerDirectory()
@@ -2452,6 +2576,11 @@ namespace codeLess.AvaloniaApp
         // Command Palette, Quick Open, Theme Picker & Modals
         public void OpenQuickOpen()
         {
+            if (CommandPalette.IsVisible && string.IsNullOrEmpty(CommandPalette.InitialPrefix))
+            {
+                CommandPalette.CycleSelection(1);
+                return;
+            }
             var entries = new List<PaletteEntryItem>();
             var seen = new HashSet<string>(PathKeyComparer);
             PaletteEntryItem makeFileEntry(string full, bool recent)
