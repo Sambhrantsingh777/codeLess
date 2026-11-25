@@ -9,10 +9,22 @@ This file is generated from the default keybindings registry (`DefaultCommands` 
 | actions.find | Find | Editor | cmd+f | ctrl+f | ctrl+f | editorTextFocus \|\| terminalFocus |
 | copyFilePath | Copy Path | File | cmd+k p | ctrl+k p | ctrl+k p |  |
 | cursorBottom | File End | Editor | cmd+down | ctrl+end | ctrl+end | editorTextFocus |
-| cursorEnd | Line End | Editor | end | end | end | editorTextFocus |
-| cursorHome | Line Start | Editor | home | home | home | editorTextFocus |
+| cursorBottomSelect | Select to File End | Editor | cmd+shift+down | ctrl+shift+end | ctrl+shift+end | editorTextFocus |
+| cursorEnd | Line End | Editor | cmd+right | end | end | editorTextFocus |
+| cursorEndSelect | Select to Line End | Editor | cmd+shift+right | shift+end | shift+end | editorTextFocus |
+| cursorHome | Line Start | Editor | cmd+left | home | home | editorTextFocus |
+| cursorHomeSelect | Select to Line Start | Editor | cmd+shift+left | shift+home | shift+home | editorTextFocus |
+| cursorLineEnd | Cursor Line End | Editor | ctrl+e |  |  | editorTextFocus |
+| cursorLineEndSelect | Cursor Line End Select | Editor | ctrl+shift+e |  |  | editorTextFocus |
+| cursorLineStart | Cursor Line Start | Editor | ctrl+a |  |  | editorTextFocus |
+| cursorLineStartSelect | Cursor Line Start Select | Editor | ctrl+shift+a |  |  | editorTextFocus |
 | cursorTop | File Start | Editor | cmd+up | ctrl+home | ctrl+home | editorTextFocus |
+| cursorTopSelect | Select to File Start | Editor | cmd+shift+up | ctrl+shift+home | ctrl+shift+home | editorTextFocus |
 | cursorUndo | Undo Cursor | Multi-cursor | cmd+u | ctrl+u | ctrl+u | editorTextFocus |
+| cursorWordEndRight | Cursor Word End Right | Editor | alt+right | ctrl+right | ctrl+right | editorTextFocus |
+| cursorWordEndRightSelect | Cursor Word End Right Select | Editor | shift+alt+right | ctrl+shift+right | ctrl+shift+right | editorTextFocus |
+| cursorWordLeft | Cursor Word Left | Editor | alt+left | ctrl+left | ctrl+left | editorTextFocus |
+| cursorWordLeftSelect | Cursor Word Left Select | Editor | shift+alt+left | ctrl+shift+left | ctrl+shift+left | editorTextFocus |
 | deleteWordLeft | Delete Word Left | Editor | alt+backspace | ctrl+backspace | ctrl+backspace | editorTextFocus |
 | deleteWordRight | Delete Word Right | Editor | alt+delete | ctrl+delete | ctrl+delete | editorTextFocus |
 | editor.action.addCommentLine | Add Line Comment | Editor | cmd+k cmd+c | ctrl+k ctrl+c | ctrl+k ctrl+c | editorTextFocus |

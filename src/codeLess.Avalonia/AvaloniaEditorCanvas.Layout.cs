@@ -309,7 +309,7 @@ namespace codeLess.AvaloniaApp
             double rel = Math.Max(0, x - GutterWidth - 8 + (b.WordWrap ? 0 : b.ScrollLeftPx));
             int col = EditorTextLayout.CharIndexForVisualColumnInRange(text, row.Start, row.End, rel / CharWidth, TabFor(b), row.StartVcol);
             // the boundary at the end of a continuation row belongs to the next row: stay inside this one
-            if (!row.IsLastRow && col >= row.End) col = Math.Max(row.Start, row.End - (row.End - row.Start > 0 ? 1 : 0));
+            if (!row.IsLastRow && col >= row.End) col = Math.Max(row.Start, EditorTextLayout.PrevCharBoundary(text, row.End));
             return Math.Max(0, Math.Min(text.Length, col));
         }
 

@@ -5682,8 +5682,8 @@ namespace codeLess.Studio
                 }
                 else
                 {
-                    if (col > 0) col--;
-                    else if (line > 0) { line--; col = buf.Lines[line].Length; }
+                    if (col > 0) col = EditorTextLayout.PrevCharBoundary(buf.Lines[line] ?? "", col);
+                    else if (line > 0) { int prev = PrevVisibleLineWF(buf, line); if (prev >= 0) { line = prev; col = (buf.Lines[line] ?? "").Length; } }
                 }
             }
             else if (key == Keys.Right)
@@ -5715,27 +5715,30 @@ namespace codeLess.Studio
             }
             else if (key == Keys.Home)
             {
+                bool hadAff = primary ? HasRowEndAffinityWF(line, col) : rowEndAffinity;
+                rowEndAffinity = false;
                 if (ctrl)
                 {
                     line = 0;
                     col = 0;
                 }
-                else if (!TryWrappedHomeWF(buf, ref line, ref col, primary)) // wrapped row: row start first (QA #32)
+                else if (!TryWrappedHomeWF(buf, ref line, ref col, hadAff)) // wrapped row: row start first (QA #32)
                 {
                     string ln = buf.Lines[line] ?? "";
-                    int firstNonWs = 0;
-                    while (firstNonWs < ln.Length && char.IsWhiteSpace(ln[firstNonWs])) firstNonWs++;
+                    int firstNonWs = EditorWrapNavigation.FirstNonWhitespaceColumn(ln);
                     col = (col == firstNonWs) ? 0 : firstNonWs;
                 }
             }
             else if (key == Keys.End)
             {
+                bool hadAff = primary ? HasRowEndAffinityWF(line, col) : rowEndAffinity;
+                rowEndAffinity = false;
                 if (ctrl)
                 {
                     line = Math.Max(0, buf.Lines.Count - 1);
                     col = buf.Lines[line].Length;
                 }
-                else if (!TryWrappedEndWF(buf, ref line, ref col, primary, ref rowEndAffinity)) // wrapped row: row end first (QA #32)
+                else if (!TryWrappedEndWF(buf, ref line, ref col, hadAff, ref rowEndAffinity)) // wrapped row: row end first (QA #32)
                 {
                     col = buf.Lines[line].Length;
                 }
@@ -5754,23 +5757,111 @@ namespace codeLess.Studio
 
         private void DeduplicateExtraCarets(EditorTabBuffer buf)
         {
-            if (buf.ExtraCarets == null || buf.ExtraCarets.Count == 0) return;
-            for (int i = buf.ExtraCarets.Count - 1; i >= 0; i--)
+            if (buf == null || buf.ExtraCarets == null || buf.ExtraCarets.Count == 0) return;
+            List<EditorWrapNavigation.NormalizedCaret> all = new List<EditorWrapNavigation.NormalizedCaret>(1 + buf.ExtraCarets.Count);
+            EditorWrapNavigation.NormalizedCaret p = new EditorWrapNavigation.NormalizedCaret();
+            p.Line = buf.CursorLine;
+            p.Col = buf.CursorCol;
+            p.AnchorLine = buf.HasSelection() ? buf.SelectionAnchorLine : -1;
+            p.AnchorCol = buf.HasSelection() ? buf.SelectionAnchorCol : -1;
+            p.RowEndAffinity = HasRowEndAffinityWF(buf.CursorLine, buf.CursorCol);
+            all.Add(p);
+
+            for (int i = 0; i < buf.ExtraCarets.Count; i++)
             {
                 EditorCaret ec = buf.ExtraCarets[i];
-                bool matchesPrimary = (ec.CursorLine == buf.CursorLine && ec.CursorCol == buf.CursorCol);
-                bool matchesEarlier = false;
-                for (int j = 0; j < i; j++)
+                EditorWrapNavigation.NormalizedCaret nc = new EditorWrapNavigation.NormalizedCaret();
+                nc.Line = ec.CursorLine;
+                nc.Col = ec.CursorCol;
+                nc.AnchorLine = ec.HasSelection() ? ec.AnchorLine : -1;
+                nc.AnchorCol = ec.HasSelection() ? ec.AnchorCol : -1;
+                nc.RowEndAffinity = ec.RowEndAffinity;
+                all.Add(nc);
+            }
+
+            List<EditorWrapNavigation.NormalizedCaret> merged = EditorWrapNavigation.NormalizeAndMergeCarets(all);
+            if (merged.Count > 0)
+            {
+                EditorWrapNavigation.NormalizedCaret m0 = merged[0];
+                buf.CursorLine = m0.Line;
+                buf.CursorCol = m0.Col;
+                if (m0.AnchorLine >= 0 && m0.AnchorCol >= 0)
                 {
-                    if (buf.ExtraCarets[j].CursorLine == ec.CursorLine && buf.ExtraCarets[j].CursorCol == ec.CursorCol)
+                    buf.SelectionAnchorLine = m0.AnchorLine;
+                    buf.SelectionAnchorCol = m0.AnchorCol;
+                }
+                else
+                {
+                    buf.SelectionAnchorLine = m0.Line;
+                    buf.SelectionAnchorCol = m0.Col;
+                }
+                if (m0.RowEndAffinity) { wfAffinityLine = m0.Line; wfAffinityCol = m0.Col; }
+                else ClearRowEndAffinityWF();
+            }
+            buf.ExtraCarets.Clear();
+            for (int i = 1; i < merged.Count; i++)
+            {
+                EditorWrapNavigation.NormalizedCaret mi = merged[i];
+                EditorCaret ec = new EditorCaret();
+                ec.Line = mi.Line;
+                ec.Col = mi.Col;
+                ec.AnchorLine = mi.AnchorLine >= 0 ? mi.AnchorLine : mi.Line;
+                ec.AnchorCol = mi.AnchorCol >= 0 ? mi.AnchorCol : mi.Col;
+                ec.RowEndAffinity = mi.RowEndAffinity;
+                buf.ExtraCarets.Add(ec);
+            }
+        }
+
+        public void DispatchNavigationKey(Keys keyData)
+        {
+            OnKeyDown(new KeyEventArgs(keyData));
+        }
+
+        public void MoveCaretToModelLineBoundary(bool toEnd, bool shift)
+        {
+            EditorTabBuffer buf = owner != null ? owner.CurrentBuffer : null;
+            if (buf == null || buf.Lines == null || buf.Lines.Count == 0) return;
+            if (shift && !buf.HasSelection())
+            {
+                buf.SelectionAnchorLine = buf.CursorLine;
+                buf.SelectionAnchorCol = buf.CursorCol;
+            }
+            int pLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, buf.CursorLine));
+            int pCol = toEnd ? (buf.Lines[pLine] ?? "").Length : 0;
+            buf.CursorLine = pLine;
+            buf.CursorCol = pCol;
+            ClearRowEndAffinityWF();
+            if (!shift)
+            {
+                buf.SelectionAnchorLine = pLine;
+                buf.SelectionAnchorCol = pCol;
+            }
+            if (buf.ExtraCarets != null && buf.ExtraCarets.Count > 0)
+            {
+                for (int i = 0; i < buf.ExtraCarets.Count; i++)
+                {
+                    EditorCaret ec = buf.ExtraCarets[i];
+                    if (shift && (ec.AnchorLine < 0 || ec.AnchorCol < 0))
                     {
-                        matchesEarlier = true;
-                        break;
+                        ec.AnchorLine = ec.CursorLine;
+                        ec.AnchorCol = ec.CursorCol;
+                    }
+                    int ecLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, ec.CursorLine));
+                    int ecCol = toEnd ? (buf.Lines[ecLine] ?? "").Length : 0;
+                    ec.CursorLine = ecLine;
+                    ec.CursorCol = ecCol;
+                    ec.RowEndAffinity = false;
+                    if (!shift)
+                    {
+                        ec.AnchorLine = ecLine;
+                        ec.AnchorCol = ecCol;
                     }
                 }
-                if (matchesPrimary || matchesEarlier)
-                    buf.ExtraCarets.RemoveAt(i);
+                DeduplicateExtraCarets(buf);
             }
+            EnsureCursorVisible();
+            if (owner != null) owner.UpdateCursorStatusLabel();
+            this.Invalidate();
         }
 
         private void InsertNewlineAllCarets()
@@ -6201,16 +6292,26 @@ namespace codeLess.Studio
                     {
                         int ecLine = ec.CursorLine;
                         int ecCol = ec.CursorCol;
+                        bool ecAffinity = ec.RowEndAffinity;
                         if (!e.Shift && !e.Control && !e.Alt && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right) && ec.HasSelection())
                         {
                             int sl, sc, el, ecc;
                             ec.GetNormalizedSelection(out sl, out sc, out el, out ecc);
                             if (e.KeyCode == Keys.Left) { ecLine = sl; ecCol = sc; } else { ecLine = el; ecCol = ecc; }
+                            ecAffinity = false;
                         }
                         else
-                            MoveSinglePosition(buf, e.KeyCode, ref ecLine, ref ecCol, e.Control);
+                        {
+                            if (e.Shift && (ec.AnchorLine < 0 || ec.AnchorCol < 0))
+                            {
+                                ec.AnchorLine = ecLine;
+                                ec.AnchorCol = ecCol;
+                            }
+                            MoveSinglePosition(buf, e.KeyCode, ref ecLine, ref ecCol, e.Control, false, ref ecAffinity);
+                        }
                         ec.CursorLine = ecLine;
                         ec.CursorCol = ecCol;
+                        ec.RowEndAffinity = ecAffinity;
                         if (!e.Shift)
                         {
                             ec.AnchorLine = ecLine;

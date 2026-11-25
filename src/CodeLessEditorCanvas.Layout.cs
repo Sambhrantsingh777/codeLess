@@ -39,21 +39,21 @@ namespace codeLess.Studio
         }
 
         /// <summary>Home on a wrapped row: row start first, then the line's first non-blank / column 0 (shared rule).</summary>
-        private bool TryWrappedHomeWF(EditorTabBuffer buf, ref int line, ref int col, bool primary)
+        private bool TryWrappedHomeWF(EditorTabBuffer buf, ref int line, ref int col, bool atRowEnd)
         {
             if (!buf.WordWrap) return false;
-            int t = EditorWrapNavigation.Home(WrapOfWF(buf, line), col, primary && HasRowEndAffinityWF(line, col));
+            int t = EditorWrapNavigation.Home(WrapOfWF(buf, line), col, atRowEnd);
             if (t < 0) return false;
             col = t;
             return true;
         }
 
         /// <summary>End on a wrapped row: end of the row (caret stays on that row), End again: end of the line.</summary>
-        private bool TryWrappedEndWF(EditorTabBuffer buf, ref int line, ref int col, bool primary, ref bool rowEndAffinity)
+        private bool TryWrappedEndWF(EditorTabBuffer buf, ref int line, ref int col, bool atRowEnd, ref bool rowEndAffinity)
         {
             if (!buf.WordWrap) return false;
             int len = (buf.Lines[line] ?? "").Length;
-            int t = EditorWrapNavigation.End(WrapOfWF(buf, line), len, col, primary && HasRowEndAffinityWF(line, col));
+            int t = EditorWrapNavigation.End(WrapOfWF(buf, line), len, col, atRowEnd);
             if (t < 0) return false;
             col = t;
             rowEndAffinity = true;
@@ -215,7 +215,7 @@ namespace codeLess.Studio
             {
                 // past the end of a continuation row: the primary caret stays on that row at its end (VS Code affinity)
                 if (primary) { c = end; rowEndAffinity = true; }
-                else c = Math.Max(start, end - 1);
+                else c = Math.Max(start, EditorTextLayout.PrevCharBoundary(t2, end));
             }
             line = tLine;
             col = c;

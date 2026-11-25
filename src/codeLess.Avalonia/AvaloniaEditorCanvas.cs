@@ -23,6 +23,7 @@ namespace codeLess.AvaloniaApp
         public int Col;
         public int AnchorLine;
         public int AnchorCol;
+        public bool RowEndAffinity;
 
         public bool HasSelection => AnchorLine >= 0 && (AnchorLine != Line || AnchorCol != Col);
     }
@@ -116,6 +117,25 @@ namespace codeLess.AvaloniaApp
         /// <summary>Raised after the canvas scrolled vertically (Markdown preview scroll sync).</summary>
         public event Action<EditorTabBuffer> ScrollChanged;
         internal void NotifyScrollChanged() { if (CurrentBuffer != null) ScrollChanged?.Invoke(CurrentBuffer); }
+
+        internal void DetachWindowEvents()
+        {
+            BufferModified = null;
+            CaretMoved = null;
+            InlineAiEditRequested = null;
+            WelcomeActionRequested = null;
+            OpenRecentWorkspaceRequested = null;
+            EditorContextMenuRequested = null;
+            DiffAllDecisionRequested = null;
+            StatusMessagePublished = null;
+            LineAnnotationProvider = null;
+            LineAnnotationClicked = null;
+            LineAnnotationHovered = null;
+            ScrollChanged = null;
+            LinkActivated = null;
+            NavigateHistoryRequested = null;
+            Children.Clear();
+        }
 
         public AvaloniaEditorControl()
         {
@@ -1662,20 +1682,21 @@ namespace codeLess.AvaloniaApp
     /// </summary>
     internal sealed class EditorImeClient : global::Avalonia.Input.TextInput.TextInputMethodClient
     {
-        private readonly AvaloniaVirtualEditorCanvas canvas;
+        private AvaloniaVirtualEditorCanvas canvas;
         public EditorImeClient(AvaloniaVirtualEditorCanvas canvas) { this.canvas = canvas; }
+        public void Detach() { canvas = null; }
         public override Visual TextViewVisual => canvas;
         public override bool SupportsPreedit => true;
         public override bool SupportsSurroundingText => true;
-        public override string SurroundingText => canvas.ImeSurroundingText;
-        public override Rect CursorRectangle => canvas.ImeCaretRect;
+        public override string SurroundingText => canvas?.ImeSurroundingText ?? "";
+        public override Rect CursorRectangle => canvas?.ImeCaretRect ?? default;
         public override global::Avalonia.Input.TextInput.TextSelection Selection
         {
-            get => new global::Avalonia.Input.TextInput.TextSelection(canvas.ImeCaretColumn, canvas.ImeCaretColumn);
+            get => new global::Avalonia.Input.TextInput.TextSelection(canvas?.ImeCaretColumn ?? 0, canvas?.ImeCaretColumn ?? 0);
             set { }
         }
-        public override void SetPreeditText(string preeditText) => canvas.SetImePreedit(preeditText);
-        public override void SetPreeditText(string preeditText, int? cursorPos) => canvas.SetImePreedit(preeditText);
+        public override void SetPreeditText(string preeditText) => canvas?.SetImePreedit(preeditText);
+        public override void SetPreeditText(string preeditText, int? cursorPos) => canvas?.SetImePreedit(preeditText);
         public void NotifyCaretChanged()
         {
             RaiseCursorRectangleChanged();
@@ -3972,16 +3993,17 @@ namespace codeLess.AvaloniaApp
         // Every edit / movement applies to all carets (primary + ExtraCursors). Edits run from the last caret to
         // the first with one undo snapshot; carets already processed are tracked as absolute offsets and shifted
         // by each edit's length delta, so line splits / joins never misplace them.
-        private struct CaretState { public int Line, Col, AnchorLine, AnchorCol; }
+        private struct CaretState { public int Line, Col, AnchorLine, AnchorCol; public bool RowEndAffinity; }
 
-        private static CaretState ReadPrimary(EditorTabBuffer b) => new CaretState
+        private CaretState ReadPrimary(EditorTabBuffer b) => new CaretState
         {
             Line = b.CursorLine, Col = b.CursorCol,
             AnchorLine = b.HasSelection() ? b.SelectionStartLine : -1,
-            AnchorCol = b.HasSelection() ? b.SelectionStartCol : -1
+            AnchorCol = b.HasSelection() ? b.SelectionStartCol : -1,
+            RowEndAffinity = b.CursorLine == affinityLine && b.CursorCol == affinityCol
         };
 
-        private static void WritePrimary(EditorTabBuffer b, CaretState c)
+        private void WritePrimary(EditorTabBuffer b, CaretState c)
         {
             b.CursorLine = Math.Max(0, Math.Min(b.Lines.Count - 1, c.Line));
             b.CursorCol = Math.Max(0, Math.Min(b.Lines[b.CursorLine].Length, c.Col));
@@ -3991,6 +4013,8 @@ namespace codeLess.AvaloniaApp
                 b.SelectionStartCol = Math.Max(0, Math.Min(b.Lines[b.SelectionStartLine].Length, c.AnchorCol));
             }
             else b.ClearSelection();
+            if (c.RowEndAffinity) { affinityLine = b.CursorLine; affinityCol = b.CursorCol; }
+            else { affinityLine = -1; affinityCol = -1; }
         }
 
         private static long OffsetOf(EditorTabBuffer b, int line, int col)
@@ -4079,20 +4103,79 @@ namespace codeLess.AvaloniaApp
                 foreach (var ec in ExtraCursors.ToList())
                 {
                     if (ec.Line < 0 || ec.Line >= buf.Lines.Count) continue;
-                    WritePrimary(buf, new CaretState { Line = ec.Line, Col = ec.Col, AnchorLine = ec.HasSelection ? ec.AnchorLine : -1, AnchorCol = ec.HasSelection ? ec.AnchorCol : -1 });
+                    WritePrimary(buf, new CaretState
+                    {
+                        Line = ec.Line,
+                        Col = ec.Col,
+                        AnchorLine = ec.HasSelection ? ec.AnchorLine : -1,
+                        AnchorCol = ec.HasSelection ? ec.AnchorCol : -1,
+                        RowEndAffinity = ec.RowEndAffinity
+                    });
                     movingExtraCaret = true;
                     move();
                     movingExtraCaret = false;
                     var st = ReadPrimary(buf);
-                    moved.Add(new ExtraCursorCaret { Line = st.Line, Col = st.Col, AnchorLine = st.AnchorLine, AnchorCol = st.AnchorCol });
+                    moved.Add(new ExtraCursorCaret
+                    {
+                        Line = st.Line,
+                        Col = st.Col,
+                        AnchorLine = st.AnchorLine,
+                        AnchorCol = st.AnchorCol,
+                        RowEndAffinity = st.RowEndAffinity
+                    });
                 }
                 WritePrimary(buf, primary);
                 move();
-                ExtraCursors.Clear();
+                var movedPrimary = ReadPrimary(buf);
+
+                var allCarets = new List<EditorWrapNavigation.NormalizedCaret>(1 + moved.Count)
+                {
+                    new EditorWrapNavigation.NormalizedCaret
+                    {
+                        Line = movedPrimary.Line,
+                        Col = movedPrimary.Col,
+                        AnchorLine = movedPrimary.AnchorLine,
+                        AnchorCol = movedPrimary.AnchorCol,
+                        RowEndAffinity = movedPrimary.RowEndAffinity
+                    }
+                };
                 foreach (var m in moved)
                 {
-                    bool dup = (m.Line == buf.CursorLine && m.Col == buf.CursorCol) || ExtraCursors.Any(x => x.Line == m.Line && x.Col == m.Col);
-                    if (!dup) ExtraCursors.Add(m);
+                    allCarets.Add(new EditorWrapNavigation.NormalizedCaret
+                    {
+                        Line = m.Line,
+                        Col = m.Col,
+                        AnchorLine = m.AnchorLine,
+                        AnchorCol = m.AnchorCol,
+                        RowEndAffinity = m.RowEndAffinity
+                    });
+                }
+
+                var normalized = EditorWrapNavigation.NormalizeAndMergeCarets(allCarets);
+                if (normalized.Count > 0)
+                {
+                    var p0 = normalized[0];
+                    WritePrimary(buf, new CaretState
+                    {
+                        Line = p0.Line,
+                        Col = p0.Col,
+                        AnchorLine = p0.AnchorLine,
+                        AnchorCol = p0.AnchorCol,
+                        RowEndAffinity = p0.RowEndAffinity
+                    });
+                }
+                ExtraCursors.Clear();
+                for (int i = 1; i < normalized.Count; i++)
+                {
+                    var ni = normalized[i];
+                    ExtraCursors.Add(new ExtraCursorCaret
+                    {
+                        Line = ni.Line,
+                        Col = ni.Col,
+                        AnchorLine = ni.AnchorLine,
+                        AnchorCol = ni.AnchorCol,
+                        RowEndAffinity = ni.RowEndAffinity
+                    });
                 }
             }
             finally
@@ -4210,8 +4293,8 @@ namespace codeLess.AvaloniaApp
                 bool handledEmacs = true;
                 switch (e.Key)
                 {
-                    case Key.A: MoveCaretToLineBoundary(false, shift); break;
-                    case Key.E: MoveCaretToLineBoundary(true, shift); break;
+                    case Key.A: MoveCaretToModelLineBoundary(false, shift); break;
+                    case Key.E: MoveCaretToModelLineBoundary(true, shift); break;
                     case Key.F: MoveCaretHorizontal(1, shift, false); break;
                     case Key.B: MoveCaretHorizontal(-1, shift, false); break;
                     case Key.N: MoveCaretVertical(1, shift); break;
@@ -4341,7 +4424,7 @@ namespace codeLess.AvaloniaApp
             {
                 bool horizontal = e.Key == Key.Left || e.Key == Key.Right;
                 bool forward = e.Key == Key.Right || e.Key == Key.Down;
-                if (meta && !ctrl && !alt)
+                if ((meta || ctrlOrCmd) && !alt && !(ctrl && meta))
                 {
                     // Cmd+Left/Right -> line start (smart) / end; Cmd+Up/Down -> document start / end (+Shift selects)
                     if (horizontal) MoveCaretToLineBoundary(forward, shift);
@@ -4651,11 +4734,11 @@ namespace codeLess.AvaloniaApp
                     e.Handled = true;
                     break;
                 case Key.Left:
-                    MoveCaretHorizontal(-1, shift, ctrlOrCmd);
+                    MoveCaretHorizontal(-1, shift, !MacKeymap.IsMacOS && ctrlOrCmd);
                     e.Handled = true;
                     break;
                 case Key.Right:
-                    MoveCaretHorizontal(1, shift, ctrlOrCmd);
+                    MoveCaretHorizontal(1, shift, !MacKeymap.IsMacOS && ctrlOrCmd);
                     e.Handled = true;
                     break;
                 case Key.Up:
@@ -4737,13 +4820,13 @@ namespace codeLess.AvaloniaApp
             }
         }
 
-        private void MoveCaretHorizontal(int dir, bool shift, bool wordJump) => ApplyMoveToAllCarets(() => MoveCaretHorizontalCore(dir, shift, wordJump));
+        public void MoveCaretHorizontal(int dir, bool shift, bool wordJump) => ApplyMoveToAllCarets(() => MoveCaretHorizontalCore(dir, shift, wordJump));
 
         private void MoveCaretHorizontalCore(int dir, bool shift, bool wordJump)
         {
             var buf = Buffer;
             if (buf == null) return;
-            if (!movingExtraCaret) affinityLine = -1;
+            affinityLine = -1;
             // VS Code: Left / Right without Shift collapse a selection to its start / end without moving further.
             if (!shift && !wordJump && buf.HasSelection())
             {
@@ -4773,8 +4856,12 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (buf.CursorLine > 0)
                 {
-                    buf.CursorLine--;
-                    buf.CursorCol = buf.Lines[buf.CursorLine].Length;
+                    int prev = PrevVisibleLine(buf, buf.CursorLine);
+                    if (prev < buf.CursorLine)
+                    {
+                        buf.CursorLine = prev;
+                        buf.CursorCol = buf.Lines[buf.CursorLine].Length;
+                    }
                 }
             }
             else
@@ -4793,25 +4880,23 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (buf.CursorLine < buf.Lines.Count - 1)
                 {
-                    buf.CursorLine++;
-                    buf.CursorCol = 0;
+                    int next = NextVisibleLine(buf, buf.CursorLine);
+                    if (next > buf.CursorLine && next < buf.Lines.Count)
+                    {
+                        buf.CursorLine = next;
+                        buf.CursorCol = 0;
+                    }
                 }
             }
-            EnsureCursorVisible();
+            if (!movingExtraCaret) EnsureCursorVisible();
             owner.NotifyCaretMoved();
             InvalidateVisual();
         }
 
-        private static int GetFirstNonWhitespaceIndex(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return 0;
-            int i = 0;
-            while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
-            return i;
-        }
+        private static int GetFirstNonWhitespaceIndex(string s) => EditorWrapNavigation.FirstNonWhitespaceColumn(s);
 
         // Home / Cmd+Left: first non-whitespace char, then column 0. End / Cmd+Right: end of the logical line.
-        private void MoveCaretToLineBoundary(bool toEnd, bool shift) => ApplyMoveToAllCarets(() => MoveCaretToLineBoundaryCore(toEnd, shift));
+        public void MoveCaretToLineBoundary(bool toEnd, bool shift) => ApplyMoveToAllCarets(() => MoveCaretToLineBoundaryCore(toEnd, shift));
 
         private void MoveCaretToLineBoundaryCore(bool toEnd, bool shift)
         {
@@ -4820,28 +4905,45 @@ namespace codeLess.AvaloniaApp
             SetSelectionAnchorIfNeeded(shift);
             buf.CursorLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, buf.CursorLine));
             string line = buf.Lines[buf.CursorLine] ?? "";
-            bool primary = !movingExtraCaret;
             if (toEnd)
             {
-                if (!(primary && TryWrappedEnd(buf)))
+                if (!TryWrappedEnd(buf))
                 {
                     buf.CursorCol = line.Length;
-                    if (primary) affinityLine = -1;
+                    affinityLine = -1;
                 }
             }
-            else if (!(primary && TryWrappedHome(buf)))
+            else if (!TryWrappedHome(buf))
             {
                 int firstNonWs = GetFirstNonWhitespaceIndex(line);
                 buf.CursorCol = (buf.CursorCol == firstNonWs) ? 0 : firstNonWs;
-                if (primary) affinityLine = -1;
+                affinityLine = -1;
             }
-            EnsureCursorVisible();
+            if (!movingExtraCaret) EnsureCursorVisible();
+            owner.NotifyCaretMoved();
+            InvalidateVisual();
+        }
+
+        // Emacs Ctrl+A / Ctrl+E (+Shift) on macOS (cursorLineStart / cursorLineEnd):
+        // always targets column 0 or line.Length of the model line, ignoring soft-wrap segments and indentation toggle.
+        public void MoveCaretToModelLineBoundary(bool toEnd, bool shift) => ApplyMoveToAllCarets(() => MoveCaretToModelLineBoundaryCore(toEnd, shift));
+
+        private void MoveCaretToModelLineBoundaryCore(bool toEnd, bool shift)
+        {
+            var buf = Buffer;
+            if (buf == null || buf.Lines.Count == 0) return;
+            SetSelectionAnchorIfNeeded(shift);
+            buf.CursorLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, buf.CursorLine));
+            string line = buf.Lines[buf.CursorLine] ?? "";
+            buf.CursorCol = toEnd ? line.Length : 0;
+            affinityLine = -1;
+            if (!movingExtraCaret) EnsureCursorVisible();
             owner.NotifyCaretMoved();
             InvalidateVisual();
         }
 
         // Ctrl+Home/End (Windows) or Cmd+Up/Down (macOS): start / end of document.
-        private void MoveCaretToDocumentBoundary(bool toEnd, bool shift) => ApplyMoveToAllCarets(() => MoveCaretToDocumentBoundaryCore(toEnd, shift));
+        public void MoveCaretToDocumentBoundary(bool toEnd, bool shift) => ApplyMoveToAllCarets(() => MoveCaretToDocumentBoundaryCore(toEnd, shift));
 
         private void MoveCaretToDocumentBoundaryCore(bool toEnd, bool shift)
         {
@@ -4858,7 +4960,8 @@ namespace codeLess.AvaloniaApp
                 buf.CursorLine = 0;
                 buf.CursorCol = 0;
             }
-            EnsureCursorVisible();
+            affinityLine = -1;
+            if (!movingExtraCaret) EnsureCursorVisible();
             owner.NotifyCaretMoved();
             InvalidateVisual();
         }
@@ -5731,6 +5834,9 @@ namespace codeLess.AvaloniaApp
             occurrenceTimer?.Stop();
             foldTimer?.Stop();
             scrollbarHideTimer?.Stop();
+            SnippetKeyHandler = null;
+            imeClient?.Detach();
+            owner?.DetachWindowEvents();
             ReleaseBufferReferences(null);
             ClearRenderCaches();
             runBrushCache.Clear();

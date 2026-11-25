@@ -960,6 +960,7 @@ namespace codeLess.Studio
         public int Col;
         public int AnchorLine = -1;
         public int AnchorCol = -1;
+        public bool RowEndAffinity = false;
 
         public int CursorLine
         {

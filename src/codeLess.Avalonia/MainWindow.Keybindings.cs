@@ -84,10 +84,10 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("editor.action.outdentLines", () => PrimaryEditor?.Canvas?.IndentOrOutdentLines(true));
             keybindings.BindAction("editor.fold", () => PrimaryEditor?.Canvas?.FoldAtCaret());
             keybindings.BindAction("editor.unfold", () => PrimaryEditor?.Canvas?.UnfoldAtCaret());
-            keybindings.BindAction("cursorBottom", () => SendEditorKey(MacKeymap.IsMacOS ? Key.Down : Key.End, MacKeymap.PrimaryModifier));
-            keybindings.BindAction("cursorEnd", () => SendEditorKey(Key.End, KeyModifiers.None));
-            keybindings.BindAction("cursorHome", () => SendEditorKey(Key.Home, KeyModifiers.None));
-            keybindings.BindAction("cursorTop", () => SendEditorKey(MacKeymap.IsMacOS ? Key.Up : Key.Home, MacKeymap.PrimaryModifier));
+            keybindings.BindAction("cursorBottom", () => ActiveEditorCanvas?.MoveCaretToDocumentBoundary(true, false));
+            keybindings.BindAction("cursorEnd", () => ActiveEditorCanvas?.MoveCaretToLineBoundary(true, false));
+            keybindings.BindAction("cursorHome", () => ActiveEditorCanvas?.MoveCaretToLineBoundary(false, false));
+            keybindings.BindAction("cursorTop", () => ActiveEditorCanvas?.MoveCaretToDocumentBoundary(false, false));
             keybindings.BindAction("deleteWordLeft", () => SendEditorKey(Key.Back, MacKeymap.IsMacOS ? KeyModifiers.Alt : KeyModifiers.Control));
             keybindings.BindAction("deleteWordRight", () => SendEditorKey(Key.Delete, MacKeymap.IsMacOS ? KeyModifiers.Alt : KeyModifiers.Control));
             keybindings.BindAction("editor.action.clipboardCopyAction", () => RouteClipboardCommand("copy"));
@@ -242,6 +242,18 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.editor.changeLanguageMode", () => OpenLanguageModePicker());
             keybindings.BindAction("markdown.showPreviewToSide", () => OpenMarkdownPreview(toSide: true));
             keybindings.BindAction("editor.action.inlineAiBar", () => PrimaryEditor?.ShowInlineAiBar());
+            keybindings.BindAction("cursorHomeSelect", () => ActiveEditorCanvas?.MoveCaretToLineBoundary(false, true));
+            keybindings.BindAction("cursorEndSelect", () => ActiveEditorCanvas?.MoveCaretToLineBoundary(true, true));
+            keybindings.BindAction("cursorLineStart", () => ActiveEditorCanvas?.MoveCaretToModelLineBoundary(false, false));
+            keybindings.BindAction("cursorLineStartSelect", () => ActiveEditorCanvas?.MoveCaretToModelLineBoundary(false, true));
+            keybindings.BindAction("cursorLineEnd", () => ActiveEditorCanvas?.MoveCaretToModelLineBoundary(true, false));
+            keybindings.BindAction("cursorLineEndSelect", () => ActiveEditorCanvas?.MoveCaretToModelLineBoundary(true, true));
+            keybindings.BindAction("cursorTopSelect", () => ActiveEditorCanvas?.MoveCaretToDocumentBoundary(false, true));
+            keybindings.BindAction("cursorBottomSelect", () => ActiveEditorCanvas?.MoveCaretToDocumentBoundary(true, true));
+            keybindings.BindAction("cursorWordLeft", () => ActiveEditorCanvas?.MoveCaretHorizontal(-1, false, true));
+            keybindings.BindAction("cursorWordLeftSelect", () => ActiveEditorCanvas?.MoveCaretHorizontal(-1, true, true));
+            keybindings.BindAction("cursorWordEndRight", () => ActiveEditorCanvas?.MoveCaretHorizontal(1, false, true));
+            keybindings.BindAction("cursorWordEndRightSelect", () => ActiveEditorCanvas?.MoveCaretHorizontal(1, true, true));
 
             contextKeyService = new WindowContextKeyService(this);
             InitializeVscodeSettingsWatcher();
@@ -275,6 +287,9 @@ namespace codeLess.AvaloniaApp
             }
             catch { }
         }
+
+        private AvaloniaVirtualEditorCanvas ActiveEditorCanvas =>
+            (FocusManager?.GetFocusedElement() as AvaloniaVirtualEditorCanvas) ?? PrimaryEditor?.Canvas;
 
         private bool DispatchKeybinding(Key key, KeyModifiers modifiers, bool isTerminalFocus)
         {

@@ -12461,6 +12461,22 @@ if __name__ == '__main__':
             keybindingsWin.BindAction("workbench.action.toggleZenMode", delegate { ToggleZenMode(); });
             keybindingsWin.BindAction("workbench.action.toggleFullScreen", delegate { ToggleFullScreenMode(); });
             keybindingsWin.BindAction("inlineChat.start", delegate { if (editorControl != null) editorControl.ToggleCtrlKBar(); });
+            keybindingsWin.BindAction("cursorHome", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Home); });
+            keybindingsWin.BindAction("cursorHomeSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Home | Keys.Shift); });
+            keybindingsWin.BindAction("cursorEnd", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.End); });
+            keybindingsWin.BindAction("cursorEndSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.End | Keys.Shift); });
+            keybindingsWin.BindAction("cursorLineStart", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.MoveCaretToModelLineBoundary(false, false); });
+            keybindingsWin.BindAction("cursorLineStartSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.MoveCaretToModelLineBoundary(false, true); });
+            keybindingsWin.BindAction("cursorLineEnd", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.MoveCaretToModelLineBoundary(true, false); });
+            keybindingsWin.BindAction("cursorLineEndSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.MoveCaretToModelLineBoundary(true, true); });
+            keybindingsWin.BindAction("cursorTop", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Home | Keys.Control); });
+            keybindingsWin.BindAction("cursorTopSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Home | Keys.Control | Keys.Shift); });
+            keybindingsWin.BindAction("cursorBottom", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.End | Keys.Control); });
+            keybindingsWin.BindAction("cursorBottomSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.End | Keys.Control | Keys.Shift); });
+            keybindingsWin.BindAction("cursorWordLeft", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Left | Keys.Control); });
+            keybindingsWin.BindAction("cursorWordLeftSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Left | Keys.Control | Keys.Shift); });
+            keybindingsWin.BindAction("cursorWordEndRight", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Right | Keys.Control); });
+            keybindingsWin.BindAction("cursorWordEndRightSelect", delegate { if (editorControl != null && editorControl.Canvas != null) editorControl.Canvas.DispatchNavigationKey(Keys.Right | Keys.Control | Keys.Shift); });
 
             string kbPath = IdePersistentSettings.GetKeybindingsFilePath();
             keybindingsWatcherWin = new codeLess.Core.KeybindingsFileWatcher(kbPath, delegate (string content)

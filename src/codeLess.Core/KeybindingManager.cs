@@ -22,10 +22,11 @@ namespace codeLess.Core
     /// </summary>
     public class KeybindingManager
     {
-        private static List<KeybindingEntry> cachedDefaults = null;
+        private static List<KeybindingEntry> cachedDefaultsMac = null;
+        private static List<KeybindingEntry> cachedDefaultsNonMac = null;
         private static readonly object defaultLock = new object();
 
-        private readonly bool _isMac;
+        private bool _isMac;
         private readonly List<KeybindingEntry> activeBindings = new List<KeybindingEntry>();
         private readonly List<KeybindingEntry> removedBindings = new List<KeybindingEntry>();
         private readonly Dictionary<string, Action> actions = new Dictionary<string, Action>(StringComparer.Ordinal);
@@ -33,16 +34,24 @@ namespace codeLess.Core
 
         private string chordPrefix = null;
 
-        private static List<KeybindingEntry> GetDefaults()
+        public void SetPlatform(bool isMac)
         {
-            if (cachedDefaults != null && cachedDefaults.Count > 0) return cachedDefaults;
+            if (_isMac == isMac) return;
+            _isMac = isMac;
+            UpdateActiveBindings(UserBindings);
+        }
+
+        private static List<KeybindingEntry> GetDefaults(bool isMac)
+        {
+            List<KeybindingEntry> current = isMac ? cachedDefaultsMac : cachedDefaultsNonMac;
+            if (current != null && current.Count > 0) return current;
             lock (defaultLock)
             {
-                if (cachedDefaults != null && cachedDefaults.Count > 0) return cachedDefaults;
+                current = isMac ? cachedDefaultsMac : cachedDefaultsNonMac;
+                if (current != null && current.Count > 0) return current;
                 DefaultCommands.Register();
                 var list = new List<KeybindingEntry>();
-                bool isMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
-                bool isLinux = RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+                bool isLinux = !isMac && RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
 
                 foreach (var cmd in CommandRegistry.AllCommands)
                 {
@@ -61,14 +70,15 @@ namespace codeLess.Core
                         });
                     }
                 }
-                cachedDefaults = list;
-                return cachedDefaults;
+                if (isMac) cachedDefaultsMac = list;
+                else cachedDefaultsNonMac = list;
+                return list;
             }
         }
 
         public List<KeybindingEntry> ActiveBindings { get { return activeBindings; } }
         public List<KeybindingEntry> RemovedBindings { get { return removedBindings; } }
-        public List<KeybindingEntry> Defaults { get { return GetDefaults(); } }
+        public List<KeybindingEntry> Defaults { get { return GetDefaults(_isMac); } }
         public List<KeybindingEntry> UserBindings { get; private set; }
 
         public int CommandCount
@@ -361,10 +371,61 @@ namespace codeLess.Core
             return parseError;
         }
 
+        private static string CanonicalizeSingleKeystroke(string stroke)
+        {
+            if (string.IsNullOrEmpty(stroke)) return "";
+            string s = stroke.Trim().ToLowerInvariant();
+            if (s.IndexOf('+') < 0) return s;
+
+            bool ctrl = false;
+            bool shift = false;
+            bool alt = false;
+            bool option = false;
+            bool cmd = false;
+            string mainKey = "";
+
+            // Handle trailing '+' key (e.g. "cmd++")
+            bool endsWithPlus = s.EndsWith("+") && s.Length > 1 && s[s.Length - 2] == '+';
+            string work = endsWithPlus ? s.Substring(0, s.Length - 2) : s;
+            string[] tokens = work.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                string t = tokens[i].Trim();
+                if (t == "ctrl" || t == "control") ctrl = true;
+                else if (t == "shift") shift = true;
+                else if (t == "alt") alt = true;
+                else if (t == "option" || t == "opt") option = true;
+                else if (t == "cmd" || t == "meta" || t == "win" || t == "super") cmd = true;
+                else mainKey = t;
+            }
+            if (endsWithPlus) mainKey = "+";
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            if (ctrl) sb.Append("ctrl+");
+            if (shift) sb.Append("shift+");
+            if (alt) sb.Append("alt+");
+            if (option) sb.Append("option+");
+            if (cmd) sb.Append("cmd+");
+            sb.Append(mainKey);
+            return sb.ToString();
+        }
+
+        public static string CanonicalizeGesture(string gesture)
+        {
+            if (string.IsNullOrEmpty(gesture)) return "";
+            string trimmed = gesture.Trim();
+            if (trimmed.IndexOf(' ') < 0)
+                return CanonicalizeSingleKeystroke(trimmed);
+            string[] parts = trimmed.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+                parts[i] = CanonicalizeSingleKeystroke(parts[i]);
+            return string.Join(" ", parts);
+        }
+
         private void UpdateActiveBindings(List<KeybindingEntry> userBindings)
         {
             activeBindings.Clear();
-            activeBindings.AddRange(GetDefaults());
+            activeBindings.AddRange(GetDefaults(_isMac));
             removedBindings.Clear();
 
             if (userBindings != null)
@@ -399,9 +460,10 @@ namespace codeLess.Core
 
         public bool HasChordPrefix(string keyGesture)
         {
+            string canonPrefix = CanonicalizeGesture(keyGesture) + " ";
             foreach (var b in activeBindings)
             {
-                if (b.Key != null && b.Key.StartsWith(keyGesture + " ", StringComparison.OrdinalIgnoreCase))
+                if (b.Key != null && CanonicalizeGesture(b.Key).StartsWith(canonPrefix, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
@@ -417,11 +479,15 @@ namespace codeLess.Core
             }
 
             string fullGesture = chordPrefix != null ? (chordPrefix + " " + keyGesture) : keyGesture;
+            string canonGesture = CanonicalizeGesture(fullGesture);
 
             for (int i = activeBindings.Count - 1; i >= 0; i--)
             {
                 var entry = activeBindings[i];
-                if (entry.Key == fullGesture)
+                bool keyMatches = entry.Key == fullGesture ||
+                    (entry.Command != null && entry.Command.StartsWith("cursor", StringComparison.Ordinal) &&
+                     CanonicalizeGesture(entry.Key) == canonGesture);
+                if (keyMatches)
                 {
                     if (WhenParser.Evaluate(entry.WhenParsed, ctx))
                     {
@@ -430,6 +496,21 @@ namespace codeLess.Core
                         showStatus("");
                         return ExecuteCommand(entry.Command);
                     }
+                }
+            }
+
+            if (_isMac && chordPrefix == null && !isTerminalFocus)
+            {
+                string macSecondaryCmd = null;
+                if (canonGesture == "home") macSecondaryCmd = "cursorHome";
+                else if (canonGesture == "shift+home") macSecondaryCmd = "cursorHomeSelect";
+                else if (canonGesture == "end") macSecondaryCmd = "cursorEnd";
+                else if (canonGesture == "shift+end") macSecondaryCmd = "cursorEndSelect";
+
+                if (macSecondaryCmd != null && WhenParser.Evaluate(WhenParser.Parse("editorTextFocus"), ctx))
+                {
+                    showStatus("");
+                    return ExecuteCommand(macSecondaryCmd);
                 }
             }
 
