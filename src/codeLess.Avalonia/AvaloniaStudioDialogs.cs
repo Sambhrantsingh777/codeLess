@@ -104,6 +104,14 @@ namespace codeLess.AvaloniaApp
 
             SearchInput.TextChanged += (s, e) => RefreshFilter();
             SearchInput.KeyDown += OnSearchKeyDown;
+            SearchInput.AddHandler(InputElement.KeyDownEvent, (s, e) =>
+            {
+                if (e.Key == Key.Tab)
+                {
+                    CycleSelection(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
+                    e.Handled = true;
+                }
+            }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
             ResultsListBox.SelectionChanged += (s, e) =>
             {
                 int idx = ResultsListBox.SelectedIndex;
