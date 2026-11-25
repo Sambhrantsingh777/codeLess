@@ -48,6 +48,17 @@ namespace codeLess.AvaloniaApp
                 aiEngine = new LlmHarnessAndAgentEngine(settings);
                 aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
                 aiEngine.OnEnsureIndexed = EnsureWorkspaceIndexed;
+                aiEngine.DiagnosticsProvider = new LspDiagnosticsProvider();
+                aiEngine.OnAgentFeedStatus = msg => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (!windowClosed && AgentFeed != null)
+                        AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
+                });
+                aiEngine.OnTodosChanged = () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (!windowClosed && AgentFeed != null && aiEngine != null)
+                        AgentFeed.UpdateTodos(aiEngine.AgentTodos);
+                });
             }
             return aiEngine;
         }
@@ -67,7 +78,7 @@ namespace codeLess.AvaloniaApp
         private bool showWelcomeTab = true;
         private string activeSidebarView = "explorer";
         private string activeBottomTab = "terminal";
-        private string currentAgentMode = "agent";
+        private string currentAgentMode = "build";
         private bool isZenMode = false;
         private bool isFullScreen = false;
         private bool isBottomDockMaximized = false;
@@ -1764,7 +1775,7 @@ namespace codeLess.AvaloniaApp
                 Background = Brushes.Transparent
             };
             ScrollViewer.SetVerticalScrollBarVisibility(chatPromptInput, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
-            // Enter sends, Shift+Enter inserts a newline (handled before the TextBox inserts one itself).
+            // Enter sends, Shift+Enter inserts a newline. Tab cycles modes.
             chatPromptInput.AddHandler(KeyDownEvent, (s, e) =>
             {
                 if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
@@ -1772,12 +1783,18 @@ namespace codeLess.AvaloniaApp
                     SubmitChatMessage();
                     e.Handled = true;
                 }
+                else if (e.Key == Key.Tab)
+                {
+                    
+                    SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
+                    e.Handled = true;
+                }
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
             composerStack.Children.Add(chatPromptInput);
 
-            // Mode pills row: ✦ Agent | Ask | Edit | Auto-Fix
+            // Mode pills row: ✦ Build | Plan
             var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            foreach (var m in new (string Id, string Label)[] { ("agent", "Agent"), ("ask", "Ask"), ("edit", "Edit"), ("autofix", "Auto-Fix") })
+            foreach (var m in new (string Id, string Label)[] { ("agent", "Build"), ("plan", "Plan") })
             {
                 string modeId = m.Id;
                 var mb = new Button

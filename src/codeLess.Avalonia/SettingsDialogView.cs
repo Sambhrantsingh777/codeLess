@@ -282,6 +282,7 @@ namespace codeLess.AvaloniaApp
             AddLabeled("Provider", providerCombo, "codeless.ai.provider", "ai byok llm " + string.Join(" ", providers.Select(p => p.Name)));
             AddLabeled("Model", modelBox, "codeless.ai.model", "ai byok llm");
             AddLabeled("API key", apiKeyBox, "Stored per provider in your settings file", "ai byok llm secret token");
+            var nativeToolsChk = AddCheck("Use native tool calling when supported by the provider", settings.NativeToolCalling, "codeless.agent.nativeToolCalling");
 
             // ---------------------------------------------------------------- search + chrome
             var noResults = new TextBlock
@@ -378,6 +379,7 @@ namespace codeLess.AvaloniaApp
                 if (!string.IsNullOrWhiteSpace(modelBox.Text))
                     settings.ActiveModel = modelBox.Text.Trim();
                 settings.SetApiKeyForProvider(settings.ActiveProvider, (apiKeyBox.Text ?? "").Trim());
+                settings.NativeToolCalling = nativeToolsChk.IsChecked == true;
                 parity.Apply(settings);
                 onApplied?.Invoke(settings);
             };

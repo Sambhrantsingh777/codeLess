@@ -294,7 +294,7 @@ namespace codeLess.Studio
 
         // Right AI Agent & Multi-File Composer Dock
         private Panel rightDock;
-        private string currentAgentMode = "agent";
+        private string currentAgentMode = "build";
         private Button modeAgentBtn;
         private Button modeComposerBtn;
         private Button modeArchitectBtn;
@@ -342,6 +342,14 @@ namespace codeLess.Studio
             this.themes = StudioTheme.GetBuiltInThemes();
             this.activeTheme = StudioTheme.ResolveTheme(themes, settings.ActiveThemeId);
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
+                        this.aiEngine.OnAgentFeedStatus = msg => this.BeginInvoke(new Action(() => {
+                if (this.agentFeedControl != null)
+                    this.agentFeedControl.AddMessage(false, "System", "", msg);
+            }));
+            this.aiEngine.OnTodosChanged = () => this.BeginInvoke(new Action(() => {
+                if (this.agentFeedControl != null)
+                    this.agentFeedControl.UpdateTodos(this.aiEngine.AgentTodos);
+            }));
             this.vsixEngine = new VsixAndPluginHostEngine(themes);
             this.networkPrivacy = new WinFormsNetworkPrivacyController(this, settings, () => activeTheme);
             InitLanguageServerController();
@@ -6849,10 +6857,7 @@ if __name__ == '__main__':
                 e.Graphics.Clear(bg);
                 using (Pen bp = new Pen(border, 1f))
                     e.Graphics.DrawRectangle(bp, 0, 0, composerModePillBtn.Width - 1, composerModePillBtn.Height - 1);
-                string modeLabel = currentAgentMode == "composer" ? "Ask"
-                    : currentAgentMode == "architect" ? "Edit"
-                    : currentAgentMode == "autofix" ? "Fix"
-                    : "Agent";
+                string modeLabel = AgentUiParity.GetModePillLabel(currentAgentMode);
                 CodeLessVectorIcons.DrawIcon(e.Graphics, "agent", new Rectangle(6, 5, 13, 13), accent, 1.35f);
                 TextRenderer.DrawText(
                     e.Graphics,
@@ -6867,6 +6872,8 @@ if __name__ == '__main__':
             composerModePillBtn.Click += (s, e) =>
             {
                 ContextMenuStrip modeMenu = CreateAutoDisposingContextMenu();
+                modeMenu.Items.Add("Build (Agent Mode)", null, (ms, me) => SetAgentMode("build"));
+                modeMenu.Items.Add("Plan (Read-Only Planning)", null, (ms, me) => SetAgentMode("plan"));
                 modeMenu.Items.Add("Agent (Multi-file & Tools)", null, (ms, me) => SetAgentMode("agent"));
                 modeMenu.Items.Add("Ask (Read-only Chat)", null, (ms, me) => SetAgentMode("composer"));
                 modeMenu.Items.Add("Edit (Inline Manual Diff)", null, (ms, me) => SetAgentMode("architect"));
@@ -7127,6 +7134,11 @@ if __name__ == '__main__':
                 {
                     e.SuppressKeyPress = true;
                     await SubmitAgentPromptAsync();
+                }
+                else if (e.KeyCode == Keys.Tab)
+                {
+                    e.SuppressKeyPress = true;
+                    SetAgentMode(AgentUiParity.CycleBuildPlanMode(currentAgentMode));
                 }
             };
 
@@ -7610,16 +7622,13 @@ if __name__ == '__main__':
         private void SetAgentMode(string mode)
         {
             currentAgentMode = mode;
-            modeAgentBtn.Tag = mode == "agent" ? "docktab_active" : "docktab_inactive";
-            modeComposerBtn.Tag = mode == "composer" ? "docktab_active" : "docktab_inactive";
-            modeArchitectBtn.Tag = mode == "architect" ? "docktab_active" : "docktab_inactive";
-            modeAutoFixBtn.Tag = mode == "autofix" ? "docktab_active" : "docktab_inactive";
+            bool isPlan = AgentUiParity.NormalizeBuildPlanMode(mode) == "plan";
+            modeAgentBtn.Tag = !isPlan ? "docktab_active" : "docktab_inactive";
+            modeComposerBtn.Tag = isPlan ? "docktab_active" : "docktab_inactive";
             if (composerModePillBtn != null)
             {
-                composerModePillBtn.Text = mode == "composer" ? "Ask"
-                    : mode == "architect" ? "Edit"
-                    : mode == "autofix" ? "Fix"
-                    : "Agent";
+                composerModePillBtn.Text = AgentUiParity.GetModePillLabel(mode);
+                composerModePillBtn.Invalidate();
             }
             ApplyThemeToControlTree(rightDock, activeTheme);
             rightDock.Invalidate(true);
@@ -10829,6 +10838,7 @@ if __name__ == '__main__':
             else if (cmdId == "toggle_bottom") ToggleBottomDockVisibility();
             else if (cmdId == "toggle_wrap") { editorControl.ToggleWordWrap(); UpdateTelemetryBadges(); }
             else if (cmdId == "open_byok") OpenByokConfigurationDialog();
+            else if (cmdId == "codeless.agent.compact") { promptInputBox.Text = "/compact"; var _ = SubmitAgentPromptAsync(); }
             else if (cmdId == "open_settings") OpenSettingsDialog();
             else if (cmdId == "open_shortcuts") OpenKeyboardShortcutsDialog();
             else if (cmdId == "rename_symbol") PromptRenameSymbolInEditor();

@@ -24,7 +24,51 @@ namespace codeLess.Avalonia.Tests
         private readonly string _settingsBackupContent;
         private readonly bool _hadSettingsFile;
 
-        public AvaloniaHeadlessTests()
+                [AvaloniaFact]
+        public void Avalonia_Tab_TogglesMode()
+        {
+            string csFile, pyFile, subFile;
+            string ws = CreateRichTempWorkspace(out csFile, out pyFile, out subFile);
+            try
+            {
+                var window = new MainWindow(ws);
+                window.Show();
+                window.SetAgentMode("build");
+                var input = global::Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(window).OfType<global::Avalonia.Controls.TextBox>().FirstOrDefault(x => x.Name == "ChatPromptInput");
+                Assert.NotNull(input);
+                
+                var statusBtnField = window.GetType().GetField("statusAiModelBtn", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var statusBtn = (global::Avalonia.Controls.Button)statusBtnField.GetValue(window);
+                var btnContentStr = statusBtn.Content.ToString();
+                
+                Assert.Equal("build", window.CurrentAgentMode);
+                Assert.Contains("build", btnContentStr, StringComparison.OrdinalIgnoreCase);
+
+                var tabEvent = new global::Avalonia.Input.KeyEventArgs { RoutedEvent = global::Avalonia.Input.InputElement.KeyDownEvent, Key = global::Avalonia.Input.Key.Tab };
+                input.RaiseEvent(tabEvent);
+
+                btnContentStr = statusBtn.Content.ToString();
+                Assert.Equal("plan", window.CurrentAgentMode);
+                Assert.Contains("plan", btnContentStr, StringComparison.OrdinalIgnoreCase);
+
+                var tabEvent2 = new global::Avalonia.Input.KeyEventArgs { RoutedEvent = global::Avalonia.Input.InputElement.KeyDownEvent, Key = global::Avalonia.Input.Key.Tab };
+                input.RaiseEvent(tabEvent2);
+                
+                btnContentStr = statusBtn.Content.ToString();
+                Assert.Equal("build", window.CurrentAgentMode);
+                Assert.Contains("build", btnContentStr, StringComparison.OrdinalIgnoreCase);
+
+                window.SuppressUnsavedPrompts = true;
+                window.Close();
+                global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(ws, true); } catch { }
+            }
+        }
+
+public AvaloniaHeadlessTests()
         {
             _settingsFilePath = IdePersistentSettings.GetSettingsFilePath();
             _hadSettingsFile = !string.IsNullOrEmpty(_settingsFilePath) && File.Exists(_settingsFilePath);

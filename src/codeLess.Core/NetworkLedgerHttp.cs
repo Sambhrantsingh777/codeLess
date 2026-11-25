@@ -188,6 +188,8 @@ namespace codeLess.Studio
         public int TimeoutMs = 15000;
         /// <summary>Responses larger than this are truncated (protects the IDE from huge downloads into memory).</summary>
         public long MaxResponseBytes = 32L * 1024 * 1024;
+        /// <summary>When false, redirects to a different host are not followed automatically.</summary>
+        public bool AllowCrossHostRedirects = true;
         /// <summary>Message used for the <see cref="NetworkBlockedException"/> when Offline Mode refuses the request.</summary>
         public string BlockedMessage;
     }
@@ -226,6 +228,9 @@ namespace codeLess.Studio
     {
         /// <summary>Maximum redirect hops followed (like browsers / HttpClient's default of 50, but tighter).</summary>
         public const int MaxRedirects = 10;
+
+        /// <summary>In-process transport seam for unit tests (invoked after NetworkLedger.Begin check).</summary>
+        public static Func<LedgerHttpRequest, LedgerHttpResponse> TransportOverride;
 
         public static LedgerHttpResponse Get(string feature, string url, int timeoutMs)
         {
@@ -284,6 +289,7 @@ namespace codeLess.Studio
             n.UserAgent = r.UserAgent;
             n.TimeoutMs = r.TimeoutMs;
             n.MaxResponseBytes = r.MaxResponseBytes;
+            n.AllowCrossHostRedirects = r.AllowCrossHostRedirects;
             n.BlockedMessage = r.BlockedMessage;
             n.Body = dropBody ? null : r.Body;
             n.ContentType = dropBody ? null : r.ContentType;
@@ -337,6 +343,73 @@ namespace codeLess.Studio
                 NetworkRequestScope scope = NetworkLedger.Begin(hop.Feature, method, hop.Url, hop.BlockedMessage);
                 try
                 {
+                    Func<LedgerHttpRequest, LedgerHttpResponse> overrideFn = TransportOverride;
+                    if (overrideFn != null)
+                    {
+                        LedgerHttpResponse fake = overrideFn(hop);
+                        if (fake == null)
+                        {
+                            result.Error = "No response";
+                            scope.Fail(new IOException(result.Error));
+                            return Finish(result, scope, sentBefore, receivedBefore, msBefore);
+                        }
+                        int fakeStatus = fake.Status;
+                        scope.Status = fakeStatus;
+                        if (IsRedirectStatus(fakeStatus) && redirects < MaxRedirects)
+                        {
+                            string loc = null;
+                            if (fake.Headers != null)
+                            {
+                                foreach (KeyValuePair<string, string> kv in fake.Headers)
+                                {
+                                    if (string.Equals(kv.Key, "Location", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        loc = kv.Value;
+                                        break;
+                                    }
+                                }
+                            }
+                            string nextMethod = method;
+                            bool dropBody;
+                            string next = ResolveRedirect(hop.Url, fakeStatus, loc, ref nextMethod, out dropBody);
+                            if (next != null)
+                            {
+                                if (!hop.AllowCrossHostRedirects && !string.Equals(HostOf(hop.Url), HostOf(next), StringComparison.OrdinalIgnoreCase))
+                                {
+                                    result.Status = fakeStatus;
+                                    result.Error = "Cross-host redirect to " + HostOf(next) + " is not allowed.";
+                                    scope.Complete(fakeStatus, "Cross-host redirect refused");
+                                    return Finish(result, scope, sentBefore, receivedBefore, msBefore);
+                                }
+                                scope.Complete(fakeStatus, "Redirect to " + HostOf(next));
+                                sentBefore += scope.BytesSent; receivedBefore += scope.BytesReceived; msBefore += scope.ElapsedMs;
+                                hop = NextHop(hop, next, dropBody, SameOrigin(hop.Url, next));
+                                method = nextMethod;
+                                continue;
+                            }
+                        }
+                        byte[] rawBytes = fake.BodyBytes ?? Encoding.UTF8.GetBytes(fake.Body ?? "");
+                        bool truncated = fake.Truncated;
+                        if (hop.MaxResponseBytes > 0 && rawBytes.Length > hop.MaxResponseBytes)
+                        {
+                            byte[] cut = new byte[hop.MaxResponseBytes];
+                            Buffer.BlockCopy(rawBytes, 0, cut, 0, (int)hop.MaxResponseBytes);
+                            rawBytes = cut;
+                            truncated = true;
+                        }
+                        scope.AddReceived(rawBytes.Length);
+                        result.Status = fakeStatus;
+                        result.StatusDescription = fake.StatusDescription ?? "";
+                        result.ContentType = fake.ContentType ?? "";
+                        result.BodyBytes = rawBytes;
+                        result.Body = DecodeBody(rawBytes, result.ContentType);
+                        result.Truncated = truncated;
+                        result.Headers = fake.Headers ?? new List<KeyValuePair<string, string>>();
+                        result.Error = fake.Error ?? "";
+                        scope.Complete();
+                        return Finish(result, scope, sentBefore, receivedBefore, msBefore);
+                    }
+
                     Exception transport;
                     HttpWebResponse res = SendOneHop(hop, method, scope, out transport);
                     if (res == null)
@@ -355,6 +428,13 @@ namespace codeLess.Studio
                             string next = ResolveRedirect(hop.Url, status, res.Headers["Location"], ref nextMethod, out dropBody);
                             if (next != null)
                             {
+                                if (!hop.AllowCrossHostRedirects && !string.Equals(HostOf(hop.Url), HostOf(next), StringComparison.OrdinalIgnoreCase))
+                                {
+                                    result.Status = status;
+                                    result.Error = "Cross-host redirect to " + HostOf(next) + " is not allowed.";
+                                    scope.Complete(status, "Cross-host redirect refused");
+                                    return Finish(result, scope, sentBefore, receivedBefore, msBefore);
+                                }
                                 scope.Complete(status, "Redirect to " + HostOf(next));
                                 sentBefore += scope.BytesSent; receivedBefore += scope.BytesReceived; msBefore += scope.ElapsedMs;
                                 hop = NextHop(hop, next, dropBody, SameOrigin(hop.Url, next));

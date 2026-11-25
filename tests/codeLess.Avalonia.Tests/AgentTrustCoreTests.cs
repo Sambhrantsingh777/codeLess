@@ -1085,7 +1085,7 @@ namespace codeLess.Avalonia.Tests
                 File.WriteAllText(f, "a = 1\nb = 2\n");
                 var engine = new LlmHarnessAndAgentEngine(null);
                 var copy = engine.CreateIsolatedCopy();
-                var tool = copy.ExecuteWorkspaceTool("run_terminal", new Dictionary<string, object> { { "command", "touch hacked" } }, ws, null, null, new Dictionary<string, string>());
+                var tool = copy.ExecuteWorkspaceTool("run_terminal", new Dictionary<string, object> { { "command", "touch hacked" } }, ws, null, null, new Dictionary<string, string>(), "agent", null);
                 Assert.False(tool.Success);
                 Assert.False(File.Exists(Path.Combine(ws, "hacked")));
 

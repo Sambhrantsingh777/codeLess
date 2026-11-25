@@ -21,6 +21,8 @@ namespace codeLess.Studio
     /// </summary>
     public partial class IdePersistentSettings
     {
+        public bool AllowBashWildcards { get; set; }
+
         /// <summary>"off" (default), "verify" or "repair".</summary>
         public string AgentVerifyModeId { get; set; }
         /// <summary>User-level verification command (codeless.verifyCommand). Workspace values override it.</summary>

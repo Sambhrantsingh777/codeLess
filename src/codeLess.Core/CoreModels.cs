@@ -28,6 +28,15 @@ namespace codeLess.Studio
             catch { }
         }
     }
+    public class AgentToolDefinition
+    {
+        public string Name;
+        public string[] Aliases;
+        public string Description;
+        public string JsonSchema;
+        public bool IsReadOnly;
+    }
+
     public partial class StudioTheme
     {
         public string Id;
@@ -1763,6 +1772,32 @@ namespace codeLess.Studio
         public string[] Models;
         public string EnvVarName;
 
+        private int _contextWindow = 0;
+        public int ContextWindow
+        {
+            get
+            {
+                if (_contextWindow > 0) return _contextWindow;
+                string m = SelectedModel ?? "";
+                if (m.IndexOf("gemini-1.5", StringComparison.OrdinalIgnoreCase) >= 0 || m.IndexOf("gemini-2.", StringComparison.OrdinalIgnoreCase) >= 0) return 1000000;
+                if (m.IndexOf("claude", StringComparison.OrdinalIgnoreCase) >= 0) return 200000;
+                return 128000;
+            }
+            set { _contextWindow = value; }
+        }
+
+        private int _maxOutputTokens = 0;
+        public int MaxOutputTokens
+        {
+            get
+            {
+                if (_maxOutputTokens > 0) return _maxOutputTokens;
+                // Use a safe default for output tokens
+                return 4096;
+            }
+            set { _maxOutputTokens = value; }
+        }
+
         public string VendorName
         {
             get { return Name; }
@@ -1924,6 +1959,11 @@ namespace codeLess.Studio
         public bool WordWrap { get; set; }
         public bool AutoSave { get; set; }
         public bool RequireAgentToolApproval { get; set; }
+        public bool NativeToolCalling { get; set; }
+        public string AgentPermissionEdit { get; set; }
+        public string AgentPermissionWebfetch { get; set; }
+        public Dictionary<string, string> AgentPermissionBash { get; set; }
+
         /// <summary>Check GitHub Releases for a newer codeLess at most once a day (anonymous request, can be disabled).</summary>
         public bool AutoCheckForUpdates { get; set; }
         public bool ThemeDefaultMigrated { get; set; }
@@ -1976,6 +2016,11 @@ namespace codeLess.Studio
             WordWrap = false;
             AutoSave = false;
             RequireAgentToolApproval = true;
+            NativeToolCalling = true;
+            AgentPermissionEdit = "allow";
+            AgentPermissionWebfetch = "ask";
+            AgentPermissionBash = new Dictionary<string, string>();
+
             AutoCheckForUpdates = true;
             EnableInlineGhostText = true;
             ShowMinimap = true;
@@ -2046,6 +2091,16 @@ namespace codeLess.Studio
                         if (!json.Contains("\"ShowWelcomeOnStartup\"")) loaded.ShowWelcomeOnStartup = true;
                         if (!json.Contains("\"ShowBreadcrumbs\"")) loaded.ShowBreadcrumbs = true;
                         if (!json.Contains("\"ActivatePythonEnvironmentInTerminal\"")) loaded.ActivatePythonEnvironmentInTerminal = true;
+                        if (!json.Contains("\"NativeToolCalling\"") && !json.Contains("\"codeless.agent.nativeToolCalling\"")) loaded.NativeToolCalling = true;
+                        try
+                        {
+                            var rawDict = ser.DeserializeObject(json) as Dictionary<string, object>;
+                            if (rawDict != null && rawDict.ContainsKey("codeless.agent.nativeToolCalling") && rawDict["codeless.agent.nativeToolCalling"] is bool)
+                            {
+                                loaded.NativeToolCalling = (bool)rawDict["codeless.agent.nativeToolCalling"];
+                            }
+                        }
+                        catch { }
                         return loaded;
                     }
                 }

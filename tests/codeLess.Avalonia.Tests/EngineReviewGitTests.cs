@@ -194,12 +194,12 @@ namespace codeLess.Avalonia.Tests
             string marker = Path.Combine(ws, "node_modules", "installed.txt");
             int code; bool to;
             string outp = engine.RunAgentTerminalCommand("npm install lodash && touch node_modules/installed.txt", ws,
-                new Dictionary<string, string> { { Path.Combine(ws, "index.js"), "2\n" } }, out code, out to);
+                new Dictionary<string, string> { { Path.Combine(ws, "index.js"), "2\n" } }, 120000, out code, out to);
             Assert.Contains("Not run", outp);
             Assert.Contains("node_modules", outp);
             Assert.False(File.Exists(marker));
 
-            string ok = engine.RunAgentTerminalCommand("cat index.js", ws, new Dictionary<string, string> { { Path.Combine(ws, "index.js"), "2\n" } }, out code, out to);
+            string ok = engine.RunAgentTerminalCommand("cat index.js", ws, new Dictionary<string, string> { { Path.Combine(ws, "index.js"), "2\n" } }, 120000, out code, out to);
             Assert.Contains("SHARED", ok);
             Assert.Contains("own git repository", ok);
             Assert.Contains("2", ok);

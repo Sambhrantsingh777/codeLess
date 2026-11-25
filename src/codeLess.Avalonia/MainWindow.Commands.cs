@@ -2265,6 +2265,10 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrEmpty(modeId)) return;
             currentAgentMode = modeId.ToLowerInvariant();
+            if (statusAiModelBtn != null)
+            {
+                statusAiModelBtn.Content = new LiteralTextBlock($"✦ {settings.ActiveModel} ({currentAgentMode})");
+            }
             if (currentTheme == null) return;
             Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
             Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
@@ -2434,6 +2438,9 @@ namespace codeLess.AvaloniaApp
                 case "open-chat":
                     if (!rightChatDockBorder.IsVisible) ToggleRightChatDock();
                     chatPromptInput.Focus();
+                    break;
+                case "codeless.agent.compact":
+                    _ = SendChatMessageAsync("/compact");
                     break;
                 case "command-palette": OpenCommandPalette(">"); break;
                 case "byok-dialog": ShowByokAndHarnessModal(); break;
@@ -2614,6 +2621,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "File", Title = "Close Folder", Shortcut = "Ctrl+K F", Execute = CloseWorkspaceFolder },
                 new PaletteEntryItem { Category = "Edit", Title = "Find", Shortcut = "Ctrl+F", Execute = () => PrimaryEditor.ShowFindBar(false) },
                 new PaletteEntryItem { Category = "Edit", Title = "Replace", Shortcut = "Ctrl+H", Execute = () => PrimaryEditor.ShowFindBar(true) },
+                new PaletteEntryItem { Category = "Agent", Title = "Agent: Compact Context", Execute = () => { _ = SendChatMessageAsync("/compact"); } },
                 new PaletteEntryItem { Category = "Edit", Title = "Find in Files", Shortcut = "Ctrl+Shift+F", Execute = () => ShowSearchView(false) },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Line Comment", Shortcut = "Ctrl+/", Execute = () => PrimaryEditor.Canvas.ToggleLineComment() },
                 new PaletteEntryItem { Category = "Edit", Title = "Toggle Block Comment", Shortcut = "Shift+Alt+A", Execute = () => PrimaryEditor.Canvas.ToggleBlockComment() },

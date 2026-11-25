@@ -427,6 +427,7 @@ namespace codeLess.Studio
                 WordWrap = baseLoaded.WordWrap,
                 AutoSave = baseLoaded.AutoSave,
                 RequireAgentToolApproval = baseLoaded.RequireAgentToolApproval,
+                NativeToolCalling = baseLoaded.NativeToolCalling,
                 AutoCheckForUpdates = baseLoaded.AutoCheckForUpdates,
                 UpdateMode = baseLoaded.UpdateMode,
                 ThemeDefaultMigrated = baseLoaded.ThemeDefaultMigrated,

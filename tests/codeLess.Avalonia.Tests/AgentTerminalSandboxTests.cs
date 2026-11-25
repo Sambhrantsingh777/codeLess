@@ -47,7 +47,7 @@ namespace codeLess.Avalonia.Tests
                     Assert.Equal("disk\n", File.ReadAllText(a));
                     Assert.False(File.Exists(b));
                 };
-                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("cat a.txt sub/b.txt; echo clobbered > a.txt; touch made.txt; pwd"), ws, null, null, staged);
+                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("cat a.txt sub/b.txt; echo clobbered > a.txt; touch made.txt; pwd"), ws, null, null, staged, "agent", null);
                 Assert.True(r.Success, r.Output);
                 Assert.Contains("staged", r.Output);
                 Assert.Contains("new file", r.Output);
@@ -70,7 +70,7 @@ namespace codeLess.Avalonia.Tests
             try
             {
                 var engine = new LlmHarnessAndAgentEngine(null);
-                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("echo hi > made.txt"), ws, null, null, new Dictionary<string, string>());
+                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("echo hi > made.txt"), ws, null, null, new Dictionary<string, string>(), "agent", null);
                 Assert.True(r.Success, r.Output);
                 Assert.Equal("hi", File.ReadAllText(Path.Combine(ws, "made.txt")).Trim());
                 Assert.DoesNotContain("temporary copy", r.Output);
@@ -88,7 +88,7 @@ namespace codeLess.Avalonia.Tests
                 string a = Path.Combine(ws, "a.txt");
                 var engine = new LlmHarnessAndAgentEngine(null);
                 engine.TerminalOverlayOptions = new VerificationOverlayOptions { PreferGitWorktree = false, MaxCopyBytes = 1 };
-                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("cat a.txt"), ws, null, null, new Dictionary<string, string> { { a, "staged\n" } });
+                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("cat a.txt"), ws, null, null, new Dictionary<string, string> { { a, "staged\n" } }, "agent", null);
                 Assert.Contains("could not be applied", r.Output);
                 Assert.Contains("disk", r.Output);
                 Assert.DoesNotContain("staged\n", File.ReadAllText(a));
@@ -107,7 +107,7 @@ namespace codeLess.Avalonia.Tests
                 var engine = new LlmHarnessAndAgentEngine(null);
                 string runDir = null;
                 engine.OnAgentCommandStarting = (c, dir) => { runDir = dir; throw new InvalidOperationException("simulated crash"); };
-                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("true"), ws, null, null, new Dictionary<string, string> { { a, "staged\n" } });
+                var r = engine.ExecuteWorkspaceTool("run_terminal", Cmd("true"), ws, null, null, new Dictionary<string, string> { { a, "staged\n" } }, "agent", null);
                 Assert.False(r.Success);
                 Assert.Equal("disk\n", File.ReadAllText(a));
                 Assert.False(Directory.Exists(runDir));

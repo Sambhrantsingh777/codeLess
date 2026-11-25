@@ -213,7 +213,7 @@ namespace codeLess.Avalonia.Tests
 
     /// <summary>Workspace Trust UI (Avalonia headless): prompt, status item, banner, task gating, no-restart enablement.</summary>
     [Collection("SequentialWorkbench")]
-    public class EngineReviewTrustHeadlessTests : IDisposable
+            public class EngineReviewTrustHeadlessTests : IDisposable
     {
         private readonly string settingsPath = IdePersistentSettings.GetSettingsFilePath();
         private readonly string settingsBackup;

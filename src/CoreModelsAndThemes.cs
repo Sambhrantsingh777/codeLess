@@ -2793,8 +2793,16 @@ namespace codeLess.Studio
     /// Renders styled User/Assistant cards, collapsible Thinking drawers, Tool Call chips,
     /// Markdown headings/lists/bold, and interactive fenced Code Blocks with [Copy] & [Apply].
     /// </summary>
-    public class CodeLessAgentFeedControl : Control
+        public class CodeLessAgentFeedControl : Control
     {
+        public List<Dictionary<string, object>> AgentTodos = new List<Dictionary<string, object>>();
+        public void UpdateTodos(List<Dictionary<string, object>> todos)
+        {
+            AgentTodos = todos ?? new List<Dictionary<string, object>>();
+            RecalculateLayout();
+            if (this.Visible) this.Invalidate();
+        }
+        
         public class AgentToolChip
         {
             public string Name;
@@ -3282,12 +3290,20 @@ namespace codeLess.Studio
             return path;
         }
 
-        private void RecalculateLayout()
+                private void RecalculateLayout()
         {
             int w = Math.Max(180, this.Width);
             lastLayoutWidth = w;
             int contentW = Math.Max(120, w - 34);
             int total = 10;
+            
+            if (AgentTodos != null && AgentTodos.Count > 0)
+            {
+                total += 24; // Title
+                foreach (var t in AgentTodos)
+                    total += 20; // each task line
+                total += 10; // bottom margin
+            }
 
             using (Font fProse = new Font("Segoe UI", 8.9f))
             using (Font fThink = new Font("Segoe UI", 8.2f))
@@ -3534,7 +3550,7 @@ namespace codeLess.Studio
             using (Pen topLine = new Pen(theme.BorderSubtle, 1f))
                 g.DrawLine(topLine, 0, 0, this.Width, 0);
 
-            int curY = 10 - scrollY;
+                        int curY = 10 - scrollY;
             int cardMarginX = 10;
             int cardW = Math.Max(140, this.Width - 22);
 
@@ -3545,6 +3561,20 @@ namespace codeLess.Studio
             using (Font fThink = new Font("Segoe UI", 8.2f))
             using (Font fCode = new Font("Consolas", 8.5f))
             {
+                if (AgentTodos != null && AgentTodos.Count > 0)
+                {
+                    TextRenderer.DrawText(g, "Task List", fBold, new Rectangle(cardMarginX, curY, cardW, 20), theme.FgPrimary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    curY += 24;
+                    foreach (var formatted in AgentUiParity.FormatTodoList(AgentTodos))
+                    {
+                        using (Font st = formatted.Strikethrough ? new Font(fProse, FontStyle.Strikeout) : new Font(fProse, FontStyle.Regular))
+                        {
+                            TextRenderer.DrawText(g, formatted.DisplayText, st, new Rectangle(cardMarginX, curY, cardW, 20), theme.FgPrimary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                        }
+                        curY += 20;
+                    }
+                    curY += 10;
+                }
                 foreach (AgentMessageCard card in cards.ToArray())
                 {
                     if (card == null) continue;

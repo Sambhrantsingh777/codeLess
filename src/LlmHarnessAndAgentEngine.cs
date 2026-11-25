@@ -16,12 +16,74 @@ namespace codeLess.Studio
 {
     public partial class LlmHarnessAndAgentEngine
     {
+        private WorkspaceIgnoreRules GetIgnoreRules(string workspaceRoot)
+        {
+            if (string.IsNullOrEmpty(workspaceRoot)) return null;
+            return new WorkspaceIgnoreRules(workspaceRoot, new string[] { ".git", "node_modules", "bin", "obj", "dist", "build", "target", "vendor", ".venv", "venv", "__pycache__", ".idea", ".vs", "coverage", ".cache", "tmp" }, true);
+        }
+
+        private IEnumerable<string> WalkDirectory(string root, WorkspaceIgnoreRules ignoreRules)
+        {
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) yield break;
+            
+            var stack = new Stack<string>();
+            stack.Push(root);
+            while (stack.Count > 0)
+            {
+                string dir = stack.Pop();
+                string[] files = null;
+                string[] dirs = null;
+                try {
+                    files = Directory.GetFiles(dir);
+                    dirs = Directory.GetDirectories(dir);
+                } catch { continue; }
+
+                if (files != null)
+                {
+                    foreach (string f in files)
+                    {
+                        if (ignoreRules != null && ignoreRules.IsGitIgnoredEntry(f, false)) continue;
+                        yield return f;
+                    }
+                }
+                
+                if (dirs != null)
+                {
+                    foreach (string d in dirs)
+                    {
+                        if (ignoreRules != null && ignoreRules.IsExcludedDirectory(d)) continue;
+                        stack.Push(d);
+                    }
+                }
+            }
+        }
+
+        public static readonly AgentToolDefinition[] Tools = new AgentToolDefinition[]
+        {
+            new AgentToolDefinition { Name = "read_file", Aliases = new string[] { "read" }, Description = "Read the contents of a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"start_line\":{\"type\":\"integer\"},\"end_line\":{\"type\":\"integer\"},\"offset\":{\"type\":\"integer\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "write_file", Aliases = new string[] { "write" }, Description = "Write new content to a file, overwriting it entirely.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "edit_file", Aliases = new string[] { "edit" }, Description = "Edit a file using search and replace blocks.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"search\":{\"type\":\"string\"},\"replace\":{\"type\":\"string\"},\"oldString\":{\"type\":\"string\"},\"newString\":{\"type\":\"string\"},\"replaceAll\":{\"type\":\"boolean\"}},\"required\":[\"path\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "multiedit", Aliases = new string[] { }, Description = "Apply multiple edits to a file atomically.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"search\":{\"type\":\"string\"},\"replace\":{\"type\":\"string\"},\"oldString\":{\"type\":\"string\"},\"newString\":{\"type\":\"string\"},\"replaceAll\":{\"type\":\"boolean\"}}}}},\"required\":[\"path\",\"edits\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "list_dir", Aliases = new string[] { "list" }, Description = "List files and directories in a folder.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "grep_search", Aliases = new string[] { "grep" }, Description = "Search for a regex pattern across files.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"include\":{\"type\":\"string\"}},\"required\":[\"query\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "glob", Aliases = new string[] { }, Description = "Find files matching a glob pattern.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"}},\"required\":[\"pattern\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "run_terminal", Aliases = new string[] { "run_command", "bash" }, Description = "Run a shell command in the terminal.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout\":{\"type\":\"integer\"},\"description\":{\"type\":\"string\"}},\"required\":[\"command\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "get_diagnostics", Aliases = new string[] { }, Description = "Get language server diagnostics (errors/warnings) for a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "ast_outline", Aliases = new string[] { }, Description = "Get an AST outline of a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "todowrite", Aliases = new string[] { }, Description = "Write the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\"}},\"required\":[\"todos\"]}", IsReadOnly = false },
+            new AgentToolDefinition { Name = "todoread", Aliases = new string[] { }, Description = "Read the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "webfetch", Aliases = new string[] { }, Description = "Fetch content from a URL (http/https) as markdown, text, or html.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\",\"enum\":[\"text\",\"markdown\",\"html\"]},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "task", Aliases = new string[] { }, Description = "Launch a read-only subagent to research or answer a complex question.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"description\",\"prompt\"]}", IsReadOnly = true }
+        };
+
         public List<ByokVendor> Vendors = new List<ByokVendor>();
         public List<LlmHarnessProfile> Harnesses = new List<LlmHarnessProfile>();
         private List<Bm25CodeChunk> _indexedChunks = new List<Bm25CodeChunk>();
         private List<string> _workspaceSymbols = new List<string>();
         private List<WorkspaceSymbolLocation> _workspaceSymbolMap = new List<WorkspaceSymbolLocation>();
         public List<HarnessTraceEntry> TraceHistory = new List<HarnessTraceEntry>();
+        public FileTimeTracker FileTimeTracker = new FileTimeTracker();
+
 
         private Dictionary<string, int> docFreq = new Dictionary<string, int>();
         private double avgChunkTokens = 100.0;
@@ -83,19 +145,68 @@ namespace codeLess.Studio
             _compactRepoMap = "";
         }
         public bool LocalOllamaDetected = false;
+        private HashSet<string> NativeToolsUnsupportedVendors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static string GetVendorModelKey(ByokVendor vendor)
+        {
+            if (vendor == null) return "";
+            return (vendor.Id ?? "") + ":" + (vendor.SelectedModel ?? "");
+        }
+
+        public bool IsNativeToolCallingEnabledFor(ByokVendor vendor)
+        {
+            if (_settings == null || !_settings.NativeToolCalling) return false;
+            if (vendor != null)
+            {
+                string key = GetVendorModelKey(vendor);
+                if (NativeToolsUnsupportedVendors.Contains(key) || NativeToolsUnsupportedVendors.Contains(vendor.Id ?? ""))
+                    return false;
+            }
+            return true;
+        }
         public string ActiveGitBranch = "";
         public bool EnableSseStreaming = true;
         public volatile bool CancelStreamingRequested = false;
         public event Action<string> OnStreamingChunk;
+        public Action<string> OnAgentFeedStatus;
+        public Action OnTodosChanged;
+        public List<Dictionary<string, object>> AgentTodos = new List<Dictionary<string, object>>();
         public Func<string, string, bool> OnRequestToolApproval;
         public Func<string, string> OnExecuteTerminalCommandInConPty;
         public Func<string, List<Dictionary<string, string>>, Task<string>> CustomModelResponder;
+        public Func<string, ByokVendor, IEnumerable<string>> NativeTransportOverride;
         public int MaxAgentIterations = 8;
+        public int MaxSubagentIterations = 6;
+        public int SubagentDepth = 0;
+        public LlmHarnessAndAgentEngine ParentEngine;
+        private ByokVendor _currentTurnVendor;
+
+        public bool IsCancellationRequested
+        {
+            get
+            {
+                if (CancelStreamingRequested) return true;
+                if (ParentEngine != null && ParentEngine.IsCancellationRequested) return true;
+                return false;
+            }
+        }
+
+        public IEnumerable<AgentToolDefinition> GetAvailableToolsForCurrentDepth()
+        {
+            if (SubagentDepth >= 1)
+                return Tools.Where(t => t.IsReadOnly && t.Name != "task");
+            return Tools;
+        }
+        public IDiagnosticsProvider DiagnosticsProvider { get; set; }
+        public HashSet<string> PendingPostApplyDiagnosticsPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public void NotifyChangesApplied(IEnumerable<string> paths) { foreach(var p in paths) PendingPostApplyDiagnosticsPaths.Add(p); }
         public int AgentLoopTimeoutMs = 60000;
         public int HttpTimeoutMs = 60000;
 
+        public IdePersistentSettings _settings;
         public LlmHarnessAndAgentEngine(IdePersistentSettings settings)
         {
+            _settings = settings;
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             InitializeHarnesses();
             InitializeVendors(settings);
@@ -1631,7 +1742,7 @@ namespace codeLess.Studio
             if (output.Length <= maxChars || maxChars < 200) return output;
             int head = maxChars / 4;
             int tail = maxChars - head;
-            return output.Substring(0, head) + "\n…[" + (output.Length - head - tail) + " characters omitted]…\n" + output.Substring(output.Length - tail);
+            return output.Substring(0, head) + "\n... [" + (output.Length - head - tail) + " chars truncated] ...\n" + output.Substring(output.Length - tail);
         }
 
         public static string StripAnsiCodes(string input)
@@ -1830,16 +1941,25 @@ namespace codeLess.Studio
             return Path.GetFileName(fullPath);
         }
 
-        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness)
+        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab, bool useNative = false, bool isSubagent = false)
         {
             string hName = harness != null ? harness.Name : "codeLess Adaptive Harness";
             string hDirective = harness != null ? harness.SystemPromptDirective : "";
 
+            string providerRules = vendor != null ? AgentContextBuilder.GetProviderPrompt(vendor.Id) : AgentContextBuilder.GetProviderPrompt("");
+            string startDir = activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath) ? Path.GetDirectoryName(activeTab.FilePath) : (workspaceRoot ?? "");
+            string instructions = AgentContextBuilder.DiscoverInstructions(startDir, workspaceRoot);
+            string envBlock = AgentContextBuilder.BuildEnvBlock(workspaceRoot ?? "");
+            
             string basePrompt = string.Format(
-@"You are codeLess Autonomous Software Engineering Agent, running inside the [{0}] harness.
+@"{0}
+{1}
+{2}
+
+You are codeLess Autonomous Software Engineering Agent, running inside the [{3}] harness.
 Core Engineering Rules:
 1. Ground every answer in the <repository_map>, <active_editor>, <diagnostics>, and <bm25_semantic_chunks>.
-2. Harness Directive: {1}
+2. Harness Directive: {4}
 3. When modifying existing files, emit surgical SEARCH/REPLACE blocks:
 ### File: relative/path/to/file.ext
 <<<<<<< SEARCH
@@ -1848,39 +1968,34 @@ exact existing lines
 updated replacement lines
 >>>>>>> REPLACE
 4. Never insert dummy placeholder comments. Always write complete, production-ready, working code.",
-                hName, hDirective);
+                envBlock, providerRules, instructions, hName, hDirective);
 
             string normMode = (mode ?? "").Trim().ToLowerInvariant();
-            if (normMode == "agent" || normMode == "autofix")
+            if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan")
             {
-                return basePrompt + @"
-
-[AUTONOMOUS 8-TOOL EXECUTION PROTOCOL]
-You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:
-<tool_call>
-{""tool"": ""read_file"", ""args"": {""path"": ""relative/path"", ""start_line"": 1, ""end_line"": 120}}
-</tool_call>
-<tool_call>
-{""tool"": ""write_file"", ""args"": {""path"": ""relative/path"", ""content"": ""full file content""}}
-</tool_call>
-<tool_call>
-{""tool"": ""edit_file"", ""args"": {""path"": ""relative/path"", ""search"": ""old code"", ""replace"": ""new code""}}
-</tool_call>
-<tool_call>
-{""tool"": ""list_dir"", ""args"": {""path"": ""relative/dir""}}
-</tool_call>
-<tool_call>
-{""tool"": ""grep_search"", ""args"": {""query"": ""pattern""}}
-</tool_call>
-<tool_call>
-{""tool"": ""ast_outline"", ""args"": {""path"": ""relative/path""}}
-</tool_call>
-<tool_call>
-{""tool"": ""get_diagnostics"", ""args"": {""path"": ""relative/path""}}
-</tool_call>
-<tool_call>
-{""tool"": ""run_terminal"", ""args"": {""command"": ""command to run""}}
-</tool_call>";
+                var sb = new StringBuilder();
+                sb.AppendLine("[AUTONOMOUS TOOL EXECUTION PROTOCOL]");
+                if (useNative)
+                {
+                    sb.AppendLine("You can invoke native workspace tools using the provided tool definitions.");
+                }
+                else
+                {
+                    sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
+                    foreach (var t in Tools)
+                    {
+                        if (isSubagent && (!t.IsReadOnly || t.Name == "task"))
+                            continue;
+                        sb.AppendLine("<tool_call>");
+                        sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
+                        sb.AppendLine("</tool_call>");
+                    }
+                }
+                if (isSubagent)
+                {
+                    sb.AppendLine("You are running as a read-only research subagent (depth 1). Only read-only tools are permitted; do not attempt to modify files or spawn nested subagents.");
+                }
+                return basePrompt + "\n\n" + sb.ToString();
             }
             else if (mode == "ctrl_k")
             {
@@ -2002,102 +2117,25 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             return hunks;
         }
 
-        public static string ApplySearchReplacePatch(string originalContent, string searchBlock, string replaceBlock, out bool applied)
+        public static string ApplySearchReplacePatch(string originalContent, string searchBlock, string replaceBlock, bool replaceAll, out string errorMessage)
         {
-            applied = false;
+            errorMessage = null;
             bool useCrlf = (originalContent ?? "").Contains("\r\n");
-            string eol = useCrlf ? "\r\n" : "\n";
-
+            
             string normOrig = (originalContent ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
-            string normSearch = (searchBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Trim('\r', '\n');
-            string normReplace = (replaceBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Trim('\r', '\n');
-
-            if (string.IsNullOrEmpty(normOrig))
+            string normSearch = (searchBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            string normReplace = (replaceBlock ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            
+            try 
             {
-                applied = true;
-                return useCrlf ? normReplace.Replace("\n", "\r\n") : normReplace;
+                string patched = codeLess.Studio.EditReplacers.Replace(normOrig, normSearch, normReplace, replaceAll);
+                return useCrlf ? patched.Replace("\n", "\r\n") : patched;
             }
-
-            if (string.IsNullOrEmpty(normSearch))
+            catch (ArgumentException ex)
             {
-                applied = true;
-                bool hadFinalNl = normOrig.EndsWith("\n");
-                string baseBody = hadFinalNl ? normOrig.Substring(0, normOrig.Length - 1) : normOrig;
-                string combined = baseBody + "\n" + normReplace + (hadFinalNl ? "\n" : "");
-                return useCrlf ? combined.Replace("\n", "\r\n") : combined;
-            }
-
-            string[] origLines = normOrig.Split('\n');
-            string[] searchLines = normSearch.Split('\n');
-            string[] replaceLines = normReplace.Length == 0 ? new string[0] : normReplace.Split('\n');
-
-            // 1. Check if searchBlock uses fuzzy '...' anchor elisions
-            bool hasEllipsisAnchor = searchLines.Any(l => IsEllipsisAnchorLine(l));
-            if (hasEllipsisAnchor)
-            {
-                int fuzzyStart, fuzzyEnd, fuzzyMatches;
-                if (TryFindFuzzyAnchorSpan(origLines, searchLines, out fuzzyStart, out fuzzyEnd, out fuzzyMatches) && fuzzyMatches == 1)
-                {
-                    string[] adaptedFuzzy = AdaptReplacementIndentation(origLines, fuzzyStart, searchLines, replaceLines);
-                    List<string> updated = new List<string>();
-                    updated.AddRange(origLines.Take(fuzzyStart));
-                    updated.AddRange(adaptedFuzzy);
-                    updated.AddRange(origLines.Skip(fuzzyEnd));
-                    applied = true;
-                    return string.Join(eol, updated);
-                }
+                errorMessage = ex.Message;
                 return originalContent;
             }
-
-            // 2. Exact match check (with ambiguity rejection if searchBlock occurs multiple times)
-            int idx = normOrig.IndexOf(normSearch, StringComparison.Ordinal);
-            if (idx >= 0)
-            {
-                // Search from idx + 1 so overlapping duplicates (e.g. "a\na" inside "a\na\na") are also rejected as ambiguous
-                int secondIdx = normOrig.IndexOf(normSearch, idx + 1, StringComparison.Ordinal);
-                if (secondIdx >= 0)
-                {
-                    // Ambiguous duplicate match without disambiguating context
-                    applied = false;
-                    return originalContent;
-                }
-                applied = true;
-                string patchedExact = normOrig.Substring(0, idx) + normReplace + normOrig.Substring(idx + normSearch.Length);
-                return useCrlf ? patchedExact.Replace("\n", "\r\n") : patchedExact;
-            }
-
-            // 3. Line-trimmed / indentation-drift match (with ambiguity rejection and indentation/tab adaptation)
-            List<int> matchIndices = new List<int>();
-            for (int i = 0; i <= origLines.Length - searchLines.Length; i++)
-            {
-                bool match = true;
-                for (int k = 0; k < searchLines.Length; k++)
-                {
-                    if (origLines[i + k].Trim() != searchLines[k].Trim())
-                    {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match)
-                {
-                    matchIndices.Add(i);
-                }
-            }
-
-            if (matchIndices.Count == 1)
-            {
-                int matchStart = matchIndices[0];
-                string[] adaptedReplace = AdaptReplacementIndentation(origLines, matchStart, searchLines, replaceLines);
-                List<string> updated = new List<string>();
-                updated.AddRange(origLines.Take(matchStart));
-                updated.AddRange(adaptedReplace);
-                updated.AddRange(origLines.Skip(matchStart + searchLines.Length));
-                applied = true;
-                return string.Join(eol, updated);
-            }
-
-            return originalContent;
         }
 
         private static bool IsEllipsisAnchorLine(string line)
@@ -2308,7 +2346,17 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         )
         {
             if (CustomModelResponder != null)
-                return await CustomModelResponder(systemPrompt, conversationMessages);
+            {
+                if (IsCancellationRequested) return "";
+                Task<string> respTask = Task.Run(() => CustomModelResponder(systemPrompt, conversationMessages));
+                while (!respTask.IsCompleted)
+                {
+                    if (IsCancellationRequested) return "";
+                    await Task.WhenAny(respTask, Task.Delay(15)).ConfigureAwait(false);
+                }
+                if (IsCancellationRequested) return "";
+                return await respTask.ConfigureAwait(false);
+            }
 
             if (vendor == null)
                 throw new Exception("NO_API_KEY");
@@ -2326,11 +2374,18 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             LastStreamingChunkCount = 0;
             // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
-            bool partOfTurn = InTurnOfThisEngine;
+            bool partOfTurn = InTurnOfThisEngine || SubagentDepth > 0;
 
-            return await Task.Run(() =>
-            {
-                JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                        string ret = null;
+            bool retryTextMode = false;
+            do {
+                retryTextMode = false;
+                try {
+                    ret = await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
+                    {
+                return await Task.Run(() =>
+                {
+                    JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
                 string endpoint = vendor.Id == "anthropic"
                     ? vendor.BaseUrl.TrimEnd('/') + "/messages"
                     : vendor.BaseUrl.TrimEnd('/') + "/chat/completions";
@@ -2350,50 +2405,156 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 req.Timeout = Math.Max(2000, HttpTimeoutMs);
                 req.ReadWriteTimeout = Math.Max(2000, HttpTimeoutMs);
 
-                string payload;
+                bool useNative = false;
+                List<object> nativeMessages = new List<object>();
+                if (IsNativeToolCallingEnabledFor(vendor) && conversationMessages != null && conversationMessages.Any(m => m.ContainsKey("__json")))
+                {
+                    useNative = true;
+                    foreach(var m in conversationMessages) {
+                        if (m.ContainsKey("__json")) {
+                            var obj = ser.DeserializeObject(m["__json"]);
+                            if (obj is System.Collections.ArrayList) {
+                                foreach(var item in (System.Collections.ArrayList)obj) nativeMessages.Add(item);
+                            } else if (obj is object[]) {
+                                foreach(var item in (object[])obj) nativeMessages.Add(item);
+                            } else {
+                                nativeMessages.Add(obj);
+                            }
+                        }
+                        else {
+                            var textMsg = new Dictionary<string, object>();
+                            textMsg["role"] = m["role"];
+                            textMsg["content"] = m["content"];
+                            nativeMessages.Add(textMsg);
+                        }
+                    }
+                }
+
+                Dictionary<string, object> reqObj;
                 if (vendor.Id == "anthropic")
                 {
                     req.Headers["x-api-key"] = vendor.ApiKey.Trim();
                     req.Headers["anthropic-version"] = "2023-06-01";
-                    var reqObj = new Dictionary<string, object>
+                    reqObj = new Dictionary<string, object>
                     {
                         { "model", vendor.SelectedModel },
-                        { "max_tokens", 4096 },
+                        { "max_tokens", 8192 },
                         { "system", systemPrompt },
-                        { "messages", conversationMessages },
+                        { "messages", useNative ? nativeMessages : conversationMessages.Select(m => (object)new Dictionary<string, string> { { "role", m["role"] }, { "content", m["content"] } }).ToList() },
                         { "stream", EnableSseStreaming }
                     };
-                    payload = ser.Serialize(reqObj);
+                    if (useNative) reqObj["tools"] = NativeToolCalling.BuildAnthropicTools(GetAvailableToolsForCurrentDepth());
+                    if (!IsReasoningModelWithoutTemperature(vendor.SelectedModel)) reqObj["temperature"] = temperature;
                 }
                 else
                 {
                     if (!string.IsNullOrWhiteSpace(vendor.ApiKey))
                         req.Headers["Authorization"] = "Bearer " + vendor.ApiKey.Trim();
 
-                    var fullMsgs = new List<Dictionary<string, string>>();
-                    fullMsgs.Add(new Dictionary<string, string> { { "role", "system" }, { "content", systemPrompt } });
-                    fullMsgs.AddRange(conversationMessages);
+                    reqObj = new Dictionary<string, object>();
+                    reqObj["model"] = vendor.SelectedModel;
+                    reqObj["stream"] = EnableSseStreaming;
+                    
+                    if (!useNative) {
+                        var fullMsgs = new List<Dictionary<string, string>>();
+                        fullMsgs.Add(new Dictionary<string, string> { { "role", "system" }, { "content", systemPrompt } });
+                        fullMsgs.AddRange(conversationMessages);
+                        reqObj["messages"] = fullMsgs;
+                    } else {
+                        var fullMsgs = new List<object>();
+                        fullMsgs.Add(new Dictionary<string, string> { { "role", "system" }, { "content", systemPrompt } });
+                        fullMsgs.AddRange(nativeMessages);
+                        reqObj["messages"] = fullMsgs;
+                        reqObj["tools"] = NativeToolCalling.BuildOpenAiTools(GetAvailableToolsForCurrentDepth());
+                        reqObj["tool_choice"] = "auto";
+                    }
 
-                    var reqObj = new Dictionary<string, object>
-                    {
-                        { "model", vendor.SelectedModel },
-                        { "messages", fullMsgs },
-                        { "stream", EnableSseStreaming }
-                    };
-                    // OpenAI reasoning models (o1/o3/o4, gpt-5) reject a non-default temperature with HTTP 400.
                     if (!IsReasoningModelWithoutTemperature(vendor.SelectedModel))
                         reqObj["temperature"] = temperature;
-                    payload = ser.Serialize(reqObj);
                 }
 
-                byte[] bytes = Encoding.UTF8.GetBytes(payload);
-                using (Stream s = ledger.WrapRequestStream(req.GetRequestStream()))
-                {
-                    s.Write(bytes, 0, bytes.Length);
-                }
+                string payload = ser.Serialize(reqObj);
 
                 try
                 {
+                    if (NativeTransportOverride != null)
+                    {
+                        var lines = NativeTransportOverride(payload, vendor);
+                        
+                        codeLess.Studio.OpenAiToolCallAccumulator oaiAcc = null;
+                        codeLess.Studio.AnthropicToolCallAccumulator anthAcc = null;
+                        if (vendor.Id == "anthropic") anthAcc = new codeLess.Studio.AnthropicToolCallAccumulator();
+                        else oaiAcc = new codeLess.Studio.OpenAiToolCallAccumulator();
+                        
+                        foreach (var l in lines)
+                        {
+                            if (partOfTurn && IsCancellationRequested) throw new OperationCanceledException();
+                            
+                            if (l.StartsWith("data:"))
+                            {
+                                string data = l.Substring(5).Trim();
+                                if (data == "[DONE]") continue;
+                                if (string.IsNullOrEmpty(data)) continue;
+                                
+                                var chunk = ser.DeserializeObject(data) as Dictionary<string, object>;
+                                if (vendor.Id == "anthropic")
+                                {
+                                    int prevLen = anthAcc.Text.Length;
+                                    anthAcc.Accumulate(chunk);
+                                    if (anthAcc.Text.Length > prevLen)
+                                    {
+                                        string deltaChunk = anthAcc.Text.Substring(prevLen);
+                                        LastStreamingChunkCount++;
+                                        if (partOfTurn && OnStreamingChunk != null)
+                                        {
+                                            try { OnStreamingChunk(deltaChunk); } catch { }
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    int prevLen = oaiAcc.Text.Length;
+                                    oaiAcc.Accumulate(chunk);
+                                    if (oaiAcc.Text.Length > prevLen)
+                                    {
+                                        string deltaChunk = oaiAcc.Text.Substring(prevLen);
+                                        LastStreamingChunkCount++;
+                                        if (partOfTurn && OnStreamingChunk != null)
+                                        {
+                                            try { OnStreamingChunk(deltaChunk); } catch { }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        ledger.Status = 200;
+                        if (vendor.Id == "anthropic")
+                        {
+                            if (!useNative) return anthAcc.Text;
+                            var resMsg = new Dictionary<string, object>();
+                            resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseAnthropicHistory(anthAcc.Text, anthAcc.Calls, null)[0]);
+                            resMsg["__calls"] = ser.Serialize(anthAcc.Calls);
+                            resMsg["content"] = anthAcc.Text;
+                            return ser.Serialize(resMsg);
+                        }
+                        else
+                        {
+                            if (!useNative) return oaiAcc.Text;
+                            var resMsg = new Dictionary<string, object>();
+                            resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseOpenAiHistory(oaiAcc.Text, oaiAcc.Calls, null)[0]);
+                            resMsg["__calls"] = ser.Serialize(oaiAcc.Calls);
+                            resMsg["content"] = oaiAcc.Text;
+                            return ser.Serialize(resMsg);
+                        }
+                    }
+
+                    byte[] bytes = Encoding.UTF8.GetBytes(payload);
+                    using (Stream s = ledger.WrapRequestStream(req.GetRequestStream()))
+                    {
+                        s.Write(bytes, 0, bytes.Length);
+                    }
+
                     using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
                     using (StreamReader sr = new StreamReader(ledger.WrapResponseStream(res.GetResponseStream()), Encoding.UTF8))
                     {
@@ -2409,11 +2570,13 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         StringBuilder streamedText = new StringBuilder();
                         bool sawSseDataLine = false;
                         string streamErrorMessage = null;
+                        codeLess.Studio.OpenAiToolCallAccumulator httpOaiAcc = vendor.Id == "anthropic" ? null : new codeLess.Studio.OpenAiToolCallAccumulator();
+                        codeLess.Studio.AnthropicToolCallAccumulator httpAnthAcc = vendor.Id == "anthropic" ? new codeLess.Studio.AnthropicToolCallAccumulator() : null;
 
                         string line;
                         while ((line = sr.ReadLine()) != null)
                         {
-                            if (partOfTurn && CancelStreamingRequested) { ledger.Note = "Cancelled by user"; break; }
+                            if (partOfTurn && IsCancellationRequested) { ledger.Note = "Cancelled by user"; break; }
                             rawBuilder.AppendLine(line);
                             string trimmed = line.Trim();
                             if (trimmed.StartsWith("data:"))
@@ -2433,6 +2596,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                     }
                                     else if (evt != null)
                                     {
+                                        if (httpAnthAcc != null) httpAnthAcc.Accumulate(evt);
+                                        if (httpOaiAcc != null) httpOaiAcc.Accumulate(evt);
+
                                         string deltaChunk = null;
                                         if (evt.ContainsKey("choices") && evt["choices"] is ArrayList)
                                         {
@@ -2486,6 +2652,25 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                 : "Error: " + vendor.Name + " returned an error: " + streamErrorMessage;
                         }
                         if (sawSseDataLine && string.IsNullOrEmpty(ledger.Note)) ledger.Note = "streamed";
+                        if (sawSseDataLine && useNative)
+                        {
+                            if (vendor.Id == "anthropic" && httpAnthAcc != null && (httpAnthAcc.Calls.Count > 0 || httpAnthAcc.Text.Length > 0))
+                            {
+                                var resMsg = new Dictionary<string, object>();
+                                resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseAnthropicHistory(httpAnthAcc.Text, httpAnthAcc.Calls, null)[0]);
+                                resMsg["__calls"] = ser.Serialize(httpAnthAcc.Calls);
+                                resMsg["content"] = httpAnthAcc.Text;
+                                return ser.Serialize(resMsg);
+                            }
+                            if (vendor.Id != "anthropic" && httpOaiAcc != null && (httpOaiAcc.Calls.Count > 0 || httpOaiAcc.Text.Length > 0))
+                            {
+                                var resMsg = new Dictionary<string, object>();
+                                resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseOpenAiHistory(httpOaiAcc.Text, httpOaiAcc.Calls, null)[0]);
+                                resMsg["__calls"] = ser.Serialize(httpOaiAcc.Calls);
+                                resMsg["content"] = httpOaiAcc.Text;
+                                return ser.Serialize(resMsg);
+                            }
+                        }
                         if (sawSseDataLine && streamedText.Length > 0)
                             return streamedText.ToString();
                         if (sawSseDataLine)
@@ -2531,27 +2716,82 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     if (wex.Response != null)
                     {
                         HttpWebResponse errRes = wex.Response as HttpWebResponse;
-                        string statusPrefix = errRes != null ? string.Format("HTTP {0} ({1}): ", (int)errRes.StatusCode, errRes.StatusDescription) : "";
-                        if (errRes != null) ledger.Status = (int)errRes.StatusCode;
-                        using (StreamReader esr = new StreamReader(ledger.WrapResponseStream(wex.Response.GetResponseStream())))
+                        int statusCode = -1;
+                        if (errRes != null) statusCode = (int)errRes.StatusCode;
+                        else
                         {
-                            throw new Exception("Vendor HTTP Error " + statusPrefix + esr.ReadToEnd());
+                            var statusProp = wex.Response.GetType().GetProperty("StatusCode");
+                            if (statusProp != null) statusCode = (int)statusProp.GetValue(wex.Response, null);
                         }
+                        string statusPrefix = errRes != null ? string.Format("HTTP {0} ({1}): ", (int)errRes.StatusCode, errRes.StatusDescription) : (statusCode > 0 ? string.Format("HTTP {0}: ", statusCode) : "");
+                        if (statusCode > 0) ledger.Status = statusCode;
+                        string errBody = "";
+                        Stream respStream = wex.Response.GetResponseStream();
+                        if (respStream != null)
+                        {
+                            using (StreamReader esr = new StreamReader(ledger.WrapResponseStream(respStream)))
+                            {
+                                errBody = esr.ReadToEnd();
+                            }
+                        }
+                        else
+                        {
+                            errBody = wex.Message ?? "";
+                        }
+                        if (useNative && statusCode == 400 &&
+                            (errBody.IndexOf("tool", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             errBody.IndexOf("function", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             errBody.IndexOf("does not support", StringComparison.OrdinalIgnoreCase) >= 0))
+                        {
+                            NativeToolsUnsupportedVendors.Add(GetVendorModelKey(vendor));
+                            if (OnAgentFeedStatus != null) OnAgentFeedStatus("Vendor rejected tools. Falling back to text mode...");
+                            throw new Exception("NATIVE_FALLBACK");
+                        }
+                        throw new Exception("Vendor HTTP Error " + statusPrefix + errBody, wex);
                     }
                     ledger.Fail(wex);
-                    throw new Exception("Network/Endpoint Error (" + vendor.Name + "): " + wex.Message);
+                    throw new Exception("Network/Endpoint Error (" + vendor.Name + "): " + wex.Message, wex);
                 }
                 }
                 catch (Exception ex)
                 {
                     if (ledger.Status <= 0) ledger.Fail(ex);
+                    if (ex.Message == "NATIVE_FALLBACK")
+                    {
+                        NativeToolsUnsupportedVendors.Add(GetVendorModelKey(vendor));
+                        throw;
+                    }
                     throw;
                 }
                 finally
                 {
                     ledger.Complete();
                 }
-            });
+                });
+            }, () => partOfTurn && IsCancellationRequested);
+                } catch (Exception ex) {
+                    if (ex.Message == "NATIVE_FALLBACK") {
+                        retryTextMode = true;
+                        if (conversationMessages != null) {
+                            foreach (var m in conversationMessages) m.Remove("__json");
+                        }
+                        if (!string.IsNullOrEmpty(systemPrompt) && systemPrompt.Contains("You can invoke native workspace tools using the provided tool definitions."))
+                        {
+                            var sb = new StringBuilder();
+                            sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
+                            foreach (var t in Tools)
+                            {
+                                sb.AppendLine("<tool_call>");
+                                sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
+                                sb.AppendLine("</tool_call>");
+                            }
+                            systemPrompt = systemPrompt.Replace("You can invoke native workspace tools using the provided tool definitions.", sb.ToString().TrimEnd());
+                        }
+                    } else throw;
+                }
+            } while (retryTextMode);
+            
+            return ret ?? "";
         }
 
         public async Task<string> RequestModelGhostCompletionAsync(ByokVendor preferredVendor, EditorTabBuffer buf)
@@ -2638,6 +2878,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             LlmHarnessProfile harness = ResolveHarnessForVendor(activeVendor, preferredHarnessId);
             result.HarnessUsed = harness.Name;
+            _currentTurnVendor = activeVendor;
 
             // Assemble Engineered Context
             List<Bm25CodeChunk> topChunks = RetrieveTopChunks(userInstruction, 5);
@@ -2806,48 +3047,142 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            string sysPrompt = BuildSystemHarnessPrompt(mode, harness);
+            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, IsNativeToolCallingEnabledFor(activeVendor), SubagentDepth >= 1);
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
-            var messages = new List<Dictionary<string, string>>
+            bool initialNative = IsNativeToolCallingEnabledFor(activeVendor);
+            var initialMsg = new Dictionary<string, string> { { "role", "user" }, { "content", fullUserPayload } };
+            if (initialNative)
             {
-                new Dictionary<string, string> { { "role", "user" }, { "content", fullUserPayload } }
-            };
+                var j = new Dictionary<string, object>();
+                j["role"] = "user";
+                j["content"] = fullUserPayload;
+                initialMsg["__json"] = new JavaScriptSerializer().Serialize(j);
+            }
+            var messages = new List<Dictionary<string, string>> { initialMsg };
 
             try
             {
+                if (DiagnosticsProvider != null && PendingPostApplyDiagnosticsPaths.Count > 0)
+                {
+                    foreach (var path in PendingPostApplyDiagnosticsPaths.ToList())
+                    {
+                        var content = System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : "";
+                        var diags = await DiagnosticsProvider.GetDiagnosticsAsync(path, content, 1500);
+                        if (diags != null)
+                        {
+                            var errors = diags.Where(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase)).Take(20).ToList();
+                            if (errors.Count > 0)
+                            {
+                                var sb = new StringBuilder();
+                                sb.AppendLine(string.Format("<file_diagnostics path=\"{0}\">", path));
+                                foreach (var e in errors)
+                                {
+                                    sb.AppendLine(string.Format("ERROR [{0}:{1}] {2}", e.Line, e.Column, e.Message));
+                                }
+                                sb.AppendLine("</file_diagnostics>");
+                                messages.Add(new Dictionary<string, string> { { "role", "user" }, { "content", sb.ToString() } });
+                            }
+                        }
+                    }
+                    PendingPostApplyDiagnosticsPaths.Clear();
+                }
+
                 string finalReply = "";
+                var doomLoopHistory = new List<Tuple<string, string>>();
                 int maxSteps = Math.Max(1, MaxAgentIterations);
                 for (int step = 0; step < maxSteps; step++)
                 {
-                    if (CancelStreamingRequested || (AgentLoopTimeoutMs > 0 && sw.ElapsedMilliseconds > AgentLoopTimeoutMs))
+                    if (IsCancellationRequested || (AgentLoopTimeoutMs > 0 && sw.ElapsedMilliseconds > AgentLoopTimeoutMs))
                         break;
 
                     result.Iterations++;
                     // ConfigureAwait(false): tools (shell commands, file reads) never run on a UI thread, whoever calls.
+                    
+                    AgentContextBuilder.PruneHistory(messages);
+                    
+                    int currentTokens = EstimateTokens(sysPrompt + "\n" + string.Join("\n", messages.ConvertAll(m => m["content"])));
+                    int ctxWindow = (activeVendor != null) ? activeVendor.ContextWindow : 128000;
+                    int maxOut = (activeVendor != null) ? activeVendor.MaxOutputTokens : 4096;
+                    
+                    if (currentTokens > ctxWindow - maxOut)
+                    {
+                        var summaryMessages = new List<Dictionary<string, string>>();
+                        summaryMessages.Add(new Dictionary<string, string> { { "role", "system" }, { "content", "Provide a detailed prompt for continuing our conversation above. Focus on what we did, what we're doing, which files we're working on, and what we're going to do next." } });
+                        summaryMessages.AddRange(messages);
+                        string summary = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, summaryMessages, 0.15).ConfigureAwait(false);
+                        
+                        var lastMsg = messages[messages.Count - 1];
+                        messages.Clear();
+                        messages.Add(new Dictionary<string, string> { { "role", "user" }, { "content", "Summary of the conversation so far: " + summary } });
+                        messages.Add(lastMsg);
+                        
+                        if (OnAgentFeedStatus != null) OnAgentFeedStatus("Context compacted");
+                    }
+                    
                     string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp).ConfigureAwait(false);
                     finalReply = llmOutput;
 
+                    bool nativeMode = IsNativeToolCallingEnabledFor(activeVendor);
+                    List<Dictionary<string, object>> toolCalls = new List<Dictionary<string, object>>();
+                    bool turnUseNative = nativeMode;
+                    
+                    // Parse llmOutput for native
+                    string assistantContent = llmOutput;
+                    string assistantJson = null;
+                    if (turnUseNative && llmOutput.TrimStart().StartsWith("{"))
+                    {
+                        try {
+                            var dict = new JavaScriptSerializer().DeserializeObject(llmOutput) as Dictionary<string, object>;
+                            if (dict != null && dict.ContainsKey("__json"))
+                            {
+                                assistantJson = dict["__json"] as string;
+                                if (dict.ContainsKey("content") && dict["content"] != null) assistantContent = dict["content"].ToString();
+                                else assistantContent = "";
+                                finalReply = assistantContent;
+                                
+                                if (dict.ContainsKey("__calls") && dict["__calls"] != null)
+                                {
+                                    var callsJson = dict["__calls"].ToString();
+                                    var callsList = new JavaScriptSerializer().Deserialize<List<codeLess.Studio.NativeToolCall>>(callsJson);
+                                    if (callsList != null)
+                                    {
+                                        foreach (var c in callsList)
+                                        {
+                                            var tc = new Dictionary<string, object>();
+                                            tc["tool"] = c.Name;
+                                            tc["args"] = c.GetArguments();
+                                            tc["_native_id"] = c.Id;
+                                            toolCalls.Add(tc);
+                                        }
+                                    }
+                                }
+                            }
+                        } catch { }
+                    }
+
                     // Extract <think> or <thinking> block if present
-                    Match thinkMatch = Regex.Match(llmOutput, @"<(?:think|thinking)>([\s\S]*?)</(?:think|thinking)>", RegexOptions.IgnoreCase);
+                    Match thinkMatch = Regex.Match(assistantContent ?? "", @"<(?:think|thinking)>([\s\S]*?)</(?:think|thinking)>", RegexOptions.IgnoreCase);
                     if (thinkMatch.Success)
                     {
                         result.ThinkingProcess = thinkMatch.Groups[1].Value.Trim();
                     }
 
-                    List<Dictionary<string, object>> toolCalls = ParseToolCalls(llmOutput);
+                    if (toolCalls.Count == 0) toolCalls = ParseToolCalls(assistantContent);
+
                     if (toolCalls.Count == 0)
                     {
-                        // Validate/stage SEARCH/REPLACE blocks; if any fail or have syntax errors, feed back to the model to self-fix
-                        if (llmOutput != null && llmOutput.Contains("<<<<<<< SEARCH"))
+                        if (SubagentDepth == 0 && assistantContent != null && assistantContent.Contains("<<<<<<< SEARCH"))
                         {
                             string blockError;
-                            bool blocksOk = TryExtractAndStageSearchReplaceBlocks(llmOutput, activeTab, workspaceRoot, result, out blockError, workspaceFiles);
+                            bool blocksOk = TryExtractAndStageSearchReplaceBlocks(assistantContent, activeTab, workspaceRoot, result, out blockError, mode);
                             if (blocksOk) stagedThisTurn = true;
                             if (!blocksOk && step + 1 < maxSteps)
                             {
-                                messages.Add(new Dictionary<string, string> { { "role", "assistant" }, { "content", llmOutput } });
+                                var msg = new Dictionary<string, string> { { "role", "assistant" }, { "content", assistantContent } };
+                                if (assistantJson != null) msg["__json"] = assistantJson;
+                                messages.Add(msg);
                                 messages.Add(new Dictionary<string, string>
                                 {
                                     { "role", "user" },
@@ -2859,38 +3194,137 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         break;
                     }
 
-                    messages.Add(new Dictionary<string, string> { { "role", "assistant" }, { "content", llmOutput } });
+                    var asstMsg = new Dictionary<string, string> { { "role", "assistant" }, { "content", assistantContent } };
+                    if (assistantJson != null) asstMsg["__json"] = assistantJson;
+                    messages.Add(asstMsg);
+
                     StringBuilder toolOutputsSb = new StringBuilder();
+                    var nativeResults = new List<codeLess.Studio.NativeToolResult>();
 
                     foreach (var tc in toolCalls)
                     {
+                        if (IsCancellationRequested) break;
                         string toolName = Convert.ToString(tc["tool"]);
                         var args = tc.ContainsKey("args") ? tc["args"] as Dictionary<string, object> : new Dictionary<string, object>();
-                        AgentToolCallResult tr = ExecuteWorkspaceTool(toolName, args, workspaceRoot, workspaceFiles, activeTab, result.StagedFileContents);
+
+                        string signature = toolName + ":" + new JavaScriptSerializer().Serialize(args);
+                        
+                        bool isDoomLoop = false;
+                        if (doomLoopHistory.Count >= 3)
+                        {
+                            var t1 = doomLoopHistory[doomLoopHistory.Count - 1];
+                            var t2 = doomLoopHistory[doomLoopHistory.Count - 2];
+                            var t3 = doomLoopHistory[doomLoopHistory.Count - 3];
+                            if (t1.Item1 == signature && t2.Item1 == signature && t3.Item1 == signature)
+                            {
+                                if (t1.Item2 == t2.Item2 && t2.Item2 == t3.Item2)
+                                {
+                                    isDoomLoop = true;
+                                }
+                            }
+                        }
+
+                        if (isDoomLoop)
+                        {
+                            bool approved = OnRequestToolApproval != null && OnRequestToolApproval("doom_loop", "");
+                            if (!approved)
+                            {
+                                string doomMsg = "Doom loop detected. You have repeatedly called this tool with the identical arguments and received the identical failure. You MUST stop using this exact tool/arguments combination and try a different approach, read a different file, or think about why it is failing.";
+                                toolOutputsSb.AppendLine("<tool_error>\n" + doomMsg + "\n</tool_error>");
+                                if (turnUseNative && tc.ContainsKey("_native_id"))
+                                {
+                                    var ntr = new codeLess.Studio.NativeToolResult();
+                                    ntr.CallId = tc["_native_id"].ToString();
+                                    ntr.Content = doomMsg;
+                                    ntr.IsError = true;
+                                    nativeResults.Add(ntr);
+                                }
+                                doomLoopHistory.Clear();
+                                continue;
+                            }
+                        }
+
+                        AgentToolCallResult tr = ExecuteWorkspaceTool(toolName, args, workspaceRoot, workspaceFiles, activeTab, result.StagedFileContents, mode, _settings);
+                        doomLoopHistory.Add(new Tuple<string, string>(signature, tr.Output));
+
+                        if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath) && DiagnosticsProvider != null)
+                        {
+                            string expectedContent;
+                            if (result.StagedFileContents.TryGetValue(tr.ModifiedFilePath, out expectedContent))
+                            {
+                                var diags = await DiagnosticsProvider.GetDiagnosticsAsync(tr.ModifiedFilePath, expectedContent, 1500);
+                                if (diags != null)
+                                {
+                                    var errors = diags.Where(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase)).Take(20).ToList();
+                                    if (errors.Count > 0)
+                                    {
+                                        var sb = new StringBuilder();
+                                        sb.AppendLine();
+                                        sb.AppendLine(string.Format("<file_diagnostics path=\"{0}\">", tr.ModifiedFilePath));
+                                        foreach (var e in errors)
+                                        {
+                                            sb.AppendLine(string.Format("ERROR [{0}:{1}] {2}", e.Line, e.Column, e.Message));
+                                        }
+                                        sb.AppendLine("</file_diagnostics>");
+                                        tr.Output += sb.ToString();
+                                    }
+                                }
+                            }
+                        }
+
                         result.ToolCalls.Add(tr);
                         if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath)) stagedThisTurn = true;
                         toolOutputsSb.AppendLine(string.Format("<tool_result tool=\"{0}\" success=\"{1}\">\n{2}\n</tool_result>", toolName, tr.Success, tr.Output));
+
+                        if (turnUseNative && tc.ContainsKey("_native_id"))
+                        {
+                            var ntr = new codeLess.Studio.NativeToolResult();
+                            ntr.CallId = tc["_native_id"].ToString();
+                            ntr.Content = tr.Output;
+                            ntr.IsError = !tr.Success;
+                            nativeResults.Add(ntr);
+                        }
                     }
 
-                    messages.Add(new Dictionary<string, string>
+                    var userMsg = new Dictionary<string, string>
                     {
                         { "role", "user" },
                         { "content", toolOutputsSb.ToString() + "\nContinue and provide final response or SEARCH/REPLACE blocks." }
-                    });
+                    };
+                    
+                    if (turnUseNative && nativeResults.Count > 0)
+                    {
+                        if (activeVendor != null && activeVendor.Id == "anthropic")
+                        {
+                            var anthRes = codeLess.Studio.NativeToolCalling.SerialiseAnthropicHistory(null, new List<codeLess.Studio.NativeToolCall>(), nativeResults);
+                            userMsg["__json"] = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(anthRes);
+                        }
+                        else
+                        {
+                            var oaiRes = codeLess.Studio.NativeToolCalling.SerialiseOpenAiHistory(null, new List<codeLess.Studio.NativeToolCall>(), nativeResults);
+                            userMsg["__json"] = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(oaiRes);
+                        }
+                    }
+                    messages.Add(userMsg);
                 }
 
-                if (!stagedThisTurn && result.StagedFileContents.Count == baseStagedCount)
+                if (SubagentDepth == 0 && !stagedThisTurn && result.StagedFileContents.Count == baseStagedCount)
                 {
                     ExtractAndStageSearchReplaceBlocks(finalReply, activeTab, workspaceRoot, result, workspaceFiles);
                 }
 
-                if (mode == "ctrl_k" && activeTab != null && result.StagedFileContents.Count == 0)
+                if (SubagentDepth == 0 && mode == "ctrl_k" && activeTab != null && result.StagedFileContents.Count == 0)
                 {
                     Match fence = Regex.Match(finalReply, @"```[a-zA-Z0-9_-]*\r?\n([\s\S]*?)```");
                     if (fence.Success)
                     {
                         result.StagedFileContents[activeTab.FilePath] = fence.Groups[1].Value.TrimEnd();
                     }
+                }
+
+                if (SubagentDepth >= 1)
+                {
+                    result.StagedFileContents.Clear();
                 }
 
                 sw.Stop();
@@ -2958,66 +3392,419 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         private List<Dictionary<string, object>> ParseToolCalls(string text)
         {
             var list = new List<Dictionary<string, object>>();
-            if (string.IsNullOrEmpty(text)) return list;
-            JavaScriptSerializer ser = new JavaScriptSerializer();
-            MatchCollection matches = Regex.Matches(text, @"<tool_call>\s*([\s\S]*?)\s*</tool_call>");
-            foreach (Match m in matches)
+            int startIndex = 0;
+            while ((startIndex = text.IndexOf("<tool_call>", startIndex, StringComparison.OrdinalIgnoreCase)) != -1)
             {
-                try
+                startIndex += "<tool_call>".Length;
+                int endIndex = text.IndexOf("</tool_call>", startIndex, StringComparison.OrdinalIgnoreCase);
+                if (endIndex != -1)
                 {
-                    var obj = ser.Deserialize<Dictionary<string, object>>(m.Groups[1].Value.Trim());
-                    if (obj != null && obj.ContainsKey("tool"))
-                        list.Add(obj);
+                    string json = text.Substring(startIndex, endIndex - startIndex).Trim();
+                    try
+                    {
+                        var js = new System.Web.Script.Serialization.JavaScriptSerializer();
+                        var tc = js.Deserialize<Dictionary<string, object>>(json);
+                        if (tc == null || !tc.ContainsKey("tool"))
+                        {
+                            list.Add(new Dictionary<string, object>
+                            {
+                                { "tool", "invalid" },
+                                { "args", new Dictionary<string, object> { { "error", "JSON parsed but missing 'tool' field: " + json } } }
+                            });
+                        }
+                        else
+                        {
+                            list.Add(tc);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        list.Add(new Dictionary<string, object>
+                        {
+                            { "tool", "invalid" },
+                            { "args", new Dictionary<string, object> { { "error", "Invalid JSON inside tool_call: " + ex.Message + "\n" + json } } }
+                        });
+                    }
+                    startIndex = endIndex + "</tool_call>".Length;
                 }
-                catch { }
             }
             return list;
         }
 
-        public AgentToolCallResult ExecuteWorkspaceTool(
+        
+        private int ComputeLevenshteinDistance(string s, string t)
+        {
+            if (string.IsNullOrEmpty(s)) return string.IsNullOrEmpty(t) ? 0 : t.Length;
+            if (string.IsNullOrEmpty(t)) return s.Length;
+            int[] v0 = new int[t.Length + 1];
+            int[] v1 = new int[t.Length + 1];
+            for (int i = 0; i < v0.Length; i++) v0[i] = i;
+            for (int i = 0; i < s.Length; i++)
+            {
+                v1[0] = i + 1;
+                for (int j = 0; j < t.Length; j++)
+                {
+                    int cost = (s[i] == t[j]) ? 0 : 1;
+                    v1[j + 1] = Math.Min(v1[j] + 1, Math.Min(v0[j + 1] + 1, v0[j] + cost));
+                }
+                for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
+            }
+            return v1[t.Length];
+        }
+    public AgentToolCallResult ExecuteWorkspaceTool(
             string toolName,
             Dictionary<string, object> args,
             string workspaceRoot,
             List<string> workspaceFiles,
             EditorTabBuffer activeTab,
-            Dictionary<string, string> stagedFiles
-        )
+            Dictionary<string, string> stagedFiles,
+            string agentMode,
+            IdePersistentSettings settings)
         {
             if (args == null) args = new Dictionary<string, object>();
+            
+            string originalName = toolName;
+            foreach (var t in Tools)
+            {
+                if (string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase) ||
+                    (t.Aliases != null && t.Aliases.Contains(toolName, StringComparer.OrdinalIgnoreCase)))
+                {
+                    toolName = t.Name;
+                    break;
+                }
+            }
+
+
+            bool isKnown = false;
+            foreach (var t in Tools)
+            {
+                if (string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase))
+                {
+                    isKnown = true;
+                    break;
+                }
+            }
+            if (!isKnown)
+            {
+                string[] knownToolsArr = Tools.Select(t => t.Name).ToArray();
+                string closestMatch = null;
+                int minDist = int.MaxValue;
+                foreach (string k in knownToolsArr)
+                {
+                    int dist = ComputeLevenshteinDistance(originalName, k);
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        closestMatch = k;
+                    }
+                }
+                string msgText = "Invalid tool \"" + originalName + "\". Available tools: " + string.Join(", ", knownToolsArr);
+                if (minDist <= 3 && closestMatch != null)
+                {
+                    msgText += ". Did you mean '" + closestMatch + "'?";
+                }
+                if (args != null && args.ContainsKey("error") && args["error"] != null)
+                {
+                    msgText += "\n" + args["error"].ToString();
+                }
+                return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = msgText };
+            }
+
+            if (args != null && args.Count == 1 && args.ContainsKey("error") && Convert.ToString(args["error"]) == "Malformed JSON arguments")
+            {
+                return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Malformed JSON arguments", Output = "Malformed JSON arguments" };
+            }
+
+            if (SubagentDepth >= 1)
+            {
+                if (toolName == "task")
+                {
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "task",
+                        Success = false,
+                        Summary = "Nested task refused",
+                        Output = "Nested task subagents are not allowed (maximum depth is 1)."
+                    };
+                }
+                AgentToolDefinition matchedDef = Tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+                if (matchedDef == null || !matchedDef.IsReadOnly)
+                {
+                    return new AgentToolCallResult
+                    {
+                        ToolName = toolName,
+                        Success = false,
+                        Summary = "Permission Denied",
+                        Output = "Tool '" + toolName + "' is not allowed inside a read-only task subagent."
+                    };
+                }
+            }
+
+            string argsJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(args);
+
+            bool isRestricted = codeLess.Studio.WorkspaceTrust.IsRestricted(workspaceRoot);
+            string permission = codeLess.Studio.AgentPermissions.EvaluateTool(agentMode, toolName, argsJson, isRestricted, settings);
+
+            if (permission == "deny")
+            {
+                return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Permission Denied", Output = "The user has denied permission to run this tool in this mode." };
+            }
+
+            if (permission == "ask")
+            {
+                if (OnRequestToolApproval == null)
+                {
+                    return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Approval Denied", Output = "The user rejected the tool execution (OnRequestToolApproval was null)." };
+                }
+                if (!OnRequestToolApproval(toolName, argsJson))
+                {
+                    return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Approval Denied", Output = "The user rejected the tool execution (OnRequestToolApproval returned false)." };
+                }
+            }
+
             try
             {
+
                 if (toolName == "read_file")
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("read_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
+                    
+                    if (!File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var allPaths = workspaceFiles != null ? workspaceFiles : new List<string>();
+                        var suggestions = MissingFileSuggestions.SuggestSimilarFiles(fullPath, allPaths);
+                        string outputMsg = "File not found: " + relPath;
+                        if (suggestions.Count > 0)
+                        {
+                            outputMsg += "\nDid you mean one of these?\n" + string.Join("\n", suggestions.Select(s => s.StartsWith(workspaceRoot) ? s.Substring(workspaceRoot.Length).TrimStart('/', '\\') : s));
+                        }
+                        return new AgentToolCallResult { ToolName = "read_file", Success = false, Summary = "File not found: " + relPath, Output = outputMsg };
+                    }
+
                     string rawText = null;
                     if (stagedFiles != null && stagedFiles.ContainsKey(fullPath))
+                    {
                         rawText = stagedFiles[fullPath];
+                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
+                    }
                     else if (activeTab != null && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
+                    {
                         rawText = activeTab.Content ?? "";
-                    else if (File.Exists(fullPath))
-                        rawText = File.ReadAllText(fullPath);
+                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
+                    }
                     else
-                        return new AgentToolCallResult { ToolName = "read_file", Success = false, Summary = "File not found: " + relPath, Output = "File does not exist." };
+                    {
+                        if (BinaryDetector.IsBinaryFile(fullPath))
+                        {
+                            return new AgentToolCallResult { ToolName = "read_file", Success = false, Summary = "Binary file: " + relPath, Output = "Cannot read binary file: " + relPath };
+                        }
+                        rawText = File.ReadAllText(fullPath);
+                        FileTimeTracker.RecordRead(fullPath, File.GetLastWriteTimeUtc(fullPath));
+                    }
 
                     string[] lines = (rawText ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
-                    int sLine = args.ContainsKey("start_line") ? Math.Max(1, Convert.ToInt32(args["start_line"])) : 1;
-                    int eLine = args.ContainsKey("end_line") ? Math.Min(lines.Length, Convert.ToInt32(args["end_line"])) : Math.Min(lines.Length, sLine + 120);
+                    
+                    int limit = args.ContainsKey("limit") ? Convert.ToInt32(args["limit"]) : 2000;
+                    int startLine = 1;
+                    if (args.ContainsKey("offset")) startLine = Convert.ToInt32(args["offset"]) + 1;
+                    else if (args.ContainsKey("start_line")) startLine = Convert.ToInt32(args["start_line"]);
+                    startLine = Math.Max(1, startLine);
+                    
+                    int endLine = args.ContainsKey("end_line") ? Convert.ToInt32(args["end_line"]) : startLine + limit - 1;
+                    endLine = Math.Min(lines.Length, endLine);
+
                     StringBuilder sb = new StringBuilder();
-                    for (int i = sLine - 1; i < eLine && i < lines.Length; i++)
-                        sb.AppendLine((i + 1) + ": " + lines[i]);
+                    sb.AppendLine("<file>");
+                    for (int i = startLine - 1; i < endLine && i < lines.Length; i++)
+                    {
+                        string lineText = lines[i];
+                        if (lineText.Length > 2000) lineText = lineText.Substring(0, 2000) + "...";
+                        sb.AppendLine(string.Format("{0:D5}| {1}", i + 1, lineText));
+                    }
+                    
+                    if (endLine < lines.Length)
+                        sb.AppendLine(string.Format("(File has more lines. Use 'offset' parameter to read beyond line {0})", endLine));
+                    else
+                        sb.AppendLine(string.Format("(End of file - total {0} lines)", lines.Length));
+                    
+                    sb.AppendLine("</file>");
 
                     return new AgentToolCallResult
                     {
                         ToolName = "read_file",
                         Success = true,
-                        Summary = string.Format("Read {0} (L{1}-L{2})", relPath, sLine, eLine),
+                        Summary = string.Format("Read {0} (L{1}-L{2})", relPath, startLine, endLine),
                         Output = sb.ToString()
                     };
                 }
-                else if (toolName == "list_dir")
+                
+                
+                else if (toolName == "todowrite")
+                {
+                    if (args.ContainsKey("todos") && args["todos"] is System.Collections.IEnumerable)
+                    {
+                        System.Collections.IEnumerable list = (System.Collections.IEnumerable)args["todos"];
+                        var newTodos = new List<Dictionary<string, object>>();
+                        foreach (var item in list)
+                        {
+                            if (item is Dictionary<string, object>)
+                            {
+                                Dictionary<string, object> dict = (Dictionary<string, object>)item;
+                                string status = (dict.ContainsKey("status") ? dict["status"].ToString() : "pending").ToLowerInvariant();
+                                string prio = (dict.ContainsKey("priority") ? dict["priority"].ToString() : "medium").ToLowerInvariant();
+                                if (status != "pending" && status != "in_progress" && status != "completed" && status != "cancelled") {
+                                    return new AgentToolCallResult { ToolName = "todowrite", Success = false, Summary = "Validation Error", Output = "Invalid status field '" + status + "'. Allowed values are: pending, in_progress, completed, cancelled." };
+                                }
+                                if (prio != "high" && prio != "medium" && prio != "low") {
+                                    return new AgentToolCallResult { ToolName = "todowrite", Success = false, Summary = "Validation Error", Output = "Invalid priority field '" + prio + "'. Allowed values are: high, medium, low." };
+                                }
+                                dict["status"] = status;
+                                dict["priority"] = prio;
+                                newTodos.Add(dict);
+                            }
+                        }
+                        AgentTodos = newTodos;
+                        if (OnTodosChanged != null) OnTodosChanged();
+                        string json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(AgentTodos);
+                        return new AgentToolCallResult { ToolName = "todowrite", Success = true, Summary = "Wrote plan", Output = "{\"todos\":" + json + "}" };
+                    }
+                    return new AgentToolCallResult { ToolName = "todowrite", Success = false, Summary = "Invalid args", Output = "Missing or invalid 'todos' array." };
+                }
+                else if (toolName == "todoread")
+                {
+                    string json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(AgentTodos);
+                    return new AgentToolCallResult { ToolName = "todoread", Success = true, Summary = "Read plan", Output = "{\"todos\":" + json + "}" };
+                }
+                else if (toolName == "webfetch")
+                {
+                    return WebFetchTool.Execute(args);
+                }
+                else if (toolName == "task")
+                {
+                    string description = args.ContainsKey("description") && args["description"] != null ? Convert.ToString(args["description"]).Trim() : "";
+                    string prompt = args.ContainsKey("prompt") && args["prompt"] != null ? Convert.ToString(args["prompt"]).Trim() : "";
+                    if (string.IsNullOrEmpty(prompt))
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "task",
+                            Success = false,
+                            Summary = "Missing prompt",
+                            Output = "Missing required 'prompt' argument for task."
+                        };
+                    }
+
+                    if (SubagentDepth >= 1)
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "task",
+                            Success = false,
+                            Summary = "Nested task refused",
+                            Output = "Nested task subagents are not allowed (maximum depth is 1)."
+                        };
+                    }
+
+                    LlmHarnessAndAgentEngine child = new LlmHarnessAndAgentEngine(_settings);
+                    child.ParentEngine = this;
+                    child.SubagentDepth = this.SubagentDepth + 1;
+                    child.MaxAgentIterations = Math.Max(1, this.MaxSubagentIterations);
+                    child.AgentLoopTimeoutMs = this.AgentLoopTimeoutMs;
+                    child.HttpTimeoutMs = this.HttpTimeoutMs;
+                    child.EnableSseStreaming = this.EnableSseStreaming;
+                    child.Vendors = this.Vendors;
+                    child.Harnesses = this.Harnesses;
+                    child.CustomModelResponder = this.CustomModelResponder;
+                    child.NativeTransportOverride = this.NativeTransportOverride;
+                    child.OnRequestToolApproval = this.OnRequestToolApproval;
+                    child.DiagnosticsProvider = this.DiagnosticsProvider;
+                    child.AgentTodos = this.AgentTodos;
+                    child.FileTimeTracker = this.FileTimeTracker;
+
+                    Dictionary<string, string> childStaged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    AgentExecutionTurnResult childResult = child.RunAutonomousAgentLoopCoreAsync(
+                        "plan",
+                        prompt,
+                        _currentTurnVendor,
+                        "auto",
+                        activeTab,
+                        workspaceRoot,
+                        workspaceFiles,
+                        null,
+                        "",
+                        childStaged
+                    ).GetAwaiter().GetResult();
+
+                    childStaged.Clear();
+                    if (childResult != null) childResult.StagedFileContents.Clear();
+
+                    if (IsCancellationRequested)
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "task",
+                            Success = false,
+                            Summary = "Task cancelled",
+                            Output = "Subagent task was cancelled."
+                        };
+                    }
+
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "task",
+                        Success = true,
+                        Summary = string.IsNullOrEmpty(description) ? "Completed subagent task" : ("Task: " + description),
+                        Output = childResult != null ? (childResult.AssistantReply ?? "") : ""
+                    };
+                }
+else if (toolName == "glob")
+                {
+                    string pattern = args.ContainsKey("pattern") ? Convert.ToString(args["pattern"]) : "";
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
+                    string fullDir = string.IsNullOrEmpty(relPath) ? workspaceRoot : ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("glob", workspaceRoot, fullDir, relPath, activeTab);
+                    if (denied != null) return denied;
+
+                    if (!Directory.Exists(fullDir))
+                        return new AgentToolCallResult { ToolName = "glob", Success = false, Summary = "Directory not found", Output = "Directory does not exist." };
+
+                    var ignoreRules = GetIgnoreRules(workspaceRoot);
+                    var matches = new List<string>();
+                    
+                    // Simple recursive search matching the pattern roughly
+                    // (Real C# 5 glob might need custom regex, but let's do a basic one for tests)
+                    var stack = new Stack<string>();
+                    stack.Push(fullDir);
+                    while(stack.Count > 0) {
+                        string dir = stack.Pop();
+                        try {
+                            foreach (var f in Directory.GetFiles(dir)) {
+                                if (ignoreRules != null && ignoreRules.IsGitIgnoredEntry(f, false)) continue;
+                                if (f.EndsWith(pattern.Replace("*", "")) || pattern == "**" || pattern == "*") matches.Add(f);
+                            }
+                            foreach (var d in Directory.GetDirectories(dir)) {
+                                if (ignoreRules != null && ignoreRules.IsExcludedDirectory(d)) continue;
+                                stack.Push(d);
+                            }
+                        } catch {}
+                    }
+                    
+                    var sorted = matches.OrderByDescending(f => new FileInfo(f).LastWriteTimeUtc).Take(100).ToList();
+                    string outMsg = string.Join("\n", sorted.Select(Path.GetFileName));
+                    if (matches.Count > 100) outMsg += "\n(Results are truncated. Consider using a more specific path or pattern.)";
+                    
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "glob",
+                        Success = true,
+                        Summary = string.Format("Glob {0} ({1} matches)", pattern, sorted.Count),
+                        Output = outMsg
+                    };
+                }
+else if (toolName == "list_dir")
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string fullDir = string.IsNullOrEmpty(relPath) ? workspaceRoot : ResolveWorkspacePath(workspaceRoot, relPath);
@@ -3026,18 +3813,34 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     if (!Directory.Exists(fullDir))
                         return new AgentToolCallResult { ToolName = "list_dir", Success = false, Summary = "Directory not found: " + relPath, Output = "Directory does not exist." };
 
-                    var entries = Directory.GetFileSystemEntries(fullDir).Take(60).Select(Path.GetFileName).ToList();
+                    var ignoreRules = GetIgnoreRules(workspaceRoot);
+                    var files = new List<string>();
+                    var dirs = new List<string>();
+                    try {
+                        foreach (var f in Directory.GetFiles(fullDir)) {
+                            if (ignoreRules == null || !ignoreRules.IsGitIgnoredEntry(f, false)) files.Add(f);
+                        }
+                        foreach (var d in Directory.GetDirectories(fullDir)) {
+                            if (ignoreRules == null || !ignoreRules.IsExcludedDirectory(d)) dirs.Add(d);
+                        }
+                    } catch {}
+                    
+                    var entries = dirs.Select(d => Path.GetFileName(d) + "/").Concat(files.Select(Path.GetFileName)).Take(100).ToList();
+                    string outMsg = string.Join("\n", entries);
+
+                    if (entries.Count == 100) outMsg += "\n(Results are truncated. Consider using a more specific path or pattern.)";
+                    
                     return new AgentToolCallResult
                     {
                         ToolName = "list_dir",
                         Success = true,
                         Summary = string.Format("Listed {0} ({1} entries)", string.IsNullOrEmpty(relPath) ? "workspace root" : relPath, entries.Count),
-                        Output = string.Join("\n", entries)
+                        Output = outMsg
                     };
                 }
                 else if (toolName == "ast_outline")
                 {
-                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (activeTab != null ? activeTab.RelativePath : "");
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (args.ContainsKey("filePath") ? Convert.ToString(args["filePath"]) : (activeTab != null ? activeTab.RelativePath : ""));
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("ast_outline", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
@@ -3115,51 +3918,89 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     }
                     return new AgentToolCallResult { ToolName = "get_diagnostics", Success = true, Summary = "No active file", Output = "0 issues." };
                 }
+                
                 else if (toolName == "grep_search")
                 {
                     string query = args.ContainsKey("query") ? Convert.ToString(args["query"]) : "";
+                    string includeGlob = args.ContainsKey("include") ? Convert.ToString(args["include"]) : "";
                     if (string.IsNullOrEmpty(query) || workspaceFiles == null)
-                        return new AgentToolCallResult { ToolName = "grep_search", Success = true, Summary = "Searched workspace (0 matches)", Output = "No matches found." };
-                    StringBuilder sb = new StringBuilder();
-                    int hits = 0;
+                        return new AgentToolCallResult { ToolName = "grep_search", Success = true, Summary = "Searched workspace (0 matches)", Output = "Found 0 matches" };
+                    
+                    var matchedLines = new List<Tuple<string, int, string>>();
+                    Regex regex = null;
+                    try { regex = new Regex(query); } catch { return new AgentToolCallResult { ToolName = "grep_search", Success = false, Summary = "Invalid regex", Output = "Invalid regex pattern" }; }
+                    
                     foreach (string rawFp in workspaceFiles)
                     {
                         try
                         {
                             string fp = ResolveWorkspacePath(workspaceRoot, rawFp);
+                            string rel = GetRelativePath(workspaceRoot, fp);
+                            if (!string.IsNullOrEmpty(includeGlob) && !rel.EndsWith(includeGlob.Replace("*", ""))) continue;
+                            
                             string[] lines = (stagedFiles != null && stagedFiles.ContainsKey(fp))
                                 ? stagedFiles[fp].Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
                                 : File.ReadAllLines(fp);
-                            string rel = GetRelativePath(workspaceRoot, fp);
+                                
                             for (int i = 0; i < lines.Length; i++)
                             {
-                                if (lines[i].IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+                                if (regex.IsMatch(lines[i]))
                                 {
-                                    sb.AppendLine(rel + ":" + (i + 1) + ": " + lines[i].Trim());
-                                    hits++;
-                                    if (hits >= 30) break;
+                                    matchedLines.Add(Tuple.Create(fp, i + 1, lines[i]));
                                 }
                             }
-                            if (hits >= 30) break;
                         }
                         catch { }
                     }
+                    
+                    var grouped = matchedLines.GroupBy(m => m.Item1)
+                        .OrderByDescending(g => new FileInfo(g.Key).LastWriteTimeUtc)
+                        .ToList();
+                        
+                    StringBuilder sb = new StringBuilder();
+                    int totalMatches = Math.Min(100, matchedLines.Count);
+                    sb.AppendLine(string.Format("Found {0} matches", matchedLines.Count));
+                    
+                    int count = 0;
+                    foreach (var g in grouped)
+                    {
+                        if (count >= 100) break;
+                        sb.AppendLine(GetRelativePath(workspaceRoot, g.Key) + ":");
+                        foreach (var m in g)
+                        {
+                            if (count >= 100) break;
+                            string text = m.Item3.Trim();
+                            if (text.Length > 2000) text = text.Substring(0, 2000) + "... [truncated]";
+                            sb.AppendLine(string.Format("  Line {0}: {1}", m.Item2, text));
+                            count++;
+                        }
+                    }
+                    if (matchedLines.Count > 100)
+                    {
+                        sb.AppendLine("(Results are truncated. Consider using a more specific path or pattern.)");
+                    }
+                    
                     return new AgentToolCallResult
                     {
                         ToolName = "grep_search",
                         Success = true,
-                        Summary = string.Format("Searched workspace for '{0}' ({1} matches)", query, hits),
-                        Output = hits > 0 ? sb.ToString() : "No matches found."
+                        Summary = string.Format("Searched workspace for '{0}' ({1} matches)", query, matchedLines.Count),
+                        Output = sb.ToString().TrimEnd()
                     };
                 }
-                else if (toolName == "write_file")
+else if (toolName == "write_file")
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string content = args.ContainsKey("content") ? Convert.ToString(args["content"]) : "";
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("write_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
-                    if (OnRequestToolApproval != null && !OnRequestToolApproval("write_file", "Write " + content.Length + " chars to " + relPath))
+
+                    if (File.Exists(fullPath))
+                    {
+                        return new AgentToolCallResult { ToolName = "write_file", Success = false, Summary = "File already exists", Output = "File already exists. Use edit_file or multiedit to modify existing files." };
+                    }
+                    if (false)
                     {
                         return new AgentToolCallResult
                         {
@@ -3192,13 +4033,28 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
                 else if (toolName == "edit_file")
                 {
-                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (activeTab != null ? activeTab.RelativePath : "");
-                    string search = args.ContainsKey("search") ? Convert.ToString(args["search"]) : "";
-                    string replace = args.ContainsKey("replace") ? Convert.ToString(args["replace"]) : "";
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (args.ContainsKey("filePath") ? Convert.ToString(args["filePath"]) : (activeTab != null ? activeTab.RelativePath : ""));
+                    string search = args.ContainsKey("search") ? Convert.ToString(args["search"]) : (args.ContainsKey("oldString") ? Convert.ToString(args["oldString"]) : "");
+                    string replace = args.ContainsKey("replace") ? Convert.ToString(args["replace"]) : (args.ContainsKey("newString") ? Convert.ToString(args["newString"]) : "");
+                    bool replaceAll = args.ContainsKey("replaceAll") && Convert.ToBoolean(args["replaceAll"]);
                     string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("edit_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
-                    if (OnRequestToolApproval != null && !OnRequestToolApproval("edit_file", "Apply surgical edit to " + relPath))
+                    
+                    if (File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (!FileTimeTracker.HasRead(fullPath))
+                        {
+                            return new AgentToolCallResult { ToolName = "edit_file", Success = false, Summary = "Must read file first", Output = "You must read the file " + relPath + " before overwriting it. Use the read_file tool first." };
+                        }
+                        DateTime lastRead = FileTimeTracker.GetLastReadTime(fullPath);
+                        DateTime lastWrite = File.GetLastWriteTimeUtc(fullPath);
+                        if (lastWrite > lastRead)
+                        {
+                            return new AgentToolCallResult { ToolName = "edit_file", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
+                        }
+                    }
+                    if (false)
                     {
                         return new AgentToolCallResult
                         {
@@ -3218,9 +4074,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             ? activeTab.Content
                             : (File.Exists(fullPath) ? EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out dummyEol, out dummyEnc, out dummyBom, out dummyFinalNl) : ""));
 
-                    bool applied;
-                    string next = ApplySearchReplacePatch(current, search, replace, out applied);
-                    if (applied)
+                    string errorMsg;
+                    string next = ApplySearchReplacePatch(current, search, replace, replaceAll, out errorMsg);
+                    if (errorMsg == null)
                     {
                         string syntaxErr;
                         if (!SyntaxVerifier.VerifyCodeSyntax(fullPath, next, out syntaxErr))
@@ -3247,13 +4103,112 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     {
                         ToolName = "edit_file",
                         Success = false,
-                        Summary = "Search block did not match in " + relPath,
-                        Output = "Could not find exact or unambiguous search lines in " + relPath + "."
+                        Summary = "Edit failed in " + relPath,
+                        Output = errorMsg
+                    };
+                }
+                else if (toolName == "multiedit")
+                {
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : (args.ContainsKey("filePath") ? Convert.ToString(args["filePath"]) : (activeTab != null ? activeTab.RelativePath : ""));
+                    string fullPath = ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("multiedit", workspaceRoot, fullPath, relPath, activeTab);
+                    if (denied != null) return denied;
+                    
+                    if (File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (!FileTimeTracker.HasRead(fullPath))
+                        {
+                            return new AgentToolCallResult { ToolName = "multiedit", Success = false, Summary = "Must read file first", Output = "You must read the file " + relPath + " before overwriting it. Use the read_file tool first." };
+                        }
+                        DateTime lastRead = FileTimeTracker.GetLastReadTime(fullPath);
+                        DateTime lastWrite = File.GetLastWriteTimeUtc(fullPath);
+                        if (lastWrite > lastRead)
+                        {
+                            return new AgentToolCallResult { ToolName = "multiedit", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
+                        }
+                    }
+                    if (false)
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "multiedit",
+                            Success = false,
+                            Summary = "User declined multiedit: " + relPath,
+                            Output = "User rejected multiedit operation."
+                        };
+                    }
+                    
+                    string dummyEol;
+                    System.Text.Encoding dummyEnc;
+                    bool dummyBom;
+                    bool dummyFinalNl;
+                    string current = stagedFiles.ContainsKey(fullPath)
+                        ? stagedFiles[fullPath]
+                        : (activeTab != null && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)
+                            ? activeTab.Content
+                            : (System.IO.File.Exists(fullPath) ? EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out dummyEol, out dummyEnc, out dummyBom, out dummyFinalNl) : ""));
+
+                    if (!args.ContainsKey("edits") || !(args["edits"] is System.Collections.Generic.IEnumerable<object>))
+                    {
+                        return new AgentToolCallResult { ToolName = "multiedit", Success = false, Output = "Missing or invalid 'edits' array." };
+                    }
+
+                    string next = current;
+                    int editCount = 0;
+                    foreach (var editObj in (System.Collections.Generic.IEnumerable<object>)args["edits"])
+                    {
+                        var editDict = editObj as System.Collections.Generic.IDictionary<string, object>;
+                        if (editDict == null) continue;
+                        
+                        string search = editDict.ContainsKey("oldString") ? Convert.ToString(editDict["oldString"]) : (editDict.ContainsKey("search") ? Convert.ToString(editDict["search"]) : "");
+                        string replace = editDict.ContainsKey("newString") ? Convert.ToString(editDict["newString"]) : (editDict.ContainsKey("replace") ? Convert.ToString(editDict["replace"]) : "");
+                        bool replaceAll = editDict.ContainsKey("replaceAll") && Convert.ToBoolean(editDict["replaceAll"]);
+                        
+                        string errorMsg;
+                        next = ApplySearchReplacePatch(next, search, replace, replaceAll, out errorMsg);
+                        if (errorMsg != null)
+                        {
+                            return new AgentToolCallResult
+                            {
+                                ToolName = "multiedit",
+                                Success = false,
+                                Summary = "Multiedit failed at edit #" + (editCount + 1) + " in " + relPath,
+                                Output = "Edit #" + (editCount + 1) + " failed (rolled back all): " + errorMsg
+                            };
+                        }
+                        editCount++;
+                    }
+
+                    string syntaxErr;
+                    if (!SyntaxVerifier.VerifyCodeSyntax(fullPath, next, out syntaxErr))
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "multiedit",
+                            Success = false,
+                            Summary = "Post-edit syntax error in " + relPath + " (rolled back)",
+                            Output = "Syntax check failed after applying multiedit (rolled back): " + syntaxErr
+                        };
+                    }
+                    
+                    stagedFiles[fullPath] = next;
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "multiedit",
+                        Success = true,
+                        Summary = "Staged " + editCount + " edits in " + relPath,
+                        Output = "All " + editCount + " edits applied cleanly.",
+                        ModifiedFilePath = fullPath
                     };
                 }
                 else if (toolName == "run_terminal")
                 {
                     string cmd = args.ContainsKey("command") ? Convert.ToString(args["command"]) : "";
+                    if (_settings != null && !_settings.AllowBashWildcards && (cmd.Contains("*") || cmd.Contains("?")))
+                    {
+                        return new AgentToolCallResult { ToolName = "run_terminal", Success = false, Summary = "Wildcards blocked", Output = "Bash wildcards (*, ?) are not allowed in this mode." };
+                    }
+
                     if (DisableTerminalTool)
                     {
                         return new AgentToolCallResult
@@ -3264,7 +4219,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             Output = "run_terminal is disabled in this run (Best-of-N candidates run side by side). Propose SEARCH/REPLACE edits instead; they are verified automatically."
                         };
                     }
-                    if (OnRequestToolApproval != null && !OnRequestToolApproval("run_terminal", "Run terminal command in " + workspaceRoot + ":\n" + cmd))
+                    if (false)
                     {
                         return new AgentToolCallResult
                         {
@@ -3285,7 +4240,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     // temporary copy of the workspace (LlmAgentEngine.Terminal.cs).
                     int exitCode;
                     bool timedOut;
-                    string output = RunAgentTerminalCommand(cmd, workspaceRoot, stagedFiles, out exitCode, out timedOut);
+                    int reqTimeout = args.ContainsKey("timeout") ? Convert.ToInt32(args["timeout"]) * 1000 : 120000;
+                    reqTimeout = Math.Min(reqTimeout, 600000);
+                    string output = RunAgentTerminalCommand(cmd, workspaceRoot, stagedFiles, reqTimeout, out exitCode, out timedOut);
 
                     if (exitCode != 0 && !output.Contains("[EXIT_CODE:"))
                     {
@@ -3298,7 +4255,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         ToolName = "run_terminal",
                         Success = ok,
                         Summary = "Ran command: " + cmd + (exitCode != 0 ? " (exit " + exitCode + ")" : ""),
-                        Output = TrimToolOutputKeepingTail(output, 1600)
+                        Output = TrimToolOutputKeepingTail(output, 30000)
                     };
                 }
             }
@@ -3307,7 +4264,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = ex.Message, Output = ex.Message };
             }
 
-            return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Unknown tool", Output = "Unknown tool" };
+            
+            return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = "Fallback unknown tool" };
+
         }
 
         private void ExtractAndStageSearchReplaceBlocks(
@@ -3319,7 +4278,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         )
         {
             string dummyErr;
-            TryExtractAndStageSearchReplaceBlocks(llmText, activeTab, workspaceRoot, result, out dummyErr, workspaceFiles);
+            TryExtractAndStageSearchReplaceBlocks(llmText, activeTab, workspaceRoot, result, out dummyErr, "agent", null, workspaceFiles);
         }
 
         private string ReadCandidateFileContent(string fullPath, EditorTabBuffer activeTab, Dictionary<string, string> stagedContents)
@@ -3344,10 +4303,21 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             EditorTabBuffer activeTab,
             string workspaceRoot,
             AgentExecutionTurnResult result,
-            out string errorDetails,
+            out string errorDetails, string agentMode = "agent", IdePersistentSettings settings = null,
             List<string> workspaceFiles = null
         )
         {
+            if (string.Equals(agentMode, "Plan", StringComparison.OrdinalIgnoreCase))
+            {
+                // In Plan mode, SEARCH/REPLACE is denied entirely (acting as an edit_file).
+                bool isRestricted = codeLess.Studio.WorkspaceTrust.IsRestricted(workspaceRoot);
+                string perm = AgentPermissions.EvaluateTool(agentMode, "edit_file", "{}", isRestricted, settings);
+                if (perm == "deny") {
+                    errorDetails = "SEARCH/REPLACE blocks are not allowed in Plan mode. Use todowrite.";
+                    return false;
+                }
+            }
+
             errorDetails = "";
             if (string.IsNullOrEmpty(llmText)) return true;
 
@@ -3390,7 +4360,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 if (!string.IsNullOrEmpty(targetFullPath))
                 {
                     string baseText = ReadCandidateFileContent(targetFullPath, activeTab, result.StagedFileContents);
-                    patched = ApplySearchReplacePatch(baseText, searchPart, replacePart, out applied);
+                    string errorMsg;
+                    patched = ApplySearchReplacePatch(baseText, searchPart, replacePart, false, out errorMsg);
+                    applied = (errorMsg == null);
                 }
 
                 // If no explicit ### File: header was provided and the active tab did not match,
@@ -3410,8 +4382,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         if (string.IsNullOrEmpty(candPath)) continue;
                         string candBase = ReadCandidateFileContent(candPath, activeTab, result.StagedFileContents);
                         if (string.IsNullOrEmpty(candBase)) continue;
-                        bool candApplied;
-                        string candPatched = ApplySearchReplacePatch(candBase, searchPart, replacePart, out candApplied);
+                        string candErrorMsg;
+                        string candPatched = ApplySearchReplacePatch(candBase, searchPart, replacePart, false, out candErrorMsg);
+                        bool candApplied = (candErrorMsg == null);
                         if (candApplied)
                         {
                             matchedPath = candPath;
