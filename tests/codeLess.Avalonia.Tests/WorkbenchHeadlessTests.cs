@@ -302,7 +302,7 @@ namespace codeLess.Avalonia.Tests
                 string response = await window.SendChatMessageAsync("Use checked arithmetic in Add");
                 Assert.NotNull(response);
                 Assert.NotNull(capturedSysPrompt);
-                Assert.Contains("[AUTONOMOUS 12-TOOL EXECUTION PROTOCOL]", capturedSysPrompt);
+                Assert.Contains("[AUTONOMOUS TOOL EXECUTION PROTOCOL]", capturedSysPrompt);
                 Assert.Contains("checked(a + b)", window.Editor.Text);
                 Assert.True(window.ChatHistoryItems.Count >= 4);
 
