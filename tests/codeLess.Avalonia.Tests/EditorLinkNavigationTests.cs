@@ -245,7 +245,7 @@ namespace codeLess.Avalonia.Tests
 
         private static Point PointFor(MainWindow window, AvaloniaVirtualEditorCanvas canvas, int row, int col, string lineText)
         {
-            double x = AvaloniaVirtualEditorCanvas.GutterWidth + 8 + (codeLess.Studio.EditorTextLayout.VisualColumn(lineText, col, 4) + 0.5) * canvas.CharWidth;
+            double x = AvaloniaVirtualEditorCanvas.GutterWidth + 8 + (canvas.VisualColumn(lineText, col) + 0.5) * canvas.CharWidth;
             double y = (row + 0.5) * canvas.LineHeight;
             var p = canvas.TranslatePoint(new Point(x, y), window);
             Assert.True(p.HasValue);

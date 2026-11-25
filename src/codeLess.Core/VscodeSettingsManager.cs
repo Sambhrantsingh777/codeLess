@@ -209,10 +209,6 @@ namespace codeLess.Core
                     target.WordWrap = w != null && (w.ToString() == "on" || w.ToString() == "bounded" || w.ToString() == "wordWrapColumn" || w.ToString() == "True");
                 }
                 if (dict.ContainsKey("editor.minimap.enabled")) target.ShowMinimap = Convert.ToBoolean(dict["editor.minimap.enabled"]);
-                if (dict.ContainsKey("editor.rulers")) {
-                    var rulers = dict["editor.rulers"] as object[];
-                    if (rulers != null && rulers.Length > 0) target.TabSize = Convert.ToInt32(rulers[0]);
-                }
                 if (dict.ContainsKey("search.exclude")) {
                     Dictionary<string, object> sx = dict["search.exclude"] as Dictionary<string, object>;
                     if (sx != null) {

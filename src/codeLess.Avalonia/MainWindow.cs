@@ -276,7 +276,7 @@ namespace codeLess.AvaloniaApp
             BuildNativeMacMenu();
             InitLanguageServers();
             InitializeWorkspaceTrust();
-            ApplyTheme(currentTheme);
+            ApplyTheme(currentTheme, persistSetting: false);
             InitDebugWorkbench();
 
             // Register tunnel & bubble key handlers so workbench shortcuts work anywhere
@@ -395,6 +395,8 @@ namespace codeLess.AvaloniaApp
         {
             windowClosed = true; // late background results (analysis) must not touch this window any more
             StopWorkspaceWatcher();
+            if (workspaceSettingsTimer != null) { workspaceSettingsTimer.Dispose(); workspaceSettingsTimer = null; }
+            if (userSettingsTimer != null) { userSettingsTimer.Dispose(); userSettingsTimer = null; }
             if (workspaceSettingsWatcher != null) { workspaceSettingsWatcher.Dispose(); workspaceSettingsWatcher = null; }
             if (userSettingsWatcher != null) { userSettingsWatcher.Dispose(); userSettingsWatcher = null; }
             if (keybindingsWatcher != null) { keybindingsWatcher.Dispose(); keybindingsWatcher = null; }
@@ -1874,7 +1876,13 @@ namespace codeLess.AvaloniaApp
             if (persistSetting && settings != null)
             {
                 settings.ThemeId = theme.Id;
-                codeLess.Core.VscodeSettingsManager.WriteSetting("workbench.colorTheme", theme.Id);
+                try
+                {
+                    string userSettingsPath = codeLess.Core.VscodeSettingsManager.GetUserSettingsPath();
+                    if (File.Exists(userSettingsPath) && File.ReadAllText(userSettingsPath).Contains("\"workbench.colorTheme\""))
+                        codeLess.Core.VscodeSettingsManager.WriteSetting("workbench.colorTheme", theme.Id);
+                }
+                catch { }
                 try { settings.Save(); } catch { }
             }
 

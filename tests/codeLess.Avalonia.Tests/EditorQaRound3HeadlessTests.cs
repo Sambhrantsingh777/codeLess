@@ -23,8 +23,7 @@ namespace codeLess.Avalonia.Tests
         private readonly string settingsPath;
         private readonly string settingsBackup;
         private readonly bool hadSettings;
-        // Justification: AvaloniaVirtualEditorCanvas.DisplayTabSize is no longer static. Tab size is now read from per-canvas EditorTabBuffer, defaulting to VscodeSettingsManager workspace settings. Test defaults are isolated by xUnit session directory.
-        private readonly int savedTab = 4;
+        private readonly int savedTab = AvaloniaVirtualEditorCanvas.DefaultDisplayTabSize;
         private readonly bool savedSpaces = AvaloniaVirtualEditorCanvas.InsertSpacesSetting;
 
         public EditorQaRound3HeadlessTests()
@@ -39,7 +38,7 @@ namespace codeLess.Avalonia.Tests
 
         public void Dispose()
         {
-            
+            AvaloniaVirtualEditorCanvas.DefaultDisplayTabSize = savedTab;
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = savedSpaces;
             try
             {

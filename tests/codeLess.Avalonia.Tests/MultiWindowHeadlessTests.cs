@@ -8,6 +8,7 @@ using codeLess.AvaloniaApp;
 
 namespace codeLess.Avalonia.Tests
 {
+    [Collection("SequentialWorkbench")]
     public class MultiWindowHeadlessTests
     {
         [AvaloniaFact]
@@ -15,28 +16,36 @@ namespace codeLess.Avalonia.Tests
         {
             string wRoot = Path.Combine(Path.GetTempPath(), "w_test_" + Guid.NewGuid());
             Directory.CreateDirectory(wRoot);
-            string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(wRoot);
-            Directory.CreateDirectory(Path.GetDirectoryName(wsPath));
-            File.WriteAllText(wsPath, "{}");
+            try
+            {
+                string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(wRoot);
+                Directory.CreateDirectory(Path.GetDirectoryName(wsPath));
+                File.WriteAllText(wsPath, "{}");
 
-            var w = new MainWindow(wRoot);
-            var wsWatcher = w.GetType().GetField("workspaceSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
-            var userWatcher = w.GetType().GetField("userSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
-            var keysWatcher = w.GetType().GetField("keybindingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
-            
-            Assert.NotNull(wsWatcher);
-            Assert.NotNull(userWatcher);
-            Assert.NotNull(keysWatcher);
+                var w = new MainWindow(wRoot);
+                var wsWatcher = w.GetType().GetField("workspaceSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
+                var userWatcher = w.GetType().GetField("userSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
+                var keysWatcher = w.GetType().GetField("keybindingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
 
-            w.Close(); // Will call OnClosed
-            
-            wsWatcher = w.GetType().GetField("workspaceSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
-            userWatcher = w.GetType().GetField("userSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
-            keysWatcher = w.GetType().GetField("keybindingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
-            
-            Assert.Null(wsWatcher);
-            Assert.Null(userWatcher);
-            Assert.Null(keysWatcher);
+                Assert.NotNull(wsWatcher);
+                Assert.NotNull(userWatcher);
+                Assert.NotNull(keysWatcher);
+
+                w.SuppressUnsavedPrompts = true;
+                w.Close(); // Will call OnClosed
+
+                wsWatcher = w.GetType().GetField("workspaceSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
+                userWatcher = w.GetType().GetField("userSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
+                keysWatcher = w.GetType().GetField("keybindingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
+
+                Assert.Null(wsWatcher);
+                Assert.Null(userWatcher);
+                Assert.Null(keysWatcher);
+            }
+            finally
+            {
+                try { Directory.Delete(wRoot, true); } catch { }
+            }
         }
     }
 }

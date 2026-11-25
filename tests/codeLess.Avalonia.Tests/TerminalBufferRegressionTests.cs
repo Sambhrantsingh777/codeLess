@@ -115,9 +115,9 @@ namespace codeLess.Avalonia.Tests
         [Fact]
         public void VisualColumns_HandleTabsWideCharsEmojiAndCombiningMarks()
         {
-            
-            System.Func<string, int, int> V = (s, c) => codeLess.Studio.EditorTextLayout.VisualColumn(s, c, 4);
-            System.Func<string, double, int> I = (s, c) => codeLess.Studio.EditorTextLayout.CharIndexForVisualColumn(s, c, 4);
+            codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DefaultDisplayTabSize = 4;
+            System.Func<string, int, int> V = (s, c) => codeLess.Studio.EditorTextLayout.VisualColumn(s, c, codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DefaultDisplayTabSize);
+            System.Func<string, double, int> I = (s, c) => codeLess.Studio.EditorTextLayout.CharIndexForVisualColumn(s, c, codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DefaultDisplayTabSize);
             Assert.Equal(4, V("\tx", 1));          // tab to first stop
             Assert.Equal(4, V("ab\tx", 3));        // tab from col 2 -> 4
             Assert.Equal(8, V("abcd\tx", 5));      // tab exactly at a stop -> next stop

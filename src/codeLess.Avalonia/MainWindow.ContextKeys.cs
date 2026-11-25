@@ -49,6 +49,8 @@ namespace codeLess.AvaloniaApp
                         return !MacKeymap.IsMacOS && System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
                     case "islinux":
                         return !MacKeymap.IsMacOS && System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux);
+                    case "indebugmode":
+                        return window.debugController != null && window.debugController.IsActive;
                     default:
                         return false;
                 }

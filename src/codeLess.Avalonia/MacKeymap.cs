@@ -64,6 +64,22 @@ namespace codeLess.AvaloniaApp
 
         public static string FormatShortcut(string key, bool shift = false, bool alt = false)
         {
+            if (!string.IsNullOrEmpty(key) && key.Length > 1 && !shift && !alt)
+            {
+                string[] chords = key.Split(' ');
+                var formattedChords = new string[chords.Length];
+                for (int c = 0; c < chords.Length; c++)
+                {
+                    string[] parts = chords[c].Split('+');
+                    for (int p = 0; p < parts.Length; p++)
+                    {
+                        if (parts[p].Length > 0)
+                            parts[p] = char.ToUpperInvariant(parts[p][0]) + parts[p].Substring(1);
+                    }
+                    formattedChords[c] = string.Join("+", parts);
+                }
+                return codeLess.Studio.WorkbenchMenuModel.FormatShortcut(string.Join(" ", formattedChords), IsMacOS);
+            }
             if (IsMacOS)
             {
                 string prefix = "";

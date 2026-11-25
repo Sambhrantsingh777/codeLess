@@ -17,12 +17,13 @@ namespace codeLess.Core
             this.filePath = path;
             this.onChange = onChange;
             
-            if (!File.Exists(path))
+            string dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             {
-                try { File.WriteAllText(path, "[\n]"); } catch { }
+                try { Directory.CreateDirectory(dir); } catch { }
             }
 
-            watcher = new FileSystemWatcher(Path.GetDirectoryName(path), Path.GetFileName(path));
+            watcher = new FileSystemWatcher(dir, Path.GetFileName(path));
             watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime;
             watcher.Changed += OnChanged;
             watcher.Created += OnChanged;

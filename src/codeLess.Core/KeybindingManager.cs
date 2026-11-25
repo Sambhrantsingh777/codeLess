@@ -28,10 +28,11 @@ namespace codeLess.Core
 
         private static List<KeybindingEntry> GetDefaults()
         {
-            if (cachedDefaults != null) return cachedDefaults;
+            if (cachedDefaults != null && cachedDefaults.Count > 0) return cachedDefaults;
             lock (defaultLock)
             {
-                if (cachedDefaults != null) return cachedDefaults;
+                if (cachedDefaults != null && cachedDefaults.Count > 0) return cachedDefaults;
+                DefaultCommands.Register();
                 var list = new List<KeybindingEntry>();
                 bool isMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
                 bool isLinux = RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
@@ -107,8 +108,7 @@ namespace codeLess.Core
                 newBindings.Add(d);
             }
 
-            // Let's just do a hacky regex/string search for removing items, since we only remove by command/key.
-            // We can just parse the existing file to get the list of dicts.
+            // Parse the existing file to preserve comments and formatting for unchanged entries.
             string err;
             var parsed = JsoncParser.Parse(json, out err);
             var existingList = parsed as System.Collections.IEnumerable;
@@ -164,8 +164,7 @@ namespace codeLess.Core
                     string cmdStr = c2 != null ? c2.ToString() : null;
                     if (cmdStr != null)
                     {
-                        // crude text removal: find {"command": "cmdStr" ... }
-                        // Actually, we can just find "cmdStr" and then find the enclosing { }
+                        // Locate the object containing this command id and remove its span.
                         int idx = json.IndexOf("\"" + cmdStr + "\"");
                         if (idx >= 0)
                         {

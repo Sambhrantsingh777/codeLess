@@ -72,6 +72,7 @@ namespace codeLess.AvaloniaApp
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
+            if (isDispatchingCommandKey) return;
             if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
             
             bool isTerminal = IsFromTerminal(e.Source);
@@ -102,7 +103,16 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
-            if (DispatchKeybinding(e.Key, e.KeyModifiers, isTerminal)) { e.Handled = true; return; }
+            if (DispatchKeybinding(e.Key, e.KeyModifiers, isTerminal))
+            {
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+                {
+                    suppressNextWindowTextInput = true;
+                    PrimaryEditor?.Canvas?.SuppressNextTextInput();
+                }
+                e.Handled = true;
+                return;
+            }
 
             if (isTerminal && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
                 return;
@@ -721,7 +731,13 @@ namespace codeLess.AvaloniaApp
                 SplitEditor.Canvas.FontSizePx = next;
             }
             settings.FontSize = (float)PrimaryEditor.Canvas.FontSizePx;
-            codeLess.Core.VscodeSettingsManager.WriteSetting("editor.fontSize", PrimaryEditor.Canvas.FontSizePx);
+            try
+            {
+                string userSettingsPath = codeLess.Core.VscodeSettingsManager.GetUserSettingsPath();
+                if (File.Exists(userSettingsPath) && File.ReadAllText(userSettingsPath).Contains("\"editor.fontSize\""))
+                    codeLess.Core.VscodeSettingsManager.WriteSetting("editor.fontSize", PrimaryEditor.Canvas.FontSizePx);
+            }
+            catch { }
             PrimaryEditor.Canvas.InvalidateVisual();
             SplitEditor.Canvas.InvalidateVisual();
         }
@@ -935,6 +951,7 @@ namespace codeLess.AvaloniaApp
             if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, CloseWorkspaceFolder)) return;
             StopWorkspaceWatcher();
             workspaceRoot = "";
+            InitializeWorkspaceSettingsWatcher();
             LspOnWorkspaceChanged();
             workspaceFiles.Clear();
             ExplorerTree.Nodes.Clear();
@@ -2637,7 +2654,7 @@ namespace codeLess.AvaloniaApp
                     var b = keybindings.ActiveBindings.FirstOrDefault(x => x.Command == item.Id);
                     if (b != null && !string.IsNullOrEmpty(b.Key))
                     {
-                        item.Shortcut = codeLess.Studio.WorkbenchMenuModel.FormatShortcut(string.Join(" ", b.Key.Split(' ').Select(c => string.Join("+", c.Split('+').Select(t => t.Length > 0 ? char.ToUpper(t[0]) + t.Substring(1) : t)))), MacKeymap.IsMacOS);
+                        item.Shortcut = MacKeymap.FormatShortcut(b.Key);
                         formatted = true;
                     }
                 }

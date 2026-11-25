@@ -1,6 +1,7 @@
 using System;
 using Avalonia.Input;
 using codeLess.Core;
+using codeLess.Studio;
 using System.Linq;
 
 namespace codeLess.AvaloniaApp
@@ -11,6 +12,32 @@ namespace codeLess.AvaloniaApp
         private KeybindingsFileWatcher keybindingsWatcher;
         private Avalonia.Controls.Border keybindingsNotification;
         private WindowContextKeyService contextKeyService;
+        private bool isDispatchingCommandKey;
+        private System.IO.FileSystemWatcher workspaceSettingsWatcher;
+        private System.Threading.Timer workspaceSettingsTimer;
+        private System.IO.FileSystemWatcher userSettingsWatcher;
+        private System.Threading.Timer userSettingsTimer;
+
+        private void SendEditorKey(Key key, KeyModifiers mods)
+        {
+            if (PrimaryEditor?.Canvas == null) return;
+            bool prev = isDispatchingCommandKey;
+            isDispatchingCommandKey = true;
+            try
+            {
+                var ev = new KeyEventArgs
+                {
+                    RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+                    Key = key,
+                    KeyModifiers = mods
+                };
+                PrimaryEditor.Canvas.RaiseEvent(ev);
+            }
+            finally
+            {
+                isDispatchingCommandKey = prev;
+            }
+        }
 
         private void InitializeKeybindings()
         {
@@ -22,7 +49,7 @@ namespace codeLess.AvaloniaApp
             {
                 keybindings.BindAction(kvp.Key, kvp.Value);
             }
-            
+
             // Bind palette commands by title
             foreach (var item in BuildAllPaletteCommands())
             {
@@ -32,7 +59,8 @@ namespace codeLess.AvaloniaApp
                     keybindings.BindAction(cmd.Id, item.Execute);
                 }
             }
-            // Add custom mappings not in the menu
+
+            // Bind VS Code command IDs to their workbench and editor actions
             keybindings.BindAction("editor.action.moveLinesUpAction", () => PrimaryEditor?.Canvas?.MoveActiveLine(-1));
             keybindings.BindAction("editor.action.moveLinesDownAction", () => PrimaryEditor?.Canvas?.MoveActiveLine(1));
             keybindings.BindAction("editor.action.insertLineBefore", () => PrimaryEditor?.Canvas?.InsertLineAboveOrBelow(true));
@@ -40,7 +68,13 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("editor.action.copyLinesUpAction", () => PrimaryEditor?.Canvas?.CopyActiveLine(-1));
             keybindings.BindAction("editor.action.copyLinesDownAction", () => PrimaryEditor?.Canvas?.CopyActiveLine(1));
             keybindings.BindAction("editor.action.addSelectionToNextFindMatch", () => PrimaryEditor?.Canvas?.AddNextOccurrenceOrSelectWord());
-            keybindings.BindAction("editor.action.toggleWordWrap", () => PrimaryEditor?.Canvas?.ToggleWordWrap());
+            keybindings.BindAction("editor.action.toggleWordWrap", () =>
+            {
+                ToggleWordWrapCommand();
+                suppressNextWindowTextInput = true;
+                PrimaryEditor?.Canvas?.SuppressNextTextInput();
+                RefreshNativeCheckStates();
+            });
             keybindings.BindAction("editor.action.smartSelect.expand", () => PrimaryEditor?.Canvas?.ExpandSelection());
             keybindings.BindAction("editor.action.smartSelect.shrink", () => PrimaryEditor?.Canvas?.ShrinkSelection());
             keybindings.BindAction("editor.action.deleteLines", () => PrimaryEditor?.Canvas?.DeleteActiveLine());
@@ -48,84 +82,91 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("editor.action.outdentLines", () => PrimaryEditor?.Canvas?.IndentOrOutdentLines(true));
             keybindings.BindAction("editor.fold", () => PrimaryEditor?.Canvas?.FoldAtCaret());
             keybindings.BindAction("editor.unfold", () => PrimaryEditor?.Canvas?.UnfoldAtCaret());
-            keybindings.BindAction("cursorBottom", null);
-            keybindings.BindAction("cursorEnd", null);
-            keybindings.BindAction("cursorHome", null);
-            keybindings.BindAction("cursorTop", null);
-            keybindings.BindAction("deleteWordLeft", null);
-            keybindings.BindAction("deleteWordRight", null);
-            keybindings.BindAction("editor.action.clipboardCopyAction", null);
-            keybindings.BindAction("editor.action.clipboardCutAction", null);
-            keybindings.BindAction("editor.action.clipboardPasteAction", null);
-            keybindings.BindAction("editor.action.formatSelection", null);
-            keybindings.BindAction("editor.action.goToDeclaration", null);
-            keybindings.BindAction("editor.action.goToReferences", null);
-            keybindings.BindAction("editor.action.nextMatchFindAction", null);
-            keybindings.BindAction("editor.action.peekDefinition", null);
-            keybindings.BindAction("editor.action.previousMatchFindAction", null);
-            keybindings.BindAction("editor.action.quickFix", null);
-            keybindings.BindAction("editor.action.referenceSearch.trigger", null);
-            keybindings.BindAction("editor.action.revealDefinition", null);
-            keybindings.BindAction("editor.action.revealDefinitionAside", null);
-            keybindings.BindAction("editor.action.selectAllMatches", null);
-            keybindings.BindAction("editor.action.startFindReplaceAction", null);
-            keybindings.BindAction("editor.action.triggerParameterHints", null);
-            keybindings.BindAction("editor.action.triggerSuggest", null);
-            keybindings.BindAction("editor.debug.action.toggleBreakpoint", null);
-            keybindings.BindAction("expandLineSelection", null);
-            keybindings.BindAction("redo", null);
-            keybindings.BindAction("undo", null);
-            keybindings.BindAction("cursorUndo", null);
-            keybindings.BindAction("editor.action.changeAll", null);
-            keybindings.BindAction("editor.action.formatDocument", null);
-            keybindings.BindAction("editor.action.insertCursorAbove", null);
-            keybindings.BindAction("editor.action.insertCursorAtEndOfEachLineSelected", null);
-            keybindings.BindAction("editor.action.insertCursorBelow", null);
-            keybindings.BindAction("editor.action.marker.next", null);
-            keybindings.BindAction("editor.action.marker.prev", null);
-            keybindings.BindAction("editor.action.rename", null);
-            keybindings.BindAction("editor.action.selectHighlights", null);
-            keybindings.BindAction("editorScroll", null);
-            keybindings.BindAction("workbench.action.closeAllEditors", null);
-            keybindings.BindAction("workbench.action.debug.start", null);
-            keybindings.BindAction("workbench.action.files.newUntitledFile", null);
-            keybindings.BindAction("workbench.action.files.openFile", null);
-            keybindings.BindAction("workbench.action.files.saveAll", null);
-            keybindings.BindAction("workbench.action.files.saveAs", null);
-            keybindings.BindAction("workbench.action.findInFiles", null);
-            keybindings.BindAction("workbench.action.reopenClosedEditor", null);
-            keybindings.BindAction("workbench.action.replaceInFiles", null);
-            keybindings.BindAction("workbench.action.splitEditor", null);
-            keybindings.BindAction("workbench.action.terminal.new", null);
-            keybindings.BindAction("workbench.action.toggleFullScreen", null);
-            keybindings.BindAction("workbench.action.zoomIn", null);
-            keybindings.BindAction("workbench.action.zoomOut", null);
-            keybindings.BindAction("workbench.action.zoomReset", null);
-            keybindings.BindAction("workbench.action.closeOtherEditors", null);
-            keybindings.BindAction("workbench.action.debug.stepInto", null);
-            keybindings.BindAction("workbench.action.debug.stepOut", null);
-            keybindings.BindAction("workbench.action.debug.stepOver", null);
-            keybindings.BindAction("workbench.action.debug.stop", null);
-            keybindings.BindAction("workbench.action.files.copyPathOfActiveFile", null);
-            keybindings.BindAction("workbench.action.files.save", null);
-            keybindings.BindAction("workbench.action.focusFirstEditorGroup", null);
-            keybindings.BindAction("workbench.action.focusSecondEditorGroup", null);
-            keybindings.BindAction("workbench.action.gotoLine", null);
-            keybindings.BindAction("workbench.action.gotoSymbol", null);
-            keybindings.BindAction("workbench.action.navigateBack", null);
-            keybindings.BindAction("workbench.action.navigateForward", null);
-            keybindings.BindAction("workbench.action.openRecent", null);
-            keybindings.BindAction("workbench.action.quit", null);
-            keybindings.BindAction("workbench.action.showAllSymbols", null);
-            keybindings.BindAction("workbench.action.tasks.build", null);
-            keybindings.BindAction("workbench.action.terminal.kill", null);
-            keybindings.BindAction("workbench.action.terminal.split", null);
-            keybindings.BindAction("workbench.action.togglePanel", null);
-            keybindings.BindAction("workbench.actions.view.problems", null);
-            keybindings.BindAction("workbench.view.explorer", null);
-            keybindings.BindAction("workbench.view.extensions", null);
-            keybindings.BindAction("workbench.view.scm", null);
-            keybindings.BindAction("workbench.view.search", null);
+            keybindings.BindAction("cursorBottom", () => SendEditorKey(MacKeymap.IsMacOS ? Key.Down : Key.End, MacKeymap.PrimaryModifier));
+            keybindings.BindAction("cursorEnd", () => SendEditorKey(Key.End, KeyModifiers.None));
+            keybindings.BindAction("cursorHome", () => SendEditorKey(Key.Home, KeyModifiers.None));
+            keybindings.BindAction("cursorTop", () => SendEditorKey(MacKeymap.IsMacOS ? Key.Up : Key.Home, MacKeymap.PrimaryModifier));
+            keybindings.BindAction("deleteWordLeft", () => SendEditorKey(Key.Back, MacKeymap.IsMacOS ? KeyModifiers.Alt : KeyModifiers.Control));
+            keybindings.BindAction("deleteWordRight", () => SendEditorKey(Key.Delete, MacKeymap.IsMacOS ? KeyModifiers.Alt : KeyModifiers.Control));
+            keybindings.BindAction("editor.action.clipboardCopyAction", () => RouteClipboardCommand("copy"));
+            keybindings.BindAction("editor.action.clipboardCutAction", () => RouteClipboardCommand("cut"));
+            keybindings.BindAction("editor.action.clipboardPasteAction", () => RouteClipboardCommand("paste"));
+            keybindings.BindAction("editor.action.formatSelection", () => FormatDocumentOrSelection(true));
+            keybindings.BindAction("editor.action.goToDeclaration", () => GoToDefinitionAtCursor());
+            keybindings.BindAction("editor.action.goToReferences", () => FindAllReferencesAtCursor());
+            keybindings.BindAction("editor.action.nextMatchFindAction", () => PrimaryEditor?.FindNext(1));
+            keybindings.BindAction("editor.action.peekDefinition", () => GoToDefinitionAtCursor());
+            keybindings.BindAction("editor.action.previousMatchFindAction", () => PrimaryEditor?.FindNext(-1));
+            keybindings.BindAction("editor.action.quickFix", () => ShowQuickFixes());
+            keybindings.BindAction("editor.action.referenceSearch.trigger", () => FindAllReferencesAtCursor());
+            keybindings.BindAction("editor.action.revealDefinition", () => GoToDefinitionAtCursor());
+            keybindings.BindAction("editor.action.revealDefinitionAside", () => { GoToDefinitionAtCursor(); if (!isEditorSplit) ToggleSplitEditor(); });
+            keybindings.BindAction("editor.action.selectAllMatches", () => PrimaryEditor?.Canvas?.SelectAllFindOccurrences());
+            keybindings.BindAction("editor.action.startFindReplaceAction", () => PrimaryEditor?.ShowFindBar(true));
+            keybindings.BindAction("editor.action.triggerParameterHints", () => PrimaryLspBinding?.TriggerSignatureHelp(null, false));
+            keybindings.BindAction("editor.action.triggerSuggest", () => PrimaryLspBinding?.TriggerCompletion(null, explicitInvoke: true));
+            keybindings.BindAction("editor.debug.action.toggleBreakpoint", () => { if (!HandleDebugFunctionKey(Key.F9, KeyModifiers.None)) ToggleBreakpointAtCursor(); });
+            keybindings.BindAction("expandLineSelection", () => SendEditorKey(Key.L, MacKeymap.PrimaryModifier));
+            keybindings.BindAction("redo", () => PrimaryEditor?.Canvas?.PerformUndoRedo(true));
+            keybindings.BindAction("undo", () => PrimaryEditor?.Canvas?.PerformUndoRedo(false));
+            keybindings.BindAction("cursorUndo", () => SendEditorKey(Key.U, MacKeymap.PrimaryModifier));
+            keybindings.BindAction("editor.action.changeAll", () => PrimaryEditor?.Canvas?.SelectAllFindOccurrences());
+            keybindings.BindAction("editor.action.formatDocument", () => FormatDocumentOrSelection(false));
+            keybindings.BindAction("editor.action.insertCursorAbove", () => PrimaryEditor?.Canvas?.AddCursorVertical(-1));
+            keybindings.BindAction("editor.action.insertCursorAtEndOfEachLineSelected", () => PrimaryEditor?.Canvas?.AddCursorsToLineEnds());
+            keybindings.BindAction("editor.action.insertCursorBelow", () => PrimaryEditor?.Canvas?.AddCursorVertical(1));
+            keybindings.BindAction("editor.action.marker.next", () => JumpDiagnostic(1));
+            keybindings.BindAction("editor.action.marker.prev", () => JumpDiagnostic(-1));
+            keybindings.BindAction("editor.action.rename", () => RenameSymbolAtCursor());
+            keybindings.BindAction("editor.action.selectHighlights", () => PrimaryEditor?.Canvas?.SelectAllFindOccurrences());
+            keybindings.BindAction("editorScroll", () => PrimaryEditor?.Canvas?.ScrollLines(1));
+            keybindings.BindAction("workbench.action.closeAllEditors", () => CloseAllTabs());
+            keybindings.BindAction("workbench.action.debug.start", () => { if (!HandleDebugFunctionKey(Key.F5, KeyModifiers.None)) RunActiveFileInTerminal(); });
+            keybindings.BindAction("workbench.action.files.newUntitledFile", () => CreateNewUntitledTab());
+            keybindings.BindAction("workbench.action.files.openFile", () => _ = PromptOpenFileDialogAsync());
+            keybindings.BindAction("workbench.action.files.saveAll", () => SaveAllTabs());
+            keybindings.BindAction("workbench.action.files.saveAs", () => _ = PromptSaveAsAsync());
+            keybindings.BindAction("workbench.action.findInFiles", () => ShowSearchView(false));
+            keybindings.BindAction("workbench.action.reopenClosedEditor", () => ReopenClosedTab());
+            keybindings.BindAction("workbench.action.replaceInFiles", () => ShowSearchView(true));
+            keybindings.BindAction("workbench.action.splitEditor", () => ToggleSplitEditor());
+            keybindings.BindAction("workbench.action.terminal.new", () => RequestNewTerminal());
+            keybindings.BindAction("workbench.action.toggleFullScreen", () => ToggleFullScreenMode());
+            keybindings.BindAction("workbench.action.zoomIn", () => AdjustZoom(1));
+            keybindings.BindAction("workbench.action.zoomOut", () => AdjustZoom(-1));
+            keybindings.BindAction("workbench.action.zoomReset", () => AdjustZoom(0));
+            keybindings.BindAction("workbench.action.closeOtherEditors", () =>
+            {
+                if (activeTab != null)
+                {
+                    var others = openTabs.Where(t => !ReferenceEquals(t, activeTab) && !t.IsPinned).ToList();
+                    foreach (var t in others) CloseTab(t);
+                }
+            });
+            keybindings.BindAction("workbench.action.debug.stepInto", () => debugController?.StepInto());
+            keybindings.BindAction("workbench.action.debug.stepOut", () => debugController?.StepOut());
+            keybindings.BindAction("workbench.action.debug.stepOver", () => debugController?.StepOver());
+            keybindings.BindAction("workbench.action.debug.stop", () => { if (debugController != null) _ = debugController.StopAsync(); });
+            keybindings.BindAction("workbench.action.files.copyPathOfActiveFile", () => { if (activeTab != null) _ = CopyPathToClipboardAsync(activeTab.FilePath ?? activeTab.FileName); });
+            keybindings.BindAction("workbench.action.files.save", () => SaveActiveTab());
+            keybindings.BindAction("workbench.action.focusFirstEditorGroup", () => { if (openTabs.Count > 0) ActivateTab(openTabs[0]); });
+            keybindings.BindAction("workbench.action.focusSecondEditorGroup", () => { if (openTabs.Count > 1) ActivateTab(openTabs[1]); });
+            keybindings.BindAction("workbench.action.gotoLine", () => OpenCommandPalette(":"));
+            keybindings.BindAction("workbench.action.gotoSymbol", () => OpenCommandPalette("@"));
+            keybindings.BindAction("workbench.action.navigateBack", () => NavigateBack());
+            keybindings.BindAction("workbench.action.navigateForward", () => NavigateForward());
+            keybindings.BindAction("workbench.action.openRecent", () => { var r = RecentFolders().FirstOrDefault(); if (r != null) LoadWorkspace(r); });
+            keybindings.BindAction("workbench.action.quit", () => Close());
+            keybindings.BindAction("workbench.action.showAllSymbols", () => OpenCommandPalette("#"));
+            keybindings.BindAction("workbench.action.tasks.build", () => RunWorkspaceBuildInTerminal());
+            keybindings.BindAction("workbench.action.terminal.kill", () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); });
+            keybindings.BindAction("workbench.action.terminal.split", () => ToggleSplitTerminal());
+            keybindings.BindAction("workbench.action.togglePanel", () => ToggleBottomPanel());
+            keybindings.BindAction("workbench.actions.view.problems", () => SwitchBottomTab("problems"));
+            keybindings.BindAction("workbench.view.explorer", () => SwitchSidebarView("explorer"));
+            keybindings.BindAction("workbench.view.extensions", () => SwitchSidebarView("extensions"));
+            keybindings.BindAction("workbench.view.scm", () => SwitchSidebarView("git"));
+            keybindings.BindAction("workbench.view.search", () => ShowSearchView(false));
             keybindings.BindAction("editor.foldAll", () => PrimaryEditor?.Canvas?.FoldAll());
             keybindings.BindAction("editor.unfoldAll", () => PrimaryEditor?.Canvas?.UnfoldAll());
             keybindings.BindAction("editor.action.jumpToBracket", () => PrimaryEditor?.Canvas?.JumpToMatchingBracket());
@@ -138,17 +179,42 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.newWindow", () => CreateNewWindowInstance());
             keybindings.BindAction("workbench.action.closeWindow", () => Close());
             keybindings.BindAction("workbench.action.openSettings", () => ShowSettingsModal());
-            keybindings.BindAction("workbench.action.openSettingsJson", () => OpenFileInTab(VscodeSettingsManager.GetUserSettingsPath()));
+            keybindings.BindAction("workbench.action.openSettingsJson", () =>
+            {
+                string p = VscodeSettingsManager.GetUserSettingsPath();
+                try
+                {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(p));
+                    if (!System.IO.File.Exists(p)) System.IO.File.WriteAllText(p, "{\n}");
+                }
+                catch { }
+                OpenFileInTab(p);
+            });
             keybindings.BindAction("workbench.action.openWorkspaceSettingsFile", () => OpenWorkspaceSettingsFile());
             keybindings.BindAction("workbench.action.openGlobalKeybindings", () => ShowKeyboardShortcutsModal());
-            keybindings.BindAction("workbench.action.openGlobalKeybindingsFile", () => OpenFileInTab(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath()));
+            keybindings.BindAction("workbench.action.openGlobalKeybindingsFile", () =>
+            {
+                string p = codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath();
+                try
+                {
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(p));
+                    if (!System.IO.File.Exists(p)) System.IO.File.WriteAllText(p, "[\n]");
+                }
+                catch { }
+                OpenFileInTab(p);
+            });
             keybindings.BindAction("workbench.action.openDefaultKeybindingsFile", () => OpenDefaultKeybindingsFile());
-            keybindings.BindAction("workbench.action.terminal.toggleTerminal", () => ToggleBottomPanel()); // Simple mapping
+            keybindings.BindAction("workbench.action.terminal.toggleTerminal", () =>
+            {
+                if (!bottomPanelBorder.IsVisible) { ToggleBottomPanel(); SwitchBottomTab("terminal"); }
+                else if (activeBottomTab != "terminal") SwitchBottomTab("terminal");
+                else ToggleBottomPanel();
+            });
             keybindings.BindAction("workbench.action.toggleSidebarVisibility", () => TogglePrimarySidebar());
             keybindings.BindAction("workbench.action.toggleZenMode", () => ToggleZenMode());
             keybindings.BindAction("actions.find", () => PrimaryEditor?.ShowFindBar(false));
             keybindings.BindAction("inlineChat.start", () => PrimaryEditor?.ShowInlineAiBar());
-            
+
             keybindings.BindAction("workbench.action.toggleActivityBarVisibility", () => { if (activityBarBorder != null) activityBarBorder.IsVisible = !activityBarBorder.IsVisible; });
             keybindings.BindAction("editor.action.joinLines", () => PrimaryEditor?.Canvas?.JoinLines());
             keybindings.BindAction("editor.action.transformToUppercase", () => PrimaryEditor?.Canvas?.TransformToUppercase());
@@ -160,12 +226,10 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.nextEditor", () => CycleEditorTab(1));
             keybindings.BindAction("workbench.action.previousEditor", () => CycleEditorTab(-1));
             keybindings.BindAction("workbench.action.openNextRecentlyUsedEditorInGroup", () => OpenOrAdvanceEditorSwitcher(false));
-            keybindings.BindAction("editor.action.commentLine", () => PrimaryEditor.Canvas.ToggleLineComment());
+            keybindings.BindAction("editor.action.commentLine", () => PrimaryEditor?.Canvas?.ToggleLineComment());
             keybindings.BindAction("workbench.action.files.openFolder", () => { _ = PromptOpenFolderDialogAsync(); });
             keybindings.BindAction("workbench.action.closeFolder", () => CloseWorkspaceFolder());
-            keybindings.BindAction("workbench.action.files.saveAll", () => SaveAllTabs());
             keybindings.BindAction("workbench.action.selectTheme", () => OpenThemePickerPalette());
-            keybindings.BindAction("workbench.action.closeAllEditors", () => CloseAllTabs());
             keybindings.BindAction("workbench.action.closeUnmodifiedEditors", () => { var saved = openTabs.Where(t => !t.IsDirty && !t.IsPinned).ToList(); foreach (var t in saved) CloseTab(t, forceWithoutPrompt: true); });
             keybindings.BindAction("workbench.action.keepEditor", () => { if (activeTab != null) { activeTab.IsPinned = true; activeTab.IsPreviewTab = false; RefreshTabStrip(); } });
             keybindings.BindAction("copyFilePath", () => { if (activeTab != null) _ = CopyPathToClipboardAsync(activeTab.FilePath ?? activeTab.FileName); });
@@ -174,41 +238,66 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("markdown.showPreviewToSide", () => OpenMarkdownPreview(toSide: true));
             keybindings.BindAction("editor.action.inlineAiBar", () => PrimaryEditor?.ShowInlineAiBar());
 
-
             contextKeyService = new WindowContextKeyService(this);
             InitializeVscodeSettingsWatcher();
             InitializeWorkspaceSettingsWatcher();
 
             string path = codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath();
-            keybindingsWatcher = new KeybindingsFileWatcher(path, content => {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+            keybindingsWatcher = new KeybindingsFileWatcher(path, content =>
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (windowClosed) return;
                     string err = keybindings.LoadUserBindings(content);
-                    if (err != null) {
+                    if (err != null)
+                    {
                         ShowKeybindingsNotification("Keybindings parse error: " + err);
-                    } else {
+                    }
+                    else
+                    {
                         HideKeybindingsNotification();
                     }
                 });
             });
             // Initial load
-            try { 
-                string err = keybindings.LoadUserBindings(System.IO.File.ReadAllText(path)); 
-                if (err != null) ShowKeybindingsNotification("Keybindings parse error: " + err);
-            } catch { }
-
+            try
+            {
+                if (System.IO.File.Exists(path))
+                {
+                    string err = keybindings.LoadUserBindings(System.IO.File.ReadAllText(path));
+                    if (err != null) ShowKeybindingsNotification("Keybindings parse error: " + err);
+                }
+            }
+            catch { }
         }
 
         private bool DispatchKeybinding(Key key, KeyModifiers modifiers, bool isTerminalFocus)
         {
-            if (keybindings == null) return false;
-            string ks = KeyStringParser.FromKey((int)key, (int)modifiers);
-                        return keybindings.Dispatch(ks, contextKeyService, msg => {
-                if (!string.IsNullOrEmpty(msg))
-                    statusChordLabel.Text = msg;
-                else
-                    statusChordLabel.Text = "";
-                            }, isTerminalFocus);
+            if (keybindings == null || isDispatchingCommandKey) return false;
+            if ((DateTime.UtcNow - lastCtrlKChordTime).TotalMilliseconds < 3500) return false;
+            if (MacKeymap.ForceMacKeymapOverride.HasValue &&
+                MacKeymap.ForceMacKeymapOverride.Value != System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                return false;
+            }
+            string ks = KeyStringParser.FromKeyName(key.ToString(), (int)modifiers);
+            isDispatchingCommandKey = true;
+            try
+            {
+                return keybindings.Dispatch(ks, contextKeyService, msg =>
+                {
+                    if (!string.IsNullOrEmpty(msg))
+                        statusChordLabel.Text = msg;
+                    else
+                        statusChordLabel.Text = "";
+                }, isTerminalFocus);
+            }
+            finally
+            {
+                isDispatchingCommandKey = false;
+            }
         }
+
         private void ShowKeybindingsNotification(string message)
         {
             HideKeybindingsNotification();
@@ -243,10 +332,10 @@ namespace codeLess.AvaloniaApp
                 string key = isMac ? cmd.DefaultKeyMac : (isLinux ? cmd.DefaultKeyLinux : cmd.DefaultKeyWin);
                 if (string.IsNullOrEmpty(key) && !isMac) key = cmd.DefaultKeyWin;
                 if (string.IsNullOrEmpty(key)) continue;
-                
+
                 if (!first) sb.AppendLine(",");
                 first = false;
-                
+
                 sb.AppendLine("  {");
                 sb.AppendLine("    \"key\": \"" + key.ToLowerInvariant() + "\",");
                 sb.AppendLine("    \"command\": \"" + cmd.Id + "\"" + (!string.IsNullOrEmpty(cmd.When) ? "," : ""));
@@ -257,52 +346,71 @@ namespace codeLess.AvaloniaApp
                 sb.Append("  }");
             }
             sb.AppendLine();
-
             sb.AppendLine("]");
-            
+
             string settingsDir = codeLess.Studio.IdePersistentSettings.GetSettingsFilePath().Replace("settings.json", "");
             string tmpDir = System.IO.Path.Combine(settingsDir, ".tmp");
             System.IO.Directory.CreateDirectory(tmpDir);
             string tempPath = System.IO.Path.Combine(tmpDir, "defaultKeybindings_" + System.Guid.NewGuid().ToString().Substring(0, 8) + ".json");
-            try {
+            try
+            {
                 System.IO.File.WriteAllText(tempPath, sb.ToString());
-            } catch { }
+            }
+            catch { }
             var tab = OpenFileInTab(tempPath, preview: false);
-            if (tab != null) {
+            if (tab != null)
+            {
                 tab.IsReadOnly = true;
                 tab.RelativePath = "Default Keybindings";
                 tab.FileName = "Default Keybindings";
             }
         }
 
-                private System.IO.FileSystemWatcher workspaceSettingsWatcher;
-        
         private void InitializeWorkspaceSettingsWatcher()
         {
+            if (workspaceSettingsTimer != null)
+            {
+                workspaceSettingsTimer.Dispose();
+                workspaceSettingsTimer = null;
+            }
+            if (workspaceSettingsWatcher != null)
+            {
+                workspaceSettingsWatcher.EnableRaisingEvents = false;
+                workspaceSettingsWatcher.Dispose();
+                workspaceSettingsWatcher = null;
+            }
             if (string.IsNullOrEmpty(workspaceRoot) || !System.IO.Directory.Exists(workspaceRoot)) return;
             string path = VscodeSettingsManager.GetWorkspaceSettingsPath(workspaceRoot);
-            
+
             workspaceSettingsWatcher = new System.IO.FileSystemWatcher(workspaceRoot);
             workspaceSettingsWatcher.IncludeSubdirectories = true;
             workspaceSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName | System.IO.NotifyFilters.DirectoryName;
-            System.Threading.Timer t = null;
-            System.IO.FileSystemEventHandler handler = (s, e) => {
+            System.IO.FileSystemEventHandler handler = (s, e) =>
+            {
+                if (windowClosed) return;
                 if (e != null && !(e.FullPath.EndsWith("settings.json") || e.FullPath.EndsWith(".vscode"))) return;
-                if (t != null) { t.Dispose(); t = null; }
-                t = new System.Threading.Timer(_ => {
-                    Avalonia.Threading.Dispatcher.UIThread.Post(() => {
-                        try {
-                            var clone = codeLess.Studio.StudioSettings.Load(); // load base
+                if (workspaceSettingsTimer != null) { workspaceSettingsTimer.Dispose(); workspaceSettingsTimer = null; }
+                workspaceSettingsTimer = new System.Threading.Timer(_ =>
+                {
+                    if (windowClosed) return;
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        if (windowClosed) return;
+                        try
+                        {
+                            var clone = codeLess.Studio.StudioSettings.Load();
                             string userPath = VscodeSettingsManager.GetUserSettingsPath();
                             if (System.IO.File.Exists(userPath)) VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(userPath), clone);
-                            if (System.IO.File.Exists(path)) {
+                            if (System.IO.File.Exists(path))
+                            {
                                 string content = System.IO.File.ReadAllText(path);
                                 string err = VscodeSettingsManager.ApplySettings(content, clone);
                                 if (err != null) ShowKeybindingsNotification("Workspace settings parse error: " + err);
                                 else HideKeybindingsNotification();
                             }
                             ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
-                        } catch { }
+                        }
+                        catch { }
                     });
                 }, null, 100, System.Threading.Timeout.Infinite);
             };
@@ -310,9 +418,11 @@ namespace codeLess.AvaloniaApp
             workspaceSettingsWatcher.Created += handler;
             workspaceSettingsWatcher.Renamed += (s, e) => handler(s, null);
             workspaceSettingsWatcher.EnableRaisingEvents = true;
-            
-            try { 
-                if (System.IO.File.Exists(path)) {
+
+            try
+            {
+                if (System.IO.File.Exists(path))
+                {
                     var clone = codeLess.Studio.StudioSettings.Load();
                     string userPath = VscodeSettingsManager.GetUserSettingsPath();
                     if (System.IO.File.Exists(userPath)) VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(userPath), clone);
@@ -320,40 +430,58 @@ namespace codeLess.AvaloniaApp
                     if (err != null) ShowKeybindingsNotification("Workspace settings parse error: " + err);
                     ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
                 }
-            } catch { }
+            }
+            catch { }
         }
 
-        private System.IO.FileSystemWatcher userSettingsWatcher;
-        
         private void InitializeVscodeSettingsWatcher()
         {
-            string path = VscodeSettingsManager.GetUserSettingsPath();
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
-            if (!System.IO.File.Exists(path)) {
-                try { System.IO.File.WriteAllText(path, "{\n}"); } catch { }
+            if (userSettingsTimer != null)
+            {
+                userSettingsTimer.Dispose();
+                userSettingsTimer = null;
             }
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
-            userSettingsWatcher = new System.IO.FileSystemWatcher(System.IO.Path.GetDirectoryName(path), System.IO.Path.GetFileName(path));
+            if (userSettingsWatcher != null)
+            {
+                userSettingsWatcher.EnableRaisingEvents = false;
+                userSettingsWatcher.Dispose();
+                userSettingsWatcher = null;
+            }
+            string path = VscodeSettingsManager.GetUserSettingsPath();
+            string dir = System.IO.Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
+            {
+                try { System.IO.Directory.CreateDirectory(dir); } catch { }
+            }
+            userSettingsWatcher = new System.IO.FileSystemWatcher(dir, System.IO.Path.GetFileName(path));
             userSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName;
-            System.Threading.Timer t = null;
-            System.IO.FileSystemEventHandler handler = (s, e) => {
-                if (t != null) { t.Dispose(); t = null; }
-                t = new System.Threading.Timer(_ => {
-                    Avalonia.Threading.Dispatcher.UIThread.Post(() => {
-                        try {
-                            string content = System.IO.File.ReadAllText(path);
+            System.IO.FileSystemEventHandler handler = (s, e) =>
+            {
+                if (windowClosed) return;
+                if (userSettingsTimer != null) { userSettingsTimer.Dispose(); userSettingsTimer = null; }
+                userSettingsTimer = new System.Threading.Timer(_ =>
+                {
+                    if (windowClosed) return;
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        if (windowClosed) return;
+                        try
+                        {
+                            string content = System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : "";
                             var clone = codeLess.Studio.StudioSettings.Load();
                             string err = VscodeSettingsManager.ApplySettings(content, clone);
-                            
+
                             string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(workspaceRoot);
-                            if (wsPath != null && System.IO.File.Exists(wsPath)) {
+                            if (wsPath != null && System.IO.File.Exists(wsPath))
+                            {
                                 string wsErr = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(wsPath), clone);
                                 if (err == null) err = wsErr;
                             }
                             ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
                             if (err != null) ShowKeybindingsNotification("Settings parse error: " + err);
                             else HideKeybindingsNotification();
-                        } catch { }
+                        }
+                        catch { }
                     });
                 }, null, 100, System.Threading.Timeout.Infinite);
             };
@@ -361,35 +489,45 @@ namespace codeLess.AvaloniaApp
             userSettingsWatcher.Created += handler;
             userSettingsWatcher.Renamed += (s, e) => handler(s, null);
             userSettingsWatcher.EnableRaisingEvents = true;
-            
-            try { string err = ApplyVscodeSettings(System.IO.File.ReadAllText(path)); if (err != null) ShowKeybindingsNotification("Settings parse error: " + err); } catch { }
+
+            try
+            {
+                if (System.IO.File.Exists(path))
+                {
+                    string err = ApplyVscodeSettings(System.IO.File.ReadAllText(path));
+                    if (err != null) ShowKeybindingsNotification("Settings parse error: " + err);
+                }
+            }
+            catch { }
         }
 
         private string ApplyVscodeSettings(string content, StudioSettings targetSettings = null)
         {
             var target = targetSettings ?? (settings as StudioSettings);
             string parseError = null;
-            if (!string.IsNullOrWhiteSpace(content)) {
+            if (!string.IsNullOrWhiteSpace(content))
+            {
                 parseError = VscodeSettingsManager.ApplySettings(content, target);
-                
+
                 if (targetSettings == null && !string.IsNullOrEmpty(workspaceRoot))
                 {
                     string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(workspaceRoot);
                     if (wsPath != null && System.IO.File.Exists(wsPath))
                     {
-                        try {
+                        try
+                        {
                             string wsErr = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(wsPath), target);
                             if (parseError == null) parseError = wsErr;
-                        } catch { }
+                        }
+                        catch { }
                     }
                 }
             }
-            // No save here
-            
+
             var studioSettings = target;
             if (studioSettings != null)
             {
-                ApplyTheme(StudioTheme.GetById(studioSettings.ActiveThemeId), persistSetting: targetSettings == null);
+                ApplyTheme(StudioTheme.GetById(studioSettings.ActiveThemeId), persistSetting: false);
                 PrimaryEditor.ShowMinimap = studioSettings.ShowMinimap;
                 PrimaryEditor.ShowBreadcrumbs = studioSettings.ShowBreadcrumbs;
                 PrimaryEditor.Canvas.FontSizePx = studioSettings.EditorFontSize;
@@ -407,14 +545,14 @@ namespace codeLess.AvaloniaApp
             if (path == null) return;
             if (!System.IO.File.Exists(path))
             {
-                try {
+                try
+                {
                     System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
                     System.IO.File.WriteAllText(path, "{\n}");
-                } catch { }
+                }
+                catch { }
             }
             OpenFileInTab(path);
         }
     }
 }
-
-

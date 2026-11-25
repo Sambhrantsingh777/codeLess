@@ -1629,7 +1629,8 @@ namespace codeLess.AvaloniaApp
         // Text, caret, selection, find highlights and click hit-testing all use the same grid: a tab advances to
         // the next tab stop, CJK / emoji occupy 2 cells, combining marks 0. (Previously text was drawn with
         // measured glyph widths while carets used column * CharWidth, so they drifted apart on such lines.)
-        public int DisplayTabSize { get; set; } = 4;
+        public static int DefaultDisplayTabSize = 4;
+        public int DisplayTabSize { get; set; } = DefaultDisplayTabSize;
 
         private readonly EditorImeClient imeClient;
         private string imePreedit;

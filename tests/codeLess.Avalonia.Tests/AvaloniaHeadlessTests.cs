@@ -1085,11 +1085,11 @@ namespace codeLess.Avalonia.Tests
                 }
 
                 // Test Ctrl+K Ctrl+0 (Fold All) and Ctrl+K Ctrl+J (Unfold All)
-                window.SimulateShortcut(Key.K, MacKeymap.PrimaryModifier);
-                window.SimulateShortcut(Key.D0, MacKeymap.PrimaryModifier);
+                window.SimulateShortcut(Key.K, KeyModifiers.Control);
+                window.SimulateShortcut(Key.D0, KeyModifiers.Control);
                 Assert.NotEmpty(tab.FoldedBlockRanges);
-                window.SimulateShortcut(Key.K, MacKeymap.PrimaryModifier);
-                window.SimulateShortcut(Key.J, MacKeymap.PrimaryModifier);
+                window.SimulateShortcut(Key.K, KeyModifiers.Control);
+                window.SimulateShortcut(Key.J, KeyModifiers.Control);
                 Assert.Empty(tab.FoldedBlockRanges);
 
                 // Test Ctrl+L / Cmd+L select current line

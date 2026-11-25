@@ -9,6 +9,7 @@ using codeLess.AvaloniaApp;
 
 namespace codeLess.Avalonia.Tests
 {
+    [Collection("SequentialWorkbench")]
     public class DataDrivenRegistryTests
     {
         [AvaloniaFact]
@@ -21,11 +22,11 @@ namespace codeLess.Avalonia.Tests
 
             // Explicitly allowed collisions / reasons:
             var allowed = new HashSet<string> {
-                "editor.action.revealDefinition", // shadowed by F12 developer tools or goToDeclaration
-                "editor.action.referenceSearch.trigger", // shadowed by Shift+F12 find all references
-                "workbench.action.findInFiles", // cmd+shift+f is global search
-                "inlineChat.start", // cmd+i is inline AI
-                "workbench.action.files.copyPathOfActiveFile" // cmd+k p is a chord which we split by space and dispatch partials!
+                "editor.action.revealDefinition", // shadowed by goToDeclaration on F12
+                "editor.action.referenceSearch.trigger", // shadowed by goToReferences on Shift+F12
+                "workbench.action.findInFiles", // shadowed by workbench.view.search on Cmd/Ctrl+Shift+F
+                "inlineChat.start", // shadowed by editor.action.inlineAiBar on Cmd/Ctrl+I
+                "workbench.action.files.copyPathOfActiveFile" // shadowed by copyFilePath on Cmd/Ctrl+K P
             };
 
             foreach (var b in manager.Defaults)
@@ -33,12 +34,12 @@ namespace codeLess.Avalonia.Tests
                 if (string.IsNullOrEmpty(b.Key)) continue;
                 bool executed = false;
                 manager.BindAction(b.Command, () => { executed = true; });
-                
+
                 if (WhenParser.Evaluate(b.WhenParsed, mockCtx))
                 {
                     if (allowed.Contains(b.Command))
                     {
-                        continue; // explicitly allowed
+                        continue;
                     }
 
                     string[] parts = b.Key.Split(' ');
@@ -54,35 +55,41 @@ namespace codeLess.Avalonia.Tests
             }
             Assert.True(failures.Count == 0, string.Join(", ", failures));
         }
-        
+
         [AvaloniaFact]
         public void PaletteShortcutLabels_MatchRegistry()
         {
             DefaultCommands.Register();
             var w = new MainWindow(null);
-            var manager = new KeybindingManager();
-            var p = w.BuildAllPaletteCommands();
-            int checkedItems = 0;
-            foreach (var item in p)
+            try
             {
-                if (!string.IsNullOrEmpty(item.Id))
+                var manager = new KeybindingManager();
+                var p = w.BuildAllPaletteCommands();
+                int checkedItems = 0;
+                foreach (var item in p)
                 {
-                    var b = manager.ActiveBindings.FirstOrDefault(x => x.Command == item.Id);
-                    if (b != null && !string.IsNullOrEmpty(b.Key))
+                    if (!string.IsNullOrEmpty(item.Id))
                     {
-                        // Justification: MacKeymap.FormatShortcut(b.Key) incorrectly produces "⌘CMD+O". We use WorkbenchMenuModel.FormatShortcut which correctly produces the VS Code style "⌘O".
-                        string expected = codeLess.Studio.WorkbenchMenuModel.FormatShortcut(string.Join(" ", b.Key.Split(' ').Select(c => string.Join("+", c.Split('+').Select(t => t.Length > 0 ? char.ToUpper(t[0]) + t.Substring(1) : t)))), MacKeymap.IsMacOS);
-                        Assert.Equal(expected, item.Shortcut);
-                        checkedItems++;
+                        var b = manager.ActiveBindings.FirstOrDefault(x => x.Command == item.Id);
+                        if (b != null && !string.IsNullOrEmpty(b.Key))
+                        {
+                            Assert.Equal(MacKeymap.FormatShortcut(b.Key), item.Shortcut);
+                            checkedItems++;
+                        }
                     }
                 }
+                Assert.True(checkedItems >= 30, "Should check at least 30 palette items");
             }
-            Assert.True(checkedItems >= 30, "Should check at least 30 palette items");
+            finally
+            {
+                w.SuppressUnsavedPrompts = true;
+                w.Close();
+            }
         }
 
         private class MockContext : IContextKeyService
         {
-            public object GetValue(string key) => true; 
+            public object GetValue(string key) => true;
         }
     }
 }
