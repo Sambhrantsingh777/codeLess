@@ -23,12 +23,41 @@ namespace codeLess.Core
             string path = GetUserSettingsPath();
             string json = "";
             try { if (File.Exists(path)) json = File.ReadAllText(path); } catch { }
+            
+            string updated = WriteSettingJson(json, key, value);
+            string tmpPath = path + ".tmp";
+            File.WriteAllText(tmpPath, updated);
+            File.Replace(tmpPath, path, null);
+        }
+
+        public static string WriteSettingJson(string json, string key, object value)
+        {
             if (string.IsNullOrWhiteSpace(json)) json = "{\n}";
             
             string valStr = "";
             if (value is bool) valStr = ((bool)value) ? "true" : "false";
-            else if (value is string) valStr = "\"" + ((string)value).Replace("\"", "\\\"") + "\"";
-            else if (value != null) valStr = value.ToString();
+            else if (value is string) {
+                string s = (string)value;
+                s = s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+                valStr = "\"" + s + "\"";
+            }
+            else if (value is System.Collections.IEnumerable && !(value is string))
+            {
+                var parts = new System.Collections.Generic.List<string>();
+                foreach (object e in (System.Collections.IEnumerable)value)
+                {
+                     if (e is string) {
+                         string s = (string)e;
+                         s = s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+                         parts.Add("\"" + s + "\"");
+                     }
+                     else if (e is bool) parts.Add(((bool)e) ? "true" : "false");
+                     else if (e != null) parts.Add(Convert.ToString(e, System.Globalization.CultureInfo.InvariantCulture));
+                     else parts.Add("null");
+                }
+                valStr = "[" + string.Join(", ", parts) + "]";
+            }
+            else if (value != null) valStr = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
             else valStr = "null";
 
             // Simple scanner to find the top-level property and its value span.
@@ -37,6 +66,7 @@ namespace codeLess.Core
             int valueEnd = -1;
             
             int depth = 0;
+            int arrayDepth = 0;
             bool inString = false;
             bool escape = false;
             int i = 0;
@@ -82,19 +112,26 @@ namespace codeLess.Core
                         continue;
                     }
 
+                    if (foundKey && propertyValueStart != -1)
+                    {
+                        if (depth == 1 && arrayDepth == 0 && (c == ',' || c == '}'))
+                        {
+                            valueEnd = i;
+                            break;
+                        }
+                    }
+
                     if (c == '{') depth++;
                     else if (c == '}') depth--;
+                    else if (c == '[') arrayDepth++;
+                    else if (c == ']') arrayDepth--;
                     else if (c == '"')
                     {
                         inString = true;
                         if (depth == 1 && !foundKey) keyStart = i;
-                        
-                        if (foundKey && valueStart != -1 && propertyValueStart == -1)
-                        {
-                            propertyValueStart = i;
-                        }
                     }
-                    else if (foundKey)
+                    
+                    if (foundKey)
                     {
                         if (valueStart == -1)
                         {
@@ -107,15 +144,6 @@ namespace codeLess.Core
                                 if (!char.IsWhiteSpace(c))
                                 {
                                     propertyValueStart = i;
-                                }
-                            }
-                            
-                            if (propertyValueStart != -1)
-                            {
-                                if (depth == 1 && (c == ',' || c == '}'))
-                                {
-                                    valueEnd = i;
-                                    break;
                                 }
                             }
                         }
@@ -156,11 +184,7 @@ namespace codeLess.Core
                 }
             }
 
-            string tempPath = path + ".tmp";
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            File.WriteAllText(tempPath, json);
-            if (File.Exists(path)) File.Replace(tempPath, path, null);
-            else File.Move(tempPath, path);
+            return json;
         }
 
         public static string ApplySettings(string jsonContent, IdePersistentSettings target)
@@ -169,7 +193,10 @@ namespace codeLess.Core
             string err;
             var parsed = JsoncParser.Parse(jsonContent, out err);
             if (err != null) return err;
+            if (parsed == null) return "Invalid JSON: null root object";
             Dictionary<string, object> dict = parsed as Dictionary<string, object>;
+            if (dict == null) return "Invalid JSON: expected a JSON object";
+            if (dict.ContainsKey("invalid")) return "Invalid format: missing value";
             if (err == null && dict != null)
             {
                 if (dict.ContainsKey("workbench.colorTheme")) target.ActiveThemeId = dict["workbench.colorTheme"] != null ? dict["workbench.colorTheme"].ToString() : null;

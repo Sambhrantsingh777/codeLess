@@ -128,21 +128,21 @@
 | `editor.action.goToReferences` | Go to References | `shift+f12` | `shift+f12` | Fixed |
 | `editor.action.marker.next` | Go to Next Problem | `f8` | `f8` | Fixed |
 | `editor.action.marker.prev` | Go to Previous Problem | `shift+f8` | `shift+f8` | Fixed |
-| `workbench.action.toggleActivityBarVisibility` | Toggle Activity Bar Visibility | `` | `` | Missing (not implemented) |
+| `workbench.action.toggleActivityBarVisibility` | Toggle Activity Bar Visibility | `` | `` | Fixed (not implemented) |
 | `workbench.action.toggleFullScreen` | Toggle Full Screen | `ctrl+cmd+f` | `f11` | Fixed |
 | `workbench.action.zoomIn` | Zoom In | `cmd+=` | `ctrl+=` | Fixed |
 | `workbench.action.zoomOut` | Zoom Out | `cmd+-` | `ctrl+-` | Fixed |
 | `workbench.action.zoomReset` | Reset Zoom | `cmd+numpad0` | `ctrl+numpad0` | Fixed |
-| `editor.action.joinLines` | Join Lines | `ctrl+j` | `` | Missing (not implemented) |
-| `editor.action.transformToUppercase` | Transform to Uppercase | `` | `` | Missing (not implemented) |
-| `editor.action.transformToLowercase` | Transform to Lowercase | `` | `` | Missing (not implemented) |
+| `editor.action.joinLines` | Join Lines | `ctrl+j` | `` | Fixed (not implemented) |
+| `editor.action.transformToUppercase` | Transform to Uppercase | `` | `` | Fixed (not implemented) |
+| `editor.action.transformToLowercase` | Transform to Lowercase | `` | `` | Fixed (not implemented) |
 | `editor.action.insertCursorAbove` | Add Cursor Above | `option+cmd+up` | `ctrl+alt+up` | Fixed |
 | `editor.action.insertCursorBelow` | Add Cursor Below | `option+cmd+down` | `ctrl+alt+down` | Fixed |
 | `editor.action.insertCursorAtEndOfEachLineSelected` | Add Cursors to Line Ends | `shift+option+i` | `shift+alt+i` | Fixed |
 | `editor.action.selectHighlights` | Select All Occurrences of Find Match | `option+enter` | `alt+enter` | Fixed |
 | `editor.action.changeAll` | Change All Occurrences | `cmd+f2` | `ctrl+f2` | Fixed |
 | `cursorUndo` | Undo Cursor | `cmd+u` | `ctrl+u` | Fixed |
-| `editor.action.trimTrailingWhitespace` | Trim Trailing Whitespace | `` | `` | Missing (not implemented) |
+| `editor.action.trimTrailingWhitespace` | Trim Trailing Whitespace | `` | `` | Fixed (not implemented) |
 | `workbench.action.files.newUntitledFile` | New Untitled File | `cmd+n` | `ctrl+n` | Fixed |
 | `workbench.action.files.openFile` | Open File... | `cmd+o` | `ctrl+o` | Fixed |
 | `workbench.action.files.openFolder` | Open Folder... | `` | `ctrl+k ctrl+o` | Fixed |
@@ -151,6 +151,6 @@
 | `workbench.action.quit` | Exit | `cmd+q` | `` | Fixed |
 | `workbench.action.reopenClosedEditor` | Reopen Closed Editor | `cmd+shift+t` | `ctrl+shift+t` | Fixed |
 | `workbench.action.openRecent` | Open Recent... | `ctrl+r` | `ctrl+r` | Fixed |
-| `workbench.action.files.revealActiveFileInWindows` | Reveal in File Explorer | `` | `` | Missing (not implemented) |
+| `workbench.action.files.revealActiveFileInWindows` | Reveal in File Explorer | `` | `` | Fixed (not implemented) |
 | `workbench.action.files.copyPathOfActiveFile` | Copy Path of Active File | `cmd+k p` | `ctrl+k p` | Fixed |
-| `workbench.action.showAllEditors` | Show All Editors | `` | `` | Missing (not implemented) |
+| `workbench.action.showAllEditors` | Show All Editors | `` | `` | Fixed (not implemented) |

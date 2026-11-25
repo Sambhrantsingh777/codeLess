@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Linq;
 
 namespace codeLess.Core
 {
@@ -57,14 +58,45 @@ namespace codeLess.Core
             }
         }
 
-                public List<KeybindingEntry> ActiveBindings { get { return activeBindings; } }
+        public List<KeybindingEntry> ActiveBindings { get { return activeBindings; } }
         public List<KeybindingEntry> RemovedBindings { get { return removedBindings; } }
         public List<KeybindingEntry> Defaults { get { return GetDefaults(); } }
         public List<KeybindingEntry> UserBindings { get; private set; }
 
-        public static void SaveUserBindings(List<KeybindingEntry> userBindings)
+        public static string SaveUserBindings(List<KeybindingEntry> userBindings, string testPath = null)
         {
-            var list = new List<Dictionary<string, object>>();
+            var ser = new System.Web.Script.Serialization.JavaScriptSerializer();
+            string path = testPath ?? codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath();
+            string json = "[\n]";
+            try { if (System.IO.File.Exists(path)) json = System.IO.File.ReadAllText(path); } catch { }
+
+            // simple approach: regenerate everything but try to preserve if we just append
+            // For now, let's just generate the new list as formatted JSON. Wait, no, we must preserve comments!
+            
+            // Let's implement a minimal scanner to extract elements.
+            int i = 0;
+            int depth = 0;
+            bool inString = false;
+            bool escape = false;
+            
+            var existingItems = new List<string>();
+            var newJson = new System.Text.StringBuilder();
+            
+            int lastBracket = json.LastIndexOf(']');
+            if (lastBracket == -1) 
+            {
+                // invalid json, just regenerate
+                lastBracket = json.Length;
+            }
+
+            // We will just append the ones that are new, and remove the ones that are deleted.
+            // Actually, if we just find the last ']' and append the NEW elements, and for removed elements we replace their string with empty string.
+            
+            // Regenerating completely drops comments.
+            // Let's do a trick: find objects that are in the text but not in `userBindings`, and remove them.
+            // Find objects in `userBindings` not in text, and append them.
+            
+            var newBindings = new List<Dictionary<string, object>>();
             foreach (var b in userBindings)
             {
                 var d = new Dictionary<string, object>();
@@ -72,25 +104,136 @@ namespace codeLess.Core
                 if (!string.IsNullOrEmpty(b.Command)) d["command"] = b.Command;
                 if (!string.IsNullOrEmpty(b.When)) d["when"] = b.When;
                 if (b.Args != null) d["args"] = b.Args;
-                list.Add(d);
+                newBindings.Add(d);
             }
-            var ser = new System.Web.Script.Serialization.JavaScriptSerializer();
-            // simple formatted JSON (manual indent)
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("[");
-            for (int i = 0; i < list.Count; i++)
-            {
-                string json = ser.Serialize(list[i]);
-                sb.Append("  " + json);
-                if (i < list.Count - 1) sb.AppendLine(",");
-                else sb.AppendLine();
-            }
-            sb.AppendLine("]");
+
+            // Let's just do a hacky regex/string search for removing items, since we only remove by command/key.
+            // We can just parse the existing file to get the list of dicts.
+            string err;
+            var parsed = JsoncParser.Parse(json, out err);
+            var existingList = parsed as System.Collections.IEnumerable;
             
+            if (err == null && existingList != null)
+            {
+                var existingDicts = new List<Dictionary<string, object>>();
+                foreach (var item in existingList) existingDicts.Add(item as Dictionary<string, object>);
+                
+                // additions
+                var toAdd = new List<Dictionary<string, object>>();
+                foreach (var nb in newBindings)
+                {
+                    bool found = false;
+                    foreach (var eb in existingDicts)
+                    {
+                        if (eb == null) continue;
+                        object c1, c2, k1, k2, w1, w2;
+                        nb.TryGetValue("command", out c1); eb.TryGetValue("command", out c2);
+                        nb.TryGetValue("key", out k1); eb.TryGetValue("key", out k2);
+                        nb.TryGetValue("when", out w1); eb.TryGetValue("when", out w2);
+                        if (object.Equals(c1, c2) && object.Equals(k1, k2) && object.Equals(w1, w2))
+                        {
+                            found = true; break;
+                        }
+                    }
+                    if (!found) toAdd.Add(nb);
+                }
+                
+                // deletions
+                var toRemove = new List<Dictionary<string, object>>();
+                foreach (var eb in existingDicts)
+                {
+                    if (eb == null) continue;
+                    bool found = false;
+                    foreach (var nb in newBindings)
+                    {
+                        object c1, c2, k1, k2, w1, w2;
+                        nb.TryGetValue("command", out c1); eb.TryGetValue("command", out c2);
+                        nb.TryGetValue("key", out k1); eb.TryGetValue("key", out k2);
+                        nb.TryGetValue("when", out w1); eb.TryGetValue("when", out w2);
+                        if (object.Equals(c1, c2) && object.Equals(k1, k2) && object.Equals(w1, w2))
+                        {
+                            found = true; break;
+                        }
+                    }
+                    if (!found) toRemove.Add(eb);
+                }
+
+                foreach (var rem in toRemove)
+                {
+                    object c2; rem.TryGetValue("command", out c2);
+                    string cmdStr = c2 != null ? c2.ToString() : null;
+                    if (cmdStr != null)
+                    {
+                        // crude text removal: find {"command": "cmdStr" ... }
+                        // Actually, we can just find "cmdStr" and then find the enclosing { }
+                        int idx = json.IndexOf("\"" + cmdStr + "\"");
+                        if (idx >= 0)
+                        {
+                            int startObj = json.LastIndexOf('{', idx);
+                            int endObj = json.IndexOf('}', idx);
+                            if (startObj >= 0 && endObj >= 0)
+                            {
+                                int removeStart = startObj;
+                                int removeEnd = endObj + 1;
+                                // remove trailing comma if present
+                                while (removeEnd < json.Length && char.IsWhiteSpace(json[removeEnd])) removeEnd++;
+                                if (removeEnd < json.Length && json[removeEnd] == ',') removeEnd++;
+                                
+                                json = json.Substring(0, removeStart) + json.Substring(removeEnd);
+                            }
+                        }
+                    }
+                }
+
+                if (toAdd.Count > 0)
+                {
+                    int lastBrace = json.LastIndexOf(']');
+                    if (lastBrace >= 0)
+                    {
+                        var sb = new System.Text.StringBuilder();
+                        string before = json.Substring(0, lastBrace);
+                        int b = before.Length - 1;
+                        while (b >= 0 && char.IsWhiteSpace(before[b])) b--;
+                        bool needsComma = false;
+                        if (b >= 0 && before[b] != '[' && before[b] != ',') needsComma = true;
+                        
+                        if (needsComma) sb.Append(",\n");
+                        
+                        for (int k = 0; k < toAdd.Count; k++)
+                        {
+                            sb.Append("  " + ser.Serialize(toAdd[k]));
+                            if (k < toAdd.Count - 1) sb.Append(",\n");
+                        }
+                        sb.Append("\n");
+                        json = json.Substring(0, lastBrace) + sb.ToString() + json.Substring(lastBrace);
+                    }
+                }
+            }
+            else
+            {
+                // Fallback: regenerate
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("[");
+                for (int k = 0; k < newBindings.Count; k++)
+                {
+                    sb.Append("  " + ser.Serialize(newBindings[k]));
+                    if (k < newBindings.Count - 1) sb.AppendLine(",");
+                    else sb.AppendLine();
+                }
+                sb.AppendLine("]");
+                json = sb.ToString();
+            }
+
             try {
-                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath()));
-                System.IO.File.WriteAllText(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath(), sb.ToString());
-            } catch { }
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                string tempPath = path + ".tmp";
+                System.IO.File.WriteAllText(tempPath, json);
+                if (System.IO.File.Exists(path)) System.IO.File.Replace(tempPath, path, null);
+                else System.IO.File.Move(tempPath, path);
+                return null;
+            } catch (Exception ex) {
+                return ex.Message;
+            }
         }
 
         public KeybindingManager()
@@ -122,6 +265,7 @@ namespace codeLess.Core
             {
                 string err;
                 var result = JsoncParser.Parse(jsonContent, out err);
+                if (err == null && result == null) err = "Invalid JSON syntax";
                 parseError = err;
                 System.Collections.IEnumerable arr = result as System.Collections.IEnumerable;
                 if (err == null && arr != null)

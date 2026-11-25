@@ -254,7 +254,7 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrWhiteSpace(settings.ThemeId))
                 settings.ThemeId = StudioTheme.DefaultThemeId;
             currentTheme = StudioTheme.GetById(settings.ThemeId);
-            AvaloniaVirtualEditorCanvas.DisplayTabSize = Math.Max(1, Math.Min(16, settings.TabSize <= 0 ? 4 : settings.TabSize));
+            if (PrimaryEditor?.Canvas != null) PrimaryEditor.Canvas.DisplayTabSize = Math.Max(1, Math.Min(16, settings.TabSize <= 0 ? 4 : settings.TabSize));
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
             EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);

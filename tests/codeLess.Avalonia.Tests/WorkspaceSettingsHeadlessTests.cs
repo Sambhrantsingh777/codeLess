@@ -28,10 +28,11 @@ namespace codeLess.Avalonia.Tests
             int baseTabSize = baseSettings.TabSize;
             
             var w1 = new MainWindow(w1Root);
-            Assert.Equal(8, AvaloniaVirtualEditorCanvas.DisplayTabSize);
+            Assert.Equal(8, w1.PrimaryEditor?.Canvas?.DisplayTabSize);
             
             var w3 = new MainWindow(w3Root);
-            Assert.Equal(baseTabSize, AvaloniaVirtualEditorCanvas.DisplayTabSize);
+            Assert.Equal(baseTabSize, w3.PrimaryEditor?.Canvas?.DisplayTabSize);
+            Assert.Equal(8, w1.PrimaryEditor?.Canvas?.DisplayTabSize);
         }
     }
 }

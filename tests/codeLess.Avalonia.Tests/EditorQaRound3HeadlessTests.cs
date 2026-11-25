@@ -23,7 +23,7 @@ namespace codeLess.Avalonia.Tests
         private readonly string settingsPath;
         private readonly string settingsBackup;
         private readonly bool hadSettings;
-        private readonly int savedTab = AvaloniaVirtualEditorCanvas.DisplayTabSize;
+        private readonly int savedTab = 4;
         private readonly bool savedSpaces = AvaloniaVirtualEditorCanvas.InsertSpacesSetting;
 
         public EditorQaRound3HeadlessTests()
@@ -38,7 +38,7 @@ namespace codeLess.Avalonia.Tests
 
         public void Dispose()
         {
-            AvaloniaVirtualEditorCanvas.DisplayTabSize = savedTab;
+            
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = savedSpaces;
             try
             {

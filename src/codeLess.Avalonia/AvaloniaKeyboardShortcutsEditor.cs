@@ -193,7 +193,7 @@ namespace codeLess.AvaloniaApp
                 {
                     users.Add(new KeybindingEntry { Command = "-" + ui.Command, When = ui.When });
                 }
-                KeybindingManager.SaveUserBindings(users);
+                string _err = KeybindingManager.SaveUserBindings(users);
                 try { manager.LoadUserBindings(System.IO.File.ReadAllText(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath())); } catch {}
                 RefreshData();
             }
@@ -210,7 +210,7 @@ namespace codeLess.AvaloniaApp
             {
                 var users = manager.UserBindings ?? new List<KeybindingEntry>();
                 users.Add(new KeybindingEntry { Command = ui.Command, When = ui.When, Key = keyString });
-                KeybindingManager.SaveUserBindings(users);
+                string _err = KeybindingManager.SaveUserBindings(users);
                 try { manager.LoadUserBindings(System.IO.File.ReadAllText(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath())); } catch {}
                 RefreshData();
             }

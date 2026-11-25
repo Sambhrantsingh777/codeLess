@@ -19,11 +19,42 @@ namespace codeLess.Avalonia.Tests
             typeof(KeybindingManager).GetField("cachedDefaults", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).SetValue(null, null);
             var mgr = new KeybindingManager();
             var editor = new AvaloniaKeyboardShortcutsEditor(codeLess.Studio.StudioTheme.GetById("codeless-dark"), null, mgr);
+            
             var searchBox = editor.GetSearchBoxForTest();
             searchBox.Text = "copy";
             editor.FilterListForTest();
+            
             var listView = editor.GetListViewForTest();
-            Assert.NotEmpty(listView.ItemsSource.Cast<object>());
+            var items = listView.ItemsSource.Cast<ListBoxItem>().ToList();
+            Assert.NotEmpty(items);
+            foreach (var item in items) {
+                var e = item.Tag;
+                var cmdType = e.GetType();
+                string cmd = (string)cmdType.GetProperty("Command").GetValue(e);
+                string title = (string)cmdType.GetProperty("Title").GetValue(e);
+                string key = (string)cmdType.GetProperty("Key").GetValue(e);
+                
+                bool match = (cmd != null && cmd.ToLowerInvariant().Contains("copy")) || 
+                             (title != null && title.ToLowerInvariant().Contains("copy")) || 
+                             (key != null && key.ToLowerInvariant().Contains("copy"));
+                Assert.True(match, "Search results should only contain rows matching the query");
+            }
+
+            // Test conflict
+            editor.ApplyNewBindingForTest("ctrl+f");
+            items = listView.ItemsSource.Cast<ListBoxItem>().ToList();
+            
+            // Should have a conflict for ctrl+f now
+            bool foundConflict = false;
+            foreach (var item in items) {
+                var content = item.Content as global::Avalonia.Controls.Grid;
+                var txtKey = content.Children.OfType<global::Avalonia.Controls.TextBlock>().ElementAt(1);
+                if (txtKey.Text.Contains("commands")) {
+                    foundConflict = true;
+                    Assert.Equal(global::Avalonia.Media.Brushes.Orange, txtKey.Foreground);
+                }
+            }
+            Assert.True(foundConflict, "Conflict indicator missing");
         }
 
         [AvaloniaFact]

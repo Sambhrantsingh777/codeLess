@@ -1,3 +1,4 @@
+using System.IO;
 using System;
 using Avalonia.Headless.XUnit;
 using System.Linq;
@@ -12,11 +13,21 @@ namespace codeLess.Avalonia.Tests
         [AvaloniaFact]
         public void WindowClose_DisposesWatchers()
         {
-            var w = new MainWindow(null);
+            string wRoot = Path.Combine(Path.GetTempPath(), "w_test_" + Guid.NewGuid());
+            Directory.CreateDirectory(wRoot);
+            string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(wRoot);
+            Directory.CreateDirectory(Path.GetDirectoryName(wsPath));
+            File.WriteAllText(wsPath, "{}");
+
+            var w = new MainWindow(wRoot);
             var wsWatcher = w.GetType().GetField("workspaceSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
             var userWatcher = w.GetType().GetField("userSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
             var keysWatcher = w.GetType().GetField("keybindingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);
             
+            Assert.NotNull(wsWatcher);
+            Assert.NotNull(userWatcher);
+            Assert.NotNull(keysWatcher);
+
             w.Close(); // Will call OnClosed
             
             wsWatcher = w.GetType().GetField("workspaceSettingsWatcher", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(w);

@@ -75,27 +75,37 @@ namespace codeLess.AvaloniaApp
             if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
             
             bool isTerminal = IsFromTerminal(e.Source);
+
+            // Allow TextBox to handle basic text input and text editing shortcuts
+            if (e.Source is TextBox)
+            {
+                bool isEditKey = false;
+                if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) && !e.KeyModifiers.HasFlag(KeyModifiers.Meta) && !e.KeyModifiers.HasFlag(KeyModifiers.Alt)) {
+                    if (e.Key != Key.Escape && e.Key != Key.F1 && e.Key != Key.F3 && e.Key != Key.F4 && e.Key != Key.F5 && e.Key != Key.F6 && e.Key != Key.F10 && e.Key != Key.F8 && e.Key != Key.F9 && e.Key != Key.F11 && e.Key != Key.F12)
+                        isEditKey = true;
+                } else if (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta)) {
+                    if (e.Key == Key.A || e.Key == Key.C || e.Key == Key.V || e.Key == Key.X || e.Key == Key.Z || e.Key == Key.Y || e.Key == Key.Back || e.Key == Key.Delete || e.Key == Key.Left || e.Key == Key.Right)
+                        isEditKey = true;
+                } else if (e.KeyModifiers.HasFlag(KeyModifiers.Alt)) {
+                    if (e.Key == Key.Left || e.Key == Key.Right || e.Key == Key.Back || e.Key == Key.Delete)
+                        isEditKey = true;
+                }
+                
+                if (isEditKey)
+                {
+                    if (lastCtrlKChordTime != DateTime.MinValue)
+                    {
+                        lastCtrlKChordTime = DateTime.MinValue;
+                        statusChordLabel.Text = "";
+                    }
+                    return;
+                }
+            }
+
             if (DispatchKeybinding(e.Key, e.KeyModifiers, isTerminal)) { e.Handled = true; return; }
 
             if (isTerminal && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
                 return;
-
-            if (e.Source is TextBox &&
-                !e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                !e.KeyModifiers.HasFlag(KeyModifiers.Meta) &&
-                !e.KeyModifiers.HasFlag(KeyModifiers.Alt) &&
-                e.Key != Key.Escape &&
-                e.Key != Key.F1 && e.Key != Key.F3 && e.Key != Key.F4 && e.Key != Key.F5 &&
-                e.Key != Key.F6 && e.Key != Key.F10 &&
-                e.Key != Key.F8 && e.Key != Key.F9 && e.Key != Key.F11 && e.Key != Key.F12)
-            {
-                if (lastCtrlKChordTime != DateTime.MinValue)
-                {
-                    lastCtrlKChordTime = DateTime.MinValue;
-                    statusChordLabel.Text = "";
-                }
-                return;
-            }
 
             if (HandleWorkbenchKeyEvent(e.Key, e.KeyModifiers))
             {
