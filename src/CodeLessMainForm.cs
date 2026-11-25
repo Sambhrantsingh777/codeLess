@@ -5075,6 +5075,13 @@ if __name__ == '__main__':
                 using (SolidBrush cb = new SolidBrush(StudioTheme.Blend(bg, t.AccentPrimary, 0.35))) g.FillRectangle(cb, countRect);
                 TextRenderer.DrawText(g, countText, searchMatchFontWin, countRect, t.FgPrimary, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
                 string name = Path.GetFileName(grp.FilePath);
+                SetiIconInfo searchIcon = SetiIconTheme.Resolve(name, t != null && t.IsLight, null);
+                using (Font sf = SetiWinFormsFont.CreateFont(11.0f))
+                {
+                    TextRenderer.DrawText(g, searchIcon.Glyph, sf, new Rectangle(x, r.Y, 16, r.Height), searchIcon.Color,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                }
+                x += 20;
                 int nameMax = Math.Max(20, countRect.X - x - 6);
                 Size ns = TextRenderer.MeasureText(g, name, searchHeaderFontWin, new Size(nameMax, r.Height), flags);
                 TextRenderer.DrawText(g, name, searchHeaderFontWin, new Rectangle(x, r.Y, Math.Min(ns.Width, nameMax), r.Height), t.FgPrimary, flags | TextFormatFlags.EndEllipsis);
@@ -9334,17 +9341,9 @@ if __name__ == '__main__':
 
         private static void ResolveTabBadge(string fileName, StudioTheme theme, out string badge, out Color color)
         {
-            string ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
-            if (ext == ".cs") { badge = "C#"; color = Color.FromArgb(168, 85, 247); }
-            else if (ext == ".py") { badge = "PY"; color = Color.FromArgb(56, 189, 248); }
-            else if (ext == ".js" || ext == ".mjs") { badge = "JS"; color = Color.FromArgb(250, 204, 21); }
-            else if (ext == ".ts" || ext == ".tsx") { badge = "TS"; color = Color.FromArgb(59, 130, 246); }
-            else if (ext == ".rs") { badge = "RS"; color = Color.FromArgb(251, 146, 60); }
-            else if (ext == ".ps1") { badge = "PS"; color = Color.FromArgb(56, 189, 248); }
-            else if (ext == ".sh") { badge = "SH"; color = Color.FromArgb(74, 222, 128); }
-            else if (ext == ".json") { badge = "{}"; color = Color.FromArgb(250, 204, 21); }
-            else if (ext == ".md") { badge = "MD"; color = Color.FromArgb(148, 163, 184); }
-            else { badge = "≡"; color = theme != null ? theme.FgSecondary : Color.LightGray; }
+            SetiIconInfo icon = SetiIconTheme.Resolve(fileName ?? "", theme != null && theme.IsLight, null);
+            badge = icon.Glyph;
+            color = icon.Color;
         }
 
         private void ResizeOpenTabButtons()
@@ -9616,7 +9615,11 @@ if __name__ == '__main__':
                         g.DrawLine(rp, tabBtn.Width - 1, 0, tabBtn.Width - 1, tabBtn.Height);
 
                     Color diffTitleCol = activeTheme.IsLight ? Color.FromArgb(4, 120, 87) : Color.FromArgb(74, 222, 128);
-                    TextRenderer.DrawText(g, badgeText, TabBadgeFont, new Point(8, 10), badgeCol);
+                    using (Font setiFont = SetiWinFormsFont.CreateFont(11.5f))
+                    {
+                        TextRenderer.DrawText(g, badgeText, setiFont, new Rectangle(8, 0, 18, tabBtn.Height), badgeCol,
+                            TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+                    }
                     Font activeTitleFont = captured.IsDeletedOnDisk ? TabStrikeoutTitleFont : (captured.IsPreview ? TabItalicTitleFont : TabTitleFont);
                     Rectangle titleRect = new Rectangle(30, 0, Math.Max(22, tabBtn.Width - 48), tabBtn.Height);
                     Color titleFg = pendingDiffs > 0 ? diffTitleCol : (isCurrent ? activeTheme.FgPrimary : activeTheme.FgSecondary);

@@ -28,6 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="Assets\seti.ttf" />
     <Content Include="..\..\assets\savatarr_bolt.png" Link="assets\savatarr_bolt.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\assets\savatarr_bolt.png')" />
   </ItemGroup>
 

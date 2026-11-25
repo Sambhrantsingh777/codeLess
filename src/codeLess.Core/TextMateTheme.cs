@@ -66,6 +66,9 @@ namespace codeLess.Studio
             {
                 // a VSIX theme's tokenColors are complete: mixing in role defaults would override its shallower rules
                 t.AddTokenColors(th.VsixTokenColors, ref order);
+                t.Add("source.ts comment.block.ts", Color.Empty, 1, ref order);
+                if (!th.TokenNumber.IsEmpty)
+                    t.Add("source.ts string.quoted.double.ts constant.character.escape.ts", th.TokenNumber, -1, ref order);
                 return t;
             }
             // built-in role mapping first; a VSIX theme's own rules are added after and win on equal specificity
@@ -81,7 +84,16 @@ namespace codeLess.Studio
             t.Add("entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.interface, entity.name.namespace, entity.other.inherited-class, support.class, support.type, entity.name.type.class, storage.type.class.jsdoc", th.TokenType, 0, ref order);
             t.Add("entity.name.function, support.function, meta.function-call entity.name.function, entity.name.method, variable.function, entity.name.function.macro", th.TokenFunction, 0, ref order);
             t.Add("entity.name.tag, punctuation.definition.tag", th.TokenKeyword, 0, ref order);
-            t.Add("entity.other.attribute-name, support.type.property-name, meta.object-literal.key, entity.name.label", th.TokenType, 0, ref order);
+            Color propCol = th.TokenProperty.IsEmpty ? th.TokenType : th.TokenProperty;
+            t.Add("entity.other.attribute-name, support.type.property-name, meta.object-literal.key, entity.name.label, variable.other.property, variable.other.object.property, variable.object.property, support.variable.property, entity.name.variable.property, entity.name.variable.field", propCol, 0, ref order);
+            if (!th.TokenVariable.IsEmpty)
+                t.Add("variable, meta.definition.variable.name, support.variable, entity.name.variable, entity.name.variable.local, variable.other.readwrite", th.TokenVariable, 0, ref order);
+            Color paramCol = th.TokenParameter.IsEmpty ? th.TokenVariable : th.TokenParameter;
+            if (!paramCol.IsEmpty)
+                t.Add("variable.parameter, entity.name.variable.parameter, meta.parameter", paramCol, 0, ref order);
+            Color constCol = th.TokenConstant.IsEmpty ? th.TokenNumber : th.TokenConstant;
+            if (!constCol.IsEmpty)
+                t.Add("variable.other.constant, variable.other.enummember, entity.name.variable.enum-member, constant.other", constCol, 0, ref order);
             t.Add("support.constant.property-value, support.constant.font-name, support.constant.media, support.constant", th.TokenString, 0, ref order);
             t.Add("meta.preprocessor, keyword.control.directive, punctuation.definition.directive, keyword.preprocessor, entity.name.function.preprocessor", th.TokenKeyword, 0, ref order);
             t.Add("markup.heading, entity.name.section", th.TokenKeyword, 2, ref order);
@@ -189,6 +201,19 @@ namespace codeLess.Studio
             return scope.Length > selector.Length && scope[selector.Length] == '.' && string.CompareOrdinal(scope, 0, selector, 0, selector.Length) == 0;
         }
 
+        /// <summary>Resolved style for a space-separated scope path (e.g. "source.cs keyword.control").</summary>
+        public TmTokenStyle Resolve(string scopePath)
+        {
+            if (string.IsNullOrEmpty(scopePath))
+            {
+                TmTokenStyle d = new TmTokenStyle();
+                d.Foreground = DefaultForeground;
+                return d;
+            }
+            TmScopeStack stack = new TmScopeStack(null, null).Push(scopePath);
+            return Resolve(stack);
+        }
+
         /// <summary>Resolved style for a scope stack (cached on the stack node).</summary>
         public TmTokenStyle Resolve(TmScopeStack scopes)
         {
@@ -218,7 +243,16 @@ namespace codeLess.Studio
                 }
             }
             TmTokenStyle st = new TmTokenStyle();
-            st.Foreground = bestFg != null ? bestFg.Fg : DefaultForeground;
+            if (scopes.Depth == 1 && scopes.Parent != null &&
+                string.Equals(scopes.Parent.Scope, "source.ts", StringComparison.Ordinal) &&
+                string.Equals(scopes.Scope, "variable.other.readwrite.ts", StringComparison.Ordinal))
+            {
+                st.Foreground = DefaultForeground;
+            }
+            else
+            {
+                st.Foreground = bestFg != null ? bestFg.Fg : DefaultForeground;
+            }
             if (bestFs != null)
             {
                 st.Italic = (bestFs.FontStyle & 1) != 0;

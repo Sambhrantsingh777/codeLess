@@ -147,7 +147,7 @@ namespace codeLess.AvaloniaApp
                 double x0 = codeBaseX + run.Vcol * cw;
                 if (record && run.Plain && CaptureFrameTokens) LastFrameRunOrigins.Add((docLine, run.Vcol, x0));
                 if (x0 + run.Cells * cw < GutterWidth || x0 > codeAreaRight) continue;
-                run.Text.Draw(context, new Point(x0, y + run.Dy));
+                run.Text.Draw(context, new Point(Math.Round(x0), Math.Round(y + run.Dy)));
             }
             return codeBaseX + row.EndVcol * cw;
         }

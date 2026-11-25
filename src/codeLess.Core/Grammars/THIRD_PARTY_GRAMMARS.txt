@@ -26,6 +26,8 @@ ruby.tmLanguage.json.gz            source.ruby           Shopify/ruby-lsp (e0444
 makefile.tmLanguage.json.gz        source.makefile       fadeevab/make.tmbundle (1d4c0b541959995db098df751ffc129da39a294b)         MIT, Copyright (c) Alexander Fadeev
 python.tmLanguage.json.gz          source.python         MagicStack/MagicPython (7d0f2b22a5ad8fccbd7341bc7b7a715169283044)         MIT, Copyright (c) 2014 GitHub Inc., Copyright (c) 2015-present MagicStack Inc.
 json.tmLanguage.json.gz            source.json           microsoft/vscode-JSON.tmLanguage (9bd83f1c252b375e957203f21793316203f61f70) MIT, Copyright (c) 2015 simonzack, zertosh, benvie
+seti.ttf.gz / seti.ttf             file icons (Seti)     jesseweed/seti-ui (2d6c5e68b4ded73c92dac291845ee44e1182d511)              MIT, Copyright (c) 2014 Jesse Weed
+VsCodeDefaultThemes.cs             color themes          microsoft/vscode extensions/theme-defaults                                MIT, Copyright (c) Microsoft Corporation
 
 Not bundled (non-MIT or unverified licence): HTML / Markdown-derived TextMate bundles (TextMate Bundle License),
 Lua, INI (TextMate Bundle License), Dockerfile (Apache-2.0), C/C++ (GPL-3.0), PHP (MIT AND Boost). These languages

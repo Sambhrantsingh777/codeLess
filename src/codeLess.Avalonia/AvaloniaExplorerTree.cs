@@ -95,6 +95,9 @@ namespace codeLess.AvaloniaApp
         {
             Focusable = true;
             ClipToBounds = true;
+            UseLayoutRounding = true;
+            RenderOptions.SetTextRenderingMode(this, TextRenderingMode.SubpixelAntialias);
+            RenderOptions.SetBitmapInterpolationMode(this, global::Avalonia.Media.Imaging.BitmapInterpolationMode.HighQuality);
         }
 
         private StudioTheme scrollTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
@@ -527,67 +530,93 @@ namespace codeLess.AvaloniaApp
             InvalidateVisual();
         }
 
-        public static void GetFileTypeBadge(string fileName, out string badgeText, out Color badgeColor)
+        private static readonly object setiFontLock = new object();
+        private static FontFamily setiFontFamily;
+        private static Typeface setiTypeface;
+        private static bool setiFontLoaded;
+
+        public static bool IsSetiFontLoaded => setiFontLoaded;
+
+        public static void ResetSetiFontCacheForBackendSwitch()
         {
-            string ext = (Path.GetExtension(fileName ?? "") ?? "").ToLowerInvariant();
-            switch (ext)
+            lock (setiFontLock)
             {
-                case ".cs":
-                    badgeText = "C#";
-                    badgeColor = Color.FromRgb(56, 189, 248);
-                    break;
-                case ".py":
-                    badgeText = "PY";
-                    badgeColor = Color.FromRgb(250, 204, 21);
-                    break;
-                case ".js":
-                case ".jsx":
-                    badgeText = "JS";
-                    badgeColor = Color.FromRgb(245, 158, 11);
-                    break;
-                case ".ts":
-                case ".tsx":
-                    badgeText = "TS";
-                    badgeColor = Color.FromRgb(59, 130, 246);
-                    break;
-                case ".rs":
-                    badgeText = "RS";
-                    badgeColor = Color.FromRgb(249, 115, 22);
-                    break;
-                case ".ps1":
-                    badgeText = "PS";
-                    badgeColor = Color.FromRgb(96, 165, 250);
-                    break;
-                case ".sh":
-                case ".zsh":
-                    badgeText = "SH";
-                    badgeColor = Color.FromRgb(74, 222, 128);
-                    break;
-                case ".json":
-                case ".yaml":
-                case ".yml":
-                case ".toml":
-                    badgeText = "{}";
-                    badgeColor = Color.FromRgb(168, 85, 247);
-                    break;
-                case ".iss":
-                    badgeText = "IS";
-                    badgeColor = Color.FromRgb(45, 212, 191);
-                    break;
-                case ".md":
-                    badgeText = "MD";
-                    badgeColor = Color.FromRgb(148, 163, 184);
-                    break;
-                default:
-                    badgeText = "≡";
-                    badgeColor = Color.FromRgb(148, 163, 184);
-                    break;
+                setiFontFamily = null;
+                setiTypeface = default;
+                setiFontLoaded = false;
             }
         }
+
+        private static void EnsureSetiFontRegistered()
+        {
+            if (setiFontLoaded && setiFontFamily != null) return;
+            lock (setiFontLock)
+            {
+                if (setiFontLoaded && setiFontFamily != null) return;
+                try
+                {
+                    FontManager.Current.AddFontCollection(new global::Avalonia.Media.Fonts.EmbeddedFontCollection(
+                        new Uri("fonts:Seti", UriKind.Absolute),
+                        new Uri("avares://codeLess/Assets", UriKind.Absolute)));
+                }
+                catch { }
+                var candidate = new FontFamily("fonts:Seti#seti");
+                var candidateTf = new Typeface(candidate, FontStyle.Normal, FontWeight.Normal);
+                if (FontManager.Current.TryGetGlyphTypeface(candidateTf, out _))
+                {
+                    setiFontFamily = candidate;
+                    setiTypeface = candidateTf;
+                }
+                else
+                {
+                    setiFontFamily = new FontFamily("Inter, Menlo, Consolas, sans-serif");
+                    setiTypeface = new Typeface(setiFontFamily, FontStyle.Normal, FontWeight.Normal);
+                }
+                setiFontLoaded = true;
+            }
+        }
+
+        public static FontFamily GetSetiFontFamily()
+        {
+            EnsureSetiFontRegistered();
+            return setiFontFamily;
+        }
+
+        public static Typeface GetSetiTypeface()
+        {
+            EnsureSetiFontRegistered();
+            return setiTypeface;
+        }
+
+        public static TextBlock CreateSetiFileIconControl(string fileName, StudioTheme theme, Thickness? margin = null)
+        {
+            bool isLight = theme != null && theme.IsLight;
+            SetiIconInfo icon = SetiIconTheme.Resolve(fileName, isLight, null);
+            var tb = new TextBlock
+            {
+                Text = icon.Glyph,
+                FontFamily = GetSetiFontFamily(),
+                FontSize = 18.0,
+                Width = 16,
+                Height = 16,
+                TextAlignment = TextAlignment.Center,
+                Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(icon.Color)),
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                UseLayoutRounding = true
+            };
+            if (margin.HasValue) tb.Margin = margin.Value;
+            RenderOptions.SetTextRenderingMode(tb, TextRenderingMode.Antialias);
+            return tb;
+        }
+
+        public readonly List<(string FileName, string IconId, string Glyph, Color Color)> LastFrameFileIcons =
+            new List<(string, string, string, Color)>();
 
         public override void Render(DrawingContext context)
         {
             base.Render(context);
+            LastFrameFileIcons.Clear();
             double w = Bounds.Width;
             double h = Bounds.Height;
             context.FillRectangle(new SolidColorBrush(BgColor), new Rect(0, 0, w, h));
@@ -648,41 +677,30 @@ namespace codeLess.AvaloniaApp
 
                 double indentX = 8 + depth * UiTokens.TreeIndent;
                 bool isFolder = node.IsDirectory || node.StateImageIndex == 1 || node.Nodes.Count > 0;
+                bool isLightBg = (BgColor.R + BgColor.G + BgColor.B) > 380;
 
                 if (isFolder)
                 {
-                    // Draw crisp vector chevron (▸ or ▾)
-                    var chevRect = new Rect(indentX, y + 5, 11, 12);
+                    // Seti defines no folder glyph: draw twistie only in the 16 px slot (VS Code align-icons-and-twisties)
+                    var chevRect = new Rect(indentX + 2, y + 5, 11, 12);
                     AvaloniaVectorIcons.DrawIcon(context, node.IsExpanded ? "chevron-down" : "chevron-right", chevRect, TextSecondary, 1.5f);
-
-                    // Draw folder icon
-                    var folderColor = Color.FromRgb(220, 182, 122);
-                    var folderPen = new Pen(new SolidColorBrush(folderColor), 1.3);
-                    double fx = indentX + 15;
-                    double fy = y + 5;
-                    context.DrawRectangle(
-                        node.IsExpanded ? new SolidColorBrush(Color.FromArgb(55, 220, 182, 122)) : null,
-                        folderPen,
-                        new Rect(fx, fy + 2, 12, 9), 1.2, 1.2);
-                    context.DrawLine(folderPen, new Point(fx + 1, fy + 1), new Point(fx + 5, fy + 1));
                 }
                 else
                 {
-                    string badgeText;
-                    Color badgeColor;
-                    GetFileTypeBadge(node.Text, out badgeText, out badgeColor);
+                    SetiIconInfo icon = SetiIconTheme.Resolve(node.Text, isLightBg, null);
+                    Color badgeColor = AvaloniaColorHelper.ToAvColor(icon.Color);
+                    LastFrameFileIcons.Add((node.Text ?? "", icon.Id, icon.Glyph, badgeColor));
                     var bft = new FormattedText(
-                        badgeText,
+                        icon.Glyph,
                         CultureInfo.InvariantCulture,
                         FlowDirection.LeftToRight,
-                        fontBadge,
-                        8.5,
+                        GetSetiTypeface(),
+                        18.0,
                         new SolidColorBrush(badgeColor));
-                    context.DrawText(bft, new Point(indentX + 12, y + (RowHeight - bft.Height) / 2.0));
+                    context.DrawText(bft, new Point(Math.Round(indentX + (16.0 - bft.Width) / 2.0), Math.Round(y + (RowHeight - bft.Height) / 2.0)));
                 }
 
                 // Git status color & right badge (VS Code Light+ vs Dark+ colors)
-                bool isLightBg = (BgColor.R + BgColor.G + BgColor.B) > 380;
                 Color modAmber = isLightBg ? Color.FromRgb(137, 85, 3) : Color.FromRgb(226, 192, 141);
                 Color addGreen = isLightBg ? Color.FromRgb(0, 113, 0) : Color.FromRgb(115, 201, 145);
                 Color delRed = isLightBg ? Color.FromRgb(173, 7, 7) : Color.FromRgb(241, 76, 76);
@@ -730,7 +748,7 @@ namespace codeLess.AvaloniaApp
                     labelColor = delRed;
                 }
 
-                double textX = indentX + 32;
+                double textX = indentX + 22;
                 double maxTextW = Math.Max(20, w - textX - (gitBadge != null ? 24 : 8));
                 var ft = new FormattedText(
                     GetCompactDisplayText(node),
@@ -744,7 +762,7 @@ namespace codeLess.AvaloniaApp
                     MaxLineCount = 1,
                     Trimming = TextTrimming.CharacterEllipsis
                 };
-                context.DrawText(ft, new Point(textX, y + (RowHeight - ft.Height) / 2.0));
+                context.DrawText(ft, new Point(Math.Round(textX), Math.Round(y + (RowHeight - ft.Height) / 2.0)));
 
                 if (!string.IsNullOrEmpty(gitBadge))
                 {
@@ -755,7 +773,7 @@ namespace codeLess.AvaloniaApp
                         fontBadge,
                         10.0,
                         new SolidColorBrush(gitBadgeColor));
-                    context.DrawText(gft, new Point(w - gft.Width - 10, y + (RowHeight - gft.Height) / 2.0));
+                    context.DrawText(gft, new Point(Math.Round(w - gft.Width - 10), Math.Round(y + (RowHeight - gft.Height) / 2.0)));
                 }
             }
 

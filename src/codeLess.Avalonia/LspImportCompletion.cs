@@ -191,17 +191,7 @@ namespace codeLess.AvaloniaApp
             if (it == null || !(it.Tag is ImportCompletionTag tag)) return null;
             if (it.Kind == 19 || tag.IsFolder) return new FolderGlyph();
             if (it.Kind != 17) return null;
-            AvaloniaExplorerTree.GetFileTypeBadge(it.Label ?? "", out string badge, out Avalonia.Media.Color color);
-            return new Avalonia.Controls.TextBlock
-            {
-                Text = badge,
-                FontFamily = new Avalonia.Media.FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
-                FontWeight = Avalonia.Media.FontWeight.Bold,
-                FontSize = 8.5,
-                Foreground = new Avalonia.Media.SolidColorBrush(color),
-                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center
-            };
+            return AvaloniaExplorerTree.CreateSetiFileIconControl(it.Label ?? "", theme);
         }
 
         private sealed class FolderGlyph : Avalonia.Controls.Control

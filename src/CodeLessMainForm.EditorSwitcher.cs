@@ -249,7 +249,7 @@ namespace codeLess.Studio
             using (Pen p = new Pen(border)) g.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
             using (Font small = new Font("Segoe UI", UiTokens.Pt(UiTokens.FontSmall)))
             using (Font ui = new Font("Segoe UI", UiTokens.Pt(UiTokens.FontUi)))
-            using (Font badgeFont = new Font("Consolas", 7f, FontStyle.Bold))
+            using (Font badgeFont = SetiWinFormsFont.CreateFont(11.5f))
             {
                 TextRenderer.DrawText(g, "Recently used editors", small, new Rectangle(Pad + 8, Pad, Width - 2 * Pad - 16, TitleH), muted,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
@@ -259,27 +259,20 @@ namespace codeLess.Studio
                     EditorTabBuffer tab = items[i];
                     Rectangle r = new Rectangle(Pad, Pad + TitleH + (i - scrollTop) * RowH, Width - 2 * Pad, RowH);
                     if (i == selected) using (SolidBrush sb = new SolidBrush(selBg)) g.FillRectangle(sb, r);
-                    string badge = BadgeFor(tab.FileName);
-                    TextRenderer.DrawText(g, badge, badgeFont, new Rectangle(r.X + 2, r.Y, 26, r.Height), muted,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                    SetiIconInfo icon = SetiIconTheme.Resolve(tab.FileName ?? "", t != null && t.IsLight, null);
+                    TextRenderer.DrawText(g, icon.Glyph, badgeFont, new Rectangle(r.X + 4, r.Y, 18, r.Height), icon.Color,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
                     string name = (tab.IsDirty ? "● " : "") + (tab.FileName ?? "");
                     Size nameSize = TextRenderer.MeasureText(g, name, ui, new Size(int.MaxValue, RowH), TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-                    TextRenderer.DrawText(g, name, ui, new Rectangle(r.X + 32, r.Y, r.Width - 40, r.Height), fg,
+                    TextRenderer.DrawText(g, name, ui, new Rectangle(r.X + 26, r.Y, r.Width - 34, r.Height), fg,
                         TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
                     string dir = FolderOf(tab);
-                    int dx = r.X + 32 + nameSize.Width + 10;
+                    int dx = r.X + 26 + nameSize.Width + 10;
                     if (dir.Length > 0 && dx < r.Right - 20)
                         TextRenderer.DrawText(g, dir, small, new Rectangle(dx, r.Y, r.Right - dx - 6, r.Height), muted,
                             TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.PathEllipsis);
                 }
             }
-        }
-
-        private static string BadgeFor(string fileName)
-        {
-            string ext = Path.GetExtension(fileName ?? "").TrimStart('.').ToUpperInvariant();
-            if (ext.Length == 0) return "•";
-            return ext.Length > 3 ? ext.Substring(0, 3) : ext;
         }
 
         private string FolderOf(EditorTabBuffer tab)

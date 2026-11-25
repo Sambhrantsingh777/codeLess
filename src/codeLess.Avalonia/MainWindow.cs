@@ -530,6 +530,9 @@ namespace codeLess.AvaloniaApp
             MinWidth = 900;
             MinHeight = 580;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            UseLayoutRounding = true;
+            RenderOptions.SetTextRenderingMode(this, TextRenderingMode.SubpixelAntialias);
+            RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.HighQuality);
 
             TryLoadWindowIcon();
 
@@ -3655,18 +3658,9 @@ namespace codeLess.AvaloniaApp
             {
                 var captured = tab;
                 bool isActive = ReferenceEquals(captured, activeTab);
-                AvaloniaExplorerTree.GetFileTypeBadge(captured.FileName, out string badgeTxt, out Color badgeCol);
 
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-                row.Children.Add(new TextBlock
-                {
-                    Text = badgeTxt,
-                    FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
-                    FontWeight = FontWeight.Bold,
-                    FontSize = 9.5,
-                    Foreground = new SolidColorBrush(badgeCol),
-                    VerticalAlignment = VerticalAlignment.Center
-                });
+                row.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(captured.FileName, currentTheme));
 
                 string labelText = (captured.IsPinned ? "◈ " : "") + captured.FileName + (captured.IsDeletedOnDisk ? " (deleted)" : "");
                 var titleTb = new TextBlock

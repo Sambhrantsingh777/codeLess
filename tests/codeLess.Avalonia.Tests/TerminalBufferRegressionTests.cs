@@ -66,14 +66,14 @@ namespace codeLess.Avalonia.Tests
     public class DefaultThemeTests
     {
         [Fact]
-        public void SavatarrGraphite_IsTheDefaultTheme()
+        public void DarkModern_IsTheDefaultTheme()
         {
-            Assert.Equal("savatarr-graphite", codeLess.Studio.StudioTheme.DefaultThemeId);
-            Assert.Equal("savatarr-graphite", codeLess.Studio.StudioTheme.GetBuiltInThemes()[0].Id);
-            Assert.Equal("savatarr-graphite", new codeLess.Studio.IdePersistentSettings().ActiveThemeId);
+            Assert.Equal("dark-modern", codeLess.Studio.StudioTheme.DefaultThemeId);
+            Assert.Equal("dark-modern", codeLess.Studio.StudioTheme.GetBuiltInThemes()[0].Id);
+            Assert.Equal("dark-modern", new codeLess.Studio.IdePersistentSettings().ActiveThemeId);
             var t = codeLess.Studio.StudioTheme.GetBuiltInThemes()[0];
             Assert.False(t.IsLight);
-            Assert.Equal(System.Drawing.Color.FromArgb(25, 120, 229).ToArgb(), t.AccentPrimary.ToArgb()); // Savatarr blue
+            Assert.Equal(System.Drawing.Color.FromArgb(0, 120, 212).ToArgb(), t.AccentPrimary.ToArgb()); // VS Code Dark Modern #0078D4
         }
 
         [Fact]

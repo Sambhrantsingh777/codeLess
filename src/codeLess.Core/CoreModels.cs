@@ -64,10 +64,19 @@ namespace codeLess.Studio
         public Color TokenNumber;
         public Color TokenType;
         public Color TokenOperator;
+        public Color TokenVariable;
+        public Color TokenParameter;
+        public Color TokenProperty;
+        public Color TokenConstant;
         public bool IsLight { get { return BgEditor.R > 180; } }
 
-        /// <summary>Default theme id (Savatarr brand: neutral graphite greys + Savatarr blue #1978E5).</summary>
-        public const string DefaultThemeId = "savatarr-graphite";
+        /// <summary>Default theme id (VS Code Dark Modern).</summary>
+        public const string DefaultThemeId = "dark-modern";
+
+        public static StudioTheme DarkModern { get { return ResolveThemeFromShared("dark-modern", null); } }
+        public static StudioTheme DarkPlus { get { return ResolveThemeFromShared("dark-plus", null); } }
+        public static StudioTheme LightModern { get { return ResolveThemeFromShared("light-modern", null); } }
+        public static StudioTheme LightPlus { get { return ResolveThemeFromShared("light-plus", null); } }
 
         private static StudioTheme[] _cachedBuiltInThemes;
 
@@ -89,10 +98,146 @@ namespace codeLess.Studio
             {
                 new StudioTheme
                 {
+                    // VS Code Dark Modern (extensions/theme-defaults/themes/dark_modern.json -> dark_plus.json -> dark_vs.json)
+                    Id = "dark-modern",
+                    Name = "Dark Modern",
+                    BgWorkbench = Hex("#181818"),
+                    BgActivity = Hex("#181818"),
+                    BgSidebar = Hex("#181818"),
+                    BgEditor = Hex("#1F1F1F"),
+                    BgElevated = Hex("#202020"),
+                    BgHover = Hex("#2A2D2E"),
+                    BgLineHighlight = Hex("#282828"),
+                    BgSelection = Color.FromArgb(100, 38, 79, 120),
+                    BgStatus = Hex("#181818"),
+                    BorderSubtle = Hex("#2B2B2B"),
+                    AccentPrimary = Hex("#0078D4"),
+                    AccentSecondary = Hex("#4DAAFC"),
+                    FgPrimary = Hex("#CCCCCC"),
+                    FgSecondary = Hex("#9D9D9D"),
+                    FgMuted = Hex("#6E7681"),
+                    TokenKeyword = Hex("#569CD6"),
+                    TokenControl = Hex("#C586C0"),
+                    TokenFunction = Hex("#DCDCAA"),
+                    TokenString = Hex("#CE9178"),
+                    TokenComment = Hex("#6A9955"),
+                    TokenNumber = Hex("#B5CEA8"),
+                    TokenType = Hex("#4EC9B0"),
+                    TokenOperator = Hex("#D4D4D4"),
+                    TokenVariable = Hex("#9CDCFE"),
+                    TokenParameter = Hex("#9CDCFE"),
+                    TokenProperty = Hex("#9CDCFE"),
+                    TokenConstant = Hex("#4FC1FF"),
+                    VsixTokenColors = VsCodeDefaultThemes.GetDarkTokenColors()
+                },
+                new StudioTheme
+                {
+                    // VS Code Dark+ (extensions/theme-defaults/themes/dark_plus.json -> dark_vs.json)
+                    Id = "dark-plus",
+                    Name = "Dark+",
+                    BgWorkbench = Hex("#252526"),
+                    BgActivity = Hex("#333333"),
+                    BgSidebar = Hex("#252526"),
+                    BgEditor = Hex("#1E1E1E"),
+                    BgElevated = Hex("#252526"),
+                    BgHover = Hex("#2A2D2E"),
+                    BgLineHighlight = Hex("#282828"),
+                    BgSelection = Color.FromArgb(100, 38, 79, 120),
+                    BgStatus = Hex("#007ACC"),
+                    BorderSubtle = Hex("#303031"),
+                    AccentPrimary = Hex("#007ACC"),
+                    AccentSecondary = Hex("#3794FF"),
+                    FgPrimary = Hex("#D4D4D4"),
+                    FgSecondary = Hex("#CCCCCC"),
+                    FgMuted = Hex("#858585"),
+                    TokenKeyword = Hex("#569CD6"),
+                    TokenControl = Hex("#C586C0"),
+                    TokenFunction = Hex("#DCDCAA"),
+                    TokenString = Hex("#CE9178"),
+                    TokenComment = Hex("#6A9955"),
+                    TokenNumber = Hex("#B5CEA8"),
+                    TokenType = Hex("#4EC9B0"),
+                    TokenOperator = Hex("#D4D4D4"),
+                    TokenVariable = Hex("#9CDCFE"),
+                    TokenParameter = Hex("#9CDCFE"),
+                    TokenProperty = Hex("#9CDCFE"),
+                    TokenConstant = Hex("#4FC1FF"),
+                    VsixTokenColors = VsCodeDefaultThemes.GetDarkTokenColors()
+                },
+                new StudioTheme
+                {
+                    // VS Code Light Modern (extensions/theme-defaults/themes/light_modern.json -> light_plus.json -> light_vs.json)
+                    Id = "light-modern",
+                    Name = "Light Modern",
+                    BgWorkbench = Hex("#F8F8F8"),
+                    BgActivity = Hex("#F8F8F8"),
+                    BgSidebar = Hex("#F8F8F8"),
+                    BgEditor = Hex("#FFFFFF"),
+                    BgElevated = Hex("#F8F8F8"),
+                    BgHover = Hex("#F2F2F2"),
+                    BgLineHighlight = Hex("#F3F3F3"),
+                    BgSelection = Color.FromArgb(110, 173, 214, 255),
+                    BgStatus = Hex("#F8F8F8"),
+                    BorderSubtle = Hex("#E5E5E5"),
+                    AccentPrimary = Hex("#005FB8"),
+                    AccentSecondary = Hex("#005FB8"),
+                    FgPrimary = Hex("#3B3B3B"),
+                    FgSecondary = Hex("#616161"),
+                    FgMuted = Hex("#6E7681"),
+                    TokenKeyword = Hex("#0000FF"),
+                    TokenControl = Hex("#AF00DB"),
+                    TokenFunction = Hex("#795E26"),
+                    TokenString = Hex("#A31515"),
+                    TokenComment = Hex("#008000"),
+                    TokenNumber = Hex("#098658"),
+                    TokenType = Hex("#267F99"),
+                    TokenOperator = Hex("#000000"),
+                    TokenVariable = Hex("#001080"),
+                    TokenParameter = Hex("#001080"),
+                    TokenProperty = Hex("#001080"),
+                    TokenConstant = Hex("#0070C1"),
+                    VsixTokenColors = VsCodeDefaultThemes.GetLightTokenColors()
+                },
+                new StudioTheme
+                {
+                    // VS Code Light+ (extensions/theme-defaults/themes/light_plus.json -> light_vs.json)
+                    Id = "light-plus",
+                    Name = "Light+",
+                    BgWorkbench = Hex("#F3F3F3"),
+                    BgActivity = Hex("#2C2C2C"),
+                    BgSidebar = Hex("#F3F3F3"),
+                    BgEditor = Hex("#FFFFFF"),
+                    BgElevated = Hex("#F3F3F3"),
+                    BgHover = Hex("#E8E8E8"),
+                    BgLineHighlight = Hex("#F3F3F3"),
+                    BgSelection = Color.FromArgb(110, 173, 214, 255),
+                    BgStatus = Hex("#007ACC"),
+                    BorderSubtle = Hex("#D8D8D8"),
+                    AccentPrimary = Hex("#007ACC"),
+                    AccentSecondary = Hex("#006AB1"),
+                    FgPrimary = Hex("#000000"),
+                    FgSecondary = Hex("#616161"),
+                    FgMuted = Hex("#767676"),
+                    TokenKeyword = Hex("#0000FF"),
+                    TokenControl = Hex("#AF00DB"),
+                    TokenFunction = Hex("#795E26"),
+                    TokenString = Hex("#A31515"),
+                    TokenComment = Hex("#008000"),
+                    TokenNumber = Hex("#098658"),
+                    TokenType = Hex("#267F99"),
+                    TokenOperator = Hex("#000000"),
+                    TokenVariable = Hex("#001080"),
+                    TokenParameter = Hex("#001080"),
+                    TokenProperty = Hex("#001080"),
+                    TokenConstant = Hex("#0070C1"),
+                    VsixTokenColors = VsCodeDefaultThemes.GetLightTokenColors()
+                },
+                new StudioTheme
+                {
                     // Matches savatarr.com: ink greys (#0E1420 / #4B5768 / #5B6472), light surface text (#E3E7ED)
                     // and the Savatarr brand blue (#1978E5, hover #125FBD) as the single accent.
                     Id = "savatarr-graphite",
-                    Name = "Savatarr Graphite (Default)",
+                    Name = "Savatarr Graphite",
                     BgWorkbench = Hex("#17191d"),
                     BgActivity = Hex("#1b1d21"),
                     BgSidebar = Hex("#1e2024"),
@@ -115,7 +260,11 @@ namespace codeLess.Studio
                     TokenComment = Hex("#737b87"),
                     TokenNumber = Hex("#f69d50"),
                     TokenType = Hex("#56d4dd"),
-                    TokenOperator = Hex("#adbac7")
+                    TokenOperator = Hex("#adbac7"),
+                    TokenVariable = Hex("#9cdcfe"),
+                    TokenParameter = Hex("#fdba74"),
+                    TokenProperty = Hex("#79c0ff"),
+                    TokenConstant = Hex("#4fc1ff")
                 },
                 new StudioTheme
                 {
@@ -400,19 +549,36 @@ namespace codeLess.Studio
             };
         }
 
+        private static bool MatchesThemeQuerySlow(StudioTheme t, string q)
+        {
+            if (t == null || string.IsNullOrEmpty(q)) return false;
+            if (t.Id == "savatarr-graphite" && string.Equals(q, "Savatarr Graphite (Default)", StringComparison.OrdinalIgnoreCase))
+                return true;
+            string normId = (t.Id ?? "").Replace("-", "").Replace("_", "").Replace(" ", "");
+            string normName = (t.Name ?? "").Replace("-", "").Replace("_", "").Replace(" ", "");
+            string normQ = q.Replace("-", "").Replace("_", "").Replace(" ", "");
+            return string.Equals(normId, normQ, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normName, normQ, StringComparison.OrdinalIgnoreCase);
+        }
+
         public static StudioTheme ResolveTheme(List<StudioTheme> list, string idOrName)
         {
             if (list == null || list.Count == 0)
                 return ResolveThemeFromShared(idOrName, null);
             if (!string.IsNullOrWhiteSpace(idOrName))
             {
-                string q = idOrName.Trim();
+                string q = (idOrName[0] <= ' ' || idOrName[idOrName.Length - 1] <= ' ') ? idOrName.Trim() : idOrName;
                 for (int i = 0; i < list.Count; i++)
                 {
                     StudioTheme t = list[i];
                     if (t != null && (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
                                       string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase)))
                         return t;
+                }
+                for (int i = 0; i < list.Count; i++)
+                {
+                    if (MatchesThemeQuerySlow(list[i], q))
+                        return list[i];
                 }
 
                 if (q.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -430,35 +596,54 @@ namespace codeLess.Studio
         internal static StudioTheme ResolveThemeFromShared(string idOrName, List<StudioTheme> extensionThemes)
         {
             StudioTheme[] builtIn = GetBuiltInThemesSharedArray();
-            if (!string.IsNullOrWhiteSpace(idOrName))
+            if (!string.IsNullOrEmpty(idOrName))
             {
-                string q = idOrName.Trim();
-                for (int i = 0; i < builtIn.Length; i++)
-                {
-                    StudioTheme t = builtIn[i];
-                    if (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase))
-                        return t;
-                }
-                if (extensionThemes != null)
-                {
-                    lock (extensionThemes)
-                    {
-                        for (int i = 0; i < extensionThemes.Count; i++)
-                        {
-                            StudioTheme t = extensionThemes[i];
-                            if (t != null && (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
-                                              string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase)))
-                                return t;
-                        }
-                    }
-                }
-                if (q.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    q.IndexOf("daylight", StringComparison.OrdinalIgnoreCase) >= 0)
+                string q = (idOrName[0] <= ' ' || idOrName[idOrName.Length - 1] <= ' ') ? idOrName.Trim() : idOrName;
+                if (q.Length > 0)
                 {
                     for (int i = 0; i < builtIn.Length; i++)
                     {
-                        if (builtIn[i].IsLight) return builtIn[i];
+                        StudioTheme t = builtIn[i];
+                        if (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase))
+                            return t;
+                    }
+                    if (extensionThemes != null && extensionThemes.Count > 0)
+                    {
+                        lock (extensionThemes)
+                        {
+                            for (int i = 0; i < extensionThemes.Count; i++)
+                            {
+                                StudioTheme t = extensionThemes[i];
+                                if (t != null && (string.Equals(t.Id, q, StringComparison.OrdinalIgnoreCase) ||
+                                                  string.Equals(t.Name, q, StringComparison.OrdinalIgnoreCase)))
+                                    return t;
+                            }
+                        }
+                    }
+                    for (int i = 0; i < builtIn.Length; i++)
+                    {
+                        if (MatchesThemeQuerySlow(builtIn[i], q))
+                            return builtIn[i];
+                    }
+                    if (extensionThemes != null && extensionThemes.Count > 0)
+                    {
+                        lock (extensionThemes)
+                        {
+                            for (int i = 0; i < extensionThemes.Count; i++)
+                            {
+                                if (MatchesThemeQuerySlow(extensionThemes[i], q))
+                                    return extensionThemes[i];
+                            }
+                        }
+                    }
+                    if (q.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        q.IndexOf("daylight", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        for (int i = 0; i < builtIn.Length; i++)
+                        {
+                            if (builtIn[i].IsLight) return builtIn[i];
+                        }
                     }
                 }
             }

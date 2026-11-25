@@ -589,8 +589,7 @@ namespace codeLess.AvaloniaApp
                 g.ChevronBlock = chevron;
                 grid.Children.Add(chevron);
                 string fileName = Path.GetFileName(g.FilePath);
-                AvaloniaExplorerTree.GetFileTypeBadge(fileName, out string badge, out Color badgeColor);
-                var badgeTb = new TextBlock { Text = badge, FontSize = 8.5, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(badgeColor), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 5, 0) };
+                var badgeTb = AvaloniaExplorerTree.CreateSetiFileIconControl(fileName, theme, new Thickness(2, 0, 5, 0));
                 Grid.SetColumn(badgeTb, 1);
                 grid.Children.Add(badgeTb);
                 var nameTb = new TextBlock { Text = fileName, FontSize = UiTokens.FontUi, FontWeight = FontWeight.Normal, Foreground = primary, VerticalAlignment = VerticalAlignment.Center };

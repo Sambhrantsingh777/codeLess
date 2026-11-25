@@ -342,7 +342,12 @@ namespace codeLess.AvaloniaApp
                     MinHeight = UiTokens.ListRowHeight - 4
                 };
 
-                if (!string.IsNullOrEmpty(entry.Category))
+                if (!string.IsNullOrEmpty(entry.FilePath))
+                {
+                    var fileIcon = AvaloniaExplorerTree.CreateSetiFileIconControl(entry.Title, currentTheme, new Thickness(0, 0, 6, 0));
+                    row.Children.Add(fileIcon);
+                }
+                else if (!string.IsNullOrEmpty(entry.Category))
                 {
                     row.Children.Add(new TextBlock
                     {

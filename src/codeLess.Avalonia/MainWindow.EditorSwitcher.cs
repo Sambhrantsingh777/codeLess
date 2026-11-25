@@ -281,19 +281,8 @@ namespace codeLess.AvaloniaApp
             {
                 var tab = items[i];
                 int index = i;
-                AvaloniaExplorerTree.GetFileTypeBadge(tab.FileName ?? "", out string badge, out Color badgeColor);
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-                row.Children.Add(new TextBlock
-                {
-                    Text = badge,
-                    FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
-                    FontWeight = FontWeight.Bold,
-                    FontSize = 9.5,
-                    Width = 22,
-                    TextAlignment = TextAlignment.Center,
-                    Foreground = new SolidColorBrush(badgeColor),
-                    VerticalAlignment = VerticalAlignment.Center
-                });
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+                row.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(tab.FileName ?? "", theme));
                 row.Children.Add(new TextBlock
                 {
                     Text = (tab.IsDirty ? "● " : "") + (tab.FileName ?? ""),

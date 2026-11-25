@@ -423,6 +423,10 @@ namespace codeLess.AvaloniaApp
                 }
                 sb.Append(parts[i]);
                 bool isLast = (i == parts.Length - 1);
+                if (isLast)
+                {
+                    breadcrumbSegmentsPanel.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(parts[i], currentTheme, new Thickness(0, 0, 2, 0)));
+                }
                 breadcrumbSegmentsPanel.Children.Add(new TextBlock
                 {
                     Text = parts[i],
@@ -1783,6 +1787,9 @@ namespace codeLess.AvaloniaApp
             this.owner = owner;
             Focusable = true;
             ClipToBounds = true;
+            UseLayoutRounding = true;
+            RenderOptions.SetTextRenderingMode(this, TextRenderingMode.SubpixelAntialias);
+            RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.HighQuality);
             imeClient = new EditorImeClient(this);
             TextInputMethodClientRequested += (s, e) => e.Client = imeClient;
             global::Avalonia.Input.InputMethod.SetIsInputMethodEnabled(this, true);
@@ -5258,7 +5265,7 @@ namespace codeLess.AvaloniaApp
                 if (vr.IsFirstRow)
                 {
                     var lnFt = LineNumberText(docLine, docLine == buf.CursorLine, fontRegular, fontBold, textPriBrush, textSecBrush);
-                    lnFt.Draw(context, new Point(Math.Max(4, GutterWidth - 22 - lnFt.Width), y + (LineHeight - lnFt.Height) / 2.0));
+                    lnFt.Draw(context, new Point(Math.Round(Math.Max(4, GutterWidth - 22 - lnFt.Width)), Math.Round(y + (LineHeight - lnFt.Height) / 2.0)));
                     DrawDebugGutterGlyphs(context, buf, docLine, y);
                 }
 

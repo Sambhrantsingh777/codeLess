@@ -211,11 +211,9 @@ namespace codeLess.Studio
                 return true;
             }
             if (it.Kind != 17) return false;
-            string ext = Path.GetExtension(it.Label ?? "").TrimStart('.').ToUpperInvariant();
-            if (ext.Length == 0) ext = "•";
-            else if (ext.Length > 3) ext = ext.Substring(0, 3);
-            using (Font f = new Font("Consolas", 6.5f, FontStyle.Bold))
-                TextRenderer.DrawText(g, ext, f, r, fg, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            SetiIconInfo icon = SetiIconTheme.Resolve(it.Label ?? "", false, null);
+            using (Font f = SetiWinFormsFont.CreateFont(10.5f))
+                TextRenderer.DrawText(g, icon.Glyph, f, r, icon.Color, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
             return true;
         }
     }

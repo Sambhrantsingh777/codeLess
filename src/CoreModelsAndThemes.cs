@@ -49,6 +49,82 @@ using System.Windows.Forms;
 
 namespace codeLess.Studio
 {
+    public static class SetiWinFormsFont
+    {
+        private static readonly object syncRoot = new object();
+        private static System.Drawing.Text.PrivateFontCollection fontCollection;
+        private static FontFamily setiFamily;
+        private static bool loadAttempted;
+
+        public static bool IsLoaded { get { return setiFamily != null; } }
+
+        public static Font CreateFont(float sizePt)
+        {
+            EnsureLoaded();
+            if (setiFamily != null)
+            {
+                try { return new Font(setiFamily, sizePt, FontStyle.Regular); }
+                catch { }
+            }
+            return new Font("Segoe UI Symbol", sizePt, FontStyle.Regular);
+        }
+
+        private static void EnsureLoaded()
+        {
+            if (loadAttempted) return;
+            lock (syncRoot)
+            {
+                if (loadAttempted) return;
+                loadAttempted = true;
+                try
+                {
+                    byte[] ttfBytes = LoadSetiTtfBytes();
+                    if (ttfBytes != null && ttfBytes.Length > 0)
+                    {
+                        System.Drawing.Text.PrivateFontCollection pfc = new System.Drawing.Text.PrivateFontCollection();
+                        IntPtr ptr = Marshal.AllocCoTaskMem(ttfBytes.Length);
+                        try
+                        {
+                            Marshal.Copy(ttfBytes, 0, ptr, ttfBytes.Length);
+                            pfc.AddMemoryFont(ptr, ttfBytes.Length);
+                        }
+                        finally
+                        {
+                            Marshal.FreeCoTaskMem(ptr);
+                        }
+                        if (pfc.Families != null && pfc.Families.Length > 0)
+                        {
+                            fontCollection = pfc;
+                            setiFamily = pfc.Families[0];
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static byte[] LoadSetiTtfBytes()
+        {
+            try
+            {
+                System.Reflection.Assembly coreAsm = typeof(SetiIconTheme).Assembly;
+                using (Stream s = coreAsm.GetManifestResourceStream("codeLess.Grammars.seti.ttf.gz"))
+                {
+                    if (s != null)
+                    {
+                        using (System.IO.Compression.GZipStream gz = new System.IO.Compression.GZipStream(s, System.IO.Compression.CompressionMode.Decompress))
+                        using (MemoryStream ms = new MemoryStream())
+                        {
+                            gz.CopyTo(ms);
+                            return ms.ToArray();
+                        }
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+    }
     /// <summary>
     /// Custom-painted borderless dark dropdown control that replaces classic Win32 ComboBox
     /// (eliminating white 3D Win95 borders and classic grey dropdown buttons).
@@ -879,6 +955,7 @@ namespace codeLess.Studio
             string badge = null;
             Color badgeColor = theme != null ? theme.FgSecondary : Color.FromArgb(148, 163, 184);
 
+            bool isFileBadge = false;
             if (text.StartsWith("[class] ")) { badge = "C"; badgeColor = theme != null ? theme.AccentSecondary : Color.FromArgb(74, 222, 128); text = text.Substring(8); }
             else if (text.StartsWith("[struct] ")) { badge = "S"; badgeColor = theme != null ? theme.TokenType : Color.FromArgb(56, 189, 248); text = text.Substring(9); }
             else if (text.StartsWith("[interface] ")) { badge = "I"; badgeColor = theme != null ? theme.TokenKeyword : Color.FromArgb(192, 132, 252); text = text.Substring(12); }
@@ -887,26 +964,20 @@ namespace codeLess.Studio
             else if (text.StartsWith("≡ "))
             {
                 text = text.Substring(2);
-                string ext = Path.GetExtension(text).ToLowerInvariant();
-                if (ext == ".cs") { badge = "C#"; badgeColor = theme != null ? theme.AccentPrimary : Color.FromArgb(56, 189, 248); }
-                else if (ext == ".py") { badge = "PY"; badgeColor = theme != null ? theme.TokenNumber : Color.FromArgb(250, 204, 21); }
-                else if (ext == ".js" || ext == ".mjs") { badge = "JS"; badgeColor = theme != null ? theme.TokenType : Color.FromArgb(245, 158, 11); }
-                else if (ext == ".ts" || ext == ".tsx") { badge = "TS"; badgeColor = theme != null ? theme.AccentPrimary : Color.FromArgb(96, 165, 250); }
-                else if (ext == ".rs") { badge = "RS"; badgeColor = theme != null ? theme.TokenControl : Color.FromArgb(251, 146, 60); }
-                else if (ext == ".ps1") { badge = "PS"; badgeColor = theme != null ? theme.TokenFunction : Color.FromArgb(34, 211, 238); }
-                else if (ext == ".sh") { badge = "SH"; badgeColor = theme != null ? theme.AccentSecondary : Color.FromArgb(74, 222, 128); }
-                else if (ext == ".json" || ext == ".manifest") { badge = "{}"; badgeColor = theme != null ? theme.TokenKeyword : Color.FromArgb(192, 132, 252); }
-                else { badge = "≡"; badgeColor = theme != null ? theme.FgSecondary : Color.FromArgb(148, 163, 184); }
+                SetiIconInfo icon = SetiIconTheme.Resolve(text, theme != null && theme.IsLight, null);
+                badge = icon.Glyph;
+                badgeColor = icon.Color;
+                isFileBadge = true;
             }
 
             if (badge != null)
             {
-                using (Font bf = new Font("Consolas", 8.2f, FontStyle.Bold))
+                using (Font bf = isFileBadge ? SetiWinFormsFont.CreateFont(11.5f) : new Font("Consolas", 8.2f, FontStyle.Bold))
                 {
-                    Rectangle br = new Rectangle(x, rowRect.Y, 22, rowRect.Height);
-                    TextRenderer.DrawText(g, badge, bf, br, badgeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding);
+                    Rectangle br = new Rectangle(x, rowRect.Y, 20, rowRect.Height);
+                    TextRenderer.DrawText(g, badge, bf, br, badgeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
                 }
-                x += 24;
+                x += 22;
             }
 
             Rectangle tr = new Rectangle(x, rowRect.Y, Math.Max(10, rowRect.Width - x - 8), rowRect.Height);
@@ -1768,26 +1839,16 @@ namespace codeLess.Studio
                 }
                 else
                 {
-                    string ext = Path.GetExtension(rawName).ToLowerInvariant();
-                    string badge = "≡";
-                    Color badgeCol = theme != null ? theme.FgSecondary : Color.FromArgb(148, 163, 184);
-                    if (ext == ".cs") { badge = "C#"; badgeCol = theme != null ? theme.AccentPrimary : Color.FromArgb(56, 189, 248); }
-                    else if (ext == ".py") { badge = "PY"; badgeCol = theme != null ? theme.TokenNumber : Color.FromArgb(250, 204, 21); }
-                    else if (ext == ".js" || ext == ".mjs") { badge = "JS"; badgeCol = theme != null ? theme.TokenType : Color.FromArgb(245, 158, 11); }
-                    else if (ext == ".ts" || ext == ".tsx") { badge = "TS"; badgeCol = theme != null ? theme.AccentPrimary : Color.FromArgb(96, 165, 250); }
-                    else if (ext == ".rs") { badge = "RS"; badgeCol = theme != null ? theme.TokenControl : Color.FromArgb(251, 146, 60); }
-                    else if (ext == ".ps1") { badge = "PS"; badgeCol = theme != null ? theme.TokenFunction : Color.FromArgb(34, 211, 238); }
-                    else if (ext == ".sh") { badge = "SH"; badgeCol = theme != null ? theme.AccentSecondary : Color.FromArgb(74, 222, 128); }
-                    else if (ext == ".json" || ext == ".manifest") { badge = "{}"; badgeCol = theme != null ? theme.TokenKeyword : Color.FromArgb(192, 132, 252); }
-                    else if (ext == ".iss") { badge = "IS"; badgeCol = theme != null ? theme.TokenControl : Color.FromArgb(244, 114, 182); }
-                    else if (ext == ".md") { badge = "MD"; badgeCol = theme != null ? theme.TokenKeyword : Color.FromArgb(167, 139, 250); }
+                    SetiIconInfo icon = SetiIconTheme.Resolve(rawName, theme != null && theme.IsLight, null);
+                    string badge = icon.Glyph;
+                    Color badgeCol = icon.Color;
 
-                    using (Font bf = new Font("Consolas", 8.0f, FontStyle.Bold))
+                    using (Font bf = SetiWinFormsFont.CreateFont(11.5f))
                     {
-                        TextRenderer.DrawText(g, badge, bf, new Rectangle(x, r.Y, 22, r.Height),
-                            badgeCol, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding);
+                        TextRenderer.DrawText(g, badge, bf, new Rectangle(x, r.Y, 16, r.Height),
+                            badgeCol, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
                     }
-                    x += 23;
+                    x += 22;
 
                     // Check Git decoration status
                     string gitStatus = null;
