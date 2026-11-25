@@ -5,11 +5,12 @@ using System.Web.Script.Serialization;
 
 namespace codeLess.Studio
 {
-    public class AgentToolSpec
+    
+    public class NativeToolResult
     {
-        public string Name { get; set; }
-        public string Description { get; set; }
-        public Dictionary<string, object> Parameters { get; set; }
+        public string CallId { get; set; }
+        public string Content { get; set; }
+        public bool IsError { get; set; }
     }
 
     public class NativeToolCall
@@ -37,33 +38,16 @@ namespace codeLess.Studio
     {
         private static readonly JavaScriptSerializer Serializer = new JavaScriptSerializer();
         
-        public static readonly AgentToolSpec[] Tools = new AgentToolSpec[]
-        {
-            new AgentToolSpec { Name = "read_file", Description = "Read the contents of a file.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"start_line\":{\"type\":\"integer\"},\"end_line\":{\"type\":\"integer\"},\"offset\":{\"type\":\"integer\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"path\"]}") },
-            new AgentToolSpec { Name = "write_file", Description = "Write new content to a file, overwriting it entirely.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}") },
-            new AgentToolSpec { Name = "edit_file", Description = "Edit a file using search and replace blocks.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"search\":{\"type\":\"string\"},\"replace\":{\"type\":\"string\"},\"oldString\":{\"type\":\"string\"},\"newString\":{\"type\":\"string\"},\"replaceAll\":{\"type\":\"boolean\"}},\"required\":[\"path\"]}") },
-            new AgentToolSpec { Name = "multiedit", Description = "Apply multiple edits to a file atomically.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"search\":{\"type\":\"string\"},\"replace\":{\"type\":\"string\"},\"oldString\":{\"type\":\"string\"},\"newString\":{\"type\":\"string\"},\"replaceAll\":{\"type\":\"boolean\"}}}}},\"required\":[\"path\",\"edits\"]}") },
-            new AgentToolSpec { Name = "list_dir", Description = "List files and directories in a folder.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}") },
-            new AgentToolSpec { Name = "grep_search", Description = "Search for a regex pattern across files.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"include\":{\"type\":\"string\"}},\"required\":[\"query\"]}") },
-            new AgentToolSpec { Name = "glob", Description = "Find files matching a glob pattern.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"}},\"required\":[\"pattern\"]}") },
-            new AgentToolSpec { Name = "run_terminal", Description = "Run a shell command in the terminal.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout\":{\"type\":\"integer\"},\"description\":{\"type\":\"string\"}},\"required\":[\"command\"]}") },
-            new AgentToolSpec { Name = "get_diagnostics", Description = "Get language server diagnostics (errors/warnings) for a file.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}") },
-            new AgentToolSpec { Name = "ast_outline", Description = "Get an AST outline of a file.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}") },
-            new AgentToolSpec { Name = "webfetch", Description = "Fetch content from a URL.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\"},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}") },
-            new AgentToolSpec { Name = "task", Description = "Run a nested read-only subagent task.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"prompt\"]}") },
-            new AgentToolSpec { Name = "todowrite", Description = "Write the plan todos.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\"}},\"required\":[\"todos\"]}") },
-            new AgentToolSpec { Name = "todoread", Description = "Read the plan todos.", Parameters = (Dictionary<string, object>)Serializer.DeserializeObject("{\"type\":\"object\",\"properties\":{},\"required\":[]}") }
-        };
-
-        public static object BuildOpenAiTools()
+        
+        public static object BuildOpenAiTools(IEnumerable<AgentToolDefinition> tools)
         {
             var res = new List<object>();
-            foreach (var t in Tools)
+            foreach (var t in tools)
             {
                 var fn = new Dictionary<string, object>();
                 fn["name"] = t.Name;
                 fn["description"] = t.Description;
-                fn["parameters"] = t.Parameters;
+                fn["parameters"] = Serializer.DeserializeObject(t.JsonSchema);
                 var tool = new Dictionary<string, object>();
                 tool["type"] = "function";
                 tool["function"] = fn;
@@ -72,21 +56,21 @@ namespace codeLess.Studio
             return res;
         }
 
-        public static object BuildAnthropicTools()
+        public static object BuildAnthropicTools(IEnumerable<AgentToolDefinition> tools)
         {
             var res = new List<object>();
-            foreach (var t in Tools)
+            foreach (var t in tools)
             {
                 var tool = new Dictionary<string, object>();
                 tool["name"] = t.Name;
                 tool["description"] = t.Description;
-                tool["input_schema"] = t.Parameters;
+                tool["input_schema"] = Serializer.DeserializeObject(t.JsonSchema);
                 res.Add(tool);
             }
             return res;
         }
 
-        public static List<object> SerialiseOpenAiHistory(List<NativeToolCall> calls, string text)
+        public static List<object> SerialiseOpenAiHistory(string text, List<NativeToolCall> calls, List<NativeToolResult> results)
         {
             var res = new List<object>();
             
@@ -112,19 +96,22 @@ namespace codeLess.Studio
                 
             res.Add(assistantMsg);
             
-            foreach (var c in calls)
+            if (results != null)
             {
-                var toolMsg = new Dictionary<string, object>();
-                toolMsg["role"] = "tool";
-                toolMsg["tool_call_id"] = c.Id;
-                toolMsg["content"] = ""; // The result will be filled later, here we just output the shape requested
-                res.Add(toolMsg);
+                foreach (var r in results)
+                {
+                    var toolMsg = new Dictionary<string, object>();
+                    toolMsg["role"] = "tool";
+                    toolMsg["tool_call_id"] = r.CallId;
+                    toolMsg["content"] = r.Content;
+                    res.Add(toolMsg);
+                }
             }
             
             return res;
         }
 
-        public static List<object> SerialiseAnthropicHistory(List<NativeToolCall> calls, string text)
+        public static List<object> SerialiseAnthropicHistory(string text, List<NativeToolCall> calls, List<NativeToolResult> results)
         {
             var res = new List<object>();
             
@@ -143,7 +130,7 @@ namespace codeLess.Studio
                 tu["type"] = "tool_use";
                 tu["id"] = c.Id;
                 tu["name"] = c.Name;
-                tu["input"] = c.GetArguments(); // Anthropic uses parsed JSON object here
+                tu["input"] = c.GetArguments(); 
                 content.Add(tu);
             }
             
@@ -152,19 +139,19 @@ namespace codeLess.Studio
             assistantMsg["content"] = content;
             res.Add(assistantMsg);
             
-            var userContent = new List<object>();
-            foreach (var c in calls)
+            if (results != null && results.Count > 0)
             {
-                var tr = new Dictionary<string, object>();
-                tr["type"] = "tool_result";
-                tr["tool_use_id"] = c.Id;
-                tr["content"] = ""; // Result to be filled later
-                tr["is_error"] = false;
-                userContent.Add(tr);
-            }
-            
-            if (userContent.Count > 0)
-            {
+                var userContent = new List<object>();
+                foreach (var r in results)
+                {
+                    var tr = new Dictionary<string, object>();
+                    tr["type"] = "tool_result";
+                    tr["tool_use_id"] = r.CallId;
+                    tr["content"] = r.Content;
+                    tr["is_error"] = r.IsError;
+                    userContent.Add(tr);
+                }
+                
                 var userMsg = new Dictionary<string, object>();
                 userMsg["role"] = "user";
                 userMsg["content"] = userContent;

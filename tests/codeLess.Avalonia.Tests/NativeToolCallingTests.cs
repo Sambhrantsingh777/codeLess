@@ -15,32 +15,52 @@ namespace codeLess.Avalonia.Tests
         [Fact]
         public void ToolsTable_MatchesExecuteWorkspaceTool()
         {
-            var engineTools = LlmHarnessAndAgentEngine.Tools.Select(t => t.Name).OrderBy(x => x).ToList();
-            var nativeTools = NativeToolCalling.Tools.Select(t => t.Name).OrderBy(x => x).ToList();
-            Assert.Equal(engineTools, nativeTools);
+            var harness = new LlmHarnessAndAgentEngine(new IdePersistentSettings { RequireAgentToolApproval = false });
+            var executor = harness.GetType().GetMethod("ExecuteWorkspaceTool", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.NotNull(executor);
+            
+            var tools = LlmHarnessAndAgentEngine.Tools.Select(t => t.Name).ToList();
+            
+            foreach (var t in tools)
+            {
+                var res = (codeLess.Studio.AgentToolCallResult)executor.Invoke(harness, new object[] { t, new Dictionary<string, object>(), "/tmp", null, null, new Dictionary<string, string>(), "build", new IdePersistentSettings { RequireAgentToolApproval = false } });
+                Assert.False(res.Output != null && res.Output.StartsWith("Invalid tool \""), "Tool " + t + " was not recognized by ExecuteWorkspaceTool");
+            }
+            
+            var invalidRes = (codeLess.Studio.AgentToolCallResult)executor.Invoke(harness, new object[] { "definitely_invalid_tool_name_xyz", new Dictionary<string, object>(), "/tmp", null, null, new Dictionary<string, string>(), "build", new IdePersistentSettings { RequireAgentToolApproval = false } });
+            Assert.True(invalidRes.Output.StartsWith("Invalid tool \""), "Unrecognized tool did not return Invalid tool message");
         }
 
         [Fact]
         public void Builders_ReturnCorrectJsonShape()
         {
-            var oai = NativeToolCalling.BuildOpenAiTools() as List<object>;
+            // Test roundtrip of JSON Schema required parameters survives
+            var buildersTools = NativeToolCalling.BuildOpenAiTools(LlmHarnessAndAgentEngine.Tools) as List<object>;
+            var json = _js.Serialize(buildersTools);
+            var deserialized = _js.DeserializeObject(json) as System.Collections.ArrayList;
+            var firstFn = (Dictionary<string, object>)((Dictionary<string, object>)deserialized[0])["function"];
+            var parameters = (Dictionary<string, object>)firstFn["parameters"];
+            var requiredArr = (System.Collections.ArrayList)parameters["required"];
+            Assert.Contains("path", requiredArr.Cast<string>());
+
+            var oai = NativeToolCalling.BuildOpenAiTools(LlmHarnessAndAgentEngine.Tools) as List<object>;
             Assert.NotNull(oai);
-            Assert.Equal(NativeToolCalling.Tools.Length, oai.Count);
+            Assert.Equal(LlmHarnessAndAgentEngine.Tools.Length, oai.Count);
             
             var oaiFirst = (Dictionary<string, object>)oai[0];
             Assert.Equal("function", oaiFirst["type"]);
             var fn = (Dictionary<string, object>)oaiFirst["function"];
-            Assert.Equal(NativeToolCalling.Tools[0].Name, fn["name"]);
-            Assert.Equal(NativeToolCalling.Tools[0].Description, fn["description"]);
+            Assert.Equal(LlmHarnessAndAgentEngine.Tools[0].Name, fn["name"]);
+            Assert.Equal(LlmHarnessAndAgentEngine.Tools[0].Description, fn["description"]);
             Assert.NotNull(fn["parameters"]);
 
-            var anth = NativeToolCalling.BuildAnthropicTools() as List<object>;
+            var anth = NativeToolCalling.BuildAnthropicTools(LlmHarnessAndAgentEngine.Tools) as List<object>;
             Assert.NotNull(anth);
-            Assert.Equal(NativeToolCalling.Tools.Length, anth.Count);
+            Assert.Equal(LlmHarnessAndAgentEngine.Tools.Length, anth.Count);
             
             var anthFirst = (Dictionary<string, object>)anth[0];
-            Assert.Equal(NativeToolCalling.Tools[0].Name, anthFirst["name"]);
-            Assert.Equal(NativeToolCalling.Tools[0].Description, anthFirst["description"]);
+            Assert.Equal(LlmHarnessAndAgentEngine.Tools[0].Name, anthFirst["name"]);
+            Assert.Equal(LlmHarnessAndAgentEngine.Tools[0].Description, anthFirst["description"]);
             Assert.NotNull(anthFirst["input_schema"]);
         }
 
@@ -52,7 +72,10 @@ namespace codeLess.Avalonia.Tests
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"content\":\"Here is text\"}}]}"));
             
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\": \\\"\"}}]} ]}]}"));
-            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"file.txt\\\"\"}}]}}]}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"fi\"}}]}}]}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"le\"}}]}}]}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\".t\"}}]}}]}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"xt\\\"\"}}]}}]}"));
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"}\"}}]}}]}"));
             
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"choices\":[{\"finish_reason\":\"tool_calls\",\"delta\":{}}]}"));
@@ -114,8 +137,9 @@ namespace codeLess.Avalonia.Tests
         public void HistorySerialisers_ShapeTests()
         {
             var calls = new List<NativeToolCall> { new NativeToolCall { Id = "call_1", Name = "read_file", ArgumentsJson = "{\"path\": \"f.txt\"}" } };
+            var results = new List<NativeToolResult> { new NativeToolResult { CallId = "call_1", Content = "file data", IsError = false } };
             
-            var oaiHistory = NativeToolCalling.SerialiseOpenAiHistory(calls, "text");
+            var oaiHistory = NativeToolCalling.SerialiseOpenAiHistory("text", calls, results);
             Assert.Equal(2, oaiHistory.Count);
             
             var astMsg = (Dictionary<string, object>)oaiHistory[0];
@@ -129,8 +153,9 @@ namespace codeLess.Avalonia.Tests
             var toolMsg = (Dictionary<string, object>)oaiHistory[1];
             Assert.Equal("tool", toolMsg["role"]);
             Assert.Equal("call_1", toolMsg["tool_call_id"]);
+            Assert.Equal("file data", toolMsg["content"]);
 
-            var anthHistory = NativeToolCalling.SerialiseAnthropicHistory(calls, "text");
+            var anthHistory = NativeToolCalling.SerialiseAnthropicHistory("text", calls, results);
             Assert.Equal(2, anthHistory.Count);
             
             var astAnth = (Dictionary<string, object>)anthHistory[0];
@@ -148,6 +173,9 @@ namespace codeLess.Avalonia.Tests
             Assert.Single(usrAnthContent);
             var trBlock = (Dictionary<string, object>)usrAnthContent[0];
             Assert.Equal("tool_result", trBlock["type"]);
+            Assert.Equal("call_1", trBlock["tool_use_id"]);
+            Assert.Equal("file data", trBlock["content"]);
+            Assert.False((bool)trBlock["is_error"]);
         }
     }
 }
