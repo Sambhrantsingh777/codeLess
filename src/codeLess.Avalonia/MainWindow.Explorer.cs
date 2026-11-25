@@ -361,9 +361,12 @@ namespace codeLess.AvaloniaApp
             QueueFsChange(e.FullPath, structural: e.ChangeType != WatcherChangeTypes.Changed);
         }
 
+        private int fsDebouncePostPending;
+
         private void QueueFsChange(string fullPath, bool structural)
         {
             if (string.IsNullOrEmpty(fullPath)) return;
+            if (EditorTabBuffer.IsAtomicSaveTempFile(fullPath)) return;
             if (!structural)
             {
                 lock (internalSaveTimestamps)
@@ -397,11 +400,21 @@ namespace codeLess.AvaloniaApp
                 {
                     if (structural) { fsTreeDirty = true; RecordStructuralFsChange(fullPath, excludedFromIndex: false); }
                     fsGitDirty = true;
-                    if (!structural && fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
+                    if (fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
                 }
             }
-            var weakSelf = new WeakReference<MainWindow>(this);
-            MainUi.Post(() => { if (weakSelf.TryGetTarget(out var self) && !self.windowClosed) self.RestartFsDebounce(); });
+            if (Interlocked.Exchange(ref fsDebouncePostPending, 1) == 0)
+            {
+                var weakSelf = new WeakReference<MainWindow>(this);
+                MainUi.Post(() =>
+                {
+                    if (weakSelf.TryGetTarget(out var self))
+                    {
+                        Interlocked.Exchange(ref self.fsDebouncePostPending, 0);
+                        if (!self.windowClosed) self.RestartFsDebounce();
+                    }
+                });
+            }
         }
 
         private void RestartFsDebounce()
@@ -456,6 +469,9 @@ namespace codeLess.AvaloniaApp
             }
             if (git)
                 RefreshGitStatusInBackground();
+            var openPathSet = new HashSet<string>(
+                openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath),
+                PathKeyComparer);
             foreach (var t in openTabs.ToList())
             {
                 if (!t.IsUntitled && !string.IsNullOrEmpty(t.FilePath) && !File.Exists(t.FilePath) && !t.IsDeletedOnDisk)
@@ -463,6 +479,7 @@ namespace codeLess.AvaloniaApp
             }
             foreach (string f in changed)
             {
+                if (!openPathSet.Contains(f)) continue;
                 if (File.Exists(f)) HandleExternalFileChanged(f);
                 else HandleExternalFileDeleted(f);
             }

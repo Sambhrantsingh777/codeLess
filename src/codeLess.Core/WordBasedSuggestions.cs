@@ -64,6 +64,13 @@ namespace codeLess.Studio
             DocWords dw = cache.GetValue(buf, delegate(EditorTabBuffer b) { return new DocWords(); });
             if (ReferenceEquals(dw.LinesRef, buf.Lines) && dw.Version == buf.EditVersion) return dw.Words;
             List<string> lines = buf.Lines;
+            if (lines != null && lines.Count > EditorLargeFileThresholds.LineThreshold)
+            {
+                if (dw.LinesRef != null && Math.Abs(unchecked(Environment.TickCount - dw.BuiltTick)) < LargeDocumentRescanMs)
+                    return dw.Words;
+                Store(dw, buf, ScanWordsWindow(lines, buf.CursorLine, LargeDocumentLines));
+                return dw.Words;
+            }
             bool large = lines != null && lines.Count > LargeDocumentLines;
             if (large && dw.LinesRef != null)
             {
@@ -90,6 +97,20 @@ namespace codeLess.Studio
             }
             Store(dw, buf, ScanWords(lines));
             return dw.Words;
+        }
+
+        private static List<string> ScanWordsWindow(IList<string> lines, int centerLine, int maxWindowLines)
+        {
+            if (lines == null || lines.Count == 0) return new List<string>();
+            int count = lines.Count;
+            int headerCount = Math.Min(500, count);
+            int half = Math.Max(250, maxWindowLines / 2);
+            int winStart = Math.Max(headerCount, Math.Min(count - 1, centerLine) - half);
+            int winEnd = Math.Min(count, winStart + maxWindowLines);
+            List<string> window = new List<string>(headerCount + Math.Max(0, winEnd - winStart));
+            for (int i = 0; i < headerCount; i++) window.Add(lines[i]);
+            for (int i = winStart; i < winEnd; i++) window.Add(lines[i]);
+            return ScanWords(window);
         }
 
         /// <summary>Large documents refresh their word list in the background (tests turn this off for determinism).</summary>

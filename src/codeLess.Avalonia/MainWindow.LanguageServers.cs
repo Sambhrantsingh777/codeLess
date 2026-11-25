@@ -91,7 +91,7 @@ namespace codeLess.AvaloniaApp
         // ------------------------------------------------------------------ document lifecycle hooks
 
         private static bool IsLspEligible(EditorTabBuffer tab) =>
-            tab != null && !string.IsNullOrEmpty(tab.FilePath) && File.Exists(tab.FilePath) && tab.Content != null && tab.Content.Length <= 4 * 1024 * 1024;
+            tab != null && !tab.IsLargeFile && !tab.IsLargeFileViewer && !string.IsNullOrEmpty(tab.FilePath) && File.Exists(tab.FilePath) && tab.Content != null && tab.Content.Length <= 4 * 1024 * 1024;
 
         /// <summary>Hook: ActivateTab. Opens the document on its server and closes documents whose tab is gone.</summary>
         private void LspOnTabActivated(EditorTabBuffer tab)

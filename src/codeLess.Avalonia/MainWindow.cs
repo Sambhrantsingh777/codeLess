@@ -707,6 +707,7 @@ namespace codeLess.AvaloniaApp
 
         public new void Close()
         {
+            if (windowClosed) return;
             bool shouldHotExit = HotExitService.ShouldBackupWithoutPrompt(settings, isApplicationQuitting);
             if (shouldHotExit)
             {
@@ -3255,6 +3256,12 @@ namespace codeLess.AvaloniaApp
         private void RecordClosedTabHistory(EditorTabBuffer tab)
         {
             if (tab == null || string.IsNullOrEmpty(tab.FilePath) || !File.Exists(tab.FilePath)) return;
+            if (closedTabHistory.Count >= 64)
+            {
+                var recent = closedTabHistory.Take(32).Reverse().ToList();
+                closedTabHistory.Clear();
+                foreach (var p in recent) closedTabHistory.Push(p);
+            }
             closedTabHistory.Push(tab.FilePath);
             if (closedTabStates.Count >= 64) closedTabStates.Clear();
             closedTabStates[tab.FilePath] = (tab.CursorLine, tab.CursorCol, tab.ScrollTopLine);
@@ -3267,6 +3274,10 @@ namespace codeLess.AvaloniaApp
             {
                 if (!ConfirmSaveOrDiscardDirtyTabs(new[] { tab }, () => { if (openTabs.Contains(tab)) CloseTab(tab, forceWithoutPrompt: true); }))
                     return false;
+            }
+            else if (forceWithoutPrompt)
+            {
+                HotExitService.DeleteBackup(workspaceRoot, tab);
             }
 
             RecordClosedTabHistory(tab);

@@ -360,6 +360,7 @@ namespace codeLess.Studio
         {
             string name = Path.GetFileName(fullPath);
             if (string.IsNullOrEmpty(name)) return true;
+            if (EditorTabBuffer.IsAtomicSaveTempFile(name)) return true;
             string ext = Path.GetExtension(name);
             if (!string.IsNullOrEmpty(ext) && WorkspaceSearchEngine.BinaryExtensions.Contains(ext)) return true;
             return IsGitIgnored(fullPath, name, false);
@@ -420,6 +421,7 @@ namespace codeLess.Studio
                     DirectoryInfo di = new DirectoryInfo(item.Dir);
                     foreach (FileSystemInfo fsi in di.EnumerateFileSystemInfos())
                     {
+                        if (ct.IsCancellationRequested) break;
                         string full = fsi.FullName;
                         if ((fsi.Attributes & FileAttributes.Directory) == FileAttributes.Directory)
                         {
@@ -434,6 +436,7 @@ namespace codeLess.Studio
                         else
                         {
                             string fname = fsi.Name;
+                            if (EditorTabBuffer.IsAtomicSaveTempFile(fname)) continue;
                             string ext = Path.GetExtension(fname);
                             if (!string.IsNullOrEmpty(ext) && WorkspaceSearchEngine.BinaryExtensions.Contains(ext)) continue;
                             if (IsIgnoredByChain(chain, full, fname, false)) continue;

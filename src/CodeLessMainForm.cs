@@ -8893,9 +8893,12 @@ if __name__ == '__main__':
         private DateTime fsFirstPendingUtc = DateTime.MinValue;
         private readonly HashSet<EditorTabBuffer> tabsWithReloadPromptOpen = new HashSet<EditorTabBuffer>();
 
+        private int fsFlushBeginInvokePending;
+
         private void QueueWorkspaceFsChange(string fullPath, bool structural, bool deleted)
         {
             if (string.IsNullOrEmpty(fullPath)) return;
+            if (EditorTabBuffer.IsAtomicSaveTempFile(fullPath)) return;
             bool insideGit = fullPath.IndexOf("\\.git\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
                              fullPath.EndsWith("\\.git", StringComparison.OrdinalIgnoreCase);
             lock (fsChangeLock)
@@ -8920,10 +8923,12 @@ if __name__ == '__main__':
         private void ScheduleFsFlush()
         {
             if (!this.IsHandleCreated || this.IsDisposed) return;
+            if (System.Threading.Interlocked.Exchange(ref fsFlushBeginInvokePending, 1) != 0) return;
             try
             {
                 this.BeginInvoke(new Action(() =>
                 {
+                    System.Threading.Interlocked.Exchange(ref fsFlushBeginInvokePending, 0);
                     if (this.IsDisposed) return;
                     if (fsFlushTimer == null)
                     {
@@ -8974,6 +8979,7 @@ if __name__ == '__main__':
                 foreach (string c in changed)
                 {
                     // node_modules / bin / obj churn refreshes the tree but never enters the search index.
+                    if (known.Contains(c)) continue;
                     if (IsUnderExcludedFolder(c, excludedNames)) continue;
                     string ext = Path.GetExtension(c);
                     if ((string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext)) && File.Exists(c) && known.Add(c))
@@ -9352,7 +9358,14 @@ if __name__ == '__main__':
 
             if (!string.IsNullOrEmpty(captured.FilePath))
             {
+                if (closedTabPaths.Count >= 64)
+                {
+                    List<string> recent = closedTabPaths.Take(32).Reverse().ToList();
+                    closedTabPaths.Clear();
+                    foreach (string p in recent) closedTabPaths.Push(p);
+                }
                 closedTabPaths.Push(captured.FilePath);
+                if (closedTabStatesWin.Count >= 64) closedTabStatesWin.Clear();
                 closedTabStatesWin[captured.FilePath] = new ClosedTabStateWin
                 {
                     Line = captured.CursorLine,
@@ -9360,6 +9373,7 @@ if __name__ == '__main__':
                     ScrollTop = captured.ScrollTopLine
                 };
             }
+            HotExitService.DeleteBackup(workspaceRoot, captured);
 
             openTabs.Remove(captured);
             if (captured.OnClosed != null)

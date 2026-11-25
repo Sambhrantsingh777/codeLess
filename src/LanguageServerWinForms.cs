@@ -98,7 +98,7 @@ namespace codeLess.Studio
 
         private static bool Eligible(EditorTabBuffer tab)
         {
-            return tab != null && !string.IsNullOrEmpty(tab.FilePath) && File.Exists(tab.FilePath) && (tab.Content == null || tab.Content.Length <= 4 * 1024 * 1024);
+            return tab != null && !tab.IsLargeFile && !tab.IsLargeFileViewer && !string.IsNullOrEmpty(tab.FilePath) && File.Exists(tab.FilePath) && (tab.Content == null || tab.Content.Length <= 4 * 1024 * 1024);
         }
 
         /// <summary>Hook: called whenever the tab strip is rebuilt. Opens the active document, closes documents whose tab is gone.</summary>

@@ -339,6 +339,7 @@ namespace codeLess.Studio
                 {
                     foreach (string file in Directory.EnumerateFiles(current))
                     {
+                        if (ct.IsCancellationRequested) break;
                         if (ignoreRules.IsIgnoredFile(file)) continue;
                         if (hasInclude || hasExclude)
                         {
@@ -350,9 +351,11 @@ namespace codeLess.Studio
                         results.Add(file);
                         if (results.Count >= maxFiles) break;
                     }
+                    if (ct.IsCancellationRequested) break;
                     List<string> subs = new List<string>();
                     foreach (string sub in Directory.EnumerateDirectories(current))
                     {
+                        if (ct.IsCancellationRequested) break;
                         string name = Path.GetFileName(sub);
                         if (string.IsNullOrEmpty(name) || ignoreRules.IsExcludedDirectory(sub)) continue;
                         if (hasExclude && exclude.IsMatch(sub, GetRelative(workspaceRoot, sub))) continue;
