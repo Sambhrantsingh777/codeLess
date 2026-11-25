@@ -42,6 +42,7 @@ All ported components in `src/codeLess.Core/` and `src/` are written in strict C
 | **M7d: `webfetch` Tool** | `src/tool/webfetch.ts` | `src/codeLess.Core/WebFetchTool.cs`, `src/codeLess.Core/NetworkLedgerHttp.cs` | `WebFetchTool.Execute`, `ConvertHtmlToText`, `ConvertHtmlToMarkdown`, `LedgerHttp.Send` |
 | **M7e: `task` Subagent Tool** | `src/tool/task.ts` | `src/LlmHarnessAndAgentEngine.cs` | `ExecuteWorkspaceTool` (`toolName == "task"`), `SubagentDepth` (max depth 1), `GetAvailableToolsForCurrentDepth` (read-only tools only, nested `task` refused) |
 | **M7f: WinForms & Avalonia UI Parity** | `packages/opencode/src/cli/cmd/tui/` | `src/codeLess.Core/AgentUiParity.cs`, `src/CodeLessMainForm.cs`, `src/CoreModelsAndThemes.cs`, `src/codeLess.Avalonia/MainWindow.cs` | Build/Plan mode dropdown & `Tab` key cycling, `AgentTodos` task list rendering (`☐`, `◐`, `☑`, `☒` with strikethrough) |
+| **M9a: MCP Servers (Local Stdio)** | `src/mcp/index.ts` | `src/codeLess.Core/McpStdioClient.cs`, `src/codeLess.Core/AgentPermissions.cs`, `src/LlmHarnessAndAgentEngine.cs` | `McpConfigLoader.LoadMergedConfig` (`codeless.mcp`), `McpStdioClient` (`initialize`, `notifications/initialized`, `tools/list`, `tools/call`), `McpServerManager` (lazy start, `<server>_<tool>` exposure, `StopAll` on close/workspace change) |
 
 ---
 
@@ -95,3 +96,4 @@ All agent harness settings persist in `IdePersistentSettings` (`settings.json`):
 | `agent.permission.edit` | `AgentPermissionEdit` | `"allow"` | Permission override (`"allow"`, `"ask"`, or `"deny"`) for `write_file`, `edit_file`, and `multiedit` in Build mode (always `"deny"` in Plan mode). |
 | `agent.permission.webfetch` | `AgentPermissionWebfetch` | `"ask"` | Permission override (`"allow"`, `"ask"`, or `"deny"`) for `webfetch`. Defaults to `"ask"` so outbound documentation fetches require approval unless explicitly set to `"allow"`. |
 | `agent.permission.bash` | `AgentPermissionBash` | `{}` | Dictionary of glob patterns (e.g. `{"git status*": "allow", "rm *": "deny"}`) matched by longest-pattern-wins against `run_terminal` commands, merged with `MergeStricter`. |
+| `codeless.mcp` | `McpServers` | `{}` | Local stdio MCP server definitions (`{ "<name>": { "type": "local", "command": ["cmd", "arg"], "environment": {...}, "enabled": true } }`) merged across user `settings.json` and workspace `.vscode/settings.json` (workspace wins). |

@@ -83,6 +83,8 @@ namespace codeLess.Studio
         private List<WorkspaceSymbolLocation> _workspaceSymbolMap = new List<WorkspaceSymbolLocation>();
         public List<HarnessTraceEntry> TraceHistory = new List<HarnessTraceEntry>();
         public FileTimeTracker FileTimeTracker = new FileTimeTracker();
+        public McpServerManager McpManager = new McpServerManager();
+        private string _currentTurnWorkspaceRoot = "";
 
 
         private Dictionary<string, int> docFreq = new Dictionary<string, int>();
@@ -143,6 +145,12 @@ namespace codeLess.Studio
             docFreq = new Dictionary<string, int>();
             _projectRulesText = "";
             _compactRepoMap = "";
+            if (McpManager != null) McpManager.StopAll();
+        }
+
+        public void DisposeMcpServers()
+        {
+            if (McpManager != null) McpManager.StopAll();
         }
         public bool LocalOllamaDetected = false;
         private HashSet<string> NativeToolsUnsupportedVendors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -191,10 +199,21 @@ namespace codeLess.Studio
             }
         }
 
-        public IEnumerable<AgentToolDefinition> GetAvailableToolsForCurrentDepth()
+        public IEnumerable<AgentToolDefinition> GetAvailableToolsForCurrentDepth(string workspaceRoot = null)
         {
             if (SubagentDepth >= 1)
                 return Tools.Where(t => t.IsReadOnly && t.Name != "task");
+            string ws = !string.IsNullOrEmpty(workspaceRoot) ? workspaceRoot : _currentTurnWorkspaceRoot;
+            if (McpManager != null)
+            {
+                List<AgentToolDefinition> mcpTools = McpManager.GetAgentToolDefinitions(ws, _settings);
+                if (mcpTools != null && mcpTools.Count > 0)
+                {
+                    List<AgentToolDefinition> combined = new List<AgentToolDefinition>(Tools);
+                    combined.AddRange(mcpTools);
+                    return combined;
+                }
+            }
             return Tools;
         }
         public IDiagnosticsProvider DiagnosticsProvider { get; set; }
@@ -1943,6 +1962,11 @@ namespace codeLess.Studio
 
         public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab, bool useNative = false, bool isSubagent = false)
         {
+            return BuildSystemHarnessPrompt(mode, harness, vendor, workspaceRoot, activeTab, useNative, isSubagent, null);
+        }
+
+        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab, bool useNative, bool isSubagent, IEnumerable<AgentToolDefinition> availableTools)
+        {
             string hName = harness != null ? harness.Name : "codeLess Adaptive Harness";
             string hDirective = harness != null ? harness.SystemPromptDirective : "";
 
@@ -1982,7 +2006,8 @@ updated replacement lines
                 else
                 {
                     sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
-                    foreach (var t in Tools)
+                    IEnumerable<AgentToolDefinition> toolsToList = availableTools ?? Tools;
+                    foreach (var t in toolsToList)
                     {
                         if (isSubagent && (!t.IsReadOnly || t.Name == "task"))
                             continue;
@@ -2779,7 +2804,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         {
                             var sb = new StringBuilder();
                             sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
-                            foreach (var t in Tools)
+                            foreach (var t in GetAvailableToolsForCurrentDepth(_currentTurnWorkspaceRoot))
                             {
                                 sb.AppendLine("<tool_call>");
                                 sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
@@ -2879,6 +2904,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             LlmHarnessProfile harness = ResolveHarnessForVendor(activeVendor, preferredHarnessId);
             result.HarnessUsed = harness.Name;
             _currentTurnVendor = activeVendor;
+            _currentTurnWorkspaceRoot = workspaceRoot ?? "";
 
             // Assemble Engineered Context
             List<Bm25CodeChunk> topChunks = RetrieveTopChunks(userInstruction, 5);
@@ -3047,7 +3073,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, IsNativeToolCallingEnabledFor(activeVendor), SubagentDepth >= 1);
+            IEnumerable<AgentToolDefinition> turnTools = GetAvailableToolsForCurrentDepth(workspaceRoot);
+            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, IsNativeToolCallingEnabledFor(activeVendor), SubagentDepth >= 1, turnTools);
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
@@ -3484,9 +3511,15 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     break;
                 }
             }
+            McpToolInfo mcpToolInfo = null;
+            if (!isKnown && McpManager != null && McpManager.TryResolveMcpTool(originalName, workspaceRoot, settings ?? _settings, out mcpToolInfo))
+            {
+                toolName = mcpToolInfo.ExposedName;
+                isKnown = true;
+            }
             if (!isKnown)
             {
-                string[] knownToolsArr = Tools.Select(t => t.Name).ToArray();
+                string[] knownToolsArr = GetAvailableToolsForCurrentDepth(workspaceRoot).Select(t => t.Name).ToArray();
                 string closestMatch = null;
                 int minDist = int.MaxValue;
                 foreach (string k in knownToolsArr)
@@ -3564,6 +3597,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             try
             {
+                if (mcpToolInfo != null)
+                {
+                    return McpManager.ExecuteMcpTool(mcpToolInfo, args);
+                }
 
                 if (toolName == "read_file")
                 {

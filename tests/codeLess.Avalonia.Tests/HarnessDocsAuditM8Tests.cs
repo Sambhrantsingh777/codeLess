@@ -35,6 +35,7 @@ namespace codeLess.Avalonia.Tests
             Assert.Contains("M7e:", audit);
             Assert.Contains("M7f:", audit);
             Assert.Contains("M8:", audit);
+            Assert.Contains("M9a:", audit);
             Assert.DoesNotContain("| TODO |", audit);
             Assert.DoesNotContain("| Partial |", audit);
             Assert.DoesNotContain("| Missing |", audit);

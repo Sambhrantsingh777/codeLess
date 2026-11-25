@@ -259,6 +259,12 @@ namespace codeLess.Core
                         if (keys.Count > 0) target.ExcludedFolders = string.Join(", ", keys);
                     }
                 }
+                if (dict.ContainsKey("codeless.mcp") || dict.ContainsKey("mcp"))
+                {
+                    if (target.McpServers == null)
+                        target.McpServers = new Dictionary<string, McpServerConfig>(StringComparer.OrdinalIgnoreCase);
+                    McpConfigLoader.MergeFromRootDictionary(dict, target.McpServers);
+                }
             }
             return null;
         }

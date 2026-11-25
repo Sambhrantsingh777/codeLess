@@ -760,6 +760,7 @@ namespace codeLess.AvaloniaApp
             secondarySplitTerminalSession = null;
             workspaceFiles.Clear();
             indexCandidateFiles = null;
+            aiEngine?.DisposeMcpServers();
             aiEngine?.ClearWorkspaceIndex();
             tabDirtyDots.Clear();
             tabCloseButtons.Clear();
@@ -2490,6 +2491,7 @@ namespace codeLess.AvaloniaApp
                 additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, newRoot));
             }
             workspaceRoot = newRoot;
+            aiEngine?.McpManager?.OnWorkspaceChanged(workspaceRoot);
             InitializeWorkspaceSettingsWatcher();
             settings.AddRecentWorkspace(workspaceRoot);
             OnDebugWorkspaceChanged();

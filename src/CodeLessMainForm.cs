@@ -8055,6 +8055,7 @@ if __name__ == '__main__':
                 additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, rootDir));
             }
             workspaceRoot = rootDir;
+            if (aiEngine != null && aiEngine.McpManager != null) aiEngine.McpManager.OnWorkspaceChanged(rootDir);
             if (lspController != null) lspController.SetWorkspaceRoot(rootDir);
             OnWorkspaceTrustFolderOpenedWin();
             terminalWorkingDir = rootDir;
@@ -9030,6 +9031,10 @@ if __name__ == '__main__':
                 return;
             }
             KillAllTerminalChildProcesses();
+            if (aiEngine != null)
+            {
+                try { aiEngine.DisposeMcpServers(); } catch { }
+            }
             if (lspController != null)
             {
                 try { lspController.Dispose(); } catch { }
