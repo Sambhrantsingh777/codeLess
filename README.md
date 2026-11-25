@@ -77,24 +77,26 @@ Measured deterministically in-process via `MemoryProfileAndLeakTests.MemoryProfi
 
 Portions of the **codeLess** autonomous agent harness (`src/codeLess.Core/` and `src/LlmHarnessAndAgentEngine.cs`) are derived from **[sst/opencode](https://github.com/sst/opencode)** (MIT License) and adapted for an interactive desktop IDE with staged inline diff review, Workspace Trust, and the Network Privacy Ledger (see [`docs/HARNESS_OPENCODE.md`](./docs/HARNESS_OPENCODE.md)).
 
-### 1. `Build` & `Plan` Modes, Permissions, and 12 Built-In Agent Tools
+### 1. `Build` & `Plan` Modes, Permissions, and 14 Built-In Agent Tools
 - **`Build` vs. `Plan` Mode (`Tab` to cycle)**: Toggle between `Build` (full read/write/terminal access) and `Plan` (read-only analysis and planning) in the AI chat bar or by pressing `Tab` in the chat input (`AgentPermissions`). In `Plan` mode, all file-modifying tools (`write_file`, `edit_file`, `multiedit`) are denied and `run_terminal` only permits read-only inspection commands (`ls`, `cat`, `head`, `tail`, `rg`, `grep`, `find`, `git status/diff/log/show`, `pwd`, `wc`, `tree`), prompting on anything else.
-- **12 Autonomous Workspace Tools**:
-  1. **`read_file`** (`read`): 1-indexed `offset` & `limit` (default 2,000 lines), `00001| ` line prefixes, 2,000-char line cap, 50 KB byte cap, `BinaryDetector` guard, and `MissingFileSuggestions` ("Did you mean?") via Levenshtein distance.
-  2. **`write_file`** (`write`): Stages new or full-file replacements into `StagedFileContents` for inline diff review; requires prior `read_file` via `FileTimeTracker` when overwriting an existing file.
-  3. **`edit_file`** (`edit`, `patch`): Applies surgical replacements via the **9-stage `EditReplacers` cascade** (`Simple`, `LineTrimmed`, `BlockAnchor`, `WhitespaceNormalized`, `IndentationFlexible`, `EscapeNormalized`, `TrimmedBoundary`, `ContextAware`, `MultiOccurrence`), guarded by `FileTimeTracker` read-before-edit and mtime checks.
-  4. **`multiedit`**: Applies multiple `EditReplacers` edits sequentially to a single file on an in-memory snapshot and rolls back atomically if any edit fails.
-  5. **`list_directory`** (`ls`, `list`): Indented directory tree skipping ignored directories (`node_modules`, `.git`, `bin`, `obj`), capped at 100 entries.
-  6. **`glob`**: Glob matching (`*`, `**`, `?`, `{a,b}`), sorted newest-first by mtime, capped at 100 files.
-  7. **`grep`** (`search_workspace`, `rg`): Regex search across workspace and staged files, grouped by file, sorted newest-first, capped at 100 matches.
-  8. **`run_terminal`** (`bash`, `sh`, `cmd`): Runs shell commands with process-tree timeout enforcement and 30,000-character head+tail output truncation.
-  9. **`todowrite`** & 10. **`todoread`**: Structured session task list (`pending`, `in_progress`, `completed`, `cancelled`) rendered live in the AI sidebar (`☐`, `◐`, `☑`, `☒`).
-  11. **`webfetch`**: Fetches documentation URLs through `LedgerHttp` / `NetworkLedger` (honouring Offline Mode, 5 MB cap, no cross-host redirects) and converts HTML to Markdown or plain text.
-  12. **`task`**: Spawns a depth-1 read-only subagent (`SubagentDepth = 1`, max 8 turns, read-only tools only, isolated staging) for parallel codebase investigation.
+- **14 Autonomous Workspace Tools (`LlmHarnessAndAgentEngine.Tools`)**:
+  1. **`read_file`** (alias `read`): 0-based `offset` (or 1-based `start_line`) & `limit` (default 2,000 lines), `00001| ` line prefixes, 2,000-char line cap, `BinaryDetector` guard, and `MissingFileSuggestions` ("Did you mean?") via Levenshtein distance.
+  2. **`write_file`** (alias `write`): Creates/stages files into `StagedFileContents` for inline diff review.
+  3. **`edit_file`** (alias `edit`): Applies surgical replacements to existing files via the **9-stage `EditReplacers` cascade** (`Simple`, `LineTrimmed`, `BlockAnchor`, `WhitespaceNormalized`, `IndentationFlexible`, `EscapeNormalized`, `TrimmedBoundary`, `ContextAware`, `MultiOccurrence`), guarded by `FileTimeTracker` read-before-edit and mtime checks.
+  4. **`multiedit`**: Applies multiple `EditReplacers` edits sequentially to a single file on an in-memory snapshot (enforcing `FileTimeTracker` read-before-edit) and rolls back atomically if any edit fails.
+  5. **`list_dir`** (alias `list`): Indented directory tree skipping ignored directories (`node_modules`, `.git`, `bin`, `obj`), capped at 100 entries.
+  6. **`grep_search`** (alias `grep`): Regex search across workspace and staged files, grouped by file, sorted newest-first, capped at 100 matches.
+  7. **`glob`**: Glob matching (`*`, `**`, `?`, `{a,b}`), sorted newest-first by mtime, capped at 100 files.
+  8. **`run_terminal`** (aliases `run_command`, `bash`): Runs shell commands with process-tree timeout enforcement and 30,000-character head+tail output truncation.
+  9. **`get_diagnostics`**: Returns compiler, syntax, and LSP diagnostics for a file or workspace.
+  10. **`ast_outline`**: Extracts class, struct, interface, method, and function signatures for a workspace file.
+  11. **`todowrite`** & 12. **`todoread`**: Structured session task list (`pending`, `in_progress`, `completed`, `cancelled`) rendered live in the AI sidebar (`☐`, `◐`, `☑`, `☒`).
+  13. **`webfetch`**: Fetches documentation URLs through `LedgerHttp` / `NetworkLedger` (honouring Offline Mode, 5 MB cap, no cross-host redirects) and converts HTML to Markdown or plain text.
+  14. **`task`**: Spawns a depth-1 read-only subagent (`SubagentDepth = 1`, `MaxSubagentIterations = 6`, read-only tools only, isolated staging) for parallel codebase investigation.
 - **Resilience, Compaction & Diagnostics Loop**:
   - **Native Function Calling (`NativeToolCalling`)**: Streaming OpenAI (`tools` / `tool_calls`) and Anthropic (`tool_use` / `tool_result`) tool payloads with automatic per-`vendor:model` fallback to `<tool_call>` XML/JSON text mode on HTTP 400.
   - **Exponential Retry (`ApiRetryHandler`) & Doom-Loop Guard**: Retries transient HTTP 429 / 5xx errors up to 5 times honouring `retry-after-ms` and `retry-after` headers; halts and prompts after 3 identical consecutive tool calls (`doom_loop`).
-  - **Context Compaction & Rules Discovery (`AgentContextBuilder`)**: Automatically discovers `.codelessrules`, `AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` (walking up to the git root, 16 KB cap), prunes old tool outputs (`PruneHistory`), and summarizes conversation history when approaching `ContextWindow - MaxOutputTokens`.
+  - **Context Compaction & Rules Discovery (`AgentContextBuilder`)**: Automatically discovers `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.cursorrules`, `.codelessrules`, and `.codeless/instructions.md` (walking up to the git root, 16 KB cap), prunes old tool outputs (`PruneHistory`), and summarizes conversation history when approaching `ContextWindow - MaxOutputTokens`.
   - **Post-Edit LSP Diagnostics (`LspDiagnosticsProvider`) & AST Syntax Gate (`SyntaxVerifier`)**: Validates edits before staging and injects `<file_diagnostics>` (up to 20 errors) so the agent repairs compiler/type errors immediately.
 
 ### 2. Five Model-Family-Tuned Harness Profiles
@@ -113,7 +115,7 @@ Connect API keys (via Preferences `Ctrl/Cmd+,` or standard environment variables
 
 Everything below is built in — no extensions to find, install or configure — and works on Windows, macOS and Linux.
 
-- **Multi-window & multi-instance CLI workflow (`W1`)**: Single-instance IPC forwarding over UNIX domain sockets / Windows named pipes (`SingleInstanceIpc`); full VS Code CLI flags (`codeLess <folder|file>`, `-n`/`--new-window`, `-r`/`--reuse-window`, `-g`/`--goto file:line:col`, `-d`/`--diff a b`, `-a`/`--add`, `-w`/`--wait`, `--user-data-dir`, `--status`, `-v`/`--version`, `-h`/`--help`); focusing already-open workspace/file windows instead of duplicating; per-window state isolation; live cross-window settings sync (`IdeSettingsWatcher`); cascading window placement; macOS dock stay-alive when the last window closes; and full session restoration (`window.restoreWindows`: `all` | `folders` | `one` | `none`).
+- **Multi-window & multi-instance CLI workflow (`W1`)**: Single-instance IPC forwarding over per-user named pipes (`ApplicationSession` / `NamedPipeIpcTransport` / `WorkspaceSessionStore` / `AvaloniaWindowManager`); full VS Code CLI flags (`codeLess <folder|file>`, `-n`/`--new-window`, `-r`/`--reuse-window`, `-g`/`--goto <file:line[:col]>`, `-d`/`--diff <left> <right>`, `-a`/`--add <folder>`, `-w`/`--wait`, `--new-instance`, `--user-data-dir <dir>`, `--workspace <dir>`); focusing already-open workspace/file windows instead of duplicating; per-window state isolation; live cross-window settings sync (`IdeSettingsWatcher`); cascading window placement; macOS dock stay-alive when the last window closes; and full session restoration (`window.restoreWindows`: `all` | `one` | `none`).
 - **VS Code Keybindings & Settings (`W3`)**: Data-driven `KeybindingManager` and boolean `WhenParser` (`editorTextFocus`, `terminalFocus`, `suggestWidgetVisible`, `inQuickOpen`, `findInputFocussed`, `inDebugMode`) with multi-chord support (`Cmd/Ctrl+K ...`); searchable Keyboard Shortcuts UI (`Cmd/Ctrl+K Cmd/Ctrl+S`) with live conflict detection and key recording; and JSONC-preserving `settings.json` and `keybindings.json` sync across:
   - **macOS**: `~/Library/Application Support/codeLess/User/{settings,keybindings}.json`
   - **Linux**: `~/.config/codeLess/User/{settings,keybindings}.json`
@@ -185,7 +187,7 @@ dotnet test codeLess.sln -c Release
 
 - [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md) — Head-to-head VS Code benchmarks, large-file & monorepo numbers, and in-process memory profile
 - [`docs/MEMORY.md`](./docs/MEMORY.md) — Managed heap profile, top retainers fixed, lazy subsystems, and GC configuration (`W4`)
-- [`docs/HARNESS_OPENCODE.md`](./docs/HARNESS_OPENCODE.md) — `sst/opencode` attribution, architecture mapping (`M1–M8`), 12-tool reference, and settings
+- [`docs/HARNESS_OPENCODE.md`](./docs/HARNESS_OPENCODE.md) — `sst/opencode` attribution, architecture mapping (`M1–M8`), tool reference, and settings
 - [`docs/KEYBINDINGS.md`](./docs/KEYBINDINGS.md) — Generated default keyboard shortcuts (`CommandRegistry`) and menu accelerators (`WorkbenchMenuModel`)
 - [`docs/EDITOR_PARITY.md`](./docs/EDITOR_PARITY.md) — 58-behaviour VS Code editor touch & feel parity matrix (`W5`)
 - [`docs/WORKBENCH_PARITY.md`](./docs/WORKBENCH_PARITY.md) — 30-behaviour VS Code workbench parity matrix (`W6`)
