@@ -23,6 +23,7 @@ namespace codeLess.AvaloniaApp
 
         public IEnumerable<IWorkbenchWindow> GetOpenWindows()
         {
+            if (App.TestOpenWindows != null) return App.TestOpenWindows;
             return _desktop.Windows.OfType<MainWindow>().Cast<IWorkbenchWindow>();
         }
 
@@ -41,7 +42,7 @@ namespace codeLess.AvaloniaApp
                     settings.RestoreWindowPaths.Remove(normPath);
                     settings.Save();
                 }
-                if (!OperatingSystem.IsMacOS() && !_desktop.Windows.OfType<MainWindow>().Any())
+                if (!OperatingSystem.IsMacOS() && !GetOpenWindows().Any())
                 {
                     QuitApplication();
                 }

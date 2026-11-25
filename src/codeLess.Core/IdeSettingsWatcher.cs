@@ -31,14 +31,6 @@ namespace codeLess.Studio
 
         private static void OnFileEvent(object sender, FileSystemEventArgs e)
         {
-            try
-            {
-                var currentWriteTime = File.GetLastWriteTimeUtc(IdePersistentSettings.GetSettingsFilePath());
-                if ((currentWriteTime - _lastKnownWriteTime).TotalMilliseconds < 50) return;
-                _lastKnownWriteTime = currentWriteTime;
-            }
-            catch { }
-            
             try { _debounceTimer.Change(300, Timeout.Infinite); } catch { }
         }
 

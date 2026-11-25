@@ -35,7 +35,7 @@ namespace codeLess.AvaloniaApp.Tests
             // Wait for debounce
             Thread.Sleep(1000);
 
-            Assert.True(fires >= 1 && fires <= 2); // Ignore flaky debounce on macOS
+            Assert.Equal(1, fires);
             IdeSettingsWatcher.OnSettingsFileChanged -= handler;
             
             // cleanup

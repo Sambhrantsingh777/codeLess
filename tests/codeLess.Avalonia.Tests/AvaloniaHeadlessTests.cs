@@ -140,7 +140,7 @@ namespace codeLess.Avalonia.Tests
         }
 
         [AvaloniaFact]
-        public void TitleAndMenus_TopMenuAndNativeMenu_HaveAllEightTopLevelMenus()
+        public void TitleAndMenus_TopMenuAndNativeMenu_HaveAllNineTopLevelMenus()
         {
             string csFile, pyFile, subFile;
             string ws = CreateRichTempWorkspace(out csFile, out pyFile, out subFile);
@@ -154,7 +154,7 @@ namespace codeLess.Avalonia.Tests
                     .Select(m => (m.Header?.ToString() ?? "").Replace("_", ""))
                     .ToList();
 
-                Assert.Equal(new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }, headers);
+                Assert.Equal(new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }, headers);
 
                 // Verify macOS NativeMenu also has codeLess + all 8 standard menus
                 var nativeMenu = NativeMenu.GetMenu(window);
