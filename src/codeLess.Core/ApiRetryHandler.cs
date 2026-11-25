@@ -22,7 +22,7 @@ namespace codeLess.Studio
 
             while (true)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested) break;
 
                 int delayMsToWait = 0;
                 try
@@ -47,7 +47,13 @@ namespace codeLess.Studio
                 if (delayMsToWait > 0)
                 {
                     if (DelayTaskAsync != null)
-                        await DelayTaskAsync(delayMsToWait, cancellationToken);
+                    {
+                        try {
+                            await DelayTaskAsync(delayMsToWait, cancellationToken);
+                        } catch (OperationCanceledException) {
+                            break;
+                        }
+                    }
                     attempt++;
                 }
             }

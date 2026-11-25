@@ -1569,7 +1569,8 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (e.Key == Key.Tab)
                 {
-                                        SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
+                    System.Console.WriteLine("TAB KEY DOWN! Mode was: " + currentAgentMode);
+                    SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
                     e.Handled = true;
                 }
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);

@@ -2253,7 +2253,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 });
             }
 
-            return await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
+            try {
+                return await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
             {
                 return await Task.Run(() =>
                 {
@@ -2480,6 +2481,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
                 });
             }, cts.Token);
+            } finally { cts.Cancel(); }
         }
 
         public async Task<string> RequestModelGhostCompletionAsync(ByokVendor preferredVendor, EditorTabBuffer buf)

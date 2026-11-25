@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -103,7 +104,7 @@ namespace codeLess.Avalonia.Tests
                     throw ex;
                 }
                 return Task.FromResult("Success");
-            }, CancellationToken.None);
+            }, null, CancellationToken.None);
 
             Assert.Equal(3, attempts);
             Assert.Equal("Success", result);
@@ -112,10 +113,10 @@ namespace codeLess.Avalonia.Tests
             // Test Cancellation
             var cts = new CancellationTokenSource();
             cts.Cancel();
-            await Assert.ThrowsAnyAsync<Exception>(() => ApiRetryHandler.ExecuteWithRetriesAsync(() => {
+            await Assert.ThrowsAnyAsync<Exception>(async () => await ApiRetryHandler.ExecuteWithRetriesAsync(async () => {
                 var ex = new WebException("502", null, WebExceptionStatus.ProtocolError, new FakeWebResponse(502));
                 throw ex;
-            }, cts.Token));
+            }, null, cts.Token));
             
             // Test retry-after-ms header
             attempts = 0;
@@ -130,7 +131,7 @@ namespace codeLess.Avalonia.Tests
                     throw new WebException("429", null, WebExceptionStatus.ProtocolError, resp);
                 }
                 return Task.FromResult("OK");
-            }, CancellationToken.None);
+            }, null, CancellationToken.None);
             Assert.Equal(1234, waitedTotal);
             
             // Test retry-after seconds
@@ -146,7 +147,7 @@ namespace codeLess.Avalonia.Tests
                     throw new WebException("429", null, WebExceptionStatus.ProtocolError, resp);
                 }
                 return Task.FromResult("OK");
-            }, CancellationToken.None);
+            }, null, CancellationToken.None);
             Assert.Equal(2000, waitedTotal);
             // Test retry-after HTTP-date
             attempts = 0;
@@ -161,8 +162,11 @@ namespace codeLess.Avalonia.Tests
                     throw new WebException("429", null, WebExceptionStatus.ProtocolError, resp);
                 }
                 return Task.FromResult("OK");
-            }, CancellationToken.None);
+            }, null, CancellationToken.None);
             Assert.True(waitedTotal >= 2000 && waitedTotal <= 4000, "Waited: " + waitedTotal);
+            
+            // Restore static state
+            ApiRetryHandler.DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
         }
 
     }
