@@ -3,16 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
 #if !NETFRAMEWORK
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-#else
-using System.CodeDom.Compiler;
-using Microsoft.CSharp;
 #endif
 
 namespace codeLess.Studio
@@ -25,14 +22,16 @@ namespace codeLess.Studio
             if (string.IsNullOrEmpty(content)) return true;
 
             string ext = Path.GetExtension(filePath ?? "").ToLowerInvariant();
-            if (ext == ".cs")
+            if (ext == ".cs" || ext == ".csx")
                 return VerifyCSharpSyntax(content, out errorSummary);
-            if (ext == ".py")
+            if (ext == ".py" || ext == ".pyw" || ext == ".pyi")
                 return VerifyPythonSyntax(content, out errorSummary, allowExternalProcess);
-            if (ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".jsx" || ext == ".tsx")
+            if (ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".mts" || ext == ".cts" || ext == ".jsx" || ext == ".tsx")
                 return VerifyJsTsSyntax(content, out errorSummary, allowExternalProcess && (ext == ".js" || ext == ".mjs" || ext == ".cjs"));
-            if (ext == ".json")
+            if (ext == ".json" || ext == ".jsonc" || ext == ".json5")
                 return VerifyJsonSyntax(content, out errorSummary);
+            if (ext == ".go" || ext == ".rs" || ext == ".css" || ext == ".scss" || ext == ".less")
+                return VerifyBracketsWithProfile(ext, content, out errorSummary);
 
             return true;
         }
@@ -41,9 +40,21 @@ namespace codeLess.Studio
         {
             errorSummary = "";
 #if !NETFRAMEWORK
+            return VerifyCSharpSyntaxWithRoslyn(content, out errorSummary);
+#else
+            return VerifyBraceAndOperatorBalance(".cs", content, out errorSummary);
+#endif
+        }
+
+#if !NETFRAMEWORK
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool VerifyCSharpSyntaxWithRoslyn(string content, out string errorSummary)
+        {
+            errorSummary = "";
             try
             {
-                SyntaxTree tree = CSharpSyntaxTree.ParseText(content ?? "");
+                CSharpParseOptions parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
+                SyntaxTree tree = CSharpSyntaxTree.ParseText(content ?? "", parseOptions);
                 var errors = tree.GetDiagnostics()
                     .Where(d => d.Severity == DiagnosticSeverity.Error)
                     .Take(5)
@@ -67,112 +78,64 @@ namespace codeLess.Studio
                 errorSummary = ex.Message;
                 return false;
             }
-#else
-            if (!VerifyBraceAndOperatorBalance(content, out errorSummary))
-                return false;
-            try
+        }
+#endif
+
+        private static string cachedPython312Exe;
+        private static bool checkedPython312;
+
+        private static string GetHostPython312OrNewer()
+        {
+            if (checkedPython312) return cachedPython312Exe;
+            checkedPython312 = true;
+            string[] candidates = new string[] { "python3", "python" };
+            for (int i = 0; i < candidates.Length; i++)
             {
-                using (var provider = new CSharpCodeProvider())
+                int exitCode;
+                string output;
+                if (TryRunSyntaxCheckProcess(candidates[i], "-I -c \"import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)\"", 2000, out exitCode, out output) && exitCode == 0)
                 {
-                    var cp = new CompilerParameters
-                    {
-                        GenerateExecutable = false,
-                        GenerateInMemory = true,
-                        TreatWarningsAsErrors = false
-                    };
-                    CompilerResults cr = provider.CompileAssemblyFromSource(cp, content ?? "");
-                    var syntaxErrors = new List<CompilerError>();
-                    foreach (CompilerError ce in cr.Errors)
-                    {
-                        if (ce.IsWarning) continue;
-                        // CS1001..CS1999 are lexical/parser syntax errors (whereas CS0103/CS0246 are semantic/reference errors)
-                        int codeNum = 0;
-                        if (!string.IsNullOrEmpty(ce.ErrorNumber) && ce.ErrorNumber.StartsWith("CS", StringComparison.OrdinalIgnoreCase))
-                            int.TryParse(ce.ErrorNumber.Substring(2), out codeNum);
-                        if (codeNum >= 1000 && codeNum < 2000)
-                            syntaxErrors.Add(ce);
-                    }
-                    if (syntaxErrors.Count > 0)
-                    {
-                        StringBuilder sb = new StringBuilder();
-                        foreach (var err in syntaxErrors.Take(5))
-                            sb.AppendFormat("[{0}] Line {1}: {2}; ", err.ErrorNumber, err.Line, err.ErrorText);
-                        errorSummary = sb.ToString().Trim();
-                        return false;
-                    }
+                    cachedPython312Exe = candidates[i];
+                    return cachedPython312Exe;
                 }
             }
-            catch { }
-            return true;
-#endif
+            cachedPython312Exe = null;
+            return null;
         }
 
         public static bool VerifyPythonSyntax(string content, out string errorSummary, bool allowExternalProcess = true)
         {
             errorSummary = "";
-            if (!VerifyBracketAndQuoteBalance(content, out errorSummary, true))
+            if (!VerifyBracketsWithProfile(".py", content, out errorSummary))
                 return false;
-
-            string[] lines = (content ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
-            int classDefIndent = -1;
-            int firstMethodIndent = -1;
-            for (int i = 0; i < lines.Length; i++)
-            {
-                string raw = lines[i];
-                string trimmed = raw.Trim();
-                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
-
-                if (Regex.IsMatch(trimmed, @"[\+\-]\s+[\*/]") || Regex.IsMatch(trimmed, @"=\s*$"))
-                {
-                    errorSummary = string.Format("Line {0}: Invalid operator sequence in Python statement.", i + 1);
-                    return false;
-                }
-
-                int indent = CountLeadingSpaces(raw);
-                if (trimmed.StartsWith("class ") && trimmed.EndsWith(":"))
-                {
-                    classDefIndent = indent;
-                    firstMethodIndent = -1;
-                }
-                else if (classDefIndent >= 0 && indent > classDefIndent && (trimmed.StartsWith("def ") || trimmed.StartsWith("async def ")))
-                {
-                    if (firstMethodIndent < 0)
-                    {
-                        firstMethodIndent = indent;
-                    }
-                    else if (indent != firstMethodIndent)
-                    {
-                        errorSummary = string.Format("Line {0}: Inconsistent Python method indentation ({1} spaces vs expected {2} spaces).", i + 1, indent, firstMethodIndent);
-                        return false;
-                    }
-                }
-            }
 
             if (allowExternalProcess)
             {
-                string tempPy = Path.Combine(Path.GetTempPath(), "codeless_syntax_" + Guid.NewGuid().ToString("N") + ".py");
-                try
+                string pyExe = GetHostPython312OrNewer();
+                if (!string.IsNullOrEmpty(pyExe))
                 {
-                    File.WriteAllText(tempPy, content ?? "", new UTF8Encoding(false));
-                    int exitCode;
-                    string output;
-                    if (TryRunSyntaxCheckProcess("python", "-I -m py_compile \"" + tempPy + "\"", 3000, out exitCode, out output))
+                    string tempPy = Path.Combine(Path.GetTempPath(), "codeless_syntax_" + Guid.NewGuid().ToString("N") + ".py");
+                    try
                     {
-                        // Only real compiler diagnostics count: a non-zero exit without them (e.g. the Windows Store
-                        // "python" alias stub printing "Python was not found", exit 9009) must not reject valid code.
-                        if (output.IndexOf("SyntaxError", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            output.IndexOf("IndentationError", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            output.IndexOf("TabError", StringComparison.OrdinalIgnoreCase) >= 0)
+                        File.WriteAllText(tempPy, content ?? "", new UTF8Encoding(false));
+                        int exitCode;
+                        string output;
+                        if (TryRunSyntaxCheckProcess(pyExe, "-I -m py_compile \"" + tempPy + "\"", 3000, out exitCode, out output))
                         {
-                            errorSummary = string.IsNullOrWhiteSpace(output) ? "Python syntax error" : output.Replace("\r", " ").Replace("\n", " ").Trim();
-                            return false;
+                            if (output.IndexOf("SyntaxError", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                output.IndexOf("IndentationError", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                output.IndexOf("TabError", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                errorSummary = string.IsNullOrWhiteSpace(output) ? "Python syntax error" : output.Replace("\r", " ").Replace("\n", " ").Trim();
+                                return false;
+                            }
                         }
                     }
-                }
-                catch { }
-                finally
-                {
-                    try { if (File.Exists(tempPy)) File.Delete(tempPy); } catch { }
+                    catch { }
+                    finally
+                    {
+                        try { if (File.Exists(tempPy)) File.Delete(tempPy); } catch { }
+                    }
                 }
             }
 
@@ -181,14 +144,8 @@ namespace codeLess.Studio
 
         public static bool VerifyJsTsSyntax(string content, out string errorSummary, bool allowExternalProcess = true)
         {
-            if (!VerifyBraceAndOperatorBalance(content, out errorSummary))
+            if (!VerifyBracketsWithProfile(".tsx", content, out errorSummary))
                 return false;
-
-            if (Regex.IsMatch(content ?? "", @"=\s*;") || Regex.IsMatch(content ?? "", @"[\+\-]\s+[\*/]"))
-            {
-                errorSummary = "Invalid expression or operator syntax in JS/TS.";
-                return false;
-            }
 
             if (allowExternalProcess && !(content ?? "").Contains("export ") && !(content ?? "").Contains("import "))
             {
@@ -231,8 +188,6 @@ namespace codeLess.Studio
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    // Never the workspace: "python -m" imports from the working directory, so a planted py_compile.py would
-                    // run. -I (isolated) also drops the cwd from sys.path and ignores PYTHON* variables.
                     WorkingDirectory = Path.GetTempPath()
                 };
                 using (Process p = Process.Start(psi))
@@ -262,121 +217,413 @@ namespace codeLess.Studio
         public static bool VerifyJsonSyntax(string content, out string errorSummary)
         {
             errorSummary = "";
-            try
+            int line, col;
+            string msg;
+            if (!TryValidateJsonc(content ?? "", out line, out col, out msg))
             {
-                JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-                ser.DeserializeObject(content);
-                return true;
+                errorSummary = string.Format("Invalid JSON at line {0}, column {1}: {2}", line, col, msg);
+                return false;
             }
-            catch (Exception ex)
+            return true;
+        }
+
+        public static void ValidateJsoncDiagnostics(IList<string> lines, string filePath, string relPath, List<DiagnosticItem> diags)
+        {
+            if (lines == null || diags == null) return;
+            string content = string.Join("\n", lines);
+            if (string.IsNullOrWhiteSpace(content)) return;
+            int line, col;
+            string msg;
+            if (!TryValidateJsonc(content, out line, out col, out msg))
             {
-                errorSummary = "Invalid JSON: " + ex.Message;
+                diags.Add(new DiagnosticItem
+                {
+                    Severity = "Error",
+                    FilePath = filePath,
+                    RelativePath = relPath,
+                    Line = Math.Max(1, line),
+                    Column = Math.Max(1, col),
+                    Length = 1,
+                    Message = msg,
+                    Source = "codeLess JSON Validator"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Exact recursive-descent JSON / JSONC validator supporting // line comments, /* */ block comments, and trailing commas.
+        /// </summary>
+        public static bool TryValidateJsonc(string s, out int errLine, out int errCol, out string errMsg)
+        {
+            errLine = 1;
+            errCol = 1;
+            errMsg = "";
+            if (string.IsNullOrWhiteSpace(s)) return true;
+
+            int i = 0;
+            int n = s.Length;
+            if (n > 0 && s[0] == '\uFEFF') i = 1;
+
+            if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg))
+                return false;
+            if (i >= n) return true;
+
+            if (!ParseJsoncValue(s, ref i, n, 0, out errLine, out errCol, out errMsg))
+                return false;
+
+            if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg))
+                return false;
+            if (i < n)
+            {
+                ComputeLineCol(s, i, out errLine, out errCol);
+                errMsg = "Unexpected token '" + s[i] + "' after JSON root value.";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool SkipJsoncWsAndComments(string s, ref int i, int n, out int errLine, out int errCol, out string errMsg)
+        {
+            errLine = 1;
+            errCol = 1;
+            errMsg = "";
+            while (i < n)
+            {
+                char c = s[i];
+                if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+                {
+                    i++;
+                    continue;
+                }
+                if (c == '/' && i + 1 < n)
+                {
+                    if (s[i + 1] == '/')
+                    {
+                        i += 2;
+                        while (i < n && s[i] != '\n') i++;
+                        continue;
+                    }
+                    if (s[i + 1] == '*')
+                    {
+                        int openIdx = i;
+                        i += 2;
+                        bool closed = false;
+                        while (i + 1 < n)
+                        {
+                            if (s[i] == '*' && s[i + 1] == '/') { i += 2; closed = true; break; }
+                            i++;
+                        }
+                        if (!closed)
+                        {
+                            ComputeLineCol(s, openIdx, out errLine, out errCol);
+                            errMsg = "Unclosed block comment '/*'.";
+                            return false;
+                        }
+                        continue;
+                    }
+                }
+                break;
+            }
+            return true;
+        }
+
+        private static bool ParseJsoncValue(string s, ref int i, int n, int depth, out int errLine, out int errCol, out string errMsg)
+        {
+            errLine = 1;
+            errCol = 1;
+            errMsg = "";
+            if (depth > 512)
+            {
+                ComputeLineCol(s, i, out errLine, out errCol);
+                errMsg = "Maximum JSON nesting depth exceeded.";
+                return false;
+            }
+            if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg)) return false;
+            if (i >= n)
+            {
+                ComputeLineCol(s, n, out errLine, out errCol);
+                errMsg = "Unexpected end of JSON input.";
+                return false;
+            }
+
+            char c = s[i];
+            if (c == '"') return ParseJsoncString(s, ref i, n, out errLine, out errCol, out errMsg);
+            if (c == '{') return ParseJsoncObject(s, ref i, n, depth + 1, out errLine, out errCol, out errMsg);
+            if (c == '[') return ParseJsoncArray(s, ref i, n, depth + 1, out errLine, out errCol, out errMsg);
+            if (c == '-' || (c >= '0' && c <= '9')) return ParseJsoncNumber(s, ref i, n, out errLine, out errCol, out errMsg);
+            if (MatchLiteral(s, ref i, n, "true") || MatchLiteral(s, ref i, n, "false") || MatchLiteral(s, ref i, n, "null"))
+                return true;
+
+            ComputeLineCol(s, i, out errLine, out errCol);
+            errMsg = "Unexpected token '" + c + "' in JSON.";
+            return false;
+        }
+
+        private static bool MatchLiteral(string s, ref int i, int n, string lit)
+        {
+            if (i + lit.Length > n) return false;
+            if (string.CompareOrdinal(s, i, lit, 0, lit.Length) != 0) return false;
+            int after = i + lit.Length;
+            if (after < n && (char.IsLetterOrDigit(s[after]) || s[after] == '_')) return false;
+            i = after;
+            return true;
+        }
+
+        private static bool ParseJsoncString(string s, ref int i, int n, out int errLine, out int errCol, out string errMsg)
+        {
+            errLine = 1;
+            errCol = 1;
+            errMsg = "";
+            int openIdx = i;
+            i++; // skip opening '"'
+            while (i < n)
+            {
+                char c = s[i++];
+                if (c == '"') return true;
+                if (c == '\n' || c == '\r')
+                {
+                    ComputeLineCol(s, openIdx, out errLine, out errCol);
+                    errMsg = "Unclosed string literal in JSON.";
+                    return false;
+                }
+                if (c == '\\')
+                {
+                    if (i >= n || s[i] == '\n' || s[i] == '\r')
+                    {
+                        ComputeLineCol(s, openIdx, out errLine, out errCol);
+                        errMsg = "Unclosed string escape in JSON.";
+                        return false;
+                    }
+                    i++;
+                }
+            }
+            ComputeLineCol(s, openIdx, out errLine, out errCol);
+            errMsg = "Unclosed string literal in JSON.";
+            return false;
+        }
+
+        private static bool ParseJsoncNumber(string s, ref int i, int n, out int errLine, out int errCol, out string errMsg)
+        {
+            errLine = 1;
+            errCol = 1;
+            errMsg = "";
+            int start = i;
+            if (s[i] == '-') i++;
+            if (i >= n || s[i] < '0' || s[i] > '9')
+            {
+                ComputeLineCol(s, start, out errLine, out errCol);
+                errMsg = "Invalid number literal in JSON.";
+                return false;
+            }
+            while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+            if (i < n && s[i] == '.')
+            {
+                i++;
+                if (i >= n || s[i] < '0' || s[i] > '9')
+                {
+                    ComputeLineCol(s, start, out errLine, out errCol);
+                    errMsg = "Invalid fractional number in JSON.";
+                    return false;
+                }
+                while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+            }
+            if (i < n && (s[i] == 'e' || s[i] == 'E'))
+            {
+                i++;
+                if (i < n && (s[i] == '+' || s[i] == '-')) i++;
+                if (i >= n || s[i] < '0' || s[i] > '9')
+                {
+                    ComputeLineCol(s, start, out errLine, out errCol);
+                    errMsg = "Invalid exponent in JSON number.";
+                    return false;
+                }
+                while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+            }
+            return true;
+        }
+
+        private static bool ParseJsoncObject(string s, ref int i, int n, int depth, out int errLine, out int errCol, out string errMsg)
+        {
+            int openIdx = i;
+            i++; // skip '{'
+            while (true)
+            {
+                if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg)) return false;
+                if (i >= n)
+                {
+                    ComputeLineCol(s, openIdx, out errLine, out errCol);
+                    errMsg = "Unclosed JSON object '{'.";
+                    return false;
+                }
+                if (s[i] == '}') { i++; return true; }
+                if (s[i] != '"')
+                {
+                    ComputeLineCol(s, i, out errLine, out errCol);
+                    errMsg = "Expected double-quoted property name in JSON object.";
+                    return false;
+                }
+                if (!ParseJsoncString(s, ref i, n, out errLine, out errCol, out errMsg)) return false;
+                if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg)) return false;
+                if (i >= n || s[i] != ':')
+                {
+                    ComputeLineCol(s, i < n ? i : openIdx, out errLine, out errCol);
+                    errMsg = "Expected ':' after property name in JSON object.";
+                    return false;
+                }
+                i++; // skip ':'
+                if (!ParseJsoncValue(s, ref i, n, depth, out errLine, out errCol, out errMsg)) return false;
+                if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg)) return false;
+                if (i >= n)
+                {
+                    ComputeLineCol(s, openIdx, out errLine, out errCol);
+                    errMsg = "Unclosed JSON object '{'.";
+                    return false;
+                }
+                if (s[i] == ',')
+                {
+                    i++;
+                    continue; // allows trailing comma before '}'
+                }
+                if (s[i] == '}') { i++; return true; }
+                ComputeLineCol(s, i, out errLine, out errCol);
+                errMsg = "Expected ',' or '}' in JSON object.";
                 return false;
             }
         }
 
-        private static int CountLeadingSpaces(string line)
+        private static bool ParseJsoncArray(string s, ref int i, int n, int depth, out int errLine, out int errCol, out string errMsg)
         {
-            int count = 0;
-            for (int i = 0; i < line.Length; i++)
+            int openIdx = i;
+            i++; // skip '['
+            while (true)
             {
-                if (line[i] == ' ') count++;
-                else if (line[i] == '\t') count += 4;
-                else break;
+                if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg)) return false;
+                if (i >= n)
+                {
+                    ComputeLineCol(s, openIdx, out errLine, out errCol);
+                    errMsg = "Unclosed JSON array '['.";
+                    return false;
+                }
+                if (s[i] == ']') { i++; return true; }
+                if (!ParseJsoncValue(s, ref i, n, depth, out errLine, out errCol, out errMsg)) return false;
+                if (!SkipJsoncWsAndComments(s, ref i, n, out errLine, out errCol, out errMsg)) return false;
+                if (i >= n)
+                {
+                    ComputeLineCol(s, openIdx, out errLine, out errCol);
+                    errMsg = "Unclosed JSON array '['.";
+                    return false;
+                }
+                if (s[i] == ',')
+                {
+                    i++;
+                    continue; // allows trailing comma before ']'
+                }
+                if (s[i] == ']') { i++; return true; }
+                ComputeLineCol(s, i, out errLine, out errCol);
+                errMsg = "Expected ',' or ']' in JSON array.";
+                return false;
             }
-            return count;
         }
 
-        private static bool VerifyBraceAndOperatorBalance(string content, out string errorSummary)
+        private static void ComputeLineCol(string s, int index, out int line, out int col)
+        {
+            line = 1;
+            col = 1;
+            int lim = Math.Min(index, s.Length);
+            for (int k = 0; k < lim; k++)
+            {
+                if (s[k] == '\n') { line++; col = 1; }
+                else if (s[k] != '\r') col++;
+            }
+        }
+
+        private static bool VerifyBraceAndOperatorBalance(string ext, string content, out string errorSummary)
         {
             errorSummary = "";
-            if (Regex.IsMatch(content ?? "", @"[\+\-\*/]\s*[\*/]\s*;"))
+            string codeOnly = MaskNonCodeCharacters(ext, content ?? "");
+            if (Regex.IsMatch(codeOnly, @"[\+\-\*/]\s*[\*/]\s*;"))
             {
                 errorSummary = "Invalid consecutive binary operators before semicolon.";
                 return false;
             }
-            return VerifyBracketAndQuoteBalance(content, out errorSummary, false);
+            return VerifyBracketsWithProfile(ext, content, out errorSummary);
         }
 
-        private static bool VerifyBracketAndQuoteBalance(string content, out string errorSummary, bool pythonSyntax)
+        public static bool VerifyBracketsWithProfile(string ext, string content, out string errorSummary)
         {
             errorSummary = "";
-            Stack<char> stack = new Stack<char>();
-            bool inSingle = false;
-            bool inDouble = false;
-            bool inLineComment = false;
-            bool inBlockComment = false;
+            string normalized = (content ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            string[] lines = normalized.Split('\n');
+            BracketLexProfile profile = BracketLexProfile.ForExtension(ext, "file" + ext);
+            EditorBracketCache cache = new EditorBracketCache(profile);
+            cache.Sync(lines);
+            cache.EnsureValid(lines, lines.Length - 1, 0);
 
-            string s = content ?? "";
-            for (int i = 0; i < s.Length; i++)
+            for (int li = 0; li < lines.Length; li++)
             {
-                char c = s[i];
-                char next = (i + 1 < s.Length) ? s[i + 1] : '\0';
-
-                if (inLineComment)
+                BracketLineData bd = cache.GetLine(lines, li, 0);
+                if (bd == null) continue;
+                for (int bi = 0; bi < bd.Count; bi++)
                 {
-                    if (c == '\n') inLineComment = false;
-                    continue;
-                }
-                if (inBlockComment)
-                {
-                    if (c == '*' && next == '/') { inBlockComment = false; i++; }
-                    continue;
-                }
-                if (inSingle)
-                {
-                    if (c == '\\') { i++; continue; }
-                    if (c == '\'') inSingle = false;
-                    continue;
-                }
-                if (inDouble)
-                {
-                    if (c == '\\') { i++; continue; }
-                    if (c == '"') inDouble = false;
-                    continue;
-                }
-
-                if (c == '\\') { i++; continue; }
-                if (pythonSyntax)
-                {
-                    // Python: '#' starts a line comment (apostrophes in comments must not open strings),
-                    // while '//' is floor division and '/*' is not a comment.
-                    if (c == '#') { inLineComment = true; continue; }
-                }
-                else
-                {
-                    if (c == '/' && next == '/') { inLineComment = true; i++; continue; }
-                    if (c == '/' && next == '*') { inBlockComment = true; i++; continue; }
-                }
-                if (c == '\'') { inSingle = true; continue; }
-                if (c == '"') { inDouble = true; continue; }
-
-                if (c == '{' || c == '(' || c == '[')
-                {
-                    stack.Push(c);
-                }
-                else if (c == '}' || c == ')' || c == ']')
-                {
-                    if (stack.Count == 0)
+                    if (bd.Levels[bi] < 0)
                     {
-                        errorSummary = "Unbalanced closing delimiter '" + c + "'.";
-                        return false;
-                    }
-                    char open = stack.Pop();
-                    if ((c == '}' && open != '{') || (c == ')' && open != '(') || (c == ']' && open != '['))
-                    {
-                        errorSummary = "Mismatched delimiter '" + open + "' and '" + c + "'.";
+                        errorSummary = string.Format("Line {0}: Unbalanced closing delimiter '{1}'.", li + 1, bd.Chars[bi]);
                         return false;
                     }
                 }
             }
 
-            if (stack.Count > 0)
+            if (lines.Length > 0)
             {
-                errorSummary = "Unclosed delimiter '" + stack.Peek() + "' at end of file.";
-                return false;
+                BracketLexState endState = cache.GetEndState(lines.Length - 1);
+                if (endState != null)
+                {
+                    if (endState.Mode == BracketLexState.ModeTriple)
+                    {
+                        errorSummary = "Unclosed multi-line triple-quoted string at end of file.";
+                        return false;
+                    }
+                    if (endState.Mode == BracketLexState.ModeBlockComment)
+                    {
+                        errorSummary = "Unclosed block comment at end of file.";
+                        return false;
+                    }
+                    if (endState.Mode == BracketLexState.ModeString && endState.Quote == '`')
+                    {
+                        errorSummary = "Unclosed template literal at end of file.";
+                        return false;
+                    }
+                    if (endState.Stack != null)
+                    {
+                        BracketFrame f = endState.Stack;
+                        char open = f.Open == '$' ? '{' : f.Open;
+                        errorSummary = string.Format("Line {0}: Unclosed delimiter '{1}' at end of file.", f.Line + 1, open);
+                        return false;
+                    }
+                }
             }
             return true;
+        }
+
+        private static string MaskNonCodeCharacters(string ext, string content)
+        {
+            string normalized = (content ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+            string[] lines = normalized.Split('\n');
+            BracketLexProfile profile = BracketLexProfile.ForExtension(ext, "file" + ext);
+            EditorBracketCache cache = new EditorBracketCache(profile);
+            cache.Sync(lines);
+            StringBuilder sb = new StringBuilder(normalized.Length);
+            for (int li = 0; li < lines.Length; li++)
+            {
+                string ln = lines[li];
+                for (int ci = 0; ci < ln.Length; ci++)
+                {
+                    int ctx = cache.ContextAt(lines, li, ci);
+                    sb.Append(ctx == EditorBracketCache.ContextCode ? ln[ci] : ' ');
+                }
+                if (li + 1 < lines.Length) sb.Append('\n');
+            }
+            return sb.ToString();
         }
     }
 }

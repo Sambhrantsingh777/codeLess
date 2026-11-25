@@ -20,6 +20,8 @@ namespace codeLess.Studio
     {
         /// <summary>Newest background analysis request (older results are dropped).</summary>
         internal int AnalysisRequestSeq;
+        /// <summary>True when the user explicitly switched the buffer's language mode in the picker.</summary>
+        public bool LanguageModeOverridden;
         /// <summary>EditVersion the outline / heuristic diagnostics were last computed for (-1: never).</summary>
         public int AnalyzedEditVersion = -1;
         internal string AnalyzedLanguage;

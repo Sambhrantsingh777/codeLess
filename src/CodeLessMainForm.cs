@@ -821,6 +821,7 @@ namespace codeLess.Studio
         {
             if (activeTab == null || string.IsNullOrWhiteSpace(langCode)) return;
             activeTab.Language = langCode.Trim().ToLowerInvariant();
+            activeTab.LanguageModeOverridden = true;
             LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(activeTab);
             editorControl.LoadBuffer(activeTab);
             if (splitEditorControl != null && splitEditorControl.CurrentBuffer == activeTab)

@@ -3636,6 +3636,8 @@ namespace codeLess.AvaloniaApp
             {
                 if (settings.AutoSave && !string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath))
                     ScheduleAutoSave(buf);
+                if (!buf.IsLargeFile && !buf.IsAnalysisCurrent)
+                    LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buf);
                 RefreshOutlineAndProblems(buf);
             }
         }
