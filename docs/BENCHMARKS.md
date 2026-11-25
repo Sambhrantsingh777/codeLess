@@ -146,6 +146,17 @@ Measured in-process with the headless profiler (`MemoryProfileAndLeakTests.Memor
 | Close all tabs, workspace, and both windows (live heap) | `126.43 MB` (`w1/w2/tab` leaked) | **`6.70 MB`** (`w1/w2/tab` collected) | **`-94.7%`** |
 | `StudioTheme.GetById` × 50 calls (allocated bytes) | `1,994,000 B` | **`0 B`** | **`-100%`** |
 
+### Verified In-Process Memory & Leak Tests (`tests/codeLess.Avalonia.Tests/MemoryProfileAndLeakTests.cs`)
+
+| Test Name | Verified Result |
+|---|---|
+| `MemoryProfileAndLeakTests.MemoryProfile_EndToEnd_StepsAndRetainers` | Profiles all 6 lifecycle steps above; asserts 10-file managed heap delta `< 45 MB` (`10.59 MB` measured), second-window delta `< 18 MB` (`13.98 MB` measured), `0 B` theme lookup allocations, and `WeakReference` collection of closed windows and tabs |
+| `MemoryProfileAndLeakTests.CloseTab_CollectsEditorTabBuffer_WeakReference` | Opening, syntax-highlighting, and closing a tab collects its `EditorTabBuffer` (`WeakReference.IsAlive == false`) and removes it from `EditorMruOrder` |
+| `MemoryProfileAndLeakTests.ClosePanel_CollectsAuxPaneDocumentAndTerminal_WeakReference` | Opening and closing a Markdown preview side-pane and terminal session collects `AuxPaneDocument`, `MarkdownPreviewView`, and `TerminalSessionEntry` |
+| `MemoryProfileAndLeakTests.CloseWindow_CollectsMainWindow_WeakReference` | Opening a `MainWindow`, loading a workspace and file, and calling `Close()` collects the `MainWindow` instance (`WeakReference.IsAlive == false`) |
+| `MemoryProfileAndLeakTests.Subsystems_AreLazyAtStartup_AndConstructedOnFirstUse` | Verifies `IsAgentEngineCreated`, `IsAgentTrustCreated`, `IsDebuggerCreated`, `IsBlameServiceCreated`, `IsLanguageServerManagerCreated`, and `IsNetworkPanelCreated` are `false` at startup and after `LoadWorkspace`, and become `true` only on first access |
+| `MemoryProfileAndLeakTests.SharedImmutableThemesAndIcons_ZeroDuplicateAllocations` | Verifies `StudioTheme.GetById` returns shared immutable instances with `0 B` allocated over 100 calls, and multiple `MainWindow` instances share a single `WindowIcon` |
+
 Note on full-desktop GUI `phys_footprint` / RSS numbers in the Head-to-head table above: **pending re-measurement** on an idle desktop session after the `work/mem` lazy-subsystem and leak fixes (launching GUI apps is disabled in the automated agent sandbox). To re-measure live desktop RSS / `phys_footprint`, run:
 
 ```bash
@@ -156,7 +167,7 @@ python3 bench/run_bench.py --apps codeless,vscode --include-vscode -n 3 --huge-m
 ## Reproducing
 
 ```bash
-zsh /tmp/codeless-work/tools/cl-test.sh /tmp/codeless-work/mem "MemoryProfileAndLeakTests"
+zsh /tmp/codeless-work/tools/cl-test.sh /tmp/codeless-work/docs "MemoryProfileAndLeakTests"
 bench/run_largefile_bench.sh "100 1024" 3
 bench/run_monorepo_bench.sh 38000 10000 5
 python3 bench/run_bench.py -n 5                                   # codeLess GUI metrics

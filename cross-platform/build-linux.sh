@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# codeLess v3.3.5 — Native Linux (.NET 8 + Avalonia) & Debian (.deb) Builder
+# codeLess v3.4.0 — Native Linux (.NET 8 + Avalonia) & Debian (.deb) Builder
 # Publisher: Savatarr | Zero Mono / Zero Node.js Runtime Dependency
 # ==============================================================================
 set -euo pipefail
 
 APP_NAME="codeless"
-VERSION="3.3.5"
+VERSION="3.4.0"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CSPROJ="$ROOT_DIR/src/codeLess.Avalonia/codeLess.Avalonia.csproj"
 
