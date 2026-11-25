@@ -24,7 +24,7 @@ namespace codeLess.Avalonia.Tests
             fileA = Path.Combine(ws, "Service.cs");
             fileB = Path.Combine(ws, "Consumer.cs");
             File.WriteAllText(fileA, "using System;\npublic class Service {\n    public int ComputeValue(int x) {\n        return x * 2;\n    }\n}\n");
-            File.WriteAllText(fileB, "using System;\npublic class Consumer {\n    public void Run() {\n        var s = new Service();\n        int v = s.ComputeValue(21);\n    }\n}\n");
+            File.WriteAllText(fileB, "using System;\npublic class Consumer {\n    internal void Run() {\n        var s = new Service();\n        int v = s.ComputeValue(21);\n    }\n}\n");
             return ws;
         }
 

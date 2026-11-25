@@ -17,6 +17,7 @@ namespace codeLess.AvaloniaApp
         private System.Threading.Timer workspaceSettingsTimer;
         private System.IO.FileSystemWatcher userSettingsWatcher;
         private System.Threading.Timer userSettingsTimer;
+        private StudioSettings effectiveWorkspaceSettings;
 
         private void SendEditorKey(Key key, KeyModifiers mods)
         {
@@ -533,20 +534,7 @@ namespace codeLess.AvaloniaApp
             {
                 if (!ReferenceEquals(studioSettings, settings))
                 {
-                    settings.FormatOnSave = studioSettings.FormatOnSave;
-                    settings.TrimTrailingWhitespaceOnSave = studioSettings.TrimTrailingWhitespaceOnSave;
-                    settings.InsertFinalNewlineOnSave = studioSettings.InsertFinalNewlineOnSave;
-                    settings.TrimFinalNewlinesOnSave = studioSettings.TrimFinalNewlinesOnSave;
-                    settings.AutoSaveMode = studioSettings.AutoSaveMode;
-                    settings.AutoSaveDelayMs = studioSettings.AutoSaveDelayMs;
-                    settings.HotExit = studioSettings.HotExit;
-                    settings.FilesEol = studioSettings.FilesEol;
-                    settings.AutoGuessEncoding = studioSettings.AutoGuessEncoding;
-                    settings.LargeFileThresholdMB = studioSettings.LargeFileThresholdMB;
-                    settings.ExcludedFolders = studioSettings.ExcludedFolders;
-                    settings.GitAutoFetch = studioSettings.GitAutoFetch;
-                    settings.GitRebaseWhenSync = studioSettings.GitRebaseWhenSync;
-                    settings.NativeToolCalling = studioSettings.NativeToolCalling;
+                    effectiveWorkspaceSettings = studioSettings;
                 }
                 ApplyTheme(StudioTheme.GetById(studioSettings.ActiveThemeId), persistSetting: false);
                 PrimaryEditor.ShowMinimap = studioSettings.ShowMinimap;

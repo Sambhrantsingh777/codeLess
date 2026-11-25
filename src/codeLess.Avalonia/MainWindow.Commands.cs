@@ -997,6 +997,7 @@ namespace codeLess.AvaloniaApp
             bool hadWorkspace = !string.IsNullOrEmpty(workspaceRoot) || workspaceFiles.Count > 0 || openTabs.Count > 0;
             StopWorkspaceWatcher();
             workspaceRoot = "";
+            effectiveWorkspaceSettings = null;
             InitializeWorkspaceSettingsWatcher();
             LspOnWorkspaceChanged();
             workspaceFiles.Clear();

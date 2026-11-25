@@ -382,18 +382,27 @@ namespace codeLess.AvaloniaApp
         {
             if (tab == null || tab.IsLargeFileViewer) return;
             bool changed = false;
-            if (settings != null && settings.FormatOnSave && autoSaveDepth == 0)
+            bool formatOnSave = (settings != null && settings.FormatOnSave) || (effectiveWorkspaceSettings != null && effectiveWorkspaceSettings.FormatOnSave);
+            if (formatOnSave && autoSaveDepth == 0)
             {
                 string path = LspPathFor(tab);
                 if (path == null || lsp == null || !lsp.IsActive(path))
                 {
-                    int tabSize = EditorIndentation.EffectiveTabSize(tab, settings.TabSize);
-                    bool spaces = EditorIndentation.EffectiveInsertSpaces(tab, settings.InsertSpaces);
+                    int baseTabSize = effectiveWorkspaceSettings != null ? effectiveWorkspaceSettings.TabSize : settings.TabSize;
+                    bool baseSpaces = effectiveWorkspaceSettings != null ? effectiveWorkspaceSettings.InsertSpaces : settings.InsertSpaces;
+                    int tabSize = EditorIndentation.EffectiveTabSize(tab, baseTabSize);
+                    bool spaces = EditorIndentation.EffectiveInsertSpaces(tab, baseSpaces);
                     if (SaveActions.FormatBufferFallback(tab, tabSize, spaces))
                         changed = true;
                 }
             }
             var opts = SaveActionOptions.FromSettings(settings, autoSaveDepth > 0);
+            if (effectiveWorkspaceSettings != null)
+            {
+                opts.TrimTrailingWhitespace |= effectiveWorkspaceSettings.TrimTrailingWhitespaceOnSave;
+                opts.InsertFinalNewline |= effectiveWorkspaceSettings.InsertFinalNewlineOnSave;
+                opts.TrimFinalNewlines |= effectiveWorkspaceSettings.TrimFinalNewlinesOnSave;
+            }
             EditorConfigResolver.ApplyBeforeSave(tab, opts); // end_of_line, charset, final newline / trailing whitespace
             if (opts.Any && SaveActions.ApplyToBuffer(tab, opts))
                 changed = true;
@@ -410,7 +419,8 @@ namespace codeLess.AvaloniaApp
         /// </summary>
         private bool TryFormatThenSave(EditorTabBuffer tab)
         {
-            if (tab == null || !settings.FormatOnSave || tab.IsLargeFileViewer || string.IsNullOrEmpty(tab.FilePath)) return false;
+            bool formatOnSave = (settings != null && settings.FormatOnSave) || (effectiveWorkspaceSettings != null && effectiveWorkspaceSettings.FormatOnSave);
+            if (tab == null || !formatOnSave || tab.IsLargeFileViewer || string.IsNullOrEmpty(tab.FilePath)) return false;
             string path = LspPathFor(tab);
             if (path == null || lsp == null || !lsp.IsActive(path)) return false;
             _ = FormatThenSaveAsync(tab, path);
