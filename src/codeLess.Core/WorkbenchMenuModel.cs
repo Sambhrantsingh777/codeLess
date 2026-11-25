@@ -198,7 +198,7 @@ namespace codeLess.Studio
                     Sep(),
                     Check(C("view.toggleSidebar", "Primary Side Bar", "Ctrl+B")),
                     Check(C("view.toggleChat", "Secondary Side Bar (AI Chat)", "Ctrl+Alt+I")),
-                    Check(C("view.togglePanel", "Panel", "Ctrl+J")),
+                    Check(C("view.togglePanel", "Panel", "Ctrl+J", "Cmd+J")),
                     Sep(),
                     Check(C("view.minimap", "Minimap", null)),
                     Check(C("view.breadcrumbs", "Breadcrumbs", null)),
