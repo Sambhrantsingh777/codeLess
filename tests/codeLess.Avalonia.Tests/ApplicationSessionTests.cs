@@ -26,7 +26,7 @@ namespace codeLess.AvaloniaApp.Tests
             public bool Closed = false;
             public RestoreWindowInfo Bounds = new RestoreWindowInfo();
 
-            public void FocusWindow()
+            internal void FocusWindow()
             {
                 if (_owner != null)
                 {
@@ -34,6 +34,7 @@ namespace codeLess.AvaloniaApp.Tests
                 }
                 IsActive = true;
             }
+            void IWorkbenchWindow.FocusWindow() { FocusWindow(); }
 
             public void OpenFolder(string folderPath)
             {
@@ -87,12 +88,13 @@ namespace codeLess.AvaloniaApp.Tests
                 if (bounds != null) Bounds = bounds;
             }
 
-            public void CloseWindow()
+            internal void CloseWindow()
             {
                 Closed = true;
                 var h = WindowClosed;
                 if (h != null) h(this, EventArgs.Empty);
             }
+            void IWorkbenchWindow.CloseWindow() { CloseWindow(); }
 
             public event EventHandler WindowClosed;
         }
@@ -114,7 +116,7 @@ namespace codeLess.AvaloniaApp.Tests
             return Windows.LastOrDefault(w => w.IsActive) ?? Windows.LastOrDefault();
         }
 
-        public void QuitApplication()
+        void IWindowManager.QuitApplication()
         {
             foreach (var w in Windows.ToList()) w.CloseWindow();
         }
@@ -131,8 +133,8 @@ namespace codeLess.AvaloniaApp.Tests
             private readonly AutoResetEvent _connectedEvent = new AutoResetEvent(false);
             private volatile bool _disposed;
 
-            public void SignalConnected() { _connectedEvent.Set(); }
-            public void WaitConnected() { _connectedEvent.WaitOne(500); }
+            internal void SignalConnected() { _connectedEvent.Set(); }
+            internal void WaitConnected() { _connectedEvent.WaitOne(500); }
 
             public void WriteClientToServer(byte[] buffer, int offset, int count)
             {
@@ -245,8 +247,8 @@ namespace codeLess.AvaloniaApp.Tests
             private readonly EndpointStream _stream;
             public MockServer(MockChannel ch) { _ch = ch; _stream = new EndpointStream(ch, isClient: false); }
             public Stream Stream { get { return _stream; } }
-            public void WaitForConnection() { _ch.WaitConnected(); }
-            public void Disconnect() { }
+            void IIpcServer.WaitForConnection() { _ch.WaitConnected(); }
+            void IIpcServer.Disconnect() { }
             public void Dispose() { }
         }
     }

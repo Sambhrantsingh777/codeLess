@@ -11,8 +11,14 @@ namespace codeLess.Studio
         private static Timer _debounceTimer;
         private static string _watchedPath;
         private static bool _pendingDebounce;
+        private static long _lastInProcessWriteTicks;
         public static event Action<IdePersistentSettings> OnSettingsFileChanged;
         public static Action<int> DebounceTimerChangeSeam;
+
+        public static void NotifyInProcessWrite()
+        {
+            Interlocked.Exchange(ref _lastInProcessWriteTicks, DateTime.UtcNow.Ticks);
+        }
 
         public static void Start()
         {
@@ -43,13 +49,29 @@ namespace codeLess.Studio
             }
         }
 
+        private static bool ShouldIgnoreWatcherEvent()
+        {
+            if (DebounceTimerChangeSeam != null) return false;
+            if (OnSettingsFileChanged == null) return true;
+            long lastTicks = Interlocked.Read(ref _lastInProcessWriteTicks);
+            if (lastTicks > 0)
+            {
+                double elapsedMs = new TimeSpan(DateTime.UtcNow.Ticks - lastTicks).TotalMilliseconds;
+                if (elapsedMs >= 0 && elapsedMs < 400)
+                    return true;
+            }
+            return false;
+        }
+
         private static void OnFileEvent(object sender, FileSystemEventArgs e)
         {
+            if (ShouldIgnoreWatcherEvent()) return;
             ScheduleDebounce(300);
         }
 
         private static void OnRenamedEvent(object sender, RenamedEventArgs e)
         {
+            if (ShouldIgnoreWatcherEvent()) return;
             ScheduleDebounce(300);
         }
 
@@ -119,10 +141,10 @@ namespace codeLess.Studio
             }
             try
             {
-                IdePersistentSettings settings = IdePersistentSettings.Load();
                 Action<IdePersistentSettings> handler = OnSettingsFileChanged;
                 if (handler != null)
                 {
+                    IdePersistentSettings settings = IdePersistentSettings.Load();
                     handler(settings);
                 }
             }

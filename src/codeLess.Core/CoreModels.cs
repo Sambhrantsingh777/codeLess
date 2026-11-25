@@ -1989,12 +1989,18 @@ namespace codeLess.Studio
 
         public void Save()
         {
+            SaveCore(true);
+        }
+
+        internal void SaveCore(bool notifyInProcess)
+        {
             try
             {
                 // Find / Replace / Search histories live in FindHistoryStore: a long-lived settings object must not write
                 // back the lists it loaded at startup over newer history.
                 FindHistoryStore.CopyInto(this);
                 string path = GetSettingsFilePath();
+                IdeSettingsWatcher.NotifyInProcessWrite();
                 CrossProcessFile.ReadModifyWrite(path, delegate(string targetPath)
                 {
                     if (!_recentCleared && File.Exists(targetPath))
@@ -2045,10 +2051,14 @@ namespace codeLess.Studio
                     string json = ser.Serialize(this);
                     CrossProcessFile.AtomicWrite(targetPath, json, true);
                 });
-                Action<IdePersistentSettings> savedHandler = OnSettingsSavedInProcess;
-                if (savedHandler != null)
+                IdeSettingsWatcher.NotifyInProcessWrite();
+                if (notifyInProcess)
                 {
-                    try { savedHandler(this); } catch { }
+                    Action<IdePersistentSettings> savedHandler = OnSettingsSavedInProcess;
+                    if (savedHandler != null)
+                    {
+                        try { savedHandler(this); } catch { }
+                    }
                 }
             }
             catch { }
@@ -2078,7 +2088,7 @@ namespace codeLess.Studio
             RecentWorkspaces.Insert(0, folderPath);
             if (RecentWorkspaces.Count > 12)
                 RecentWorkspaces = RecentWorkspaces.Take(12).ToList();
-            Save();
+            SaveCore(false);
         }
 
         public void AddRecentFile(string filePath)
@@ -2089,7 +2099,7 @@ namespace codeLess.Studio
             RecentFiles.Insert(0, filePath);
             if (RecentFiles.Count > 15)
                 RecentFiles = RecentFiles.Take(15).ToList();
-            Save();
+            SaveCore(false);
         }
 
         public void ClearRecentlyOpened()

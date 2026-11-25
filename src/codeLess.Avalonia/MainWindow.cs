@@ -138,15 +138,42 @@ namespace codeLess.AvaloniaApp
         public bool IsClosed => windowClosed;
         private bool _isApplyingReloadedSettings;
 
-        private void ApplyReloadedSettings()
+        private void ApplyReloadedSettings(codeLess.Studio.IdePersistentSettings incoming)
         {
-            if (windowClosed || _isApplyingReloadedSettings) return;
+            if (windowClosed || _isApplyingReloadedSettings || !IsVisible || PlatformImpl == null || Application.Current == null) return;
             _isApplyingReloadedSettings = true;
             try
             {
-                this.settings = codeLess.Studio.StudioSettings.Load();
-                codeLess.Studio.EditorNicetyOptions.ApplyFrom(this.settings);
-                codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DisplayTabSize = System.Math.Max(1, System.Math.Min(16, settings.TabSize <= 0 ? 4 : settings.TabSize));
+                var src = incoming ?? codeLess.Studio.IdePersistentSettings.Load();
+                if (this.settings == null || ReferenceEquals(src, this.settings)) return;
+
+                float newFontSize = src.EditorFontSize <= 11f ? 13f : src.EditorFontSize;
+                int newTabSize = System.Math.Max(1, System.Math.Min(16, src.TabSize <= 0 ? 4 : src.TabSize));
+                bool visualChanged =
+                    System.Math.Abs(this.settings.EditorFontSize - newFontSize) > 0.01f ||
+                    this.settings.TabSize != src.TabSize ||
+                    this.settings.InsertSpaces != src.InsertSpaces ||
+                    this.settings.WordWrap != src.WordWrap ||
+                    this.settings.ShowMinimap != src.ShowMinimap ||
+                    this.settings.ShowBreadcrumbs != src.ShowBreadcrumbs ||
+                    (!string.IsNullOrWhiteSpace(src.ActiveThemeId) && !string.Equals(this.settings.ActiveThemeId, src.ActiveThemeId, StringComparison.OrdinalIgnoreCase));
+
+                this.settings.EditorFontSize = newFontSize;
+                this.settings.TabSize = src.TabSize;
+                this.settings.InsertSpaces = src.InsertSpaces;
+                this.settings.WordWrap = src.WordWrap;
+                this.settings.ShowMinimap = src.ShowMinimap;
+                this.settings.ShowBreadcrumbs = src.ShowBreadcrumbs;
+                if (!string.IsNullOrWhiteSpace(src.ActiveThemeId))
+                    this.settings.ActiveThemeId = src.ActiveThemeId;
+                this.settings.WindowRestoreWindows = src.WindowRestoreWindows;
+                if (src.RestoreWindowPaths != null)
+                    this.settings.RestoreWindowPaths = new List<string>(src.RestoreWindowPaths);
+
+                if (!visualChanged) return;
+
+                codeLess.Studio.EditorNicetyOptions.ApplyFrom(src);
+                codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DisplayTabSize = newTabSize;
                 codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
                 if (!string.IsNullOrWhiteSpace(settings.ThemeId))
                 {
@@ -182,13 +209,14 @@ namespace codeLess.AvaloniaApp
         private void OnSettingsFileChanged(codeLess.Studio.IdePersistentSettings newSettings)
         {
             if (windowClosed) return;
+            if (ReferenceEquals(newSettings, this.settings)) return;
             if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
             {
-                ApplyReloadedSettings();
+                ApplyReloadedSettings(newSettings);
             }
             else
             {
-                Avalonia.Threading.Dispatcher.UIThread.Post(ApplyReloadedSettings);
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => ApplyReloadedSettings(newSettings));
             }
         }
 
