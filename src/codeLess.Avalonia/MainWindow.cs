@@ -635,9 +635,42 @@ namespace codeLess.AvaloniaApp
         }
 
         private bool closeConfirmed;
+        private bool isApplicationQuitting;
+        private DispatcherTimer hotExitBackupTimer;
+        private readonly HashSet<EditorTabBuffer> pendingHotExitBackups = new HashSet<EditorTabBuffer>();
+        private readonly Dictionary<EditorTabBuffer, TextBlock> tabTitleBlocks = new Dictionary<EditorTabBuffer, TextBlock>();
+        private readonly List<string> lastConflictNotificationChoices = new List<string>();
+
+        public bool IsHotExitTimerRunning => hotExitBackupTimer != null && hotExitBackupTimer.IsEnabled;
+        public IdePersistentSettings Settings => settings;
+        public Func<EditorTabBuffer, ExternalConflictAction> ExternalConflictDecisionOverride { get; set; }
+        public Func<EditorTabBuffer, ExternalConflictAction> SaveConflictDecisionOverride { get; set; }
+        public string SaveConflictSaveAsPath { get; set; }
+        public string LastConflictNotificationMessage { get; private set; } = "";
+        public IReadOnlyList<string> LastConflictNotificationChoices => lastConflictNotificationChoices;
+
+        internal void RecordConflictNotification(string message, IEnumerable<string> choices)
+        {
+            LastConflictNotificationMessage = message ?? "";
+            lastConflictNotificationChoices.Clear();
+            if (choices != null) lastConflictNotificationChoices.AddRange(choices);
+        }
+
+        public void CloseForApplicationExit()
+        {
+            isApplicationQuitting = true;
+            Close();
+        }
 
         public new void Close()
         {
+            bool shouldHotExit = HotExitService.ShouldBackupWithoutPrompt(settings, isApplicationQuitting);
+            if (shouldHotExit)
+            {
+                FlushPendingHotExitBackups();
+                HotExitService.WriteWorkspaceBackups(workspaceRoot, openTabs);
+                closeConfirmed = true;
+            }
             if (!IsVisible && !windowClosed)
             {
                 if (!closeConfirmed && !SuppressUnsavedPrompts && openTabs.Any(t => t.IsDirty))
@@ -659,7 +692,13 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnClosing(WindowClosingEventArgs e)
         {
-            // VS Code parity: quitting (Cmd+Q / red close button / Alt+F4) with modified files asks to save first.
+            if (HotExitService.ShouldBackupWithoutPrompt(settings, isApplicationQuitting))
+            {
+                FlushPendingHotExitBackups();
+                HotExitService.WriteWorkspaceBackups(workspaceRoot, openTabs);
+                closeConfirmed = true;
+            }
+            // VS Code parity: quitting (Cmd+Q / red close button / Alt+F4) with modified files asks to save first when hotExit is off (or window close when hotExit is onExit).
             if (!closeConfirmed && !SuppressUnsavedPrompts && openTabs.Any(t => t.IsDirty))
             {
                 if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, () => { closeConfirmed = true; Close(); }))
@@ -730,6 +769,9 @@ namespace codeLess.AvaloniaApp
             searchOnTypeTimer?.Stop();
             taskProblemsDebounce?.Stop();
             autoSaveTimer?.Stop();
+            hotExitBackupTimer?.Stop();
+            pendingHotExitBackups.Clear();
+            tabTitleBlocks.Clear();
             updatePeriodicTimer?.Stop();
             sidebarProgressBar?.StopProgress();
             chatProgressBar?.StopProgress();
@@ -2737,11 +2779,21 @@ namespace codeLess.AvaloniaApp
 
         public EditorTabBuffer OpenFileInTab(string filePath, bool preview = false)
         {
+            return OpenFileInTab(filePath, preview, openBinaryAnyway: false);
+        }
+
+        public EditorTabBuffer OpenBinaryFileAnyway(string filePath)
+        {
+            return OpenFileInTab(filePath, preview: false, openBinaryAnyway: true);
+        }
+
+        public EditorTabBuffer OpenFileInTab(string filePath, bool preview, bool openBinaryAnyway)
+        {
             if (string.IsNullOrWhiteSpace(filePath)) return null;
             string fullPath = Path.GetFullPath(filePath);
 
             var existing = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fullPath, PathKeyComparison));
-            if (existing == null && File.Exists(fullPath) && IsLikelyBinaryFile(fullPath))
+            if (existing == null && File.Exists(fullPath) && !openBinaryAnyway && IsLikelyBinaryFile(fullPath))
             {
                 // The text editor would corrupt binary content on save. Only passive media types go to the OS viewer:
                 // "open"/xdg-open on an .app, .command, .sh, .desktop, .jar... would execute it on a single click.
@@ -2753,7 +2805,8 @@ namespace codeLess.AvaloniaApp
                 }
                 else
                 {
-                    SetStatusMessage($"'{Path.GetFileName(fullPath)}' is a binary file and was not opened (use Reveal in Finder / File Manager).");
+                    PrimaryEditor?.ShowBinaryPlaceholder(fullPath, () => OpenBinaryFileAnyway(fullPath));
+                    SetStatusMessage(HotExitService.BinaryPlaceholderMessage);
                 }
                 return null;
             }
@@ -2778,15 +2831,17 @@ namespace codeLess.AvaloniaApp
                     ReleaseClosedTabReferences(prevTab);
                 }
             }
-            if (TryOpenLargeFileTab(fullPath, preview, out var largeFileTab)) return largeFileTab;
+            if (!openBinaryAnyway && TryOpenLargeFileTab(fullPath, preview, out var largeFileTab)) return largeFileTab;
 
             Encoding fileEnc = new UTF8Encoding(false);
             bool hasBom = false;
-            string eol = "\r\n";
+            string eol = settings != null ? settings.EffectiveNewFileEol : "\n";
             bool hasFinalNl = false;
             string content = File.Exists(fullPath)
-                ? EditorTabBuffer.ReadFilePreservingMetadata(fullPath, out fileEnc, out hasBom, out eol, out hasFinalNl)
+                ? EditorTabBuffer.ReadFilePreservingMetadata(fullPath, settings != null && settings.AutoGuessEncoding, out fileEnc, out hasBom, out eol, out hasFinalNl)
                 : "";
+            if (openBinaryAnyway && content.IndexOf('\0') >= 0)
+                content = content.Replace('\0', '\uFFFD');
 
             bool isLiveDesktop = AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
             string gitHead = (!isLiveDesktop && File.Exists(fullPath) && !string.IsNullOrEmpty(workspaceRoot))
@@ -2810,6 +2865,7 @@ namespace codeLess.AvaloniaApp
                 IsDirty = false,
                 IsPreviewTab = preview
             };
+            tab.RecordDiskBaseline(fullPath);
             tab.SyncLinesFromContent();
             EditorIndentation.ApplyOnOpen(tab, settings); // .editorconfig, else detectIndentation (QA #12)
             if (!tab.IsLargeFile)
@@ -2857,6 +2913,7 @@ namespace codeLess.AvaloniaApp
                 Language = UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
                 Content = "",
                 SavedContent = "",
+                EolSequence = settings != null ? settings.EffectiveNewFileEol : (Environment.NewLine == "\n" ? "\n" : "\r\n"),
                 WordWrap = settings.WordWrap,
                 IsDirty = false,
                 IsUntitled = true,
@@ -2931,8 +2988,10 @@ namespace codeLess.AvaloniaApp
             bool wasLarge = (tab.Content != null && tab.Content.Length > 64 * 1024) || (tab.Lines != null && tab.Lines.Count > 2000) || tab.IsLargeFile || tab.IsLargeFileViewer;
             editorMru.Remove(tab);
             pendingAutoSave.Remove(tab);
+            pendingHotExitBackups.Remove(tab);
             tabDirtyDots.Remove(tab);
             tabCloseButtons.Remove(tab);
+            tabTitleBlocks.Remove(tab);
             if (!string.IsNullOrEmpty(tab.FilePath))
                 ExplorerTree?.ProblemCountByFullPath?.Remove(tab.FilePath);
             tab.ExtraCaretsForUndo = null;
@@ -3032,6 +3091,11 @@ namespace codeLess.AvaloniaApp
 
         public bool SaveBufferToDisk(EditorTabBuffer tab)
         {
+            return SaveBufferToDisk(tab, forceOverwriteConflict: false);
+        }
+
+        public bool SaveBufferToDisk(EditorTabBuffer tab, bool forceOverwriteConflict)
+        {
             if (tab == null) return false;
             if (tab.IsLargeFileViewer) { SetStatusMessage($"{tab.FileName} is open read-only in the large-file viewer and cannot be saved."); return false; }
             if (string.IsNullOrWhiteSpace(tab.FilePath) && AvaloniaTerminalEmulatorControl.IsDesktopRuntime && StorageProvider != null)
@@ -3042,6 +3106,7 @@ namespace codeLess.AvaloniaApp
             }
             if (string.IsNullOrWhiteSpace(tab.FilePath))
             {
+                HotExitService.DeleteBackup(workspaceRoot, tab);
                 string dir = !string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot)
                     ? workspaceRoot
                     : Path.GetTempPath();
@@ -3049,9 +3114,54 @@ namespace codeLess.AvaloniaApp
                 tab.FileName = Path.GetFileName(tab.FilePath);
                 tab.IsUntitled = false;
             }
+            else if (!forceOverwriteConflict && tab.IsDirty && (tab.HasExternalDiskConflict || tab.HasDiskModifiedExternally(out _)))
+            {
+                tab.HasExternalDiskConflict = true;
+                RecordConflictNotification(
+                    $"Failed to save '{tab.FileName}': The content of the file is newer.",
+                    new[] { "Save As", "Overwrite", "Compare" });
+                if (SaveConflictDecisionOverride != null)
+                {
+                    var decision = SaveConflictDecisionOverride(tab);
+                    if (decision == ExternalConflictAction.Overwrite)
+                    {
+                        // proceed to overwrite
+                    }
+                    else if (decision == ExternalConflictAction.SaveAs && !string.IsNullOrEmpty(SaveConflictSaveAsPath))
+                    {
+                        HotExitService.DeleteBackup(workspaceRoot, tab);
+                        tab.FilePath = Path.GetFullPath(SaveConflictSaveAsPath);
+                        tab.FileName = Path.GetFileName(tab.FilePath);
+                        tab.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, tab.FilePath) : tab.FileName;
+                        tab.HasExternalDiskConflict = false;
+                    }
+                    else if (decision == ExternalConflictAction.Compare)
+                    {
+                        OpenDiskConflictDiff(tab);
+                        return false;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    ShowWorkbenchNotification(
+                        $"save-conflict:{tab.FilePath}",
+                        "error",
+                        $"Failed to save '{tab.FileName}': The content of the file is newer.",
+                        "Overwrite",
+                        () => SaveBufferToDisk(tab, forceOverwriteConflict: true));
+                    return false;
+                }
+            }
 
             try
             {
+                tab.PreDiffContent = null;
+                tab.DiffHunks?.Clear();
+                tab.SyncProposedDiffProjection();
                 ApplySaveParticipants(tab);
                 tab.SyncContentFromLines();
                 var agentSave = BeginAgentTrackedSave(tab);
@@ -3060,11 +3170,17 @@ namespace codeLess.AvaloniaApp
                 tab.SavedContent = tab.Content;
                 tab.IsDirty = false;
                 tab.IsPreviewTab = false;
+                tab.IsDeletedOnDisk = false;
+                tab.HasExternalDiskConflict = false;
+                tab.RecordDiskBaseline(tab.FilePath);
+                pendingHotExitBackups.Remove(tab);
+                HotExitService.DeleteBackup(workspaceRoot, tab);
                 tab.RefreshGutterDiff();
                 RefreshTabStrip();
                 RefreshOpenEditorsSection();
                 RefreshGitStatus();
                 UpdateWindowTitle();
+                UpdateStatusBar();
                 SetStatusMessage($"Saved {tab.FileName}");
                 LspOnSaved(tab);
                 return true;
@@ -3076,22 +3192,105 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        public void OpenDiskConflictDiff(EditorTabBuffer tab)
+        {
+            if (tab == null || string.IsNullOrEmpty(tab.FilePath) || !File.Exists(tab.FilePath)) return;
+            try
+            {
+                string disk = EditorTabBuffer.ReadFilePreservingMetadata(tab.FilePath, settings != null && settings.AutoGuessEncoding, out var enc, out bool bom, out string eol, out bool finalNl);
+                tab.PreDiffContent = InlineDiffReview.Normalize(disk ?? "");
+                InlineDiffReview.Refresh(tab);
+                tab.SyncProposedDiffProjection();
+                if (ReferenceEquals(activeTab, tab))
+                {
+                    PrimaryEditor.LoadBuffer(tab);
+                }
+            }
+            catch { }
+        }
+
         public void RevertActiveTab()
         {
-            if (activeTab == null || string.IsNullOrEmpty(activeTab.FilePath) || !File.Exists(activeTab.FilePath)) return;
-            if (activeTab.IsLargeFileViewer) return;
-            activeTab.PushUndoSnapshot();
-            string disk = File.ReadAllText(activeTab.FilePath);
-            activeTab.Content = disk;
-            activeTab.SavedContent = disk;
-            activeTab.SyncLinesFromContent();
-            activeTab.IsDirty = false;
-            activeTab.RefreshGutterDiff();
-            PrimaryEditor.LoadBuffer(activeTab);
+            RevertTabToDisk(activeTab);
+        }
+
+        public void RevertTabToDisk(EditorTabBuffer tab)
+        {
+            if (tab == null || string.IsNullOrEmpty(tab.FilePath) || !File.Exists(tab.FilePath)) return;
+            if (tab.IsLargeFileViewer) return;
+            tab.PushUndoSnapshot();
+            tab.PreDiffContent = null;
+            tab.DiffHunks?.Clear();
+            tab.SyncProposedDiffProjection();
+            string disk = EditorTabBuffer.ReadFilePreservingMetadata(tab.FilePath, settings != null && settings.AutoGuessEncoding, out var enc, out bool bom, out string eol, out bool finalNl);
+            tab.FileEncoding = enc;
+            tab.HasBom = bom;
+            tab.EolSequence = eol;
+            tab.HasFinalNewline = finalNl;
+            tab.Content = disk;
+            tab.SavedContent = disk;
+            tab.RecordDiskBaseline(tab.FilePath);
+            tab.SyncLinesFromContent();
+            tab.IsDirty = false;
+            tab.IsDeletedOnDisk = false;
+            tab.HasExternalDiskConflict = false;
+            pendingHotExitBackups.Remove(tab);
+            HotExitService.DeleteBackup(workspaceRoot, tab);
+            tab.RefreshGutterDiff();
+            if (ReferenceEquals(activeTab, tab))
+                PrimaryEditor.LoadBuffer(tab);
             RefreshTabStrip();
             RefreshOpenEditorsSection();
             UpdateWindowTitle();
-            LspOnBufferModified(activeTab);
+            UpdateStatusBar();
+            LspOnBufferModified(tab);
+        }
+
+        public void ScheduleHotExitBackup(EditorTabBuffer buf)
+        {
+            if (buf == null || !HotExitService.IsEnabled(settings)) return;
+            if (!UntitledFileDefaults.NeedsSavePrompt(buf))
+            {
+                pendingHotExitBackups.Remove(buf);
+                HotExitService.DeleteBackup(workspaceRoot, buf);
+                return;
+            }
+            pendingHotExitBackups.Add(buf);
+            if (hotExitBackupTimer == null)
+            {
+                hotExitBackupTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HotExitService.DefaultDebounceDelayMs) };
+                hotExitBackupTimer.Tick += (s, e) =>
+                {
+                    hotExitBackupTimer.Stop();
+                    FlushPendingHotExitBackups();
+                };
+            }
+            hotExitBackupTimer.Stop();
+            hotExitBackupTimer.Start();
+        }
+
+        public void FlushPendingHotExitBackups()
+        {
+            hotExitBackupTimer?.Stop();
+            if (!HotExitService.IsEnabled(settings))
+            {
+                pendingHotExitBackups.Clear();
+                return;
+            }
+            if (pendingHotExitBackups.Count == 0) return;
+            foreach (var buf in pendingHotExitBackups.ToList())
+            {
+                int idx = openTabs.IndexOf(buf);
+                if (idx >= 0 && UntitledFileDefaults.NeedsSavePrompt(buf))
+                {
+                    HotExitService.WriteTabBackup(workspaceRoot, buf, idx);
+                }
+                else
+                {
+                    HotExitService.DeleteBackup(workspaceRoot, buf);
+                }
+            }
+            pendingHotExitBackups.Clear();
         }
 
         private void OnEditorBufferModified(EditorTabBuffer buf)
@@ -3125,6 +3324,8 @@ namespace codeLess.AvaloniaApp
 
             RefreshChangesetBanner();
             UpdateStatusBar();
+            if (HotExitService.IsEnabled(settings))
+                ScheduleHotExitBackup(buf);
 
             // For large files on live desktop, coalesce Outline/Problems/AutoSave/GutterDiff rebuilds via 280ms idle debounce
             if (buf.Lines != null && buf.Lines.Count > AvaloniaVirtualEditorCanvas.DeferAnalysisLineThreshold)
@@ -3224,6 +3425,7 @@ namespace codeLess.AvaloniaApp
             var disambiguatedFolders = WorkbenchParityHelper.ComputeDisambiguatedFolders(openTabs);
             tabDirtyDots.Clear();
             tabCloseButtons.Clear();
+            tabTitleBlocks.Clear();
 
             foreach (var tab in openTabs)
             {
@@ -3242,16 +3444,19 @@ namespace codeLess.AvaloniaApp
                     VerticalAlignment = VerticalAlignment.Center
                 });
 
-                string labelText = (captured.IsPinned ? "◈ " : "") + captured.FileName;
-                row.Children.Add(new TextBlock
+                string labelText = (captured.IsPinned ? "◈ " : "") + captured.FileName + (captured.IsDeletedOnDisk ? " (deleted)" : "");
+                var titleTb = new TextBlock
                 {
                     Text = labelText,
                     FontSize = UiTokens.FontUi,
                     FontStyle = captured.IsPreviewTab ? FontStyle.Italic : FontStyle.Normal,
                     FontWeight = FontWeight.Normal,
+                    TextDecorations = captured.IsDeletedOnDisk ? TextDecorations.Strikethrough : null,
                     Foreground = new SolidColorBrush(isActive ? textPrimary : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
-                });
+                };
+                row.Children.Add(titleTb);
+                tabTitleBlocks[captured] = titleTb;
 
                 if (!string.IsNullOrEmpty(captured.FilePath) &&
                     disambiguatedFolders.TryGetValue(captured.FilePath, out string disambigFolder) &&
@@ -3368,10 +3573,11 @@ namespace codeLess.AvaloniaApp
                     : "";
                 var nameTb = new TextBlock
                 {
-                    Text = captured.FileName + disambig,
+                    Text = captured.FileName + (captured.IsDeletedOnDisk ? " (deleted)" : "") + disambig,
                     FontSize = 11.5,
                     FontStyle = captured.IsPreviewTab ? FontStyle.Italic : FontStyle.Normal,
                     FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
+                    TextDecorations = captured.IsDeletedOnDisk ? TextDecorations.Strikethrough : null,
                     Foreground = new SolidColorBrush(isActive ? textPrimary : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -3474,9 +3680,10 @@ namespace codeLess.AvaloniaApp
             if (activeTab != null)
             {
                 string dirtyPrefix = activeTab.IsDirty ? "● " : "";
+                string deletedSuffix = activeTab.IsDeletedOnDisk ? " (deleted)" : "";
                 Title = !string.IsNullOrEmpty(folderName)
-                    ? $"{dirtyPrefix}{activeTab.FileName} — {folderName} — codeLess"
-                    : $"{dirtyPrefix}{activeTab.FileName} — codeLess";
+                    ? $"{dirtyPrefix}{activeTab.FileName}{deletedSuffix} — {folderName} — codeLess"
+                    : $"{dirtyPrefix}{activeTab.FileName}{deletedSuffix} — codeLess";
             }
             else if (!string.IsNullOrEmpty(folderName))
             {
@@ -3504,7 +3711,7 @@ namespace codeLess.AvaloniaApp
                 int selectedChars = activeTab.HasSelection() ? (activeTab.GetSelectedText() ?? "").Length : 0;
                 statusLnColBtn.Content = new LiteralTextBlock(WorkbenchParityHelper.FormatStatusLnCol(activeTab.CursorLine + 1, activeTab.CursorCol + 1, selectedChars, carets));
                 statusSpacesBtn.Content = new LiteralTextBlock(StatusIndentationText);
-                statusEncodingBtn.Content = new LiteralTextBlock(activeTab.HasBom ? "UTF-8 with BOM" : "UTF-8");
+                statusEncodingBtn.Content = new LiteralTextBlock(activeTab.StatusEncodingDisplayName);
                 statusEolBtn.Content = new LiteralTextBlock(activeTab.EolLabel);
                 statusLanguageBtn.Content = new LiteralTextBlock(MapLanguageDisplayName(activeTab.Language));
             }
@@ -3549,6 +3756,29 @@ namespace codeLess.AvaloniaApp
                 case "yml": return "YAML";
                 default: return string.IsNullOrEmpty(ext) ? "Plain Text" : ext.ToUpperInvariant();
             }
+        }
+
+        public string GetTabTitleText(EditorTabBuffer tab)
+        {
+            if (tab != null && tabTitleBlocks.TryGetValue(tab, out var tb) && tb != null)
+                return tb.Text ?? "";
+            return "";
+        }
+
+        public bool IsTabTitleStrikethrough(EditorTabBuffer tab)
+        {
+            if (tab != null && tabTitleBlocks.TryGetValue(tab, out var tb) && tb != null)
+                return tb.TextDecorations != null && tb.TextDecorations.Count > 0;
+            return false;
+        }
+
+        public void ToggleActiveTabEol()
+        {
+            if (activeTab == null) return;
+            activeTab.EolSequence = activeTab.EolSequence == "\n" ? "\r\n" : "\n";
+            activeTab.IsDirty = true;
+            UpdateStatusBar();
+            RefreshTabStrip();
         }
 
         public void SetStatusMessage(string msg)

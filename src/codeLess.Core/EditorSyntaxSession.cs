@@ -230,7 +230,8 @@ namespace codeLess.Studio
         /// <summary>True when the TextMate tokenizer skips this line (longer than its limit; VS Code shows it plain).</summary>
         public bool IsTooLongForTextMate(string text)
         {
-            return textMate != null && text != null && text.Length > textMate.Grammar.MaxLineLength;
+            int maxLen = textMate != null && textMate.Grammar != null ? textMate.Grammar.MaxLineLength : 20000;
+            return text != null && text.Length > maxLen;
         }
 
         /// <summary>Known fallback line-start state (multi-line string / comment), or -1 when not computed.</summary>

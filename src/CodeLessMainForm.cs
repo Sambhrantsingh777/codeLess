@@ -46,6 +46,7 @@ namespace codeLess.Studio
         private static readonly Font TabBadgeFont = new Font("Consolas", 7.8f, FontStyle.Bold);
         private static readonly Font TabTitleFont = new Font("Segoe UI", 8.8f, FontStyle.Regular);
         private static readonly Font TabItalicTitleFont = new Font("Segoe UI", 8.8f, FontStyle.Italic);
+        private static readonly Font TabStrikeoutTitleFont = new Font("Segoe UI", 8.8f, FontStyle.Strikeout);
         private static readonly Font TabSubtitleFont = new Font("Segoe UI", 7.6f, FontStyle.Regular);
         private static readonly Font TabCloseGlyphFont = new Font("Segoe UI", 9.0f, FontStyle.Regular);
         private static readonly Font TabPlusBtnFont = new Font("Consolas", 10f, FontStyle.Bold);
@@ -1587,9 +1588,127 @@ namespace codeLess.Studio
         /// <summary>An edit restarts that buffer's delay (and the timer).</summary>
         private void NoteAutoSaveEditWin(EditorTabBuffer buf)
         {
+            if (buf != null && HotExitService.IsEnabled(settings))
+                ScheduleHotExitBackupWin(buf);
             if (buf == null || autoSaveTimer == null || !AutoSavePolicy.SavesAfterDelay(settings)) return;
             autoSaveDebouncerWin.NoteEdit(buf, AutoSaveDebouncer.NowMs());
             RestartAutoSaveTimer(settings.EffectiveAutoSaveDelayMs);
+        }
+
+        private System.Windows.Forms.Timer hotExitBackupTimer;
+        private readonly HashSet<EditorTabBuffer> pendingHotExitBackupsWin = new HashSet<EditorTabBuffer>();
+        public Func<EditorTabBuffer, ExternalConflictAction> ExternalConflictDecisionOverride;
+        public Func<EditorTabBuffer, ExternalConflictAction> SaveConflictDecisionOverride;
+        public string SaveConflictSaveAsPath;
+
+        public void ScheduleHotExitBackupWin(EditorTabBuffer buf)
+        {
+            if (buf == null || !HotExitService.IsEnabled(settings)) return;
+            if (!UntitledFileDefaults.NeedsSavePrompt(buf))
+            {
+                pendingHotExitBackupsWin.Remove(buf);
+                HotExitService.DeleteBackup(workspaceRoot, buf);
+                return;
+            }
+            pendingHotExitBackupsWin.Add(buf);
+            if (hotExitBackupTimer == null)
+            {
+                hotExitBackupTimer = new System.Windows.Forms.Timer();
+                hotExitBackupTimer.Interval = HotExitService.DefaultDebounceDelayMs;
+                hotExitBackupTimer.Tick += (s, e) =>
+                {
+                    hotExitBackupTimer.Stop();
+                    FlushPendingHotExitBackups();
+                };
+            }
+            hotExitBackupTimer.Stop();
+            hotExitBackupTimer.Start();
+        }
+
+        public void FlushPendingHotExitBackups()
+        {
+            if (hotExitBackupTimer != null) hotExitBackupTimer.Stop();
+            if (!HotExitService.IsEnabled(settings))
+            {
+                pendingHotExitBackupsWin.Clear();
+                return;
+            }
+            if (pendingHotExitBackupsWin.Count == 0) return;
+            foreach (EditorTabBuffer buf in pendingHotExitBackupsWin.ToList())
+            {
+                int idx = openTabs.IndexOf(buf);
+                if (idx >= 0 && UntitledFileDefaults.NeedsSavePrompt(buf))
+                    HotExitService.WriteTabBackup(workspaceRoot, buf, idx);
+                else
+                    HotExitService.DeleteBackup(workspaceRoot, buf);
+            }
+            pendingHotExitBackupsWin.Clear();
+        }
+
+        public void RestoreHotExitBackupsWin()
+        {
+            if (!HotExitService.IsEnabled(settings)) return;
+            List<HotExitBackupEntry> backups = HotExitService.LoadBackups(workspaceRoot);
+            if (backups == null || backups.Count == 0) return;
+            EditorTabBuffer lastRestored = null;
+            foreach (HotExitBackupEntry entry in backups)
+            {
+                if (entry == null) continue;
+                EditorTabBuffer tab = null;
+                if (entry.IsUntitled || string.IsNullOrEmpty(entry.FilePath))
+                {
+                    tab = openTabs.FirstOrDefault(t => t.IsUntitled && string.Equals(t.FileName, entry.FileName, StringComparison.OrdinalIgnoreCase));
+                    if (tab == null)
+                    {
+                        tab = new EditorTabBuffer
+                        {
+                            FilePath = "",
+                            RelativePath = entry.FileName ?? "Untitled-1",
+                            FileName = entry.FileName ?? "Untitled-1",
+                            Language = entry.Language ?? UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
+                            WordWrap = settings != null ? settings.WordWrap : false,
+                            IsUntitled = true
+                        };
+                        openTabs.Add(tab);
+                    }
+                }
+                else
+                {
+                    tab = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FilePath, StringComparison.OrdinalIgnoreCase));
+                    if (tab == null)
+                    {
+                        if (File.Exists(entry.FilePath))
+                            tab = OpenFileInTab(entry.FilePath);
+                        else
+                        {
+                            tab = new EditorTabBuffer
+                            {
+                                FilePath = entry.FilePath,
+                                RelativePath = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, entry.FilePath),
+                                FileName = Path.GetFileName(entry.FilePath),
+                                Language = Path.GetExtension(entry.FilePath).TrimStart('.'),
+                                WordWrap = settings != null ? settings.WordWrap : false,
+                                IsDeletedOnDisk = true
+                            };
+                            openTabs.Add(tab);
+                        }
+                    }
+                }
+                if (tab != null)
+                {
+                    HotExitService.ApplyBackupToTab(entry, tab);
+                    if (!tab.IsLargeFile) tab.RefreshGutterDiff();
+                    lastRestored = tab;
+                }
+            }
+            if (lastRestored != null)
+            {
+                activeTab = activeTab ?? lastRestored;
+                if (editorControl != null) editorControl.LoadBuffer(activeTab);
+                RefreshTabStrip();
+                RefreshOpenEditorsSection();
+                UpdateWindowTitle();
+            }
         }
 
         private void RestartAutoSaveTimer(long delayMs)
@@ -1635,7 +1754,7 @@ namespace codeLess.Studio
                 Language = UntitledFileDefaults.DetectWorkspaceExtension(workspaceRoot, workspaceFiles),
                 Content = "",
                 SavedContent = "",
-                EolSequence = "\r\n",
+                EolSequence = settings != null ? settings.EffectiveNewFileEol : "\r\n",
                 WordWrap = settings != null ? settings.WordWrap : false,
                 IsDirty = false,
                 IsUntitled = true
@@ -8707,6 +8826,10 @@ if __name__ == '__main__':
 
             if (shouldReload)
             {
+                int prevLine = tab.CursorLine;
+                int prevCol = tab.CursorCol;
+                int prevScrollTop = tab.ScrollTopLine;
+                int prevScrollLeft = tab.ScrollLeftCol;
                 tab.PushUndoSnapshot();
                 tab.FileEncoding = diskEnc;
                 tab.HasBom = diskBom;
@@ -8714,7 +8837,13 @@ if __name__ == '__main__':
                 tab.HasFinalNewline = diskFinalNl;
                 tab.Content = diskContent;
                 tab.SavedContent = diskContent;
+                tab.RecordDiskBaseline(fullPath);
+                tab.HasExternalDiskConflict = false;
                 tab.SyncLinesFromContent();
+                tab.CursorLine = Math.Max(0, Math.Min(prevLine, tab.Lines.Count - 1));
+                tab.CursorCol = Math.Max(0, Math.Min(prevCol, tab.Lines[tab.CursorLine].Length));
+                tab.ScrollTopLine = Math.Max(0, Math.Min(prevScrollTop, tab.Lines.Count - 1));
+                tab.ScrollLeftCol = Math.Max(0, prevScrollLeft);
                 tab.IsDirty = false;
                 tab.RefreshGutterDiff();
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
@@ -8725,6 +8854,10 @@ if __name__ == '__main__':
                 RefreshOutlineAndProblems(activeTab);
                 RefreshTabStrip();
                 statusLeftLabel.Text = "Reloaded " + tab.FileName;
+            }
+            else if (tab.IsDirty)
+            {
+                tab.HasExternalDiskConflict = true;
             }
         }
 
@@ -8769,10 +8902,20 @@ if __name__ == '__main__':
 
         public EditorTabBuffer OpenFileInTab(string filePath)
         {
+            return OpenFileInTab(filePath, false);
+        }
+
+        public EditorTabBuffer OpenBinaryFileAnyway(string filePath)
+        {
+            return OpenFileInTab(filePath, true);
+        }
+
+        public EditorTabBuffer OpenFileInTab(string filePath, bool openBinaryAnyway)
+        {
             EditorTabBuffer existing = openTabs.FirstOrDefault(
                 t => string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase)
             );
-            if (existing == null && !string.IsNullOrEmpty(filePath) && File.Exists(filePath) && IsLikelyBinaryFile(filePath))
+            if (existing == null && !string.IsNullOrEmpty(filePath) && File.Exists(filePath) && !openBinaryAnyway && IsLikelyBinaryFile(filePath))
             {
                 // Binary content would be corrupted by the text editor on save. Only passive media types are handed to
                 // the OS viewer: shell-executing arbitrary binaries would RUN .exe/.msi/.lnk/.jar... on a single click
@@ -8785,7 +8928,7 @@ if __name__ == '__main__':
                 }
                 else if (statusLeftLabel != null)
                 {
-                    statusLeftLabel.Text = Path.GetFileName(filePath) + " is a binary file and was not opened (use Reveal in File Explorer).";
+                    statusLeftLabel.Text = HotExitService.BinaryPlaceholderMessage;
                 }
                 return null;
             }
@@ -8831,11 +8974,13 @@ if __name__ == '__main__':
                 }
                 Encoding fileEnc = new UTF8Encoding(false);
                 bool hasBom = false;
-                string eol = "\r\n";
+                string eol = settings != null ? settings.EffectiveNewFileEol : "\r\n";
                 bool hasFinalNl = false;
                 string content = File.Exists(filePath)
-                    ? EditorTabBuffer.ReadFilePreservingMetadata(filePath, out fileEnc, out hasBom, out eol, out hasFinalNl)
+                    ? EditorTabBuffer.ReadFilePreservingMetadata(filePath, settings != null && settings.AutoGuessEncoding, out fileEnc, out hasBom, out eol, out hasFinalNl)
                     : "";
+                if (openBinaryAnyway && content.IndexOf('\0') >= 0)
+                    content = content.Replace('\0', '\uFFFD');
                 string gitHeadContent = (!isLarge && File.Exists(filePath))
                     ? LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, filePath)
                     : null;
@@ -8856,6 +9001,7 @@ if __name__ == '__main__':
                     IsDirty = false,
                     IsLargeFile = isLarge
                 };
+                tab.RecordDiskBaseline(filePath);
                 tab.SyncLinesFromContent();
                 EditorIndentation.ApplyOnOpen(tab, settings); // .editorconfig, else detectIndentation (QA #12)
                 if (!tab.IsLargeFile)
@@ -9024,11 +9170,23 @@ if __name__ == '__main__':
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (!ConfirmSaveOrDiscardAllDirtyBuffers(openTabs))
+            if (HotExitService.ShouldBackupWithoutPrompt(settings, true))
+            {
+                FlushPendingHotExitBackups();
+                HotExitService.WriteWorkspaceBackups(workspaceRoot, openTabs);
+            }
+            else if (!ConfirmSaveOrDiscardAllDirtyBuffers(openTabs))
             {
                 e.Cancel = true;
                 return;
             }
+            if (hotExitBackupTimer != null)
+            {
+                hotExitBackupTimer.Stop();
+                hotExitBackupTimer.Dispose();
+                hotExitBackupTimer = null;
+            }
+            pendingHotExitBackupsWin.Clear();
             KillAllTerminalChildProcesses();
             if (lspController != null)
             {
@@ -9397,7 +9555,7 @@ if __name__ == '__main__':
 
                     Color diffTitleCol = activeTheme.IsLight ? Color.FromArgb(4, 120, 87) : Color.FromArgb(74, 222, 128);
                     TextRenderer.DrawText(g, badgeText, TabBadgeFont, new Point(8, 10), badgeCol);
-                    Font activeTitleFont = captured.IsPreview ? TabItalicTitleFont : TabTitleFont;
+                    Font activeTitleFont = captured.IsDeletedOnDisk ? TabStrikeoutTitleFont : (captured.IsPreview ? TabItalicTitleFont : TabTitleFont);
                     Rectangle titleRect = new Rectangle(30, 0, Math.Max(22, tabBtn.Width - 48), tabBtn.Height);
                     Color titleFg = pendingDiffs > 0 ? diffTitleCol : (isCurrent ? activeTheme.FgPrimary : activeTheme.FgSecondary);
                     TextRenderer.DrawText(g, title, activeTitleFont, titleRect, titleFg,
@@ -9581,7 +9739,10 @@ if __name__ == '__main__':
                 EndAgentTrackedSaveWin(agentSave, buf);
                 buf.IsUntitled = false;
                 buf.IsDeletedOnDisk = false;
+                buf.HasExternalDiskConflict = false;
                 buf.IsPreview = false;
+                pendingHotExitBackupsWin.Remove(buf);
+                HotExitService.DeleteBackup(workspaceRoot, buf);
                 if (!buf.IsLargeFile && buf.GitHeadContent == null && !string.IsNullOrEmpty(workspaceRoot))
                     buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, buf.FilePath);
                 buf.RefreshGutterDiff();
