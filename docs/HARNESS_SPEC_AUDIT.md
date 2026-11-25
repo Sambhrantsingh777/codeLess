@@ -51,3 +51,4 @@
 | M6: Plan mode SEARCH/REPLACE block staging denied | Done | src/LlmHarnessAndAgentEngine.cs:3727 | `M6EnginePermissionsTests.Engine_PlanMode_SearchReplace_Denied_NothingStaged` |
 
 | M7b: Diagnostics appended after edit | Done | src/LlmHarnessAndAgentEngine.cs:2844 | `DiagnosticsProviderM7bTests.Diagnostics_AppendsErrors_CapsAt20_IgnoresWarnings_AndDoesNotHang` |
+| M7c-1: Native Tool Calling Core | Done | src/codeLess.Core/NativeToolCalling.cs | `NativeToolCallingTests.ToolsTable_MatchesExecuteWorkspaceTool` |
