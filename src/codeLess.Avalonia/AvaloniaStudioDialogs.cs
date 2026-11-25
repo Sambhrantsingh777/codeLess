@@ -182,7 +182,11 @@ namespace codeLess.AvaloniaApp
         public void Close(bool restorePreviewTheme = false)
         {
             QuickOpenFileSearch = null;
+            AllEntries.Clear();
+            FilteredEntries.Clear();
+            ResultsListBox.ItemsSource = null;
             if (!IsVisible) return;
+            try { TopLevel.GetTopLevel(this)?.FocusManager?.ClearFocus(); } catch { }
             IsVisible = false;
             if (restorePreviewTheme && !string.IsNullOrEmpty(originalThemeIdBeforePreview))
             {
@@ -431,7 +435,7 @@ namespace codeLess.AvaloniaApp
         public static string FormatShortcutForPlatform(string shortcut)
         {
             if (string.IsNullOrEmpty(shortcut)) return "";
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            if (MacKeymap.IsMacOS)
             {
                 // VS Code's macOS keymap keeps literal Control for these (Cmd+G is Find Next, Cmd+Tab is the app switcher).
                 if (shortcut == "Ctrl+`" || shortcut == "Ctrl+G" || shortcut == "Ctrl+Shift+G" || shortcut == "Ctrl+Tab" ||

@@ -18,6 +18,17 @@ namespace codeLess.Studio
         public static void NotifyInProcessWrite()
         {
             Interlocked.Exchange(ref _lastInProcessWriteTicks, DateTime.UtcNow.Ticks);
+            if (DebounceTimerChangeSeam == null)
+            {
+                lock (_sync)
+                {
+                    _pendingDebounce = false;
+                    if (_debounceTimer != null)
+                    {
+                        try { _debounceTimer.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+                    }
+                }
+            }
         }
 
         public static void Start()

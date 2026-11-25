@@ -143,16 +143,15 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transposeLetters", "Transpose Letters", "Editor", "ctrl+t", "", "", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transformToUppercase", "Transform to Uppercase", "Editor", "", "", "", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transformToLowercase", "Transform to Lowercase", "Editor", "", "", "", "editorTextFocus"));
-            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorAbove", "Add Cursor Above", "Multi-cursor", "option+cmd+up", "ctrl+alt+up", "shift+alt+up", "editorTextFocus"));
-            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorBelow", "Add Cursor Below", "Multi-cursor", "option+cmd+down", "ctrl+alt+down", "shift+alt+down", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorAbove", "Add Cursor Above", "Multi-cursor", "option+cmd+up", "ctrl+alt+up", "ctrl+alt+up", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorBelow", "Add Cursor Below", "Multi-cursor", "option+cmd+down", "ctrl+alt+down", "ctrl+alt+down", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorAtEndOfEachLineSelected", "Add Cursors to Line Ends", "Multi-cursor", "shift+option+i", "shift+alt+i", "shift+alt+i", "editorTextFocus"));
-            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.selectHighlights", "Select All Occurrences of Find Match", "Multi-cursor", "option+enter", "alt+enter", "alt+enter", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.selectHighlights", "Select All Occurrences of Find Match", "Multi-cursor", "cmd+shift+l", "ctrl+shift+l", "ctrl+shift+l", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.changeAll", "Change All Occurrences", "Multi-cursor", "cmd+f2", "ctrl+f2", "ctrl+f2", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("cursorUndo", "Undo Cursor", "Multi-cursor", "cmd+u", "ctrl+u", "ctrl+u", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.trimTrailingWhitespace", "Trim Trailing Whitespace", "Editor", "", "", "", ""));;
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.newUntitledFile", "New Untitled File", "File", "cmd+n", "ctrl+n", "ctrl+n", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFile", "Open File...", "File", "cmd+o", "ctrl+o", "ctrl+o", ""));
-            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFolder", "Open Folder...", "File", "", "ctrl+k ctrl+o", "ctrl+k ctrl+o", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.saveAs", "Save As...", "File", "cmd+shift+s", "ctrl+shift+s", "ctrl+shift+s", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.saveAll", "Save All", "File", "option+cmd+s", "ctrl+k s", "ctrl+k s", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.quit", "Exit", "File", "cmd+q", "", "", ""));;
@@ -161,7 +160,7 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.revealActiveFileInWindows", "Reveal in File Explorer", "File", "", "", "", ""));;
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.copyPathOfActiveFile", "Copy Path of Active File", "File", "cmd+k p", "ctrl+k p", "ctrl+k p", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.showAllEditors", "Show All Editors", "View", "", "", "", ""));;
-            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFolder", "Open Folder...", "File", "cmd+k o", "ctrl+k o", "ctrl+k o", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFolder", "Open Folder...", "File", "cmd+k o", "ctrl+k ctrl+o", "ctrl+k ctrl+o", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.closeFolder", "Close Folder", "File", "cmd+k f", "ctrl+k f", "ctrl+k f", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.selectTheme", "Preferences: Color Theme", "Preferences", "cmd+k cmd+t", "ctrl+k ctrl+t", "ctrl+k ctrl+t", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.keepEditor", "Keep Editor", "View", "cmd+k enter", "ctrl+k enter", "ctrl+k enter", ""));

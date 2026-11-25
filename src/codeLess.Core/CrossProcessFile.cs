@@ -52,20 +52,10 @@ namespace codeLess.Studio
             var sw = System.Diagnostics.Stopwatch.StartNew();
             while (true)
             {
+                FileStream fs = null;
                 try
                 {
-                    using (var fs = new FileStream(lockPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                    {
-                        try
-                        {
-                            modify(path);
-                        }
-                        finally
-                        {
-                            try { File.Delete(lockPath); } catch { }
-                        }
-                        return;
-                    }
+                    fs = new FileStream(lockPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                 }
                 catch (IOException)
                 {
@@ -75,7 +65,19 @@ namespace codeLess.Studio
                         continue; // try again after force breaking lock
                     }
                     Thread.Sleep(50);
+                    continue;
                 }
+
+                try
+                {
+                    modify(path);
+                }
+                finally
+                {
+                    try { fs.Dispose(); } catch { }
+                    try { File.Delete(lockPath); } catch { }
+                }
+                return;
             }
         }
     }

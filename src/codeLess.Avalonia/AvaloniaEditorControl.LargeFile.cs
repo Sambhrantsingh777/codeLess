@@ -57,7 +57,8 @@ namespace codeLess.AvaloniaApp
                     Padding = new Thickness(14, 6),
                     HorizontalAlignment = HorizontalAlignment.Center
                 };
-                binaryOpenAnywayBtn.Click += (s, e) => ClickOpenBinaryAnyway();
+                var weakEd = new WeakReference<AvaloniaEditorControl>(this);
+                binaryOpenAnywayBtn.Click += (s, e) => { if (weakEd.TryGetTarget(out var ed)) ed.ClickOpenBinaryAnyway(); };
                 var stack = new StackPanel
                 {
                     Spacing = 14,

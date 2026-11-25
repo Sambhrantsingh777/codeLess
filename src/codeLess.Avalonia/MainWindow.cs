@@ -247,7 +247,13 @@ namespace codeLess.AvaloniaApp
             }
             else
             {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => ApplyReloadedSettings(newSettings));
+                int ver = codeLess.Studio.IdePersistentSettings.InProcessSaveVersion;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (windowClosed) return;
+                    if (codeLess.Studio.IdePersistentSettings.InProcessSaveVersion != ver) return;
+                    ApplyReloadedSettings(newSettings);
+                });
             }
         }
 
@@ -859,6 +865,7 @@ namespace codeLess.AvaloniaApp
             ExplorerTree?.GitStatusByFullPath?.Clear();
             ExplorerTree?.ModifiedFolderPaths?.Clear();
             ExplorerTree?.Nodes?.Clear();
+            CommandPalette?.Close();
             CommandPalette?.RecentCommandTitles?.Clear();
             if (CommandPalette != null)
             {
@@ -866,6 +873,16 @@ namespace codeLess.AvaloniaApp
                 CommandPalette.FilteredEntries?.Clear();
                 if (CommandPalette.ResultsListBox != null) CommandPalette.ResultsListBox.ItemsSource = null;
             }
+            focusedEditorBufferForAutoSave = null;
+            pendingDebouncedBuffer = null;
+            lastRenderedTabRef = null;
+            lastPolledBuffer = null;
+            httpDocBuffer = null;
+            pendingMarkdownBuffer = null;
+            lastDebugDecoratedTab = null;
+            hunkPopupBuffer = null;
+            PrimaryEditor?.ReleaseBufferReferences(null);
+            SplitEditor?.ReleaseBufferReferences(null);
             tabStripStack?.Children.Clear();
             openEditorsStack?.Children.Clear();
             contextPillsWrap?.Children.Clear();
@@ -875,7 +892,6 @@ namespace codeLess.AvaloniaApp
             try { FocusManager?.ClearFocus(); } catch { }
             base.OnClosed(e);
             Content = null;
-            try { UpdateLayout(); } catch { }
             ProcessMemoryTrimmer.NotifyLargeFree();
         }
 
@@ -2320,7 +2336,7 @@ namespace codeLess.AvaloniaApp
 
         private void RebuildContextPillsBar()
         {
-            if (contextPillsWrap == null) return;
+            if (windowClosed || contextPillsWrap == null) return;
             contextPillsWrap.Children.Clear();
 
             var pillTheme = currentTheme ?? StudioTheme.GetById(StudioTheme.DefaultThemeId);
@@ -2336,13 +2352,14 @@ namespace codeLess.AvaloniaApp
                 BorderThickness = new Thickness(1),
                 BorderBrush = WorkbenchStyles.B(UiTokens.InputBorder(pillTheme))
             };
+            var weakWin = new WeakReference<MainWindow>(this);
             ToolTip.SetTip(addCtxBtn, "Attach the active file as context");
             addCtxBtn.Click += (s, e) =>
             {
-                if (activeTab != null && !attachedContextPills.Contains(activeTab.FileName))
+                if (weakWin.TryGetTarget(out var w) && w.activeTab != null && !w.attachedContextPills.Contains(w.activeTab.FileName))
                 {
-                    attachedContextPills.Add(activeTab.FileName);
-                    RebuildContextPillsBar();
+                    w.attachedContextPills.Add(w.activeTab.FileName);
+                    w.RebuildContextPillsBar();
                 }
             };
             contextPillsWrap.Children.Add(addCtxBtn);
@@ -2386,8 +2403,11 @@ namespace codeLess.AvaloniaApp
                 ToolTip.SetTip(pBtn, "Remove context");
                 pBtn.Click += (s, e) =>
                 {
-                    attachedContextPills.Remove(captured);
-                    RebuildContextPillsBar();
+                    if (weakWin.TryGetTarget(out var w))
+                    {
+                        w.attachedContextPills.Remove(captured);
+                        w.RebuildContextPillsBar();
+                    }
                 };
                 contextPillsWrap.Children.Add(pBtn);
             }
@@ -3637,7 +3657,7 @@ namespace codeLess.AvaloniaApp
 
         public void RefreshTabStrip()
         {
-            if (tabStripStack == null || currentTheme == null) return;
+            if (windowClosed || tabStripStack == null || currentTheme == null) return;
             tabStripStack.Children.Clear();
 
             Color activeBg = AvaloniaColorHelper.ToAvColor(currentTheme.ActiveTabBg);
@@ -3651,6 +3671,7 @@ namespace codeLess.AvaloniaApp
             lastRenderedTabDirty = activeTab?.IsDirty ?? false;
             lastRenderedTabPreview = activeTab?.IsPreviewTab ?? false;
             lastRenderedOpenTabCount = openTabs.Count;
+            var weakWin = new WeakReference<MainWindow>(this);
             if (showWelcomeTab) // closable like VS Code: with no files open the editor area then shows the empty watermark
             {
                 bool isWelcomeActive = (activeTab == null);
@@ -3663,7 +3684,7 @@ namespace codeLess.AvaloniaApp
                     Foreground = new SolidColorBrush(isWelcomeActive ? textPrimary : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
                 });
-                var wClose = WorkbenchStyles.IconButton("close", "Close", CloseWelcomeTab, currentTheme, 20, 14);
+                var wClose = WorkbenchStyles.IconButton("close", "Close", () => { if (weakWin.TryGetTarget(out var w)) w.CloseWelcomeTab(); }, currentTheme, 20, 14);
                 WorkbenchStyles.ThemeIconButton(wClose, currentTheme, isWelcomeActive);
                 wRow.Children.Add(wClose);
 
@@ -3676,7 +3697,7 @@ namespace codeLess.AvaloniaApp
                     BorderBrush = new SolidColorBrush(isWelcomeActive ? accent : borderCol),
                     BorderThickness = isWelcomeActive ? new Thickness(0, UiTokens.TabIndicatorWidth, 0, 0) : new Thickness(0, 0, 1, 1)
                 };
-                wTabBorder.PointerPressed += (s, e) => OpenWelcomeTab();
+                wTabBorder.PointerPressed += (s, e) => { if (weakWin.TryGetTarget(out var w)) w.OpenWelcomeTab(); };
                 tabStripStack.Children.Add(wTabBorder);
             }
 
@@ -3739,7 +3760,6 @@ namespace codeLess.AvaloniaApp
 
                 // VS Code: the close glyph shows on the active tab and on hover; a dirty tab shows its dot instead until hovered.
                 var weakTab = new WeakReference<EditorTabBuffer>(captured);
-                var weakWin = new WeakReference<MainWindow>(this);
                 var closeBtn = WorkbenchStyles.IconButton("close", "Close (Ctrl+W)", () =>
                 {
                     if (weakWin.TryGetTarget(out var w) && weakTab.TryGetTarget(out var t)) w.CloseTab(t);
@@ -3797,7 +3817,7 @@ namespace codeLess.AvaloniaApp
 
         public void RefreshOpenEditorsSection()
         {
-            if (openEditorsStack == null || currentTheme == null) return;
+            if (windowClosed || openEditorsStack == null || currentTheme == null) return;
             openEditorsStack.Children.Clear();
             openEditorsHeaderBtn.Content = new SectionHeaderLabel((openEditorsStack.IsVisible ? "▾ " : "▸ ") + $"OPEN EDITORS ({openTabs.Count})");
 
@@ -3862,7 +3882,7 @@ namespace codeLess.AvaloniaApp
 
         public void RefreshOutlineAndProblems(EditorTabBuffer tab)
         {
-            if (outlineListBox == null || problemsListBox == null || currentTheme == null) return;
+            if (windowClosed || outlineListBox == null || problemsListBox == null || currentTheme == null) return;
             Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
             Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
             outlineListBox.Foreground = new SolidColorBrush(textPrimary);

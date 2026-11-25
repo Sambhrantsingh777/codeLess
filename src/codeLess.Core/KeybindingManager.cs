@@ -22,10 +22,46 @@ namespace codeLess.Core
     /// </summary>
     public class KeybindingManager
     {
-        private static List<KeybindingEntry> cachedDefaults = null;
         private static readonly object defaultLock = new object();
 
-        private readonly bool _isMac;
+        public static bool? ForceMacKeymapOverride { get; set; }
+        public static bool? ForceLinuxKeymapOverride { get; set; }
+
+        public static bool IsMacOS
+        {
+            get
+            {
+                if (ForceMacKeymapOverride.HasValue)
+                    return ForceMacKeymapOverride.Value;
+                string env = Environment.GetEnvironmentVariable("CODELESS_FORCE_NONMAC_KEYMAP");
+                if (!string.IsNullOrEmpty(env) && !string.Equals(env, "0", StringComparison.OrdinalIgnoreCase) && !string.Equals(env, "false", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                return RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+            }
+        }
+
+        public static bool IsLinux
+        {
+            get
+            {
+                if (ForceLinuxKeymapOverride.HasValue)
+                    return ForceLinuxKeymapOverride.Value;
+                string env = Environment.GetEnvironmentVariable("CODELESS_FORCE_NONMAC_KEYMAP");
+                if (!string.IsNullOrEmpty(env))
+                {
+                    if (string.Equals(env, "linux", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                    if (!string.Equals(env, "0", StringComparison.OrdinalIgnoreCase) && !string.Equals(env, "false", StringComparison.OrdinalIgnoreCase))
+                        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+                }
+                if (ForceMacKeymapOverride.HasValue && ForceMacKeymapOverride.Value)
+                    return false;
+                return RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+            }
+        }
+
+        private bool _isMac;
+        private bool _isLinux;
         private readonly List<KeybindingEntry> activeBindings = new List<KeybindingEntry>();
         private readonly List<KeybindingEntry> removedBindings = new List<KeybindingEntry>();
         private readonly Dictionary<string, Action> actions = new Dictionary<string, Action>(StringComparer.Ordinal);
@@ -33,16 +69,14 @@ namespace codeLess.Core
 
         private string chordPrefix = null;
 
-        private static List<KeybindingEntry> GetDefaults()
+        public bool IsMac { get { return _isMac; } }
+
+        private static List<KeybindingEntry> BuildDefaultsForPlatform(bool isMac, bool isLinux)
         {
-            if (cachedDefaults != null && cachedDefaults.Count > 0) return cachedDefaults;
             lock (defaultLock)
             {
-                if (cachedDefaults != null && cachedDefaults.Count > 0) return cachedDefaults;
                 DefaultCommands.Register();
                 var list = new List<KeybindingEntry>();
-                bool isMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
-                bool isLinux = RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
 
                 foreach (var cmd in CommandRegistry.AllCommands)
                 {
@@ -61,9 +95,13 @@ namespace codeLess.Core
                         });
                     }
                 }
-                cachedDefaults = list;
-                return cachedDefaults;
+                return list;
             }
+        }
+
+        private List<KeybindingEntry> GetDefaults()
+        {
+            return BuildDefaultsForPlatform(_isMac, _isLinux);
         }
 
         public List<KeybindingEntry> ActiveBindings { get { return activeBindings; } }
@@ -231,15 +269,32 @@ namespace codeLess.Core
         }
 
         public KeybindingManager()
-            : this(RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            : this(IsMacOS, IsLinux)
         {
         }
 
         public KeybindingManager(bool isMac)
+            : this(isMac, !isMac && IsLinux)
+        {
+        }
+
+        public KeybindingManager(bool isMac, bool isLinux)
         {
             _isMac = isMac;
+            _isLinux = !isMac && isLinux;
             LoadDefaultMenuBindings();
             UpdateActiveBindings(null);
+        }
+
+        public void SetPlatform(bool isMac, bool isLinux)
+        {
+            bool normLinux = !isMac && isLinux;
+            if (_isMac == isMac && _isLinux == normLinux) return;
+            _isMac = isMac;
+            _isLinux = normLinux;
+            _shortcutToCommand.Clear();
+            LoadDefaultMenuBindings();
+            UpdateActiveBindings(UserBindings);
         }
 
         private void LoadDefaultMenuBindings()
@@ -397,11 +452,28 @@ namespace codeLess.Core
             }
         }
 
+        private string NormalizeKeyGesture(string keyGesture)
+        {
+            if (string.IsNullOrEmpty(keyGesture) || _isMac) return keyGesture;
+            if (keyGesture.IndexOf("cmd+", StringComparison.OrdinalIgnoreCase) < 0) return keyGesture;
+            for (int i = 0; i < activeBindings.Count; i++)
+            {
+                string k = activeBindings[i].Key;
+                if (k != null && (string.Equals(k, keyGesture, StringComparison.OrdinalIgnoreCase) ||
+                    k.StartsWith(keyGesture + " ", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return keyGesture;
+                }
+            }
+            return keyGesture.Replace("cmd+", "ctrl+").Replace("Cmd+", "ctrl+").Replace("CMD+", "ctrl+");
+        }
+
         public bool HasChordPrefix(string keyGesture)
         {
+            string norm = NormalizeKeyGesture(keyGesture);
             foreach (var b in activeBindings)
             {
-                if (b.Key != null && b.Key.StartsWith(keyGesture + " ", StringComparison.OrdinalIgnoreCase))
+                if (b.Key != null && b.Key.StartsWith(norm + " ", StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
@@ -416,8 +488,10 @@ namespace codeLess.Core
                 return true;
             }
 
+            keyGesture = NormalizeKeyGesture(keyGesture);
             string fullGesture = chordPrefix != null ? (chordPrefix + " " + keyGesture) : keyGesture;
 
+            KeybindingEntry fallbackUnboundEntry = null;
             for (int i = activeBindings.Count - 1; i >= 0; i--)
             {
                 var entry = activeBindings[i];
@@ -425,12 +499,25 @@ namespace codeLess.Core
                 {
                     if (WhenParser.Evaluate(entry.WhenParsed, ctx))
                     {
+                        if (!HasCommand(entry.Command))
+                        {
+                            if (fallbackUnboundEntry == null) fallbackUnboundEntry = entry;
+                            continue;
+                        }
                         if (isTerminalFocus && !TerminalCommands.CommandsToSkipShell.Contains(entry.Command)) return false;
                         chordPrefix = null;
                         showStatus("");
                         return ExecuteCommand(entry.Command);
                     }
                 }
+            }
+
+            if (fallbackUnboundEntry != null)
+            {
+                if (isTerminalFocus && !TerminalCommands.CommandsToSkipShell.Contains(fallbackUnboundEntry.Command)) return false;
+                chordPrefix = null;
+                showStatus("");
+                return ExecuteCommand(fallbackUnboundEntry.Command);
             }
 
             if (chordPrefix != null)

@@ -818,6 +818,7 @@ namespace codeLess.Studio
             {
                 try
                 {
+                    if (LspText.IsWindows() && dir.IndexOf("\\WindowsApps", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     if (!Directory.Exists(dir)) continue;
                     foreach (string ext in exts)
                     {

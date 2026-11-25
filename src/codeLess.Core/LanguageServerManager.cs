@@ -719,9 +719,19 @@ namespace codeLess.Studio
             ep.Trace = delegate (string t) { inst.AppendLog(t); };
             ep.NotificationReceived += delegate (string method, object prms) { OnNotification(inst, method, prms); };
             ep.RequestHandler = delegate (string method, object prms) { return OnServerRequest(inst, method, prms); };
+            Process epProc = proc;
             ep.Closed += delegate (string reason)
             {
-                if (inst.Generation == gen && !inst.ShuttingDown) inst.AppendLog("[client] connection closed: " + reason);
+                if (inst.Generation == gen && !inst.ShuttingDown)
+                {
+                    inst.AppendLog("[client] connection closed: " + reason);
+                    try
+                    {
+                        if (epProc != null && epProc.WaitForExit(500))
+                            OnProcessExited(inst, epProc, gen);
+                    }
+                    catch { }
+                }
             };
             inst.Endpoint = ep;
             ep.Start();

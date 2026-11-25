@@ -43,7 +43,7 @@ namespace codeLess.AvaloniaApp
         private void InitializeKeybindings()
         {
             DefaultCommands.Register();
-            keybindings = new KeybindingManager(System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX));
+            keybindings = new KeybindingManager(MacKeymap.IsMacOS, KeybindingManager.IsLinux);
             KeybindingManager = keybindings;
 
             // Bind actions to commands
@@ -248,19 +248,20 @@ namespace codeLess.AvaloniaApp
             InitializeWorkspaceSettingsWatcher();
 
             string path = codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath();
+            var weakWindow = new WeakReference<MainWindow>(this);
             keybindingsWatcher = new KeybindingsFileWatcher(path, content =>
             {
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
-                    if (windowClosed) return;
-                    string err = keybindings.LoadUserBindings(content);
+                    if (!weakWindow.TryGetTarget(out var self) || self.windowClosed) return;
+                    string err = self.keybindings.LoadUserBindings(content);
                     if (err != null)
                     {
-                        ShowKeybindingsNotification("Keybindings parse error: " + err);
+                        self.ShowKeybindingsNotification("Keybindings parse error: " + err);
                     }
                     else
                     {
-                        HideKeybindingsNotification();
+                        self.HideKeybindingsNotification();
                     }
                 });
             });
@@ -284,6 +285,10 @@ namespace codeLess.AvaloniaApp
                 MacKeymap.ForceMacKeymapOverride.Value != System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
             {
                 return false;
+            }
+            if (keybindings.IsMac != MacKeymap.IsMacOS)
+            {
+                keybindings.SetPlatform(MacKeymap.IsMacOS, KeybindingManager.IsLinux);
             }
             string ks = KeyStringParser.FromKeyName(key.ToString(), (int)modifiers);
             isDispatchingCommandKey = true;
@@ -329,8 +334,8 @@ namespace codeLess.AvaloniaApp
             var defaults = codeLess.Core.CommandRegistry.AllCommands;
             var sb = new System.Text.StringBuilder();
             sb.AppendLine("[");
-            bool isMac = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX);
-            bool isLinux = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux);
+            bool isMac = KeybindingManager.IsMacOS;
+            bool isLinux = KeybindingManager.IsLinux;
             bool first = true;
             foreach (var cmd in defaults)
             {
@@ -390,17 +395,18 @@ namespace codeLess.AvaloniaApp
             workspaceSettingsWatcher = new System.IO.FileSystemWatcher(workspaceRoot);
             workspaceSettingsWatcher.IncludeSubdirectories = true;
             workspaceSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName | System.IO.NotifyFilters.DirectoryName;
+            var weakWin = new WeakReference<MainWindow>(this);
             System.IO.FileSystemEventHandler handler = (s, e) =>
             {
-                if (windowClosed) return;
+                if (!weakWin.TryGetTarget(out var w) || w.windowClosed) return;
                 if (e != null && (e.FullPath.IndexOf(".vscode", StringComparison.OrdinalIgnoreCase) < 0 || !(e.FullPath.EndsWith("settings.json") || e.FullPath.EndsWith(".vscode")))) return;
-                if (workspaceSettingsTimer != null) { workspaceSettingsTimer.Dispose(); workspaceSettingsTimer = null; }
-                workspaceSettingsTimer = new System.Threading.Timer(_ =>
+                if (w.workspaceSettingsTimer != null) { w.workspaceSettingsTimer.Dispose(); w.workspaceSettingsTimer = null; }
+                w.workspaceSettingsTimer = new System.Threading.Timer(_ =>
                 {
-                    if (windowClosed) return;
+                    if (!weakWin.TryGetTarget(out var w2) || w2.windowClosed) return;
                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     {
-                        if (windowClosed) return;
+                        if (!weakWin.TryGetTarget(out var w3) || w3.windowClosed) return;
                         try
                         {
                             var clone = codeLess.Studio.StudioSettings.Load();
@@ -410,10 +416,10 @@ namespace codeLess.AvaloniaApp
                             {
                                 string content = System.IO.File.ReadAllText(path);
                                 string err = VscodeSettingsManager.ApplySettings(content, clone);
-                                if (err != null) ShowKeybindingsNotification("Workspace settings parse error: " + err);
-                                else HideKeybindingsNotification();
+                                if (err != null) w3.ShowKeybindingsNotification("Workspace settings parse error: " + err);
+                                else w3.HideKeybindingsNotification();
                             }
-                            ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
+                            w3.ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
                         }
                         catch { }
                     });
@@ -460,31 +466,32 @@ namespace codeLess.AvaloniaApp
             }
             userSettingsWatcher = new System.IO.FileSystemWatcher(dir, System.IO.Path.GetFileName(path));
             userSettingsWatcher.NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.FileName;
+            var weakWin = new WeakReference<MainWindow>(this);
             System.IO.FileSystemEventHandler handler = (s, e) =>
             {
-                if (windowClosed) return;
-                if (userSettingsTimer != null) { userSettingsTimer.Dispose(); userSettingsTimer = null; }
-                userSettingsTimer = new System.Threading.Timer(_ =>
+                if (!weakWin.TryGetTarget(out var w) || w.windowClosed) return;
+                if (w.userSettingsTimer != null) { w.userSettingsTimer.Dispose(); w.userSettingsTimer = null; }
+                w.userSettingsTimer = new System.Threading.Timer(_ =>
                 {
-                    if (windowClosed) return;
+                    if (!weakWin.TryGetTarget(out var w2) || w2.windowClosed) return;
                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     {
-                        if (windowClosed) return;
+                        if (!weakWin.TryGetTarget(out var w3) || w3.windowClosed) return;
                         try
                         {
                             string content = System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : "";
                             var clone = codeLess.Studio.StudioSettings.Load();
                             string err = VscodeSettingsManager.ApplySettings(content, clone);
 
-                            string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(workspaceRoot);
+                            string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(w3.workspaceRoot);
                             if (wsPath != null && System.IO.File.Exists(wsPath))
                             {
                                 string wsErr = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(wsPath), clone);
                                 if (err == null) err = wsErr;
                             }
-                            ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
-                            if (err != null) ShowKeybindingsNotification("Settings parse error: " + err);
-                            else HideKeybindingsNotification();
+                            w3.ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
+                            if (err != null) w3.ShowKeybindingsNotification("Settings parse error: " + err);
+                            else w3.HideKeybindingsNotification();
                         }
                         catch { }
                     });

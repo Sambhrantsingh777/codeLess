@@ -10,15 +10,17 @@ namespace codeLess.AvaloniaApp
     /// </summary>
     public static class MacKeymap
     {
-        public static bool? ForceMacKeymapOverride { get; set; }
+        public static bool? ForceMacKeymapOverride
+        {
+            get { return codeLess.Core.KeybindingManager.ForceMacKeymapOverride; }
+            set { codeLess.Core.KeybindingManager.ForceMacKeymapOverride = value; }
+        }
 
         public static bool IsMacOS
         {
             get
             {
-                if (ForceMacKeymapOverride.HasValue)
-                    return ForceMacKeymapOverride.Value;
-                return RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+                return codeLess.Core.KeybindingManager.IsMacOS;
             }
         }
 

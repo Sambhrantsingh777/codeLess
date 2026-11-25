@@ -24,8 +24,11 @@ namespace codeLess.Studio
         {
             if (string.IsNullOrWhiteSpace(ArgumentsJson))
                 return new Dictionary<string, object>();
+            string jsonToParse = ArgumentsJson.IndexOf('\\') >= 0
+                ? EscapeBareBackslashesInJsonStrings(ArgumentsJson)
+                : ArgumentsJson;
             try {
-                var obj = new JavaScriptSerializer().DeserializeObject(ArgumentsJson);
+                var obj = new JavaScriptSerializer().DeserializeObject(jsonToParse);
                 if (obj is Dictionary<string, object>) return (Dictionary<string, object>)obj;
                 throw new Exception("Not a dict");
             } catch {
@@ -33,6 +36,111 @@ namespace codeLess.Studio
                 d["error"] = "Malformed JSON arguments";
                 return d;
             }
+        }
+
+        private static string EscapeBareBackslashesInJsonStrings(string json)
+        {
+            var sb = new System.Text.StringBuilder(json.Length + 16);
+            int i = 0;
+            while (i < json.Length)
+            {
+                char c = json[i];
+                if (c != '"')
+                {
+                    sb.Append(c);
+                    i++;
+                    continue;
+                }
+
+                // Scan string literal [i .. endQuote]
+                int start = i + 1;
+                int p = start;
+                bool hasInvalidJsonEscape = false;
+                bool looksLikeWindowsPath = false;
+                if (start + 2 < json.Length &&
+                    ((json[start] >= 'A' && json[start] <= 'Z') || (json[start] >= 'a' && json[start] <= 'z')) &&
+                    json[start + 1] == ':' && json[start + 2] == '\\' &&
+                    (start + 3 >= json.Length || json[start + 3] != '\\'))
+                {
+                    looksLikeWindowsPath = true;
+                }
+
+                while (p < json.Length)
+                {
+                    char sc = json[p];
+                    if (sc == '"')
+                        break;
+                    if (sc == '\\')
+                    {
+                        if (p + 1 < json.Length)
+                        {
+                            char next = json[p + 1];
+                            if (next == '"' || next == '\\' || next == '/' ||
+                                next == 'b' || next == 'f' || next == 'n' || next == 'r' || next == 't')
+                            {
+                                p += 2;
+                                continue;
+                            }
+                            if (next == 'u' && p + 5 < json.Length &&
+                                IsHexDigit(json[p + 2]) && IsHexDigit(json[p + 3]) &&
+                                IsHexDigit(json[p + 4]) && IsHexDigit(json[p + 5]))
+                            {
+                                p += 6;
+                                continue;
+                            }
+                        }
+                        hasInvalidJsonEscape = true;
+                        p++;
+                        continue;
+                    }
+                    p++;
+                }
+
+                int endQuote = p;
+                sb.Append('"');
+                if (hasInvalidJsonEscape || looksLikeWindowsPath)
+                {
+                    int k = start;
+                    while (k < endQuote)
+                    {
+                        char kc = json[k];
+                        if (kc == '\\')
+                        {
+                            if (k + 1 < endQuote && (json[k + 1] == '"' || json[k + 1] == '\\'))
+                            {
+                                sb.Append('\\');
+                                sb.Append(json[k + 1]);
+                                k += 2;
+                                continue;
+                            }
+                            sb.Append("\\\\");
+                            k++;
+                            continue;
+                        }
+                        sb.Append(kc);
+                        k++;
+                    }
+                }
+                else
+                {
+                    sb.Append(json, start, endQuote - start);
+                }
+                if (endQuote < json.Length && json[endQuote] == '"')
+                {
+                    sb.Append('"');
+                    i = endQuote + 1;
+                }
+                else
+                {
+                    i = endQuote;
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static bool IsHexDigit(char ch)
+        {
+            return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
         }
     }
 
