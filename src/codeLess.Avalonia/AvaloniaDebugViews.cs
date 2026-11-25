@@ -149,7 +149,7 @@ namespace codeLess.AvaloniaApp
                 Padding = new Thickness(0),
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
-                Cursor = new Cursor(StandardCursorType.Hand)
+                Cursor = CursorHelper.GetCursor(StandardCursorType.Hand)
             };
             ToolTip.SetTip(b, AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform(tooltip));
             if (onClick != null) b.Click += (s, e) => onClick();
@@ -225,7 +225,7 @@ namespace codeLess.AvaloniaApp
                 Background = Brushes.Transparent,
                 Padding = new Thickness(0),
                 BorderThickness = new Thickness(0),
-                Cursor = new Cursor(StandardCursorType.Hand)
+                Cursor = CursorHelper.GetCursor(StandardCursorType.Hand)
             };
             CreateLaunchJsonLink.Click += (s, e) => CreateLaunchJsonRequested?.Invoke();
             top.Children.Add(HintText);
@@ -335,7 +335,7 @@ namespace codeLess.AvaloniaApp
                 ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
                 Height = 22,
                 Background = Brushes.Transparent,
-                Cursor = onClick != null ? new Cursor(StandardCursorType.Hand) : Cursor.Default
+                Cursor = onClick != null ? CursorHelper.GetCursor(StandardCursorType.Hand) : Cursor.Default
             };
             var spacer = new Border { Width = 8 + depth * 12 };
             g.Children.Add(spacer);
@@ -595,7 +595,7 @@ namespace codeLess.AvaloniaApp
                 cb.IsCheckedChanged += (s, e) => ctl.SetBreakpointEnabled(bp, cb.IsChecked == true);
                 g.Children.Add(cb);
                 string dir = Path.GetFileName(Path.GetDirectoryName(bp.FilePath) ?? "");
-                var tb = new TextBlock { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Inlines = new InlineCollection(), Cursor = new Cursor(StandardCursorType.Hand) };
+                var tb = new TextBlock { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Inlines = new InlineCollection(), Cursor = CursorHelper.GetCursor(StandardCursorType.Hand) };
                 Color nameColor = bp.Verified == false ? C(theme.TextSecondary) : C(theme.TextPrimary);
                 tb.Inlines.Add(new Run(Path.GetFileName(bp.FilePath)) { Foreground = new SolidColorBrush(nameColor) });
                 tb.Inlines.Add(new Run("  " + dir) { Foreground = new SolidColorBrush(C(theme.TextSecondary)), FontSize = 11 });
@@ -755,7 +755,7 @@ namespace codeLess.AvaloniaApp
             ZIndex = 50;
             BoxShadow = new BoxShadows(new BoxShadow { OffsetY = 2, Blur = 8, Color = Color.FromArgb(90, 0, 0, 0) });
             var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1 };
-            var grip = new Border { Width = 12, Height = 24, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.SizeWestEast), Child = new DebugGlyph { Kind = "grip", Width = 12, Height = 14 } };
+            var grip = new Border { Width = 12, Height = 24, Background = Brushes.Transparent, Cursor = CursorHelper.GetCursor(StandardCursorType.SizeWestEast), Child = new DebugGlyph { Kind = "grip", Width = 12, Height = 14 } };
             grip.PointerPressed += (s, e) => { dragging = true; dragStart = e.GetPosition(Parent as Visual); startOffset = DragOffset; e.Pointer.Capture(grip); e.Handled = true; };
             grip.PointerMoved += (s, e) =>
             {

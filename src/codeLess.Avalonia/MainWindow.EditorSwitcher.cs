@@ -322,7 +322,7 @@ namespace codeLess.AvaloniaApp
                     Padding = new Thickness(4, 0),
                     CornerRadius = new CornerRadius(UiTokens.ControlRadius),
                     Background = isSel ? selBg : Brushes.Transparent,
-                    Cursor = new Cursor(StandardCursorType.Hand),
+                    Cursor = CursorHelper.GetCursor(StandardCursorType.Hand),
                     Tag = tab
                 };
                 b.PointerEntered += (s, e) => { if (!isSel) b.Background = hoverBg; };

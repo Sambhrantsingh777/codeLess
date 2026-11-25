@@ -1,6 +1,7 @@
 using System;
 using Avalonia.Input;
 using codeLess.Core;
+using System.Linq;
 
 namespace codeLess.AvaloniaApp
 {
@@ -58,6 +59,19 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.previousEditor", () => CycleEditorTab(-1));
             keybindings.BindAction("workbench.action.openNextRecentlyUsedEditorInGroup", () => OpenOrAdvanceEditorSwitcher(false));
             keybindings.BindAction("editor.action.commentLine", () => PrimaryEditor.Canvas.ToggleLineComment());
+            keybindings.BindAction("workbench.action.files.openFolder", () => { _ = PromptOpenFolderDialogAsync(); });
+            keybindings.BindAction("workbench.action.closeFolder", () => CloseWorkspaceFolder());
+            keybindings.BindAction("workbench.action.files.saveAll", () => SaveAllTabs());
+            keybindings.BindAction("workbench.action.selectTheme", () => OpenThemePickerPalette());
+            keybindings.BindAction("workbench.action.closeAllEditors", () => CloseAllTabs());
+            keybindings.BindAction("workbench.action.closeUnmodifiedEditors", () => { var saved = openTabs.Where(t => !t.IsDirty && !t.IsPinned).ToList(); foreach (var t in saved) CloseTab(t, forceWithoutPrompt: true); });
+            keybindings.BindAction("workbench.action.keepEditor", () => { if (activeTab != null) { activeTab.IsPinned = true; activeTab.IsPreviewTab = false; RefreshTabStrip(); } });
+            keybindings.BindAction("copyFilePath", () => { if (activeTab != null) _ = CopyPathToClipboardAsync(activeTab.FilePath ?? activeTab.FileName); });
+            keybindings.BindAction("revealFileInOS", () => { if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RevealInOsFileManager(activeTab.FilePath); });
+            keybindings.BindAction("workbench.action.editor.changeLanguageMode", () => OpenLanguageModePicker());
+            keybindings.BindAction("markdown.showPreviewToSide", () => OpenMarkdownPreview(toSide: true));
+            keybindings.BindAction("editor.action.inlineAiBar", () => PrimaryEditor?.ShowInlineAiBar());
+
 
             contextKeyService = new WindowContextKeyService(this);
             InitializeVscodeSettingsWatcher();
@@ -86,11 +100,13 @@ namespace codeLess.AvaloniaApp
         {
             if (keybindings == null) return false;
             string ks = KeyStringParser.FromKey((int)key, (int)modifiers);
+            System.IO.File.AppendAllText("/tmp/debug2.txt", "DISPATCH: " + key + " " + ks + " prefix=" + keybindings.GetType().GetField("chordPrefix", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(keybindings) + "\n");
             return keybindings.Dispatch(ks, contextKeyService, msg => {
                 if (!string.IsNullOrEmpty(msg))
                     statusChordLabel.Text = msg;
                 else
                     statusChordLabel.Text = "";
+                System.IO.File.AppendAllText("/tmp/debug2.txt", "DISPATCH MSG: " + msg + "\n");
             }, isTerminalFocus);
         }
         private void ShowKeybindingsNotification(string message)

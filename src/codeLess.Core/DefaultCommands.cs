@@ -157,6 +157,16 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.revealActiveFileInWindows", "Reveal in File Explorer", "File", "", "", "", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.copyPathOfActiveFile", "Copy Path of Active File", "File", "cmd+k p", "ctrl+k p", "ctrl+k p", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.showAllEditors", "Show All Editors", "View", "", "", "", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.files.openFolder", "Open Folder...", "File", "cmd+k o", "ctrl+k o", "ctrl+k o", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.closeFolder", "Close Folder", "File", "cmd+k f", "ctrl+k f", "ctrl+k f", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.selectTheme", "Preferences: Color Theme", "Preferences", "cmd+k t", "ctrl+k t", "ctrl+k t", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.keepEditor", "Keep Editor", "View", "cmd+k enter", "ctrl+k enter", "ctrl+k enter", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("copyFilePath", "Copy Path", "File", "cmd+k p", "ctrl+k p", "ctrl+k p", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("revealFileInOS", "Reveal in OS", "File", "cmd+k r", "ctrl+k r", "ctrl+k r", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.editor.changeLanguageMode", "Change Language Mode", "Editor", "cmd+k m", "ctrl+k m", "ctrl+k m", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("markdown.showPreviewToSide", "Markdown: Open Preview to the Side", "Markdown", "cmd+k v", "ctrl+k v", "ctrl+k v", ""));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.inlineAiBar", "Inline AI Edit", "AI", "cmd+i", "ctrl+i", "ctrl+i", ""));
+
 }
 }
 }
