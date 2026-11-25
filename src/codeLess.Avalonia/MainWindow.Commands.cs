@@ -295,12 +295,22 @@ namespace codeLess.AvaloniaApp
             if (HandleDevToolsShortcut(key, modifiers)) return true;
             if (HandleParityShortcut(key, modifiers)) return true;
 
-            // Escape closes open modal or command palette or Zen mode
+            // Escape closes open modal or command palette or Zen mode (Shift+Escape or double-Escape within 1.5s)
             if (key == Key.Escape)
             {
                 if (ModalHost.IsVisible) { ModalHost.CloseModal(); return true; }
                 if (CommandPalette.IsVisible) { CommandPalette.Close(restorePreviewTheme: true); return true; }
-                if (isZenMode && shift) { ToggleZenMode(); return true; }
+                if (isZenMode)
+                {
+                    if (shift || (DateTime.UtcNow - lastZenEscapeTime).TotalMilliseconds < 1500)
+                    {
+                        lastZenEscapeTime = DateTime.MinValue;
+                        ToggleZenMode();
+                        return true;
+                    }
+                    lastZenEscapeTime = DateTime.UtcNow;
+                    return true;
+                }
                 return false;
             }
 
@@ -701,6 +711,11 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        private bool zenSavedSidebarVisible = true;
+        private bool zenSavedBottomPanelVisible = true;
+        private bool zenSavedRightChatVisible = true;
+        private DateTime lastZenEscapeTime = DateTime.MinValue;
+
         public void ToggleZenMode()
         {
             isZenMode = !isZenMode;
@@ -709,15 +724,18 @@ namespace codeLess.AvaloniaApp
             statusBarBorder.IsVisible = !isZenMode;
             if (isZenMode)
             {
+                zenSavedSidebarVisible = sidebarBorder.IsVisible;
+                zenSavedBottomPanelVisible = bottomPanelBorder.IsVisible;
+                zenSavedRightChatVisible = rightChatDockBorder.IsVisible;
                 if (sidebarBorder.IsVisible) TogglePrimarySidebar();
                 if (bottomPanelBorder.IsVisible) ToggleBottomPanel();
                 if (rightChatDockBorder.IsVisible) ToggleRightChatDock();
             }
             else
             {
-                if (!sidebarBorder.IsVisible) TogglePrimarySidebar();
-                if (!bottomPanelBorder.IsVisible) ToggleBottomPanel();
-                if (!rightChatDockBorder.IsVisible) ToggleRightChatDock();
+                if (zenSavedSidebarVisible && !sidebarBorder.IsVisible) TogglePrimarySidebar();
+                if (zenSavedBottomPanelVisible && !bottomPanelBorder.IsVisible) ToggleBottomPanel();
+                if (zenSavedRightChatVisible && !rightChatDockBorder.IsVisible) ToggleRightChatDock();
             }
         }
 
@@ -932,12 +950,17 @@ namespace codeLess.AvaloniaApp
 
         public void JumpDiagnostic(int direction)
         {
-            if (activeTab?.Diagnostics == null || activeTab.Diagnostics.Count == 0) return;
+            if (activeTab?.Diagnostics == null || activeTab.Diagnostics.Count == 0)
+            {
+                if (problemsPanelExtra.Count > 0)
+                    TryNavigateTaskProblem(0);
+                return;
+            }
             int curLine = activeTab.CursorLine + 1;
             var target = direction >= 0
                 ? activeTab.Diagnostics.FirstOrDefault(d => d.LineNumber > curLine) ?? activeTab.Diagnostics[0]
                 : activeTab.Diagnostics.LastOrDefault(d => d.LineNumber < curLine) ?? activeTab.Diagnostics[activeTab.Diagnostics.Count - 1];
-            PrimaryEditor.GoToLine(target.LineNumber);
+            PrimaryEditor.GoToLine(target.LineNumber, Math.Max(1, target.Column));
         }
 
         public MainWindow CreateNewWindowInstance()
@@ -959,7 +982,11 @@ namespace codeLess.AvaloniaApp
             var closing = openTabs.ToList();
             openTabs.Clear();
             editorMru.Clear();
-            foreach (var t in closing) ReleaseClosedTabReferences(t);
+            foreach (var t in closing)
+            {
+                RecordClosedTabHistory(t);
+                ReleaseClosedTabReferences(t);
+            }
             ActivateTab(null);
             SweepClosedLargeFileTabs();
         }
@@ -970,6 +997,7 @@ namespace codeLess.AvaloniaApp
             bool hadWorkspace = !string.IsNullOrEmpty(workspaceRoot) || workspaceFiles.Count > 0 || openTabs.Count > 0;
             StopWorkspaceWatcher();
             workspaceRoot = "";
+            effectiveWorkspaceSettings = null;
             InitializeWorkspaceSettingsWatcher();
             LspOnWorkspaceChanged();
             workspaceFiles.Clear();

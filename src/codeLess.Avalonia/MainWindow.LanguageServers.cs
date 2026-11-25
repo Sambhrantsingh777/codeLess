@@ -474,6 +474,48 @@ namespace codeLess.AvaloniaApp
             ShowLocationPicker(buf, refs, "references");
         }
 
+        public int RenameSymbolFallback(EditorTabBuffer buf, string newName)
+        {
+            if (buf == null || string.IsNullOrWhiteSpace(newName) || buf.Lines == null) return 0;
+            buf.ClampCursor();
+            string oldWord = LspEditing.WordAt(buf.Lines[buf.CursorLine], buf.CursorCol, out int _);
+            if (string.IsNullOrEmpty(oldWord) || oldWord == newName) return 0;
+            var rx = new System.Text.RegularExpressions.Regex(@"\b" + System.Text.RegularExpressions.Regex.Escape(oldWord) + @"\b");
+            int totalReplacements = 0;
+            foreach (var tab in openTabs)
+            {
+                if (tab == null || tab.Lines == null || tab.IsLargeFileViewer) continue;
+                int tabMatches = 0;
+                var updated = new List<string>(tab.Lines.Count);
+                for (int i = 0; i < tab.Lines.Count; i++)
+                {
+                    string ln = tab.Lines[i] ?? "";
+                    var m = rx.Matches(ln);
+                    if (m.Count > 0)
+                    {
+                        tabMatches += m.Count;
+                        ln = rx.Replace(ln, newName);
+                    }
+                    updated.Add(ln);
+                }
+                if (tabMatches > 0)
+                {
+                    tab.PushUndoSnapshot();
+                    tab.Lines = updated;
+                    tab.ClampCursor();
+                    tab.SyncContentFromLines();
+                    tab.IsDirty = true;
+                    totalReplacements += tabMatches;
+                    if (ReferenceEquals(PrimaryEditor.CurrentBuffer, tab))
+                        PrimaryEditor.Canvas.CommitExternalEdit();
+                }
+            }
+            RefreshTabStrip();
+            RefreshOpenEditorsSection();
+            UpdateWindowTitle();
+            return totalReplacements;
+        }
+
         public async void RenameSymbolAtCursor()
         {
             var buf = activeTab;

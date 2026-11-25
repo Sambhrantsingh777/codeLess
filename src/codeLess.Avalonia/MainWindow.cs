@@ -253,7 +253,7 @@ namespace codeLess.AvaloniaApp
 
         public float GetEditorFontSizeForTests() { return (float)PrimaryEditor.Canvas.FontSizePx; }
         public bool TestCheckDisposed() {
-            return windowClosed && terminalSessions.Count == 0 && workspaceLoadCts?.IsCancellationRequested == true;
+            return windowClosed && terminalSessions.Count == 0 && (workspaceLoadCts == null || workspaceLoadCts.IsCancellationRequested);
         }
         public void TestAddWorkspaceFolder(string path) { workspaceFiles.Add(path); }
         public AvaloniaEditorControl SplitEditor { get; private set; }
@@ -771,6 +771,7 @@ namespace codeLess.AvaloniaApp
             }
             openTabs.Clear();
             editorMru.Clear();
+            closedTabStates.Clear();
             activeTab = null;
 
             App.WindowManager?.UnregisterWindow(this);
@@ -3178,12 +3179,26 @@ namespace codeLess.AvaloniaApp
             if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, tab))
             {
                 var fallback = openTabs.FirstOrDefault(t => !ReferenceEquals(t, tab));
-                SplitEditor.LoadBuffer(fallback);
+                if (fallback != null)
+                    SplitEditor.LoadBuffer(fallback);
+                else
+                    ToggleSplitEditor();
             }
             PrimaryEditor?.ReleaseBufferReferences(tab);
             SplitEditor?.ReleaseBufferReferences(tab);
             LspOnTabClosed(tab);
             if (wasLarge) ProcessMemoryTrimmer.NotifyLargeFree();
+        }
+
+        private readonly Dictionary<string, (int Line, int Col, int ScrollTop)> closedTabStates =
+            new Dictionary<string, (int Line, int Col, int ScrollTop)>(StringComparer.OrdinalIgnoreCase);
+
+        private void RecordClosedTabHistory(EditorTabBuffer tab)
+        {
+            if (tab == null || string.IsNullOrEmpty(tab.FilePath) || !File.Exists(tab.FilePath)) return;
+            closedTabHistory.Push(tab.FilePath);
+            if (closedTabStates.Count >= 64) closedTabStates.Clear();
+            closedTabStates[tab.FilePath] = (tab.CursorLine, tab.CursorCol, tab.ScrollTopLine);
         }
 
         public bool CloseTab(EditorTabBuffer tab, bool forceWithoutPrompt = false)
@@ -3195,8 +3210,7 @@ namespace codeLess.AvaloniaApp
                     return false;
             }
 
-            if (!string.IsNullOrEmpty(tab.FilePath) && File.Exists(tab.FilePath))
-                closedTabHistory.Push(tab.FilePath);
+            RecordClosedTabHistory(tab);
 
             int idx = openTabs.IndexOf(tab);
             openTabs.Remove(tab);
@@ -3239,7 +3253,15 @@ namespace codeLess.AvaloniaApp
                 string path = closedTabHistory.Pop();
                 if (File.Exists(path))
                 {
-                    OpenFileInTab(path, preview: false);
+                    var reopened = OpenFileInTab(path, preview: false);
+                    if (reopened != null && closedTabStates.TryGetValue(path, out var st))
+                    {
+                        reopened.CursorLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.Line));
+                        reopened.CursorCol = Math.Max(0, Math.Min((reopened.Lines[reopened.CursorLine] ?? "").Length, st.Col));
+                        reopened.ScrollTopLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.ScrollTop));
+                        PrimaryEditor?.Canvas?.InvalidateVisual();
+                        UpdateStatusBar();
+                    }
                     return;
                 }
             }
@@ -3257,7 +3279,10 @@ namespace codeLess.AvaloniaApp
             foreach (var tab in openTabs.ToList())
             {
                 if (tab.IsDirty)
-                    SaveBufferToDisk(tab);
+                {
+                    if (!TryFormatThenSave(tab))
+                        SaveBufferToDisk(tab);
+                }
             }
         }
 

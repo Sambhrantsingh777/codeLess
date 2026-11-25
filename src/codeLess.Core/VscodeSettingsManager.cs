@@ -249,6 +249,19 @@ namespace codeLess.Core
                     string mode = dict["files.autoSave"] != null ? dict["files.autoSave"].ToString() : null;
                     target.SetAutoSaveMode(mode);
                 }
+                if (dict.ContainsKey("files.autoSaveDelay")) {
+                    target.AutoSaveDelayMs = Convert.ToInt32(dict["files.autoSaveDelay"]);
+                }
+                if (dict.ContainsKey("git.autofetch")) {
+                    object af = dict["git.autofetch"];
+                    target.GitAutoFetch = af != null && !string.Equals(af.ToString(), "false", StringComparison.OrdinalIgnoreCase) && !string.Equals(af.ToString(), "off", StringComparison.OrdinalIgnoreCase);
+                }
+                if (dict.ContainsKey("git.rebaseWhenSync")) {
+                    target.GitRebaseWhenSync = Convert.ToBoolean(dict["git.rebaseWhenSync"]);
+                }
+                if (dict.ContainsKey("codeless.agent.nativeToolCalling")) {
+                    target.NativeToolCalling = Convert.ToBoolean(dict["codeless.agent.nativeToolCalling"]);
+                }
                 if (dict.ContainsKey("files.hotExit")) {
                     string he = dict["files.hotExit"] != null ? dict["files.hotExit"].ToString() : null;
                     target.SetHotExitMode(he);

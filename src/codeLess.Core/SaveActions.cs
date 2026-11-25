@@ -120,6 +120,48 @@ namespace codeLess.Studio
             return r == null ? t : string.Join("\n", r.ToArray());
         }
 
+        /// <summary>Built-in fallback formatter when editor.formatOnSave is enabled and no external LSP server is running.</summary>
+        public static bool FormatBufferFallback(EditorTabBuffer buf, int tabSize, bool insertSpaces)
+        {
+            if (buf == null || buf.Lines == null || buf.IsLargeFile || buf.IsLargeFileViewer) return false;
+            int tab = Math.Max(1, tabSize);
+            bool markdown = IsMarkdown(buf.FilePath);
+            List<string> updated = new List<string>(buf.Lines.Count);
+            bool changed = false;
+            for (int i = 0; i < buf.Lines.Count; i++)
+            {
+                string line = buf.Lines[i] ?? "";
+                string next = line;
+                if (!markdown)
+                {
+                    next = next.TrimEnd(' ', '\t');
+                    int ws = 0;
+                    int cols = 0;
+                    while (ws < next.Length && (next[ws] == ' ' || next[ws] == '\t'))
+                    {
+                        if (next[ws] == '\t') cols = ((cols / tab) + 1) * tab;
+                        else cols++;
+                        ws++;
+                    }
+                    if (ws > 0)
+                    {
+                        string prefix = insertSpaces
+                            ? new string(' ', cols)
+                            : new string('\t', cols / tab) + new string(' ', cols % tab);
+                        next = prefix + next.Substring(ws);
+                    }
+                }
+                if (!string.Equals(next, line, StringComparison.Ordinal)) changed = true;
+                updated.Add(next);
+            }
+            if (!changed) return false;
+            buf.PushUndoSnapshot();
+            buf.Lines = updated;
+            buf.ClampCursor();
+            buf.SyncContentFromLines(false);
+            return true;
+        }
+
         public static bool IsMarkdown(string path)
         {
             string ext = (Path.GetExtension(path ?? "") ?? "").ToLowerInvariant();

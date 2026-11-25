@@ -17,6 +17,7 @@ namespace codeLess.AvaloniaApp
         private System.Threading.Timer workspaceSettingsTimer;
         private System.IO.FileSystemWatcher userSettingsWatcher;
         private System.Threading.Timer userSettingsTimer;
+        private StudioSettings effectiveWorkspaceSettings;
 
         private void SendEditorKey(Key key, KeyModifiers mods)
         {
@@ -531,6 +532,10 @@ namespace codeLess.AvaloniaApp
             var studioSettings = target;
             if (studioSettings != null)
             {
+                if (!ReferenceEquals(studioSettings, settings))
+                {
+                    effectiveWorkspaceSettings = studioSettings;
+                }
                 ApplyTheme(StudioTheme.GetById(studioSettings.ActiveThemeId), persistSetting: false);
                 PrimaryEditor.ShowMinimap = studioSettings.ShowMinimap;
                 PrimaryEditor.ShowBreadcrumbs = studioSettings.ShowBreadcrumbs;
