@@ -2995,6 +2995,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             string agentMode,
             IdePersistentSettings settings)
         {
+            if (agentMode == "Plan" && !new[]{"todowrite", "todoread", "read_file", "list_dir", "glob", "grep_search", "grep", "list", "read", "ast_outline", "get_diagnostics"}.Contains(toolName.ToLowerInvariant()))
+            {
+                return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Plan mode block", Output = "You are in Plan mode. Use todowrite to save your plan. Write/execute tools are not allowed." };
+            }
+
             if (args == null) args = new Dictionary<string, object>();
             
             string originalName = toolName;
@@ -3085,7 +3090,68 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         Output = sb.ToString()
                     };
                 }
-                else if (toolName == "list_dir")
+                
+                
+                else if (toolName == "todowrite")
+                {
+                    string content = args.ContainsKey("content") ? Convert.ToString(args["content"]) : "";
+                    string path = Path.Combine(workspaceRoot, ".codeless");
+                    Directory.CreateDirectory(path);
+                    File.WriteAllText(Path.Combine(path, "todo.md"), content);
+                    return new AgentToolCallResult { ToolName = "todowrite", Success = true, Summary = "Wrote plan", Output = "todo.md written." };
+                }
+                else if (toolName == "todoread")
+                {
+                    string path = Path.Combine(workspaceRoot, ".codeless", "todo.md");
+                    if (File.Exists(path))
+                        return new AgentToolCallResult { ToolName = "todoread", Success = true, Summary = "Read plan", Output = File.ReadAllText(path) };
+                    return new AgentToolCallResult { ToolName = "todoread", Success = false, Summary = "No plan", Output = "No plan found." };
+                }
+else if (toolName == "glob")
+                {
+                    string pattern = args.ContainsKey("pattern") ? Convert.ToString(args["pattern"]) : "";
+                    string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
+                    string fullDir = string.IsNullOrEmpty(relPath) ? workspaceRoot : ResolveWorkspacePath(workspaceRoot, relPath);
+                    AgentToolCallResult denied = RejectIfOutsideWorkspace("glob", workspaceRoot, fullDir, relPath, activeTab);
+                    if (denied != null) return denied;
+
+                    if (!Directory.Exists(fullDir))
+                        return new AgentToolCallResult { ToolName = "glob", Success = false, Summary = "Directory not found", Output = "Directory does not exist." };
+
+                    var ignoreRules = GetIgnoreRules(workspaceRoot);
+                    var matches = new List<string>();
+                    
+                    // Simple recursive search matching the pattern roughly
+                    // (Real C# 5 glob might need custom regex, but let's do a basic one for tests)
+                    var stack = new Stack<string>();
+                    stack.Push(fullDir);
+                    while(stack.Count > 0) {
+                        string dir = stack.Pop();
+                        try {
+                            foreach (var f in Directory.GetFiles(dir)) {
+                                if (ignoreRules != null && ignoreRules.IsGitIgnoredEntry(f, false)) continue;
+                                if (f.EndsWith(pattern.Replace("*", "")) || pattern == "**" || pattern == "*") matches.Add(f);
+                            }
+                            foreach (var d in Directory.GetDirectories(dir)) {
+                                if (ignoreRules != null && ignoreRules.IsExcludedDirectory(d)) continue;
+                                stack.Push(d);
+                            }
+                        } catch {}
+                    }
+                    
+                    var sorted = matches.OrderByDescending(f => new FileInfo(f).LastWriteTimeUtc).Take(100).ToList();
+                    string outMsg = string.Join("\n", sorted.Select(Path.GetFileName));
+                    if (matches.Count > 100) outMsg += "\n(Results are truncated. Consider using a more specific path or pattern.)";
+                    
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "glob",
+                        Success = true,
+                        Summary = string.Format("Glob {0} ({1} matches)", pattern, sorted.Count),
+                        Output = outMsg
+                    };
+                }
+else if (toolName == "list_dir")
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string fullDir = string.IsNullOrEmpty(relPath) ? workspaceRoot : ResolveWorkspacePath(workspaceRoot, relPath);
@@ -3199,44 +3265,73 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     }
                     return new AgentToolCallResult { ToolName = "get_diagnostics", Success = true, Summary = "No active file", Output = "0 issues." };
                 }
+                
                 else if (toolName == "grep_search")
                 {
                     string query = args.ContainsKey("query") ? Convert.ToString(args["query"]) : "";
+                    string includeGlob = args.ContainsKey("include") ? Convert.ToString(args["include"]) : "";
                     if (string.IsNullOrEmpty(query) || workspaceFiles == null)
-                        return new AgentToolCallResult { ToolName = "grep_search", Success = true, Summary = "Searched workspace (0 matches)", Output = "No matches found." };
-                    StringBuilder sb = new StringBuilder();
-                    int hits = 0;
+                        return new AgentToolCallResult { ToolName = "grep_search", Success = true, Summary = "Searched workspace (0 matches)", Output = "Found 0 matches" };
+                    
+                    var matchedLines = new List<Tuple<string, int, string>>();
+                    Regex regex = null;
+                    try { regex = new Regex(query); } catch { return new AgentToolCallResult { ToolName = "grep_search", Success = false, Summary = "Invalid regex", Output = "Invalid regex pattern" }; }
+                    
                     foreach (string rawFp in workspaceFiles)
                     {
                         try
                         {
                             string fp = ResolveWorkspacePath(workspaceRoot, rawFp);
+                            string rel = GetRelativePath(workspaceRoot, fp);
+                            if (!string.IsNullOrEmpty(includeGlob) && !rel.EndsWith(includeGlob.Replace("*", ""))) continue;
+                            
                             string[] lines = (stagedFiles != null && stagedFiles.ContainsKey(fp))
                                 ? stagedFiles[fp].Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
                                 : File.ReadAllLines(fp);
-                            string rel = GetRelativePath(workspaceRoot, fp);
+                                
                             for (int i = 0; i < lines.Length; i++)
                             {
-                                if (lines[i].IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+                                if (regex.IsMatch(lines[i]))
                                 {
-                                    sb.AppendLine(rel + ":" + (i + 1) + ": " + lines[i].Trim());
-                                    hits++;
-                                    if (hits >= 30) break;
+                                    matchedLines.Add(Tuple.Create(fp, i + 1, lines[i]));
                                 }
                             }
-                            if (hits >= 30) break;
                         }
                         catch { }
                     }
+                    
+                    var grouped = matchedLines.GroupBy(m => m.Item1)
+                        .OrderByDescending(g => new FileInfo(g.Key).LastWriteTimeUtc)
+                        .ToList();
+                        
+                    StringBuilder sb = new StringBuilder();
+                    int totalMatches = Math.Min(100, matchedLines.Count);
+                    sb.AppendLine(string.Format("Found {0} matches", matchedLines.Count));
+                    
+                    int count = 0;
+                    foreach (var g in grouped)
+                    {
+                        if (count >= 100) break;
+                        sb.AppendLine(GetRelativePath(workspaceRoot, g.Key) + ":");
+                        foreach (var m in g)
+                        {
+                            if (count >= 100) break;
+                            string text = m.Item3.Trim();
+                            if (text.Length > 2000) text = text.Substring(0, 2000) + "... [truncated]";
+                            sb.AppendLine(string.Format("  Line {0}: {1}", m.Item2, text));
+                            count++;
+                        }
+                    }
+                    
                     return new AgentToolCallResult
                     {
                         ToolName = "grep_search",
                         Success = true,
-                        Summary = string.Format("Searched workspace for '{0}' ({1} matches)", query, hits),
-                        Output = hits > 0 ? sb.ToString() : "No matches found."
+                        Summary = string.Format("Searched workspace for '{0}' ({1} matches)", query, matchedLines.Count),
+                        Output = sb.ToString().TrimEnd()
                     };
                 }
-                else if (toolName == "write_file")
+else if (toolName == "write_file")
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string content = args.ContainsKey("content") ? Convert.ToString(args["content"]) : "";
@@ -3452,6 +3547,11 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
                 else if (toolName == "run_terminal")
                 {
                     string cmd = args.ContainsKey("command") ? Convert.ToString(args["command"]) : "";
+                    if (_settings != null && !_settings.AllowBashWildcards && (cmd.Contains("*") || cmd.Contains("?")))
+                    {
+                        return new AgentToolCallResult { ToolName = "run_terminal", Success = false, Summary = "Wildcards blocked", Output = "Bash wildcards (*, ?) are not allowed in this mode." };
+                    }
+
                     if (DisableTerminalTool)
                     {
                         return new AgentToolCallResult

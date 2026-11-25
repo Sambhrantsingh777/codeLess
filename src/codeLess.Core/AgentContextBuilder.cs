@@ -16,7 +16,7 @@ namespace codeLess.Studio
             int totalLength = 0;
             int maxChars = 16384; // 16 KB
 
-            string[] targetFiles = new[] { "AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md", ".cursorrules", ".codelessrules" };
+            string[] targetFiles = new[] { "AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md", ".cursorrules", ".codelessrules", ".codeless/instructions.md" };
 
             try
             {
@@ -85,7 +85,8 @@ namespace codeLess.Studio
             string platform = "linux";
             if (Environment.OSVersion.Platform == PlatformID.Win32NT) platform = "win32";
             else if (Environment.OSVersion.Platform == PlatformID.MacOSX || System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX)) platform = "darwin";
-            sb.AppendLine("Platform: " + platform);
+            sb.AppendLine("OS: " + platform);
+            sb.AppendLine("SHELL: /bin/sh");
             sb.AppendLine("Today's date: " + DateTime.Now.ToString("yyyy-MM-dd"));
             sb.AppendLine("</env>");
             
