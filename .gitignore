@@ -26,3 +26,4 @@ bench/results/
 .DS_Store
 Thumbs.db
 **/.avalonia-build-tasks/
+.avalonia-build-tasks/

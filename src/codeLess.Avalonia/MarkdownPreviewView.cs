@@ -303,7 +303,7 @@ namespace codeLess.AvaloniaApp
                                 Text = MarkdownParser.ToPlainText(i.Children),
                                 Foreground = AvaloniaColorHelper.ToBrush(theme.AccentPrimary),
                                 TextDecorations = TextDecorations.Underline,
-                                Cursor = new Cursor(StandardCursorType.Hand),
+                                Cursor = CursorHelper.GetCursor(StandardCursorType.Hand),
                                 FontWeight = bold ? FontWeight.Bold : FontWeight.Normal,
                                 FontStyle = italic ? FontStyle.Italic : FontStyle.Normal
                             };

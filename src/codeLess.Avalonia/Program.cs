@@ -15,6 +15,13 @@ namespace codeLess.AvaloniaApp
         public static void Main(string[] args)
         {
             App.MainEnteredUtc = DateTime.UtcNow;
+            if (codeLess.Studio.ApplicationSession.TryForwardToPrimaryInstance(args))
+            {
+                Environment.Exit(0);
+                return;
+            }
+            codeLess.Studio.ApplicationSession.StartPrimaryServer();
+
             EnsureDeveloperPathOnUnix();
             RegisterCrashGuards();
 
@@ -72,7 +79,7 @@ namespace codeLess.AvaloniaApp
                     {
                         App.ScreenshotOutputPath = args[++i];
                     }
-                    else if ((a == "--workspace" || a == "-w") && i + 1 < args.Length)
+                    else if (a == "--workspace" && i + 1 < args.Length)
                     {
                         App.StartupWorkspacePath = args[++i];
                     }

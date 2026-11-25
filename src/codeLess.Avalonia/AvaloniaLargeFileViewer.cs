@@ -618,7 +618,7 @@ namespace codeLess.AvaloniaApp
             this.owner = owner;
             Focusable = true;
             ClipToBounds = true;
-            Cursor = new Cursor(StandardCursorType.Ibeam);
+            Cursor = CursorHelper.GetCursor(StandardCursorType.Ibeam);
         }
 
         private LargeFileDocument Doc => owner.Document;

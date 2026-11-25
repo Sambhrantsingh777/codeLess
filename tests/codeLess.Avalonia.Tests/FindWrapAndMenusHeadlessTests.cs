@@ -226,7 +226,8 @@ namespace codeLess.Avalonia.Tests
 
             // the command palette has "View: Toggle Word Wrap"
             w.OpenCommandPalette(">");
-            Assert.Contains(w.CommandPalette.AllEntries, e => e.Category == "View" && e.Title == "Toggle Word Wrap" && e.Shortcut == "Alt+Z");
+            var expectedWordWrap = MacKeymap.IsMacOS ? "⌥Z" : "Alt+Z";
+            Assert.Contains(w.CommandPalette.AllEntries, e => e.Category == "View" && e.Title == "Toggle Word Wrap" && e.Shortcut == expectedWordWrap);
             w.CommandPalette.IsVisible = false;
 
             // saving Settings without touching Word wrap keeps the per-editor toggle; changing it applies to every editor
@@ -318,11 +319,14 @@ namespace codeLess.Avalonia.Tests
             w.OpenCommandPalette(">");
             var palette = w.CommandPalette.AllEntries.Where(p => !string.IsNullOrEmpty(p.Shortcut)).ToList();
             w.CommandPalette.IsVisible = false;
-            foreach (var e in WorkbenchMenuModel.AllCommands(false))
+            foreach (var e in WorkbenchMenuModel.AllCommands(MacKeymap.IsMacOS))
             {
                 var p = palette.FirstOrDefault(x => string.Equals(x.Title, e.Label, StringComparison.OrdinalIgnoreCase) || string.Equals(x.Title, "Toggle " + e.Label, StringComparison.OrdinalIgnoreCase));
                 if (p == null || string.IsNullOrEmpty(e.Shortcut)) continue;
-                Assert.True(string.Equals(p.Shortcut.Replace(" ", ""), e.Shortcut.Replace(" ", ""), StringComparison.OrdinalIgnoreCase), e.Id + ": menu " + e.Shortcut + " vs palette " + p.Shortcut);
+                var expectedShortcut = e.Shortcut;
+                if (MacKeymap.IsMacOS && !string.IsNullOrEmpty(e.MacShortcut)) expectedShortcut = e.MacShortcut;
+                expectedShortcut = WorkbenchMenuModel.FormatShortcut(expectedShortcut, MacKeymap.IsMacOS);
+                Assert.True(string.Equals(p.Shortcut.Replace(" ", ""), expectedShortcut.Replace(" ", ""), StringComparison.OrdinalIgnoreCase), e.Id + ": menu " + expectedShortcut + " vs palette " + p.Shortcut);
             }
 
             // pressing the menu's shortcut does what the menu item does

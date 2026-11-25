@@ -195,7 +195,7 @@ namespace codeLess.AvaloniaApp
                 Place(List, 0, 0); Place(splitter, 1, 0); Place(detailsBorder, 2, 0);
                 splitter.ResizeDirection = GridResizeDirection.Rows;
                 splitter.Width = double.NaN; splitter.Height = 4;
-                splitter.Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
+                splitter.Cursor = CursorHelper.GetCursor(StandardCursorType.SizeNorthSouth);
                 detailsBorder.BorderThickness = new Thickness(0, 1, 0, 0);
                 // short and wide: message on the left, changed files on the right
                 detailsGrid.ColumnDefinitions.Add(new ColumnDefinition(3, GridUnitType.Star) { MinWidth = 180 });
@@ -213,7 +213,7 @@ namespace codeLess.AvaloniaApp
                 Place(List, 0, 0); Place(splitter, 0, 1); Place(detailsBorder, 0, 2);
                 splitter.ResizeDirection = GridResizeDirection.Columns;
                 splitter.Height = double.NaN; splitter.Width = 4;
-                splitter.Cursor = new Cursor(StandardCursorType.SizeWestEast);
+                splitter.Cursor = CursorHelper.GetCursor(StandardCursorType.SizeWestEast);
                 detailsBorder.BorderThickness = new Thickness(1, 0, 0, 0);
                 detailsGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
                 detailsGrid.RowDefinitions.Add(new RowDefinition(1, GridUnitType.Star));

@@ -201,7 +201,7 @@ namespace codeLess.AvaloniaApp
                     Background = AvaloniaColorHelper.ToBrush(isActive ? theme.BgEditor : theme.BgSidebar),
                     BorderBrush = AvaloniaColorHelper.ToBrush(isActive ? theme.AccentPrimary : theme.BorderSubtle),
                     BorderThickness = isActive ? new Thickness(0, 2, 1, 0) : new Thickness(0, 0, 1, 0),
-                    Cursor = new Cursor(StandardCursorType.Hand)
+                    Cursor = CursorHelper.GetCursor(StandardCursorType.Hand)
                 };
                 if (!string.IsNullOrEmpty(d.Tooltip)) ToolTip.SetTip(tab, d.Tooltip);
                 tab.PointerPressed += (s, e) =>

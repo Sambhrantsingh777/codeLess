@@ -72,26 +72,50 @@ namespace codeLess.AvaloniaApp
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
+            if (isDispatchingCommandKey) return;
             if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(e.Key, e.KeyModifiers)) { e.Handled = true; return; }
-            if (IsFromTerminal(e.Source) && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
-                return;
+            
+            bool isTerminal = IsFromTerminal(e.Source);
 
-            if (e.Source is TextBox &&
-                !e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
-                !e.KeyModifiers.HasFlag(KeyModifiers.Meta) &&
-                !e.KeyModifiers.HasFlag(KeyModifiers.Alt) &&
-                e.Key != Key.Escape &&
-                e.Key != Key.F1 && e.Key != Key.F3 && e.Key != Key.F4 && e.Key != Key.F5 &&
-                e.Key != Key.F6 && e.Key != Key.F10 &&
-                e.Key != Key.F8 && e.Key != Key.F9 && e.Key != Key.F11 && e.Key != Key.F12)
+            // Allow TextBox to handle basic text input and text editing shortcuts
+            if (e.Source is TextBox)
             {
-                if (lastCtrlKChordTime != DateTime.MinValue)
-                {
-                    lastCtrlKChordTime = DateTime.MinValue;
-                    statusChordLabel.Text = "";
+                bool isEditKey = false;
+                if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) && !e.KeyModifiers.HasFlag(KeyModifiers.Meta) && !e.KeyModifiers.HasFlag(KeyModifiers.Alt)) {
+                    if (e.Key != Key.Escape && e.Key != Key.F1 && e.Key != Key.F3 && e.Key != Key.F4 && e.Key != Key.F5 && e.Key != Key.F6 && e.Key != Key.F10 && e.Key != Key.F8 && e.Key != Key.F9 && e.Key != Key.F11 && e.Key != Key.F12)
+                        isEditKey = true;
+                } else if (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta)) {
+                    if (e.Key == Key.A || e.Key == Key.C || e.Key == Key.V || e.Key == Key.X || e.Key == Key.Z || e.Key == Key.Y || e.Key == Key.Back || e.Key == Key.Delete || e.Key == Key.Left || e.Key == Key.Right)
+                        isEditKey = true;
+                } else if (e.KeyModifiers.HasFlag(KeyModifiers.Alt)) {
+                    if (e.Key == Key.Left || e.Key == Key.Right || e.Key == Key.Back || e.Key == Key.Delete)
+                        isEditKey = true;
                 }
+                
+                if (isEditKey)
+                {
+                    if (lastCtrlKChordTime != DateTime.MinValue)
+                    {
+                        lastCtrlKChordTime = DateTime.MinValue;
+                        statusChordLabel.Text = "";
+                    }
+                    return;
+                }
+            }
+
+            if (DispatchKeybinding(e.Key, e.KeyModifiers, isTerminal))
+            {
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+                {
+                    suppressNextWindowTextInput = true;
+                    PrimaryEditor?.Canvas?.SuppressNextTextInput();
+                }
+                e.Handled = true;
                 return;
             }
+
+            if (isTerminal && !IsWorkbenchShortcutAllowedFromTerminal(e.Key, e.KeyModifiers))
+                return;
 
             if (HandleWorkbenchKeyEvent(e.Key, e.KeyModifiers))
             {
@@ -108,6 +132,7 @@ namespace codeLess.AvaloniaApp
         private bool SimulateShortcutCore(Key key, KeyModifiers modifiers)
         {
             if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(key, modifiers)) return true;
+            if (DispatchKeybinding(key, modifiers, false)) return true;
             if (HandleWorkbenchKeyEvent(key, modifiers))
                 return true;
 
@@ -706,6 +731,13 @@ namespace codeLess.AvaloniaApp
                 SplitEditor.Canvas.FontSizePx = next;
             }
             settings.FontSize = (float)PrimaryEditor.Canvas.FontSizePx;
+            try
+            {
+                string userSettingsPath = codeLess.Core.VscodeSettingsManager.GetUserSettingsPath();
+                if (File.Exists(userSettingsPath) && File.ReadAllText(userSettingsPath).Contains("\"editor.fontSize\""))
+                    codeLess.Core.VscodeSettingsManager.WriteSetting("editor.fontSize", PrimaryEditor.Canvas.FontSizePx);
+            }
+            catch { }
             PrimaryEditor.Canvas.InvalidateVisual();
             SplitEditor.Canvas.InvalidateVisual();
         }
@@ -897,14 +929,17 @@ namespace codeLess.AvaloniaApp
             PrimaryEditor.GoToLine(target.LineNumber);
         }
 
-        private void CreateNewWindowInstance()
+        public MainWindow CreateNewWindowInstance()
         {
             try
             {
-                var w = new MainWindow(workspaceRoot);
+                if (App.WindowManager != null)
+                    return App.WindowManager.CreateNewWindow(null) as MainWindow;
+                var w = new MainWindow(null);
                 w.Show();
+                return w;
             }
-            catch { }
+            catch { return null; }
         }
 
         public void CloseAllTabs()
@@ -919,6 +954,7 @@ namespace codeLess.AvaloniaApp
             if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, CloseWorkspaceFolder)) return;
             StopWorkspaceWatcher();
             workspaceRoot = "";
+            InitializeWorkspaceSettingsWatcher();
             LspOnWorkspaceChanged();
             workspaceFiles.Clear();
             ExplorerTree.Nodes.Clear();
@@ -1059,6 +1095,7 @@ namespace codeLess.AvaloniaApp
         private void OpenEditorContextMenu(EditorTabBuffer tab, Point pt)
         {
             if (tab == null) return;
+            string scI = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+I");
             string scK = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+K");
             string scF = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+F");
             string scSym = AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform("Ctrl+Shift+O");
@@ -1068,7 +1105,7 @@ namespace codeLess.AvaloniaApp
             {
                 ItemsSource = BuildParityEditorContextItems(tab).Concat(new object[]
                 {
-                    MakeCtxItem($"✦ Inline AI Edit / Generate...   ({scK})", () => PrimaryEditor.ShowInlineAiBar()),
+                    MakeCtxItem($"✦ Inline AI Edit / Generate...   ({scI})", () => PrimaryEditor.ShowInlineAiBar()),
                     MakeCtxItem("✦ Explain Selection in AI Chat", () =>
                     {
                         if (!rightChatDockBorder.IsVisible) ToggleRightChatDock();
@@ -2162,9 +2199,9 @@ namespace codeLess.AvaloniaApp
                     Child = rowGrid,
                     Background = isActive
                         ? WorkbenchStyles.B(UiTokens.ListInactiveSelection(currentTheme, currentTheme.SidebarBg))
-                        : Brushes.Transparent,
-                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand)
+                        : Brushes.Transparent
                 };
+                try { itemBorder.Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand); } catch { }
                 var hoverBrush = WorkbenchStyles.B(UiTokens.Hover(currentTheme, currentTheme.SidebarBg));
                 itemBorder.PointerEntered += (s, e) => { killBtn.Opacity = 1; if (!isActive) itemBorder.Background = hoverBrush; };
                 itemBorder.PointerExited += (s, e) => { killBtn.Opacity = isActive ? 1 : 0; if (!isActive) itemBorder.Background = Brushes.Transparent; };
@@ -2597,7 +2634,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Terminal", Title = "Split Terminal", Shortcut = "Ctrl+Shift+5", Execute = ToggleSplitTerminal },
                 new PaletteEntryItem { Category = "Terminal", Title = "Rename Active Terminal...", Execute = PromptRenameActiveTerminalSession },
                 new PaletteEntryItem { Category = "Terminal", Title = "Kill Active Terminal", Execute = () => { if (activeTerminalSession != null) KillTerminalSession(activeTerminalSession); } },
-                new PaletteEntryItem { Category = "AI", Title = "Inline AI Edit / Generate", Shortcut = "Ctrl+K", Execute = () => PrimaryEditor.ShowInlineAiBar() },
+                new PaletteEntryItem { Category = "AI", Title = "Inline AI Edit / Generate", Shortcut = "Ctrl+I", Execute = () => PrimaryEditor.ShowInlineAiBar() },
                 new PaletteEntryItem { Category = "AI", Title = "Configure BYOK AI Providers & Keys...", Execute = ShowByokAndHarnessModal },
                 new PaletteEntryItem { Category = "Preferences", Title = "Color Theme", Shortcut = "Ctrl+K Ctrl+T", Execute = OpenThemePickerPalette },
                 new PaletteEntryItem { Category = "Preferences", Title = "Open Settings", Shortcut = "Ctrl+,", Execute = ShowSettingsModal },
@@ -2615,6 +2652,28 @@ namespace codeLess.AvaloniaApp
             all.AddRange(BuildAgentTrustPaletteCommands());
             all.AddRange(BuildWorkspaceTrustPaletteCommands());
             all.AddRange(BuildExtensionPaletteCommands());
+            foreach (var item in all)
+            {
+                if (string.IsNullOrEmpty(item.Id))
+                {
+                    var cmd = codeLess.Core.CommandRegistry.AllCommands.FirstOrDefault(c => c.Title == item.Title);
+                    if (cmd != null) item.Id = cmd.Id;
+                }
+                bool formatted = false;
+                if (!string.IsNullOrEmpty(item.Id) && keybindings != null)
+                {
+                    var b = keybindings.ActiveBindings.FirstOrDefault(x => x.Command == item.Id);
+                    if (b != null && !string.IsNullOrEmpty(b.Key))
+                    {
+                        item.Shortcut = MacKeymap.FormatShortcut(b.Key);
+                        formatted = true;
+                    }
+                }
+                if (!formatted && !string.IsNullOrEmpty(item.Shortcut))
+                {
+                    item.Shortcut = codeLess.Studio.WorkbenchMenuModel.FormatShortcut(item.Shortcut, MacKeymap.IsMacOS);
+                }
+            }
             return all;
         }
 
@@ -2715,7 +2774,10 @@ namespace codeLess.AvaloniaApp
 
         public void ShowKeyboardShortcutsModal()
         {
-            var view = AvaloniaDialogBuilder.BuildKeyboardShortcutsView(currentTheme);
+            var view = AvaloniaDialogBuilder.BuildKeyboardShortcutsView(currentTheme, () => {
+                ModalHost.CloseModal();
+                OpenFileInTab(codeLess.Studio.IdePersistentSettings.GetKeybindingsFilePath());
+            }, this.keybindings);
             ModalHost.ShowModal("keyboard-shortcuts", "Keyboard Shortcuts Reference — codeLess", view, 700);
         }
 
@@ -2968,10 +3030,10 @@ namespace codeLess.AvaloniaApp
             // Ensure the default (Savatarr Graphite) theme & clean workspace
             ApplyTheme(StudioTheme.GetById(StudioTheme.DefaultThemeId), persistSetting: false);
             // An explicit --workspace wins; otherwise the codeLess repo in the current directory, else the current directory.
-            string repoDir = !string.IsNullOrEmpty(App.StartupWorkspacePath) && Directory.Exists(App.StartupWorkspacePath)
-                ? App.StartupWorkspacePath
+            string repoDir = !string.IsNullOrEmpty(this.workspaceRoot) && Directory.Exists(this.workspaceRoot)
+                ? this.workspaceRoot
                 : workspaceRoot;
-            if (string.IsNullOrEmpty(App.StartupWorkspacePath) && File.Exists(Path.Combine(Environment.CurrentDirectory, "src", "codeLess.Core", "CoreModels.cs")))
+            if (string.IsNullOrEmpty(this.workspaceRoot) && File.Exists(Path.Combine(Environment.CurrentDirectory, "src", "codeLess.Core", "CoreModels.cs")))
                 repoDir = Environment.CurrentDirectory;
             else if (string.IsNullOrEmpty(repoDir) || !Directory.Exists(repoDir))
                 repoDir = Environment.CurrentDirectory;

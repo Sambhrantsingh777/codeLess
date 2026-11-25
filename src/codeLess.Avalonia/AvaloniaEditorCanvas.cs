@@ -1629,7 +1629,8 @@ namespace codeLess.AvaloniaApp
         // Text, caret, selection, find highlights and click hit-testing all use the same grid: a tab advances to
         // the next tab stop, CJK / emoji occupy 2 cells, combining marks 0. (Previously text was drawn with
         // measured glyph widths while carets used column * CharWidth, so they drifted apart on such lines.)
-        public static int DisplayTabSize = 4;
+        public static int DefaultDisplayTabSize = 4;
+        public int DisplayTabSize { get; set; } = DefaultDisplayTabSize;
 
         private readonly EditorImeClient imeClient;
         private string imePreedit;
@@ -1655,10 +1656,10 @@ namespace codeLess.AvaloniaApp
         private static int CellsForChar(string s, int i) => EditorTextLayout.CellsForChar(s, i);
 
         /// <summary>Visual column (in cells) of character index <paramref name="col"/> with the global tab size.</summary>
-        public static int VisualColumn(string line, int col) => EditorTextLayout.VisualColumn(line, col, DisplayTabSize);
+        public int VisualColumn(string line, int col) => EditorTextLayout.VisualColumn(line, col, DisplayTabSize);
 
         /// <summary>Character index nearest to visual column <paramref name="vcol"/> (inverse of VisualColumn), global tab size.</summary>
-        public static int CharIndexForVisualColumn(string line, double vcol) => EditorTextLayout.CharIndexForVisualColumn(line, vcol, DisplayTabSize);
+        public int CharIndexForVisualColumn(string line, double vcol) => EditorTextLayout.CharIndexForVisualColumn(line, vcol, DisplayTabSize);
 
         /// <summary>X offset (relative to the start of the code area) of a character index on a document line (unwrapped).</summary>
         private double ColX(EditorTabBuffer buf, int docLine, int col)
@@ -1924,7 +1925,7 @@ namespace codeLess.AvaloniaApp
         }
 
         /// <summary>Last line hidden when <paramref name="startLine"/> is folded (startLine itself when it is not a fold header).</summary>
-        public static int FindFoldEndLine(EditorTabBuffer buf, int startLine)
+        public int FindFoldEndLine(EditorTabBuffer buf, int startLine)
         {
             if (buf == null || startLine < 0 || startLine >= buf.Lines.Count) return startLine;
             int e = EditorFoldingModel.GetFoldEnd(buf, startLine, TabFor(buf));
@@ -3051,6 +3052,84 @@ namespace codeLess.AvaloniaApp
         }
 
         /// <summary>Toggle Line Comment (Cmd/Ctrl+/) on the lines of every caret: language tokens, smallest indentation, blank lines skipped (VS Code).</summary>
+        
+        public void JoinLines()
+        {
+            var buf = Buffer;
+            if (buf == null || buf.Lines.Count <= 1) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => {
+                b.GetNormalizedSelection(out int startLine, out int startCol, out int endLine, out int endCol);
+                if (startLine == endLine && startLine < b.Lines.Count - 1) {
+                    endLine = startLine + 1;
+                }
+                if (startLine == endLine) return;
+                
+                string newText = b.Lines[startLine];
+                for (int i = startLine + 1; i <= endLine; i++) {
+                    string l = b.Lines[i].TrimStart();
+                    newText += (newText.EndsWith(" ") || newText.Length == 0 ? "" : " ") + l;
+                }
+                
+                b.SelectionAnchorLine = startLine;
+                b.SelectionAnchorCol = 0;
+                b.CursorLine = endLine;
+                b.CursorCol = b.Lines[endLine].Length;
+                
+                b.DeleteSelection();
+                b.InsertTextAtCursor(newText);
+            });
+            FinalizeBufferEdit(buf);
+        }
+
+        public void TransformToUppercase()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => {
+                if (!b.HasSelection()) return;
+                string text = b.GetSelectedText();
+                b.DeleteSelection();
+                b.InsertTextAtCursor(text.ToUpperInvariant());
+            });
+            FinalizeBufferEdit(buf);
+        }
+
+        public void TransformToLowercase()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => {
+                if (!b.HasSelection()) return;
+                string text = b.GetSelectedText();
+                b.DeleteSelection();
+                b.InsertTextAtCursor(text.ToLowerInvariant());
+            });
+            FinalizeBufferEdit(buf);
+        }
+
+        public void TrimTrailingWhitespace()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            buf.PushUndoSnapshot();
+            for (int i = 0; i < buf.Lines.Count; i++) {
+                string l = buf.Lines[i];
+                int end = l.Length - 1;
+                while (end >= 0 && char.IsWhiteSpace(l[end])) end--;
+                if (end < l.Length - 1) {
+                    buf.Lines[i] = l.Substring(0, end + 1);
+                }
+            }
+            buf.SyncContentFromLines(false);
+            FinalizeBufferEdit(buf);
+        }
+
         public void ToggleLineComment()
         {
             var buf = Buffer;
@@ -3912,7 +3991,7 @@ namespace codeLess.AvaloniaApp
             // Standard Editing & Navigation Keys
             switch (e.Key)
             {
-                case Key.Back:
+                case Key.Back: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     // macOS: Option+Backspace = word, Cmd+Backspace = to line start. Windows/Linux: Ctrl = word.
                     if (MacKeymap.IsMacOS && meta && !alt)
                         DeleteToLineBoundary(buf, toEnd: false);
@@ -3922,7 +4001,7 @@ namespace codeLess.AvaloniaApp
                         PerformBackspaceAcrossCursors();
                     e.Handled = true;
                     break;
-                case Key.Delete:
+                case Key.Delete: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     if (MacKeymap.IsMacOS && meta && !alt)
                     {
                         DeleteToLineBoundary(buf, toEnd: true);
@@ -3937,14 +4016,14 @@ namespace codeLess.AvaloniaApp
                     }
                     e.Handled = true;
                     break;
-                case Key.Enter:
+                case Key.Enter: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     if (!ctrlOrCmd)
                     {
                         PerformNewlineAcrossCursors();
                         e.Handled = true;
                     }
                     break;
-                case Key.Tab:
+                case Key.Tab: if (buf.IsReadOnly || buf.IsReadOnlyDiffPreview) { e.Handled = true; break; }
                     if (ctrl || meta) break; // Ctrl+Tab / Cmd+Tab switch editors (workbench), never indent
                     if (!shift && !ctrlOrCmd && !alt && TryHandleNicetyTab(buf)) { e.Handled = true; break; } // Emmet
                     HandleTabKey(shift); // honours the buffer's tab size / insert spaces (detected, .editorconfig, settings)
@@ -4206,6 +4285,7 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnTextInput(TextInputEventArgs e)
         {
+            if (Buffer != null && (Buffer.IsReadOnly || Buffer.IsReadOnlyDiffPreview)) { e.Handled = true; return; }
             base.OnTextInput(e);
             if (suppressTextInputAfterShortcut)
             {

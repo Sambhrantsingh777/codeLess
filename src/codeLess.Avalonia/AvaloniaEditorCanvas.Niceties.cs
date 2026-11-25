@@ -264,7 +264,7 @@ namespace codeLess.AvaloniaApp
         {
             int openIndent = Math.Max(0, EditorIndentGuides.IndentColumns(lines[p.OpenLine], tab));
             string closeLine = lines[p.CloseLine] ?? "";
-            int closeCol = VisualColumn(closeLine, p.CloseCol);
+            int closeCol = EditorTextLayout.VisualColumn(closeLine, p.CloseCol, tab);
             return Math.Min(openIndent, closeCol);
         }
 

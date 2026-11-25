@@ -21,7 +21,7 @@ namespace codeLess.Avalonia.Tests
     public class EditorQaFixesHeadlessTests : IDisposable
     {
         private readonly string dir;
-        private readonly int savedTab = AvaloniaVirtualEditorCanvas.DisplayTabSize;
+        private readonly int savedTab = AvaloniaVirtualEditorCanvas.DefaultDisplayTabSize;
         private readonly bool savedSpaces = AvaloniaVirtualEditorCanvas.InsertSpacesSetting;
         private readonly string settingsPath;
         private readonly string settingsBackup;
@@ -40,7 +40,7 @@ namespace codeLess.Avalonia.Tests
 
         public void Dispose()
         {
-            AvaloniaVirtualEditorCanvas.DisplayTabSize = savedTab;
+            AvaloniaVirtualEditorCanvas.DefaultDisplayTabSize = savedTab;
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = savedSpaces;
             try
             {

@@ -163,9 +163,18 @@ namespace codeLess.AvaloniaApp
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
             var minimapChk = Check("Show editor minimap", settings.ShowMinimap, "editor.minimap.enabled");
+            var restoreModes = new[] { "all", "one", "none" };
+            var restoreCombo = new ComboBox
+            {
+                ItemsSource = restoreModes,
+                SelectedIndex = Math.Max(0, Array.IndexOf(restoreModes, settings.WindowRestoreWindows ?? "all")),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                MinWidth = 150
+            };
             BeginSection("Appearance");
             AddLabeled("Color Theme", themeCombo, "workbench.colorTheme", string.Join(" ", themes.Select(t => t.Name)));
             AddRow(minimapChk, "Show editor minimap", "editor.minimap.enabled");
+            AddLabeled("Restore Windows", restoreCombo, "window.restoreWindows", "restore windows all one none");
 
             // ---------------------------------------------------------------- Editor
             var fontBox = new TextBox { Text = settings.FontSize.ToString("0.#", CultureInfo.InvariantCulture), Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
@@ -353,6 +362,8 @@ namespace codeLess.AvaloniaApp
                 settings.InsertSpaces = insertSpacesChk.IsChecked == true;
                 settings.DetectIndentation = detectIndentChk.IsChecked == true;
                 settings.ShowMinimap = minimapChk.IsChecked == true;
+                if (restoreCombo.SelectedIndex >= 0 && restoreCombo.SelectedIndex < restoreModes.Length)
+                    settings.WindowRestoreWindows = restoreModes[restoreCombo.SelectedIndex];
                 niceties.Apply(settings);
                 smoothness.Apply(settings);
                 settings.ActivatePythonEnvironmentInTerminal = venvChk.IsChecked == true;

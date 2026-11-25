@@ -56,7 +56,7 @@ namespace codeLess.AvaloniaApp
         /// <summary>Effective insert-spaces of the shown buffer.</summary>
         public bool InsertSpaces => EditorIndentation.EffectiveInsertSpaces(Buffer, InsertSpacesSetting);
 
-        private static int TabFor(EditorTabBuffer b) => EditorIndentation.EffectiveTabSize(b, DisplayTabSize);
+        private int TabFor(EditorTabBuffer b) => EditorIndentation.EffectiveTabSize(b, DisplayTabSize);
 
         /// <summary>Visual column of a character index on a line, with the shown buffer's tab size.</summary>
         internal int Vcol(string line, int col) => EditorTextLayout.VisualColumn(line, col, TabSize);

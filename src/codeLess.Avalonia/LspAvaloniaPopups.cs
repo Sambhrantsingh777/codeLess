@@ -130,7 +130,7 @@ namespace codeLess.AvaloniaApp
                 row.Children.Add(glyph);
                 Grid.SetColumn(label, 1); row.Children.Add(label);
                 Grid.SetColumn(right, 2); row.Children.Add(right);
-                var b = new Border { Child = row, Background = i == sel ? selBg : Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand) };
+                var b = new Border { Child = row, Background = i == sel ? selBg : Brushes.Transparent, Cursor = CursorHelper.GetCursor(StandardCursorType.Hand) };
                 b.PointerPressed += (s, e) => { ItemClicked?.Invoke(index); e.Handled = true; };
                 rows.Children.Add(b);
             }
