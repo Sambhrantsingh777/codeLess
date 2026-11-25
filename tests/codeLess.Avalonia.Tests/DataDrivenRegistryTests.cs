@@ -108,6 +108,73 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal(expected, actual);
         }
 
+        [Fact]
+        public void DocsReleaseClaimsMatchCode()
+        {
+            string repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+            if (!System.IO.File.Exists(System.IO.Path.Combine(repoRoot, "RELEASE_NOTES.md")))
+            {
+                repoRoot = System.IO.Path.GetFullPath(Environment.CurrentDirectory);
+            }
+
+            string releaseNotesPath = System.IO.Path.Combine(repoRoot, "RELEASE_NOTES.md");
+            Assert.True(System.IO.File.Exists(releaseNotesPath), "RELEASE_NOTES.md must exist at " + releaseNotesPath);
+            string fullReleaseNotes = System.IO.File.ReadAllText(releaseNotesPath);
+
+            int v335Idx = fullReleaseNotes.IndexOf("# codeLess v3.3.5", StringComparison.Ordinal);
+            string v340Section = v335Idx > 0 ? fullReleaseNotes.Substring(0, v335Idx) : fullReleaseNotes;
+            Assert.Contains("# codeLess v3.4.0", v340Section);
+
+            // Load all C# source texts under src/ once for fast verification
+            string srcRoot = System.IO.Path.Combine(repoRoot, "src");
+            var allCsFiles = System.IO.Directory.GetFiles(srcRoot, "*.cs", System.IO.SearchOption.AllDirectories);
+            string combinedSrc = string.Join("\n", allCsFiles.Select(System.IO.File.ReadAllText));
+
+            // 1. Verify every backticked dotted setting key in RELEASE_NOTES 3.4.0 exists in code
+            var settingRegex = new System.Text.RegularExpressions.Regex(@"`((?:window|editor|workbench|files|search|explorer|terminal|codeless|security)\.[A-Za-z0-9_.]+)`");
+            var settingMatches = settingRegex.Matches(v340Section);
+            var checkedSettings = new HashSet<string>(StringComparer.Ordinal);
+            foreach (System.Text.RegularExpressions.Match m in settingMatches)
+            {
+                string key = m.Groups[1].Value;
+                checkedSettings.Add(key);
+                Assert.True(
+                    combinedSrc.Contains("\"" + key + "\""),
+                    $"Setting key `{key}` mentioned in RELEASE_NOTES.md v3.4.0 does not exist as a string literal in src/");
+            }
+
+            Assert.Contains("window.restoreWindows", checkedSettings);
+            Assert.Contains("codeless.mcp", checkedSettings);
+            Assert.Contains("codeless.agent.nativeToolCalling", checkedSettings);
+            Assert.Contains("editor.wordSeparators", checkedSettings);
+            Assert.Contains("editor.cursorSurroundingLines", checkedSettings);
+            Assert.Contains("editor.useTabStops", checkedSettings);
+            Assert.Contains("editor.emptySelectionClipboard", checkedSettings);
+            Assert.Contains("files.hotExit", checkedSettings);
+            Assert.Contains("files.autoGuessEncoding", checkedSettings);
+            Assert.Contains("files.eol", checkedSettings);
+            Assert.Contains("files.insertFinalNewline", checkedSettings);
+            Assert.Contains("files.trimTrailingWhitespace", checkedSettings);
+            Assert.Contains("files.maxMemoryForLargeFilesMB", checkedSettings);
+
+            // 2. Verify every backticked slash command (e.g. `/undo`, `/redo`, `/compact`) in RELEASE_NOTES 3.4.0 exists in code
+            var slashRegex = new System.Text.RegularExpressions.Regex(@"`(/[a-z]{2,20})`");
+            var slashMatches = slashRegex.Matches(v340Section);
+            var checkedSlashCommands = new HashSet<string>(StringComparer.Ordinal);
+            foreach (System.Text.RegularExpressions.Match m in slashMatches)
+            {
+                string cmd = m.Groups[1].Value;
+                checkedSlashCommands.Add(cmd);
+                Assert.True(
+                    combinedSrc.Contains("\"" + cmd + "\""),
+                    $"Slash command `{cmd}` mentioned in RELEASE_NOTES.md v3.4.0 does not exist as a string literal in src/");
+            }
+
+            Assert.Contains("/undo", checkedSlashCommands);
+            Assert.Contains("/redo", checkedSlashCommands);
+            Assert.Contains("/compact", checkedSlashCommands);
+        }
+
         private class MockContext : IContextKeyService
         {
             public object GetValue(string key) => true;
