@@ -66,7 +66,7 @@ namespace codeLess.Avalonia.Tests
                     if (lastMsg["content"].Contains("Doom loop") || lastMsg["content"].Contains("Doom")) sawDenialMessage = true;
 
 
-                    if (lastMsg["content"].Contains("Found ") || lastMsg["content"].Contains("total ")) listDirExecutionsSeen++;
+                    if (lastMsg["content"].Contains("<tool_result tool=\"list_dir\"")) listDirExecutionsSeen++;
                 }
 
                 listDirCallsFromModel++;
