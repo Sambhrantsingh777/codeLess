@@ -6830,7 +6830,7 @@ if __name__ == '__main__':
                 e.Graphics.Clear(bg);
                 using (Pen bp = new Pen(border, 1f))
                     e.Graphics.DrawRectangle(bp, 0, 0, composerModePillBtn.Width - 1, composerModePillBtn.Height - 1);
-                string modeLabel = currentAgentMode == "plan" ? "Plan" : "Build";
+                string modeLabel = AgentUiParity.GetModePillLabel(currentAgentMode);
                 CodeLessVectorIcons.DrawIcon(e.Graphics, "agent", new Rectangle(6, 5, 13, 13), accent, 1.35f);
                 TextRenderer.DrawText(
                     e.Graphics,
@@ -6845,6 +6845,8 @@ if __name__ == '__main__':
             composerModePillBtn.Click += (s, e) =>
             {
                 ContextMenuStrip modeMenu = CreateAutoDisposingContextMenu();
+                modeMenu.Items.Add("Build (Agent Mode)", null, (ms, me) => SetAgentMode("build"));
+                modeMenu.Items.Add("Plan (Read-Only Planning)", null, (ms, me) => SetAgentMode("plan"));
                 modeMenu.Items.Add("Agent (Multi-file & Tools)", null, (ms, me) => SetAgentMode("agent"));
                 modeMenu.Items.Add("Ask (Read-only Chat)", null, (ms, me) => SetAgentMode("composer"));
                 modeMenu.Items.Add("Edit (Inline Manual Diff)", null, (ms, me) => SetAgentMode("architect"));
@@ -7109,8 +7111,7 @@ if __name__ == '__main__':
                 else if (e.KeyCode == Keys.Tab)
                 {
                     e.SuppressKeyPress = true;
-                    currentAgentMode = currentAgentMode == "build" ? "plan" : "build";
-                    composerModePillBtn.Invalidate();
+                    SetAgentMode(AgentUiParity.CycleBuildPlanMode(currentAgentMode));
                 }
             };
 
@@ -7594,11 +7595,12 @@ if __name__ == '__main__':
         private void SetAgentMode(string mode)
         {
             currentAgentMode = mode;
-            modeAgentBtn.Tag = mode == "build" ? "docktab_active" : "docktab_inactive";
-            modeComposerBtn.Tag = mode == "plan" ? "docktab_active" : "docktab_inactive";
+            bool isPlan = AgentUiParity.NormalizeBuildPlanMode(mode) == "plan";
+            modeAgentBtn.Tag = !isPlan ? "docktab_active" : "docktab_inactive";
+            modeComposerBtn.Tag = isPlan ? "docktab_active" : "docktab_inactive";
             if (composerModePillBtn != null)
             {
-                composerModePillBtn.Text = mode == "build" ? "Build" : "Plan";
+                composerModePillBtn.Text = AgentUiParity.GetModePillLabel(mode);
                 composerModePillBtn.Invalidate();
             }
             ApplyThemeToControlTree(rightDock, activeTheme);

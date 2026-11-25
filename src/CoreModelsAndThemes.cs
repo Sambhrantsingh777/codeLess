@@ -3565,22 +3565,11 @@ namespace codeLess.Studio
                 {
                     TextRenderer.DrawText(g, "Task List", fBold, new Rectangle(cardMarginX, curY, cardW, 20), theme.FgPrimary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
                     curY += 24;
-                    foreach (var t in AgentTodos)
+                    foreach (var formatted in AgentUiParity.FormatTodoList(AgentTodos))
                     {
-                        string id = t.ContainsKey("id") && t["id"] != null ? t["id"].ToString() : "";
-                        string cStr = t.ContainsKey("content") && t["content"] != null ? t["content"].ToString() : "";
-                        string status = t.ContainsKey("status") && t["status"] != null ? t["status"].ToString() : "pending";
-                        
-                        string icon = "☐";
-                        bool strike = false;
-                        if (status == "in_progress") icon = "◐";
-                        else if (status == "completed") icon = "☑";
-                        else if (status == "cancelled") { icon = "☒"; strike = true; }
-                        
-                        string text = icon + " " + id + ": " + cStr;
-                        using (Font st = strike ? new Font(fProse, FontStyle.Strikeout) : new Font(fProse, FontStyle.Regular))
+                        using (Font st = formatted.Strikethrough ? new Font(fProse, FontStyle.Strikeout) : new Font(fProse, FontStyle.Regular))
                         {
-                            TextRenderer.DrawText(g, text, st, new Rectangle(cardMarginX, curY, cardW, 20), theme.FgPrimary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                            TextRenderer.DrawText(g, formatted.DisplayText, st, new Rectangle(cardMarginX, curY, cardW, 20), theme.FgPrimary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                         }
                         curY += 20;
                     }
