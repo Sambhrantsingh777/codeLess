@@ -47,6 +47,7 @@ namespace codeLess.AvaloniaApp
         public List<AvaloniaAgentFeedItem> Items { get; } = new List<AvaloniaAgentFeedItem>();
         private readonly ScrollViewer scrollViewer;
         private readonly StackPanel cardsStack;
+        private readonly StackPanel todosStack;
         private StudioTheme currentTheme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
 
         public event Action<string, string> CodeActionRequested; // (action: "copy"|"insert"|"apply", code)
@@ -60,6 +61,11 @@ namespace codeLess.AvaloniaApp
 
         public AvaloniaAgentFeedControl()
         {
+            RowDefinitions = new RowDefinitions("Auto,*");
+            todosStack = new StackPanel { Margin = new Thickness(8, 8, 8, 0), Spacing = 4, IsVisible = false };
+            Grid.SetRow(todosStack, 0);
+            Children.Add(todosStack);
+
             cardsStack = new StackPanel
             {
                 Spacing = 7,
@@ -71,8 +77,46 @@ namespace codeLess.AvaloniaApp
                 VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
             };
+            Grid.SetRow(scrollViewer, 1);
             Children.Add(scrollViewer);
             RebuildVisualFeed();
+        }
+
+        public void UpdateTodos(List<Dictionary<string, object>> todos)
+        {
+            todosStack.Children.Clear();
+            if (todos == null || todos.Count == 0)
+            {
+                todosStack.IsVisible = false;
+                return;
+            }
+            todosStack.IsVisible = true;
+            
+            Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
+            todosStack.Children.Add(new TextBlock { Text = "Task List", FontWeight = FontWeight.Bold, FontSize = 12, Foreground = new SolidColorBrush(textPrimary), Margin = new Thickness(0, 0, 0, 4) });
+
+            foreach (var t in todos)
+            {
+                string id = t.ContainsKey("id") ? t["id"]?.ToString() : "";
+                string contentStr = t.ContainsKey("content") ? t["content"]?.ToString() : "";
+                string status = t.ContainsKey("status") ? t["status"]?.ToString() : "pending";
+                
+                string icon = "☐";
+                bool strike = false;
+                if (status == "in_progress") icon = "◐";
+                else if (status == "completed") icon = "☑";
+                else if (status == "cancelled") { icon = "☒"; strike = true; }
+                
+                var tb = new TextBlock
+                {
+                    Text = icon + " " + id + ": " + contentStr,
+                    FontSize = 12,
+                    Foreground = new SolidColorBrush(textPrimary),
+                    TextWrapping = TextWrapping.Wrap
+                };
+                if (strike) tb.TextDecorations = TextDecorations.Strikethrough;
+                todosStack.Children.Add(tb);
+            }
         }
 
         public void ApplyTheme(StudioTheme theme)

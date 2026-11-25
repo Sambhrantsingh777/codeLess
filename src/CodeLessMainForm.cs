@@ -342,9 +342,13 @@ namespace codeLess.Studio
             this.themes = StudioTheme.GetBuiltInThemes();
             this.activeTheme = StudioTheme.ResolveTheme(themes, settings.ActiveThemeId);
             this.aiEngine = new LlmHarnessAndAgentEngine(settings);
-            this.aiEngine.OnAgentFeedStatus = msg => this.BeginInvoke(new Action(() => {
+                        this.aiEngine.OnAgentFeedStatus = msg => this.BeginInvoke(new Action(() => {
                 if (this.agentFeedControl != null)
                     this.agentFeedControl.AddMessage(false, "System", "", msg);
+            }));
+            this.aiEngine.OnTodosChanged = () => this.BeginInvoke(new Action(() => {
+                if (this.agentFeedControl != null)
+                    this.agentFeedControl.UpdateTodos(this.aiEngine.AgentTodos);
             }));
             this.vsixEngine = new VsixAndPluginHostEngine(themes);
             this.networkPrivacy = new WinFormsNetworkPrivacyController(this, settings, () => activeTheme);
@@ -7590,16 +7594,12 @@ if __name__ == '__main__':
         private void SetAgentMode(string mode)
         {
             currentAgentMode = mode;
-            modeAgentBtn.Tag = mode == "agent" ? "docktab_active" : "docktab_inactive";
-            modeComposerBtn.Tag = mode == "composer" ? "docktab_active" : "docktab_inactive";
-            modeArchitectBtn.Tag = mode == "architect" ? "docktab_active" : "docktab_inactive";
-            modeAutoFixBtn.Tag = mode == "autofix" ? "docktab_active" : "docktab_inactive";
+            modeAgentBtn.Tag = mode == "build" ? "docktab_active" : "docktab_inactive";
+            modeComposerBtn.Tag = mode == "plan" ? "docktab_active" : "docktab_inactive";
             if (composerModePillBtn != null)
             {
-                composerModePillBtn.Text = mode == "composer" ? "Ask"
-                    : mode == "architect" ? "Edit"
-                    : mode == "autofix" ? "Fix"
-                    : "Agent";
+                composerModePillBtn.Text = mode == "build" ? "Build" : "Plan";
+                composerModePillBtn.Invalidate();
             }
             ApplyThemeToControlTree(rightDock, activeTheme);
             rightDock.Invalidate(true);

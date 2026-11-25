@@ -28,6 +28,40 @@ namespace codeLess.Avalonia.Tests
             _settingsBackupContent = _hadSettingsFile ? File.ReadAllText(_settingsFilePath) : null;
         }
 
+        
+        [AvaloniaFact]
+        public void AgentChat_TabCycles_PlanAndBuild_Mode()
+        {
+            string ws = CreateTempWorkspace(out _, out _);
+            try
+            {
+                var window = new MainWindow(ws);
+                
+                window.Show();
+
+                var promptBox = global::Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(window).OfType<global::Avalonia.Controls.TextBox>().FirstOrDefault(x => x.Name == "ChatPromptInput");
+                Assert.NotNull(promptBox);
+
+                Assert.Equal("build", window.CurrentAgentMode);
+
+                var tabEvent = new KeyEventArgs { RoutedEvent = global::Avalonia.Input.InputElement.KeyDownEvent, Key = Key.Tab };
+                promptBox.RaiseEvent(tabEvent);
+
+                Assert.Equal("plan", window.CurrentAgentMode);
+                Assert.True(tabEvent.Handled);
+
+                var tabEvent2 = new KeyEventArgs { RoutedEvent = global::Avalonia.Input.InputElement.KeyDownEvent, Key = Key.Tab };
+                promptBox.RaiseEvent(tabEvent2);
+
+                Assert.Equal("build", window.CurrentAgentMode);
+                Assert.True(tabEvent2.Handled);
+            }
+            finally
+            {
+                try { Directory.Delete(ws, true); } catch {}
+            }
+        }
+
         public void Dispose()
         {
             try
@@ -450,7 +484,7 @@ namespace codeLess.Avalonia.Tests
 
                 string response = await window.SendChatMessageAsync("Read Calculator.cs and use checked arithmetic in Add");
                 Assert.NotNull(response);
-                Assert.Equal(2, requestCount);
+                Assert.True(requestCount == 2, "Expected 2 requests, got " + requestCount + ". Response: " + response);
                 Assert.Equal("/v1/chat/completions", firstRequestPath);
                 Assert.Contains("checked(a + b)", window.Editor.Text);
 

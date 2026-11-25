@@ -48,7 +48,7 @@ namespace codeLess.AvaloniaApp
         private bool showWelcomeTab = true;
         private string activeSidebarView = "explorer";
         private string activeBottomTab = "terminal";
-        private string currentAgentMode = "agent";
+        private string currentAgentMode = "build";
         private bool isZenMode = false;
         private bool isFullScreen = false;
         private bool isBottomDockMaximized = false;
@@ -258,9 +258,13 @@ namespace codeLess.AvaloniaApp
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
             EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
-            aiEngine.OnAgentFeedStatus = msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                        aiEngine.OnAgentFeedStatus = msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => {
                 if (AgentFeed != null)
                     AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
+            });
+            aiEngine.OnTodosChanged = () => Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                if (AgentFeed != null)
+                    AgentFeed.UpdateTodos(aiEngine.AgentTodos);
             });
             InitNetworkPrivacy();
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
@@ -1565,7 +1569,7 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (e.Key == Key.Tab)
                 {
-                    SetAgentMode(currentAgentMode == "agent" ? "plan" : "agent");
+                    SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
                     e.Handled = true;
                 }
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);

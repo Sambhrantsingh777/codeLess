@@ -2206,6 +2206,10 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrEmpty(modeId)) return;
             currentAgentMode = modeId.ToLowerInvariant();
+            if (statusAiModelBtn != null)
+            {
+                statusAiModelBtn.Content = new LiteralTextBlock($"✦ {settings.ActiveModel} ({currentAgentMode})");
+            }
             if (currentTheme == null) return;
             Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
             Color textPrimary = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);

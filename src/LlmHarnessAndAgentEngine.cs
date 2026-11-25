@@ -93,6 +93,8 @@ namespace codeLess.Studio
         public volatile bool CancelStreamingRequested = false;
         public event Action<string> OnStreamingChunk;
         public Action<string> OnAgentFeedStatus;
+        public Action OnTodosChanged;
+        public List<Dictionary<string, object>> AgentTodos = new List<Dictionary<string, object>>();
         public Func<string, string, bool> OnRequestToolApproval;
         public Func<string, string> OnExecuteTerminalCommandInConPty;
         public Func<string, List<Dictionary<string, string>>, Task<string>> CustomModelResponder;
@@ -1857,7 +1859,7 @@ updated replacement lines
                 envBlock, providerRules, instructions, hName, hDirective);
 
             string normMode = (mode ?? "").Trim().ToLowerInvariant();
-            if (normMode == "agent" || normMode == "autofix")
+            if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan")
             {
                 var sb = new StringBuilder();
                 sb.AppendLine("[AUTONOMOUS TOOL EXECUTION PROTOCOL]");
@@ -2780,7 +2782,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         if (llmOutput != null && llmOutput.Contains("<<<<<<< SEARCH"))
                         {
                             string blockError;
-                            bool blocksOk = TryExtractAndStageSearchReplaceBlocks(llmOutput, activeTab, workspaceRoot, result, out blockError, workspaceFiles);
+                            bool blocksOk = TryExtractAndStageSearchReplaceBlocks(llmOutput, activeTab, workspaceRoot, result, out blockError, mode);
                             if (blocksOk) stagedThisTurn = true;
                             if (!blocksOk && step + 1 < maxSteps)
                             {
@@ -2995,11 +2997,6 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             string agentMode,
             IdePersistentSettings settings)
         {
-            if (agentMode == "Plan" && !new[]{"todowrite", "todoread", "read_file", "list_dir", "glob", "grep_search", "grep", "list", "read", "ast_outline", "get_diagnostics"}.Contains(toolName.ToLowerInvariant()))
-            {
-                return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Plan mode block", Output = "You are in Plan mode. Use todowrite to save your plan. Write/execute tools are not allowed." };
-            }
-
             if (args == null) args = new Dictionary<string, object>();
             
             string originalName = toolName;
@@ -3013,8 +3010,26 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
             }
 
+            string argsJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(args);
+            bool isRestricted = codeLess.Studio.WorkspaceTrust.IsRestricted(workspaceRoot);
+            string permission = codeLess.Studio.AgentPermissions.EvaluateTool(agentMode, toolName, argsJson, isRestricted, settings);
+
+            if (permission == "deny")
+            {
+                return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Permission Denied", Output = "The user has denied permission to run this tool in this mode." };
+            }
+
+            if (permission == "ask")
+            {
+                if (OnRequestToolApproval == null || !OnRequestToolApproval(toolName, argsJson))
+                {
+                    return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Approval Denied", Output = "The user rejected the tool execution." };
+                }
+            }
+
             try
             {
+
                 if (toolName == "read_file")
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
@@ -3094,18 +3109,33 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 
                 else if (toolName == "todowrite")
                 {
-                    string content = args.ContainsKey("content") ? Convert.ToString(args["content"]) : "";
-                    string path = Path.Combine(workspaceRoot, ".codeless");
-                    Directory.CreateDirectory(path);
-                    File.WriteAllText(Path.Combine(path, "todo.md"), content);
-                    return new AgentToolCallResult { ToolName = "todowrite", Success = true, Summary = "Wrote plan", Output = "todo.md written." };
+                    if (args.ContainsKey("todos") && args["todos"] is System.Collections.IEnumerable list)
+                    {
+                        var newTodos = new List<Dictionary<string, object>>();
+                        foreach (var item in list)
+                        {
+                            if (item is Dictionary<string, object> dict)
+                            {
+                                string status = (dict.ContainsKey("status") ? dict["status"].ToString() : "pending").ToLowerInvariant();
+                                string prio = (dict.ContainsKey("priority") ? dict["priority"].ToString() : "medium").ToLowerInvariant();
+                                if (status != "pending" && status != "in_progress" && status != "completed" && status != "cancelled") status = "pending";
+                                if (prio != "high" && prio != "medium" && prio != "low") prio = "medium";
+                                dict["status"] = status;
+                                dict["priority"] = prio;
+                                newTodos.Add(dict);
+                            }
+                        }
+                        AgentTodos = newTodos;
+                        if (OnTodosChanged != null) OnTodosChanged();
+                        string json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(AgentTodos);
+                        return new AgentToolCallResult { ToolName = "todowrite", Success = true, Summary = "Wrote plan", Output = "{\"todos\":" + json + "}" };
+                    }
+                    return new AgentToolCallResult { ToolName = "todowrite", Success = false, Summary = "Invalid args", Output = "Missing or invalid 'todos' array." };
                 }
                 else if (toolName == "todoread")
                 {
-                    string path = Path.Combine(workspaceRoot, ".codeless", "todo.md");
-                    if (File.Exists(path))
-                        return new AgentToolCallResult { ToolName = "todoread", Success = true, Summary = "Read plan", Output = File.ReadAllText(path) };
-                    return new AgentToolCallResult { ToolName = "todoread", Success = false, Summary = "No plan", Output = "No plan found." };
+                    string json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(AgentTodos);
+                    return new AgentToolCallResult { ToolName = "todoread", Success = true, Summary = "Read plan", Output = "{\"todos\":" + json + "}" };
                 }
 else if (toolName == "glob")
                 {
@@ -3638,7 +3668,7 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
         )
         {
             string dummyErr;
-            TryExtractAndStageSearchReplaceBlocks(llmText, activeTab, workspaceRoot, result, out dummyErr, workspaceFiles);
+            TryExtractAndStageSearchReplaceBlocks(llmText, activeTab, workspaceRoot, result, out dummyErr, "agent", null, workspaceFiles);
         }
 
         private string ReadCandidateFileContent(string fullPath, EditorTabBuffer activeTab, Dictionary<string, string> stagedContents)
@@ -3663,10 +3693,20 @@ if (OnRequestToolApproval != null && !OnRequestToolApproval("multiedit", "Apply 
             EditorTabBuffer activeTab,
             string workspaceRoot,
             AgentExecutionTurnResult result,
-            out string errorDetails,
+            out string errorDetails, string agentMode = "agent", IdePersistentSettings settings = null,
             List<string> workspaceFiles = null
         )
         {
+            if (string.Equals(agentMode, "Plan", StringComparison.OrdinalIgnoreCase))
+            {
+                // In Plan mode, SEARCH/REPLACE is denied entirely (acting as an edit_file).
+                string perm = AgentPermissions.EvaluateTool(agentMode, "edit_file", "{}", false, null);
+                if (perm == "deny") {
+                    errorDetails = "SEARCH/REPLACE blocks are not allowed in Plan mode. Use todowrite.";
+                    return false;
+                }
+            }
+
             errorDetails = "";
             if (string.IsNullOrEmpty(llmText)) return true;
 
