@@ -290,6 +290,19 @@ namespace codeLess.AvaloniaApp
         private WrapPanel contextPillsWrap;
         private readonly List<string> attachedContextPills = new List<string>();
         private TextBox chatPromptInput;
+        private Border chatAtMentionPopupBorder;
+        private ListBox chatAtMentionListBox;
+        private readonly List<ChatAtMentionItem> chatAtMentionSuggestions = new List<ChatAtMentionItem>();
+        private bool suppressChatAtMentionUpdate;
+        public TextBox ChatPromptInput => chatPromptInput;
+        public IReadOnlyList<string> AttachedContextPills => attachedContextPills;
+        public bool IsChatAtMentionPopupOpen => chatAtMentionPopupBorder != null && chatAtMentionPopupBorder.IsVisible;
+        public IReadOnlyList<ChatAtMentionItem> ChatAtMentionSuggestions => chatAtMentionSuggestions;
+        public int ChatAtMentionSelectedIndex
+        {
+            get => chatAtMentionListBox != null ? chatAtMentionListBox.SelectedIndex : -1;
+            set { if (chatAtMentionListBox != null) chatAtMentionListBox.SelectedIndex = value; }
+        }
         private readonly Dictionary<string, Button> agentModeButtons = new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
         private ComboBox chatProviderCombo;
         private ComboBox chatModelCombo;
@@ -802,6 +815,7 @@ namespace codeLess.AvaloniaApp
             secondarySplitTerminalSession = null;
             workspaceFiles.Clear();
             indexCandidateFiles = null;
+            aiEngine?.DisposeMcpServers();
             aiEngine?.ClearWorkspaceIndex();
             tabDirtyDots.Clear();
             tabCloseButtons.Clear();
@@ -1971,6 +1985,27 @@ namespace codeLess.AvaloniaApp
             RebuildContextPillsBar();
             composerStack.Children.Add(contextPillsWrap);
 
+            // @file Fuzzy Completion Popup (M9c)
+            chatAtMentionListBox = new ListBox
+            {
+                Name = "ChatAtMentionListBox",
+                MaxHeight = 148,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(2)
+            };
+            chatAtMentionListBox.DoubleTapped += (s, e) => AcceptSelectedChatAtMention();
+            chatAtMentionPopupBorder = new Border
+            {
+                Name = "ChatAtMentionPopupBorder",
+                Child = chatAtMentionListBox,
+                CornerRadius = new CornerRadius(UiTokens.ControlRadius),
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 0, 0, 4),
+                IsVisible = false
+            };
+            composerStack.Children.Add(chatAtMentionPopupBorder);
+
             // Prompt TextBox
             chatPromptInput = new TextBox
             {
@@ -1989,9 +2024,48 @@ namespace codeLess.AvaloniaApp
                 Background = Brushes.Transparent
             };
             ScrollViewer.SetVerticalScrollBarVisibility(chatPromptInput, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
-            // Enter sends, Shift+Enter inserts a newline. Tab cycles modes.
+            chatPromptInput.PropertyChanged += (s, e) =>
+            {
+                if (e.Property == TextBox.TextProperty && !suppressChatAtMentionUpdate)
+                {
+                    UpdateChatAtMentionPopup();
+                }
+            };
+            // Enter sends, Shift+Enter inserts a newline. Tab cycles modes (unless @file completion popup is open).
             chatPromptInput.AddHandler(KeyDownEvent, (s, e) =>
             {
+                if (IsChatAtMentionPopupOpen)
+                {
+                    if (e.Key == Key.Down)
+                    {
+                        if (chatAtMentionSuggestions.Count > 0)
+                            chatAtMentionListBox.SelectedIndex = Math.Min(chatAtMentionSuggestions.Count - 1, Math.Max(0, chatAtMentionListBox.SelectedIndex + 1));
+                        e.Handled = true;
+                        return;
+                    }
+                    if (e.Key == Key.Up)
+                    {
+                        if (chatAtMentionSuggestions.Count > 0)
+                            chatAtMentionListBox.SelectedIndex = Math.Max(0, chatAtMentionListBox.SelectedIndex - 1);
+                        e.Handled = true;
+                        return;
+                    }
+                    if (e.Key == Key.Enter || e.Key == Key.Tab)
+                    {
+                        if (AcceptSelectedChatAtMention())
+                        {
+                            e.Handled = true;
+                            return;
+                        }
+                    }
+                    if (e.Key == Key.Escape)
+                    {
+                        chatAtMentionPopupBorder.IsVisible = false;
+                        e.Handled = true;
+                        return;
+                    }
+                }
+
                 if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
                 {
                     SubmitChatMessage();
@@ -1999,8 +2073,7 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (e.Key == Key.Tab)
                 {
-                    
-                    SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
+                    SetAgentMode(AgentUiParity.CycleBuildPlanMode(currentAgentMode, workspaceRoot));
                     e.Handled = true;
                 }
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
@@ -2128,6 +2201,78 @@ namespace codeLess.AvaloniaApp
                 attachedContextPills.Add(pillName);
                 RebuildContextPillsBar();
             }
+        }
+
+        public void UpdateChatAtMentionPopup()
+        {
+            if (chatPromptInput == null || chatAtMentionPopupBorder == null || chatAtMentionListBox == null)
+                return;
+
+            string text = chatPromptInput.Text ?? "";
+            int caret = chatPromptInput.CaretIndex;
+            if (caret <= 0 || caret > text.Length)
+                caret = text.Length;
+
+            int atIndex;
+            string query;
+            if (!ChatAtMentionCompleter.TryExtractActiveAtQuery(text, caret, out atIndex, out query))
+            {
+                chatAtMentionSuggestions.Clear();
+                chatAtMentionListBox.ItemsSource = null;
+                chatAtMentionPopupBorder.IsVisible = false;
+                return;
+            }
+
+            List<ChatAtMentionItem> matches = ChatAtMentionCompleter.GetSuggestions(query, workspaceRoot, workspaceFiles, 16);
+            chatAtMentionSuggestions.Clear();
+            chatAtMentionSuggestions.AddRange(matches);
+
+            if (chatAtMentionSuggestions.Count == 0)
+            {
+                chatAtMentionListBox.ItemsSource = null;
+                chatAtMentionPopupBorder.IsVisible = false;
+                return;
+            }
+
+            var t = currentTheme ?? StudioTheme.GetById(StudioTheme.DefaultThemeId);
+            chatAtMentionPopupBorder.Background = WorkbenchStyles.B(UiTokens.WidgetBackground(t));
+            chatAtMentionPopupBorder.BorderBrush = WorkbenchStyles.B(UiTokens.WidgetBorder(t));
+            chatAtMentionListBox.ItemsSource = chatAtMentionSuggestions.Select(m => m.DisplayText).ToList();
+            chatAtMentionListBox.SelectedIndex = 0;
+            chatAtMentionPopupBorder.IsVisible = true;
+        }
+
+        public bool AcceptSelectedChatAtMention()
+        {
+            if (!IsChatAtMentionPopupOpen || chatAtMentionSuggestions.Count == 0)
+                return false;
+
+            int idx = chatAtMentionListBox.SelectedIndex;
+            if (idx < 0 || idx >= chatAtMentionSuggestions.Count)
+                idx = 0;
+
+            ChatAtMentionItem chosen = chatAtMentionSuggestions[idx];
+            string currentText = chatPromptInput.Text ?? "";
+            int caret = chatPromptInput.CaretIndex;
+            if (caret <= 0 || caret > currentText.Length)
+                caret = currentText.Length;
+
+            int newCaret;
+            string updated = ChatAtMentionCompleter.ApplySelection(currentText, caret, chosen.InsertToken, out newCaret);
+            suppressChatAtMentionUpdate = true;
+            try
+            {
+                chatPromptInput.Text = updated;
+                chatPromptInput.CaretIndex = newCaret;
+            }
+            finally
+            {
+                suppressChatAtMentionUpdate = false;
+            }
+
+            AttachChatContextPill(chosen.RelativePath);
+            chatAtMentionPopupBorder.IsVisible = false;
+            return true;
         }
 
         private void RebuildContextPillsBar()
@@ -2532,6 +2677,8 @@ namespace codeLess.AvaloniaApp
                 additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, newRoot));
             }
             workspaceRoot = newRoot;
+            AgentUiParity.ActiveWorkspaceRoot = workspaceRoot;
+            aiEngine?.McpManager?.OnWorkspaceChanged(workspaceRoot);
             InitializeWorkspaceSettingsWatcher();
             settings.AddRecentWorkspace(workspaceRoot);
             OnDebugWorkspaceChanged();

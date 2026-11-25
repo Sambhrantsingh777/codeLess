@@ -1075,4 +1075,252 @@ namespace codeLess.Studio
             return changes;
         }
     }
+
+    /// <summary>
+    /// Snapshot of staged file contents before and after one agent turn (M9d per-turn /undo and /redo).
+    /// Operates purely in memory on StagedFileContents without touching disk. Strict C# 5.
+    /// </summary>
+    public sealed class StagedTurnSnapshot
+    {
+        public string TurnId = "";
+        public string Label = "";
+        public DateTime CreatedUtc = DateTime.UtcNow;
+        public bool Undone;
+        public readonly Dictionary<string, string> BeforeStaged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, string> AfterStaged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public readonly List<string> TouchedPaths = new List<string>();
+    }
+
+    /// <summary>
+    /// Per-turn undo/redo stack for in-memory staged changes (M9d). Every agent turn that stages changes
+    /// records a snapshot; /undo restores StagedFileContents to the state before the turn, and /redo re-applies it.
+    /// Never touches disk. Strict C# 5.
+    /// </summary>
+    public sealed class StagedTurnHistory
+    {
+        private readonly object sync = new object();
+        private readonly List<StagedTurnSnapshot> snapshots = new List<StagedTurnSnapshot>();
+        private readonly Dictionary<string, string> currentStaged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, string> CurrentStagedFiles
+        {
+            get
+            {
+                lock (sync)
+                {
+                    return new Dictionary<string, string>(currentStaged, StringComparer.OrdinalIgnoreCase);
+                }
+            }
+        }
+
+        public List<StagedTurnSnapshot> Snapshots
+        {
+            get
+            {
+                lock (sync)
+                {
+                    return new List<StagedTurnSnapshot>(snapshots);
+                }
+            }
+        }
+
+        public bool CanUndo
+        {
+            get
+            {
+                lock (sync)
+                {
+                    for (int i = snapshots.Count - 1; i >= 0; i--)
+                    {
+                        if (!snapshots[i].Undone) return true;
+                    }
+                    return false;
+                }
+            }
+        }
+
+        public bool CanRedo
+        {
+            get
+            {
+                lock (sync)
+                {
+                    for (int i = 0; i < snapshots.Count; i++)
+                    {
+                        if (snapshots[i].Undone) return true;
+                    }
+                    return false;
+                }
+            }
+        }
+
+        public StagedTurnSnapshot RecordTurn(
+            string turnId,
+            string label,
+            IDictionary<string, string> beforeStaged,
+            IDictionary<string, string> afterStaged)
+        {
+            if (afterStaged == null || afterStaged.Count == 0) return null;
+
+            lock (sync)
+            {
+                // Drop any undone tail snapshots when a new turn stages changes (standard undo/redo stack semantics)
+                for (int i = snapshots.Count - 1; i >= 0; i--)
+                {
+                    if (snapshots[i].Undone)
+                        snapshots.RemoveAt(i);
+                }
+
+                IDictionary<string, string> effBefore = beforeStaged != null && beforeStaged.Count > 0
+                    ? beforeStaged
+                    : currentStaged;
+
+                StagedTurnSnapshot snap = new StagedTurnSnapshot();
+                snap.TurnId = string.IsNullOrEmpty(turnId) ? AgentTurnCheckpointStore.NewTurnId() : turnId;
+                snap.Label = label ?? "";
+                foreach (KeyValuePair<string, string> kv in effBefore)
+                {
+                    snap.BeforeStaged[kv.Key] = kv.Value;
+                }
+
+                // Merge afterStaged on top of effBefore so cumulative multi-turn staged state is preserved
+                foreach (KeyValuePair<string, string> kv in effBefore)
+                {
+                    snap.AfterStaged[kv.Key] = kv.Value;
+                }
+                foreach (KeyValuePair<string, string> kv in afterStaged)
+                {
+                    snap.AfterStaged[kv.Key] = kv.Value;
+                    string prevVal;
+                    if (!effBefore.TryGetValue(kv.Key, out prevVal) || !string.Equals(prevVal, kv.Value, StringComparison.Ordinal))
+                    {
+                        snap.TouchedPaths.Add(kv.Key);
+                    }
+                }
+
+                if (snap.TouchedPaths.Count == 0 && afterStaged.Count > 0)
+                {
+                    foreach (KeyValuePair<string, string> kv in afterStaged)
+                        snap.TouchedPaths.Add(kv.Key);
+                }
+
+                snapshots.Add(snap);
+                currentStaged.Clear();
+                foreach (KeyValuePair<string, string> kv in snap.AfterStaged)
+                    currentStaged[kv.Key] = kv.Value;
+
+                return snap;
+            }
+        }
+
+        public StagedTurnSnapshot FindSnapshot(string turnId)
+        {
+            if (string.IsNullOrEmpty(turnId)) return null;
+            lock (sync)
+            {
+                for (int i = snapshots.Count - 1; i >= 0; i--)
+                {
+                    if (string.Equals(snapshots[i].TurnId, turnId, StringComparison.Ordinal))
+                        return snapshots[i];
+                }
+                return null;
+            }
+        }
+
+        public StagedTurnSnapshot Undo(string specificTurnId = null)
+        {
+            lock (sync)
+            {
+                int targetIdx = -1;
+                if (!string.IsNullOrEmpty(specificTurnId))
+                {
+                    for (int i = snapshots.Count - 1; i >= 0; i--)
+                    {
+                        if (string.Equals(snapshots[i].TurnId, specificTurnId, StringComparison.Ordinal) && !snapshots[i].Undone)
+                        {
+                            targetIdx = i;
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    for (int i = snapshots.Count - 1; i >= 0; i--)
+                    {
+                        if (!snapshots[i].Undone)
+                        {
+                            targetIdx = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (targetIdx < 0) return null;
+
+                // Undo targetIdx and any newer un-undone snapshots back to targetIdx.BeforeStaged
+                for (int i = snapshots.Count - 1; i >= targetIdx; i--)
+                {
+                    snapshots[i].Undone = true;
+                }
+
+                StagedTurnSnapshot undoneSnap = snapshots[targetIdx];
+                currentStaged.Clear();
+                foreach (KeyValuePair<string, string> kv in undoneSnap.BeforeStaged)
+                {
+                    currentStaged[kv.Key] = kv.Value;
+                }
+                return undoneSnap;
+            }
+        }
+
+        public StagedTurnSnapshot Redo(string specificTurnId = null)
+        {
+            lock (sync)
+            {
+                int targetIdx = -1;
+                if (!string.IsNullOrEmpty(specificTurnId))
+                {
+                    for (int i = 0; i < snapshots.Count; i++)
+                    {
+                        if (string.Equals(snapshots[i].TurnId, specificTurnId, StringComparison.Ordinal) && snapshots[i].Undone)
+                        {
+                            targetIdx = i;
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < snapshots.Count; i++)
+                    {
+                        if (snapshots[i].Undone)
+                        {
+                            targetIdx = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (targetIdx < 0) return null;
+
+                StagedTurnSnapshot redoneSnap = snapshots[targetIdx];
+                redoneSnap.Undone = false;
+                currentStaged.Clear();
+                foreach (KeyValuePair<string, string> kv in redoneSnap.AfterStaged)
+                {
+                    currentStaged[kv.Key] = kv.Value;
+                }
+                return redoneSnap;
+            }
+        }
+
+        public void Clear()
+        {
+            lock (sync)
+            {
+                snapshots.Clear();
+                currentStaged.Clear();
+            }
+        }
+    }
 }

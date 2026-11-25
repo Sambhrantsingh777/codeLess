@@ -43,6 +43,7 @@ namespace codeLess.Studio
         /// <summary>Overrides the resolved verification command (tests).</summary>
         public VerificationCommand CommandOverride;
         public readonly List<AgentChangeSet> ChangeSets = new List<AgentChangeSet>();
+        public readonly StagedTurnHistory StagedHistory = new StagedTurnHistory();
         private readonly object gate = new object();
         private AgentTurnCheckpointStore store;
         private CancellationTokenSource running;
@@ -135,7 +136,11 @@ namespace codeLess.Studio
         {
             AgentChangeSet cs = AgentChangeSet.FromStaged(staged, workspaceRoot, baseTextProvider, label);
             cs.TurnId = string.IsNullOrEmpty(turnId) ? AgentTurnCheckpointStore.NewTurnId() : turnId;
-            if (cs.Files.Count > 0) lock (gate) ChangeSets.Add(cs);
+            if (cs.Files.Count > 0)
+            {
+                lock (gate) ChangeSets.Add(cs);
+                StagedHistory.RecordTurn(cs.TurnId, label, null, staged);
+            }
             return cs;
         }
 

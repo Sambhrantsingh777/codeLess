@@ -7236,31 +7236,18 @@ if __name__ == '__main__':
             promptInputBox.TextChanged += (s, e) =>
             {
                 string txt = promptInputBox.Text ?? "";
-                int atPos = txt.LastIndexOf('@');
-                if (atPos >= 0 && atPos >= txt.Length - 28 && !txt.Substring(atPos).Contains(" "))
+                int atPos;
+                string filter;
+                if (ChatAtMentionCompleter.TryExtractActiveAtQuery(txt, promptInputBox.SelectionStart > 0 ? promptInputBox.SelectionStart : txt.Length, out atPos, out filter))
                 {
-                    string filter = txt.Substring(atPos + 1).Trim();
                     atMentionCandidates.Clear();
                     atMentionList.Items.Clear();
 
-                    string[] builtIns = new string[] { "@ActiveFile", "@Codebase:BM25", "@Terminal", "@Problems", "@Git", "@.codelessrules" };
-                    foreach (string bi in builtIns)
+                    List<ChatAtMentionItem> suggestions = ChatAtMentionCompleter.GetSuggestions(filter, workspaceRoot, workspaceFiles, 16);
+                    for (int i = 0; i < suggestions.Count; i++)
                     {
-                        if (string.IsNullOrEmpty(filter) || bi.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            atMentionCandidates.Add(bi);
-                            atMentionList.Items.Add(bi + "  (Context Provider)");
-                        }
-                    }
-                    foreach (string fp in workspaceFiles)
-                    {
-                        string rel = "@" + LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, fp);
-                        if (string.IsNullOrEmpty(filter) || rel.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            atMentionCandidates.Add(rel);
-                            atMentionList.Items.Add(rel);
-                            if (atMentionCandidates.Count >= 16) break;
-                        }
+                        atMentionCandidates.Add(suggestions[i].InsertToken);
+                        atMentionList.Items.Add(suggestions[i].DisplayText);
                     }
 
                     if (atMentionCandidates.Count > 0)
@@ -7311,6 +7298,7 @@ if __name__ == '__main__':
                 else if (e.KeyCode == Keys.Tab)
                 {
                     e.SuppressKeyPress = true;
+                    AgentUiParity.ActiveWorkspaceRoot = workspaceRoot;
                     SetAgentMode(AgentUiParity.CycleBuildPlanMode(currentAgentMode));
                 }
             };
@@ -8235,6 +8223,7 @@ if __name__ == '__main__':
                 additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, rootDir));
             }
             workspaceRoot = rootDir;
+            if (aiEngine != null && aiEngine.McpManager != null) aiEngine.McpManager.OnWorkspaceChanged(rootDir);
             if (lspController != null) lspController.SetWorkspaceRoot(rootDir);
             OnWorkspaceTrustFolderOpenedWin();
             terminalWorkingDir = rootDir;
@@ -9249,6 +9238,10 @@ if __name__ == '__main__':
             }
             pendingHotExitBackupsWin.Clear();
             KillAllTerminalChildProcesses();
+            if (aiEngine != null)
+            {
+                try { aiEngine.DisposeMcpServers(); } catch { }
+            }
             if (lspController != null)
             {
                 try { lspController.Dispose(); } catch { }
@@ -10522,6 +10515,32 @@ if __name__ == '__main__':
             promptInputBox.Clear();
             atMentionPopupFrame.Visible = false;
             lastUserQuery = prompt;
+
+            if (string.Equals(prompt, "/undo", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(prompt, "/redo", StringComparison.OrdinalIgnoreCase))
+            {
+                bool isUndo = string.Equals(prompt, "/undo", StringComparison.OrdinalIgnoreCase);
+                if (agentFeedControl != null)
+                    agentFeedControl.AddMessage(true, "You", "", prompt);
+                if (isUndo && agentTrustWin != null && agentTrustWin.StagedHistory.CanUndo)
+                {
+                    StagedTurnSnapshot undone = agentTrustWin.StagedHistory.Undo();
+                    if (aiEngine != null) aiEngine.StagedHistory.Undo();
+                    if (agentFeedControl != null && undone != null)
+                        agentFeedControl.AddMessage(false, "System", "", "Reverted staged changes from turn " + undone.TurnId + ".");
+                    RefreshAgentReviewPanel();
+                    return;
+                }
+                if (!isUndo && agentTrustWin != null && agentTrustWin.StagedHistory.CanRedo)
+                {
+                    StagedTurnSnapshot redone = agentTrustWin.StagedHistory.Redo();
+                    if (aiEngine != null) aiEngine.StagedHistory.Redo();
+                    if (agentFeedControl != null && redone != null)
+                        agentFeedControl.AddMessage(false, "System", "", "Re-applied staged changes from turn " + redone.TurnId + ".");
+                    RefreshAgentReviewPanel();
+                    return;
+                }
+            }
 
             if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
                 TimeTravelCheckpointManager.CreateDiskCheckpoint(activeTab.FilePath, activeTab.Content, "Pre-Prompt: " + prompt);

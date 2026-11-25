@@ -3602,6 +3602,18 @@ namespace codeLess.AvaloniaApp
                 return LlmHarnessAndAgentEngine.BusyReply;
             }
 
+            string trimmedPrompt = prompt.Trim();
+            if (string.Equals(trimmedPrompt, "/undo", StringComparison.OrdinalIgnoreCase))
+            {
+                AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "user", Content = trimmedPrompt, Timestamp = DateTime.Now });
+                return await HandleSlashUndoAsync();
+            }
+            if (string.Equals(trimmedPrompt, "/redo", StringComparison.OrdinalIgnoreCase))
+            {
+                AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "user", Content = trimmedPrompt, Timestamp = DateTime.Now });
+                return await HandleSlashRedoAsync();
+            }
+
             var userItem = new AvaloniaAgentFeedItem
             {
                 Role = "user",
@@ -3675,6 +3687,8 @@ namespace codeLess.AvaloniaApp
             AgentFeed.AddMessage(new AvaloniaAgentFeedItem
             {
                 Role = "assistant",
+                TurnId = tracker.TurnId,
+                HasStagedChanges = turnResult.StagedFileContents != null && turnResult.StagedFileContents.Count > 0,
                 ModelBadge = turnResult.ProviderUsed,
                 ReasoningText = !string.IsNullOrEmpty(turnResult.ThinkingProcess)
                     ? turnResult.ThinkingProcess
