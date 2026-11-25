@@ -91,6 +91,16 @@ namespace codeLess.Studio
                     if (i + 1 < p.Length && p[i + 1] == ']') { sb.Append(']'); i++; }
                     continue;
                 }
+                if (c == '(' && i + 2 < p.Length && p[i + 1] == '?' && p[i + 2] == '#')
+                {
+                    i += 3;
+                    while (i < p.Length && p[i] != ')')
+                    {
+                        if (p[i] == '\\' && i + 1 < p.Length) { i += 2; continue; }
+                        i++;
+                    }
+                    continue;
+                }
                 if (c == '#')
                 {
                     while (i < p.Length && p[i] != '\n') i++;
