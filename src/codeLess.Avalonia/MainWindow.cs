@@ -17,6 +17,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using codeLess.Core;
 using codeLess.Studio;
 
 namespace codeLess.AvaloniaApp
@@ -134,6 +135,98 @@ namespace codeLess.AvaloniaApp
         private StackPanel tabStripStack;
         private Grid editorSplitGrid;
         public AvaloniaEditorControl PrimaryEditor { get; private set; }
+        public KeybindingManager KeybindingManager { get; private set; }
+        public bool IsClosed => windowClosed;
+        private bool _isApplyingReloadedSettings;
+
+        private void ApplyReloadedSettings(codeLess.Studio.IdePersistentSettings incoming)
+        {
+            if (windowClosed || _isApplyingReloadedSettings || !IsVisible || PlatformImpl == null || Application.Current == null) return;
+            _isApplyingReloadedSettings = true;
+            try
+            {
+                var src = incoming ?? codeLess.Studio.IdePersistentSettings.Load();
+                if (this.settings == null || ReferenceEquals(src, this.settings)) return;
+
+                float newFontSize = src.EditorFontSize <= 11f ? 13f : src.EditorFontSize;
+                int newTabSize = System.Math.Max(1, System.Math.Min(16, src.TabSize <= 0 ? 4 : src.TabSize));
+                bool visualChanged =
+                    System.Math.Abs(this.settings.EditorFontSize - newFontSize) > 0.01f ||
+                    this.settings.TabSize != src.TabSize ||
+                    this.settings.InsertSpaces != src.InsertSpaces ||
+                    this.settings.WordWrap != src.WordWrap ||
+                    this.settings.ShowMinimap != src.ShowMinimap ||
+                    this.settings.ShowBreadcrumbs != src.ShowBreadcrumbs ||
+                    (!string.IsNullOrWhiteSpace(src.ActiveThemeId) && !string.Equals(this.settings.ActiveThemeId, src.ActiveThemeId, StringComparison.OrdinalIgnoreCase));
+
+                this.settings.EditorFontSize = newFontSize;
+                this.settings.TabSize = src.TabSize;
+                this.settings.InsertSpaces = src.InsertSpaces;
+                this.settings.WordWrap = src.WordWrap;
+                this.settings.ShowMinimap = src.ShowMinimap;
+                this.settings.ShowBreadcrumbs = src.ShowBreadcrumbs;
+                if (!string.IsNullOrWhiteSpace(src.ActiveThemeId))
+                    this.settings.ActiveThemeId = src.ActiveThemeId;
+                this.settings.WindowRestoreWindows = src.WindowRestoreWindows;
+                if (src.RestoreWindowPaths != null)
+                    this.settings.RestoreWindowPaths = new List<string>(src.RestoreWindowPaths);
+
+                if (!visualChanged) return;
+
+                codeLess.Studio.EditorNicetyOptions.ApplyFrom(src);
+                if (PrimaryEditor?.Canvas != null) PrimaryEditor.Canvas.DisplayTabSize = newTabSize;
+                if (SplitEditor?.Canvas != null) SplitEditor.Canvas.DisplayTabSize = newTabSize;
+                codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
+                if (!string.IsNullOrWhiteSpace(settings.ThemeId))
+                {
+                    var newTheme = codeLess.Studio.StudioTheme.GetById(settings.ThemeId);
+                    if (newTheme != null && !string.Equals(newTheme.Id, currentTheme?.Id, StringComparison.OrdinalIgnoreCase))
+                    {
+                        currentTheme = newTheme;
+                        ApplyTheme(currentTheme, persistSetting: false);
+                    }
+                }
+                if (PrimaryEditor != null && PrimaryEditor.Canvas != null)
+                {
+                    PrimaryEditor.ShowMinimap = settings.ShowMinimap;
+                    PrimaryEditor.ShowBreadcrumbs = settings.ShowBreadcrumbs;
+                    PrimaryEditor.Canvas.FontSizePx = settings.EditorFontSize;
+                    PrimaryEditor.Canvas.InvalidateVisual();
+                }
+                if (SplitEditor != null && SplitEditor.Canvas != null)
+                {
+                    SplitEditor.ShowMinimap = settings.ShowMinimap;
+                    SplitEditor.ShowBreadcrumbs = settings.ShowBreadcrumbs;
+                    SplitEditor.Canvas.FontSizePx = settings.EditorFontSize;
+                    SplitEditor.Canvas.InvalidateVisual();
+                }
+                ApplyEditorIndentAndWrapSettings(this.settings);
+            }
+            finally
+            {
+                _isApplyingReloadedSettings = false;
+            }
+        }
+
+        private void OnSettingsFileChanged(codeLess.Studio.IdePersistentSettings newSettings)
+        {
+            if (windowClosed) return;
+            if (ReferenceEquals(newSettings, this.settings)) return;
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+            {
+                ApplyReloadedSettings(newSettings);
+            }
+            else
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => ApplyReloadedSettings(newSettings));
+            }
+        }
+
+        public float GetEditorFontSizeForTests() { return (float)PrimaryEditor.Canvas.FontSizePx; }
+        public bool TestCheckDisposed() {
+            return windowClosed && terminalSessions.Count == 0 && workspaceLoadCts?.IsCancellationRequested == true;
+        }
+        public void TestAddWorkspaceFolder(string path) { workspaceFiles.Add(path); }
         public AvaloniaEditorControl SplitEditor { get; private set; }
         private Border splitEditorBorder;
         private bool isEditorSplit = false;
@@ -259,6 +352,12 @@ namespace codeLess.AvaloniaApp
             EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
             InitNetworkPrivacy();
+            
+            codeLess.Studio.IdeSettingsWatcher.Start();
+            codeLess.Studio.IdeSettingsWatcher.OnSettingsFileChanged += OnSettingsFileChanged;
+            codeLess.Studio.IdePersistentSettings.OnSettingsSavedInProcess += OnSettingsFileChanged;
+            Activated += (s, e) => App.WindowManager?.NotifyWindowActivated(this);
+
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
             aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
@@ -286,24 +385,6 @@ namespace codeLess.AvaloniaApp
             InitUpdates(); // MainWindow.Updates.cs: Check for Updates → Downloading → Restart to Update
 
             string startPath = initialPath;
-            if (string.IsNullOrWhiteSpace(startPath))
-            {
-                string validRecent = settings.RecentWorkspaces?.FirstOrDefault(p =>
-                    !string.IsNullOrWhiteSpace(p) &&
-                    Directory.Exists(p) &&
-                    !IsUnsafeDefaultStartupDirectory(p));
-                if (!string.IsNullOrEmpty(validRecent))
-                {
-                    startPath = validRecent;
-                }
-                else if (!IsUnsafeDefaultStartupDirectory(Environment.CurrentDirectory) &&
-                         !IsHomeOrSystemTempDirectory(Environment.CurrentDirectory))
-                {
-                    // Dock / Finder / .desktop launches start in $HOME: never silently index + watch the whole
-                    // home folder (12k files, an inotify watch per directory); show the Welcome screen instead.
-                    startPath = Environment.CurrentDirectory;
-                }
-            }
 
             if (!string.IsNullOrWhiteSpace(startPath))
             {
@@ -325,6 +406,9 @@ namespace codeLess.AvaloniaApp
             }
 
             EnsureInitialTerminalSession();
+            KeybindingManager = keybindings;
+            KeybindingManager.RegisterCommands(MenuCommands);
+            App.WindowManager?.RegisterWindow(this);
             UpdateWindowTitle();
             UpdateStatusBar();
         }
@@ -394,6 +478,19 @@ namespace codeLess.AvaloniaApp
         protected override void OnClosed(EventArgs e)
         {
             windowClosed = true; // late background results (analysis) must not touch this window any more
+            codeLess.Studio.IdeSettingsWatcher.OnSettingsFileChanged -= OnSettingsFileChanged;
+            codeLess.Studio.IdePersistentSettings.OnSettingsSavedInProcess -= OnSettingsFileChanged;
+            SaveWorkspaceSession();
+            foreach (var tab in openTabs.ToList())
+            {
+                if (tab?.OnClosed != null)
+                {
+                    var cb = tab.OnClosed;
+                    tab.OnClosed = null;
+                    try { cb(); } catch { }
+                }
+            }
+            App.WindowManager?.UnregisterWindow(this);
             StopWorkspaceWatcher();
             if (workspaceSettingsTimer != null) { workspaceSettingsTimer.Dispose(); workspaceSettingsTimer = null; }
             if (userSettingsTimer != null) { userSettingsTimer.Dispose(); userSettingsTimer = null; }
@@ -2540,6 +2637,13 @@ namespace codeLess.AvaloniaApp
 
             int idx = openTabs.IndexOf(tab);
             openTabs.Remove(tab);
+            if (tab.OnClosed != null)
+            {
+                var cb = tab.OnClosed;
+                tab.OnClosed = null;
+                try { cb(); } catch { }
+            }
+            SaveWorkspaceSession();
             SweepClosedLargeFileTabs();
 
             if (ReferenceEquals(activeTab, tab))
@@ -3004,6 +3108,7 @@ namespace codeLess.AvaloniaApp
             {
                 Title = "codeLess";
             }
+            App.WindowManager?.RefreshAllWindowMenus();
         }
 
         public void UpdateStatusBar()

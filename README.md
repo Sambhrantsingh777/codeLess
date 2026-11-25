@@ -92,6 +92,7 @@ Everything below is built in — no extensions to find, install or configure —
 - **Huge files and big repos**: files of 50 MB+ open instantly in a read-only viewer with search, go to line and live tail; `.gitignore`-aware Find in Files and Quick Open across 50k+ files.
 - **Privacy you can see**: View → Network Activity lists every request codeLess makes; **Offline Mode** blocks everything except localhost (local models keep working); zero telemetry. **Workspace Trust** asks before anything from an unfamiliar folder can run.
 - **Native Integrated Terminal (ConPTY & Unix PTY)**: Truecolor VT100, split panes, named sessions, `Cmd/Ctrl+Click` on URLs and `file:line:col`.
+- **Multi-window & CLI workflow**: single-instance argument forwarding (`codeLess <folder|file>`, `-n`/`--new-window`, `-r`/`--reuse-window`, `-g`/`--goto file:line:col`, `-d`/`--diff a b`, `-a`/`--add`, `-w`/`--wait`), isolated per-window workspaces/terminals/LSP sessions, live cross-window settings sync, per-workspace session storage, and full window restoration (`window.restoreWindows`: `all` | `one` | `none`).
 - **More**: `.http` request runner, native Markdown preview, 11 built-in themes plus VSIX themes / snippets / grammars and OpenVSX search.
 
 ---

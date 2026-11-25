@@ -15,6 +15,7 @@ namespace codeLess.AvaloniaApp
 {
     public class App : Application
     {
+        public static AvaloniaWindowManager WindowManager { get; } = new AvaloniaWindowManager();
         public static string StartupWorkspacePath { get; set; }
 
         private static readonly System.Diagnostics.Stopwatch launchClock = System.Diagnostics.Stopwatch.StartNew();
@@ -77,12 +78,13 @@ namespace codeLess.AvaloniaApp
             // Quit closes via the window so the unsaved-changes prompt in MainWindow.OnClosing can run.
             NativeMenu.SetMenu(this, AppNativeMenu.Build(
                 ActiveWorkbenchWindow,
-                () => (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.TryShutdown(0)));
+                () => WindowManager.QuitApplication()));
         }
 
         /// <summary>The focused workbench window (New Window opens more), else the main one.</summary>
         private MainWindow ActiveWorkbenchWindow()
         {
+            if (WindowManager.GetLastActiveWindow() is MainWindow active) return active;
             if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime dt) return null;
             foreach (var w in dt.Windows)
                 if (w is MainWindow m && m.IsActive) return m;
@@ -111,8 +113,30 @@ namespace codeLess.AvaloniaApp
                 // Finder/Dock launches get a minimal PATH: import the user's login-shell environment (nvm, pyenv, Homebrew...)
                 // in the background so tasks, language servers and debug adapters find the user's tools (VS Code parity).
                 UserShellEnvironment.StartResolve();
-                var mainWindow = new MainWindow(StartupWorkspacePath);
-                desktop.MainWindow = mainWindow;
+                
+                WindowManager.AttachDesktopLifetime(desktop);
+                var wm = WindowManager;
+
+                codeLess.Studio.ApplicationSession.OnMessageReceived = (msg, ack) => {
+                    Dispatcher.UIThread.Post(() => {
+                        codeLess.Studio.ApplicationSession.ProcessArgs(msg.Args, msg.Cwd, wm, ack);
+                    });
+                };
+
+                if (IsAutomationRun && !string.IsNullOrEmpty(StartupWorkspacePath))
+                {
+                    wm.CreateNewWindow(StartupWorkspacePath);
+                }
+                else
+                {
+                    codeLess.Studio.ApplicationSession.ProcessArgs(desktop.Args, Environment.CurrentDirectory, wm);
+                }
+                
+                var mainWindow = desktop.MainWindow as MainWindow;
+                if (mainWindow == null && desktop.Windows.Count > 0) {
+                    mainWindow = desktop.Windows[0] as MainWindow;
+                    desktop.MainWindow = mainWindow;
+                }
 
                 // macOS delivers "Open With", dock-icon drops and `open -a codeLess <path>` as Apple Events,
                 // not argv; they were silently ignored.
@@ -127,7 +151,21 @@ namespace codeLess.AvaloniaApp
                             {
                                 string path = item?.TryGetLocalPath();
                                 if (!string.IsNullOrEmpty(path) && !IsEchoedStartupArgument(path))
-                                    Dispatcher.UIThread.Post(() => mainWindow.OpenPathFromOs(path));
+                                {
+                                    Dispatcher.UIThread.Post(() => {
+                                        codeLess.Studio.ApplicationSession.ProcessArgs(new string[] { path }, Environment.CurrentDirectory, wm);
+                                    });
+                                }
+                            }
+                        }
+                        else if (e.Kind == ActivationKind.Background || e.Kind == ActivationKind.OpenUri || e is ActivatedEventArgs)
+                        {
+                            // Dock click when no windows are open
+                            if (!System.Linq.Enumerable.Any(System.Linq.Enumerable.OfType<MainWindow>(desktop.Windows)))
+                            {
+                                Dispatcher.UIThread.Post(() => {
+                                    wm.CreateNewWindow(null);
+                                });
                             }
                         }
                     };

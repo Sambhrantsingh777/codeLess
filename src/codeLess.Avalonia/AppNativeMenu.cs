@@ -48,6 +48,11 @@ namespace codeLess.AvaloniaApp
                 {
                     var sub = new NativeMenu();
                     Fill(sub, e.Children, window, quitWithoutWindow);
+                    if (e.Id == "window") {
+                        sub.Items.Add(new NativeMenuItemSeparator());
+                        // NativeMenuItem doesn't have an Opening event in Avalonia's NativeMenu.
+                        // On macOS, Avalonia automatically populates the Window menu with open windows.
+                    }
                     target.Add(new NativeMenuItem(e.Label) { Menu = sub });
                     continue;
                 }

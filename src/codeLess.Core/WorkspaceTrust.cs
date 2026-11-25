@@ -355,25 +355,49 @@ namespace codeLess.Studio
             string path = StorePath;
             try
             {
-                Dictionary<string, object> root = new Dictionary<string, object>();
-                root["enabled"] = enabled;
-                root["trusted"] = trusted.ToArray();
-                root["restricted"] = restricted.ToArray();
-                string json = new JavaScriptSerializer().Serialize(root);
                 string dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                string tmp = path + ".tmp";
-                File.WriteAllText(tmp, json, new UTF8Encoding(false));
-                if (File.Exists(path))
-                {
-                    try { File.Replace(tmp, path, null); }
-                    catch { File.Copy(tmp, path, true); try { File.Delete(tmp); } catch { } }
-                }
-                else File.Move(tmp, path);
-                loadedFrom = path;
-                try { loadedStamp = File.GetLastWriteTimeUtc(path); } catch { }
-                lastStatUtc = DateTime.UtcNow;
-                loaded = true;
+                CrossProcessFile.ReadModifyWrite(path, _ => {
+                    Dictionary<string, object> root = new Dictionary<string, object>();
+                    // merge with disk
+                    if (File.Exists(path)) {
+                        try {
+                            string content = File.ReadAllText(path);
+                            var disk = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(content);
+                            if (disk != null) {
+                                object tr;
+                                if (disk.TryGetValue("trusted", out tr)) {
+                                    var tra = tr as object[];
+                                    if (tra != null) {
+                                        foreach(var t in tra) {
+                                            var s = t as string;
+                                            if (s != null && !trusted.Contains(s)) trusted.Add(s);
+                                        }
+                                    }
+                                }
+                                object re;
+                                if (disk.TryGetValue("restricted", out re)) {
+                                    var rea = re as object[];
+                                    if (rea != null) {
+                                        foreach(var r in rea) {
+                                            var s = r as string;
+                                            if (s != null && !restricted.Contains(s)) restricted.Add(s);
+                                        }
+                                    }
+                                }
+                            }
+                        } catch { }
+                    }
+                    root["enabled"] = enabled;
+                    root["trusted"] = trusted.ToArray();
+                    root["restricted"] = restricted.ToArray();
+                    string json = new JavaScriptSerializer().Serialize(root);
+                    CrossProcessFile.AtomicWrite(path, json, false);
+                    loadedFrom = path;
+                    try { loadedStamp = File.GetLastWriteTimeUtc(path); } catch { }
+                    lastStatUtc = DateTime.UtcNow;
+                    loaded = true;
+                });
             }
             catch { }
         }

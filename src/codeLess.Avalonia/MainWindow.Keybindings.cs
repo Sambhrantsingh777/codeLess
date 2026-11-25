@@ -42,7 +42,8 @@ namespace codeLess.AvaloniaApp
         private void InitializeKeybindings()
         {
             DefaultCommands.Register();
-            keybindings = new KeybindingManager();
+            keybindings = new KeybindingManager(System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX));
+            KeybindingManager = keybindings;
 
             // Bind actions to commands
             foreach (var kvp in MenuCommands)
@@ -388,7 +389,7 @@ namespace codeLess.AvaloniaApp
             System.IO.FileSystemEventHandler handler = (s, e) =>
             {
                 if (windowClosed) return;
-                if (e != null && !(e.FullPath.EndsWith("settings.json") || e.FullPath.EndsWith(".vscode"))) return;
+                if (e != null && (e.FullPath.IndexOf(".vscode", StringComparison.OrdinalIgnoreCase) < 0 || !(e.FullPath.EndsWith("settings.json") || e.FullPath.EndsWith(".vscode")))) return;
                 if (workspaceSettingsTimer != null) { workspaceSettingsTimer.Dispose(); workspaceSettingsTimer = null; }
                 workspaceSettingsTimer = new System.Threading.Timer(_ =>
                 {

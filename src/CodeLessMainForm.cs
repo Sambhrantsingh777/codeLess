@@ -22,7 +22,7 @@ using System.Windows.Forms;
 
 namespace codeLess.Studio
 {
-    public partial class CodeLessMainForm : CodeLessChromelessForm
+    public partial class CodeLessMainForm : CodeLessChromelessForm, IWorkbenchWindow
     {
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -515,6 +515,33 @@ namespace codeLess.Studio
                 if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
                     e.Effect = DragDropEffects.Copy;
             };
+            IdeSettingsWatcher.Start();
+            Action<IdePersistentSettings> onSettingsChanged = null;
+            onSettingsChanged = (newSettings) =>
+            {
+                if (this.IsDisposed || !this.IsHandleCreated) return;
+                try
+                {
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        if (this.IsDisposed) return;
+                        this.settings = newSettings;
+                        EditorNicetyOptions.ApplyFrom(this.settings);
+                        this.activeTheme = StudioTheme.ResolveTheme(this.themes, this.settings.ActiveThemeId);
+                        this.ApplySettingsToEditors();
+                        this.ApplyThemeToWorkbench(this.activeTheme);
+                    }));
+                }
+                catch { }
+            };
+            IdeSettingsWatcher.OnSettingsFileChanged += onSettingsChanged;
+            IdePersistentSettings.OnSettingsSavedInProcess += onSettingsChanged;
+            this.FormClosed += (s, e) =>
+            {
+                IdeSettingsWatcher.OnSettingsFileChanged -= onSettingsChanged;
+                IdePersistentSettings.OnSettingsSavedInProcess -= onSettingsChanged;
+            };
+
             this.DragDrop += (s, e) =>
             {
                 try
@@ -8930,6 +8957,7 @@ if __name__ == '__main__':
                 closedTabPaths.Push(captured.FilePath);
 
             openTabs.Remove(captured);
+            if (captured.OnClosed != null) { try { captured.OnClosed(); } catch { } }
             bool anySameFileRemaining = openTabs.Any(t =>
                 (!string.IsNullOrEmpty(captured.FilePath) && string.Equals(t.FilePath, captured.FilePath, StringComparison.OrdinalIgnoreCase)) ||
                 (!string.IsNullOrEmpty(captured.FileName) && string.Equals(t.FileName, captured.FileName, StringComparison.OrdinalIgnoreCase)));
@@ -9046,8 +9074,16 @@ if __name__ == '__main__':
 
         private void PersistOpenTabPaths()
         {
-            settings.OpenTabPaths = openTabs.Where(t => !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath).ToList();
+            List<string> paths = openTabs.Where(t => !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath).ToList();
+            settings.OpenTabPaths = paths;
             settings.Save();
+            if (!string.IsNullOrEmpty(workspaceRoot))
+            {
+                WorkspaceSessionState state = new WorkspaceSessionState();
+                state.OpenTabPaths = paths;
+                state.ActiveTabPath = (activeTab != null && !activeTab.IsUntitled) ? activeTab.FilePath : null;
+                WorkspaceSessionStore.Save(workspaceRoot, state);
+            }
         }
 
         private static void ResolveTabBadge(string fileName, StudioTheme theme, out string badge, out Color color)
@@ -12280,9 +12316,9 @@ if __name__ == '__main__':
         }
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        private static void Run(string[] args)
+                private static void Run(string[] args)
         {
-            if (CodeLessMainForm.TryRunSmokeTest(args)) return; // CI: codeLess.exe --smoke-test report.txt [workspace]
+            if (CodeLessMainForm.TryRunSmokeTest(args)) return;
             try { CodeLessMainForm.SetCurrentProcessExplicitAppUserModelID("Savatarr.codeLess"); } catch { }
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (s, e) => LogUnhandledException("UIThread", e.Exception);
@@ -12294,8 +12330,7 @@ if __name__ == '__main__':
             };
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            string initDir = (args != null && args.Length > 0) ? args[0] : "";
-            Application.Run(new CodeLessMainForm(initDir));
+            Application.Run(new CodeLessMultiWindowAppContext(args));
         }
     }
 }
