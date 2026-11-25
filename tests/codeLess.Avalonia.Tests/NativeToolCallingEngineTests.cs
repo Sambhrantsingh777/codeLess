@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
 using Xunit;
 using codeLess.Studio;
@@ -8,9 +10,27 @@ using System.Web.Script.Serialization;
 
 namespace codeLess.Avalonia.Tests
 {
-    public class NativeToolCallingEngineTests
+    public class NativeToolCallingEngineTests : IDisposable
     {
         private readonly JavaScriptSerializer _js = new JavaScriptSerializer();
+        private readonly string _testDir;
+
+        public NativeToolCallingEngineTests()
+        {
+            _testDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "m7c_engine_" + Guid.NewGuid().ToString("N")));
+            Directory.CreateDirectory(_testDir);
+            TestTrust.Trust(_testDir);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_testDir))
+                    Directory.Delete(_testDir, true);
+            }
+            catch { }
+        }
 
         [Fact]
         public async Task Engine_Native_OpenAi_ExecutesAndMaintainsHistory()
@@ -20,6 +40,13 @@ namespace codeLess.Avalonia.Tests
             harness.EnableSseStreaming = true;
             harness.Vendors.Add(new ByokVendor { Id = "openai", ApiKey = "fake_key", SelectedModel = "gpt-4o", BaseUrl = "http://127.0.0.1:8080" });
             
+            var streamedChunks = new List<string>();
+            harness.OnStreamingChunk += chunk => streamedChunks.Add(chunk);
+
+            string fakeFile = Path.Combine(_testDir, "fake.txt");
+            File.WriteAllText(fakeFile, "file content");
+            string escapedPath = fakeFile.Replace("\\", "\\\\");
+
             var payloads = new List<string>();
             harness.NativeTransportOverride = (payload, vendor) =>
             {
@@ -29,7 +56,7 @@ namespace codeLess.Avalonia.Tests
                     return new string[]
                     {
                         "data: {\"choices\":[{\"delta\":{\"content\":\"thinking\"}}]}",
-                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/fake.txt\\\"}\"}}]}}]}",
+                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"" + escapedPath + "\\\"}\"}}]}}]}",
                         "data: [DONE]"
                     };
                 }
@@ -40,17 +67,18 @@ namespace codeLess.Avalonia.Tests
                 };
             };
 
-            System.IO.File.WriteAllText("/tmp/fake.txt", "file content");
-            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, "/tmp", null, null, "", new Dictionary<string, string>());
-            
-            if (payloads.Count > 1) {
-                System.IO.File.WriteAllText("/tmp/payload1_debug.txt", payloads[1]);
-            }
+            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, _testDir, null, null, "", new Dictionary<string, string>());
 
             Assert.Equal(2, payloads.Count);
+            Assert.Equal("all done", res.AssistantReply);
+            Assert.Contains("thinking", streamedChunks);
+            Assert.Contains("all done", streamedChunks);
             
             var p1 = _js.DeserializeObject(payloads[0]) as Dictionary<string, object>;
             Assert.True(p1.ContainsKey("tools"));
+            var toolsArr = p1["tools"] as System.Collections.ArrayList;
+            Assert.NotNull(toolsArr);
+            Assert.Equal(LlmHarnessAndAgentEngine.Tools.Length, toolsArr.Count);
             Assert.Equal("auto", p1["tool_choice"]);
             
             var p2 = _js.DeserializeObject(payloads[1]) as Dictionary<string, object>;
@@ -75,6 +103,10 @@ namespace codeLess.Avalonia.Tests
             harness.EnableSseStreaming = true;
             harness.Vendors.Add(new ByokVendor { Id = "anthropic", ApiKey = "fake_key", SelectedModel = "claude-3-sonnet", BaseUrl = "http://127.0.0.1:8080" });
             
+            string fakeFile = Path.Combine(_testDir, "fake.txt");
+            File.WriteAllText(fakeFile, "file content");
+            string escapedPath = fakeFile.Replace("\\", "\\\\");
+
             var payloads = new List<string>();
             harness.NativeTransportOverride = (payload, vendor) =>
             {
@@ -84,7 +116,7 @@ namespace codeLess.Avalonia.Tests
                     return new string[]
                     {
                         "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"read_file\"}}",
-                        "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"/tmp/fake.txt\\\"}\"}}",
+                        "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"" + escapedPath + "\\\"}\"}}",
                         "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}"
                     };
                 }
@@ -95,14 +127,10 @@ namespace codeLess.Avalonia.Tests
                 };
             };
 
-            System.IO.File.WriteAllText("/tmp/fake.txt", "file content");
-            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, "/tmp", null, null, "", new Dictionary<string, string>());
-            
-            if (payloads.Count > 1) {
-                System.IO.File.WriteAllText("/tmp/payload1_debug.txt", payloads[1]);
-            }
+            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, _testDir, null, null, "", new Dictionary<string, string>());
 
             Assert.Equal(2, payloads.Count);
+            Assert.Equal("done", res.AssistantReply);
             
             var p1 = _js.DeserializeObject(payloads[0]) as Dictionary<string, object>;
             Assert.True(p1.ContainsKey("tools"));
@@ -129,6 +157,9 @@ namespace codeLess.Avalonia.Tests
             harness.EnableSseStreaming = true;
             harness.Vendors.Add(new ByokVendor { Id = "openai", ApiKey = "fake_key", SelectedModel = "gpt-4o", BaseUrl = "http://127.0.0.1:8080" });
             
+            var statusLines = new List<string>();
+            harness.OnAgentFeedStatus = s => statusLines.Add(s);
+
             var payloads = new List<string>();
             harness.NativeTransportOverride = (payload, vendor) =>
             {
@@ -136,8 +167,8 @@ namespace codeLess.Avalonia.Tests
                 var p = _js.DeserializeObject(payload) as Dictionary<string, object>;
                 if (p.ContainsKey("tools"))
                 {
-                    // To simulate the fallback gracefully, we throw NATIVE_FALLBACK
-                    throw new Exception("NATIVE_FALLBACK");
+                    throw new WebException("Bad Request", null, WebExceptionStatus.ProtocolError,
+                        new FakeWebResponse(400, "{\"error\":{\"message\":\"This model does not support tools or function calling\"}}"));
                 }
                 return new string[]
                 {
@@ -146,19 +177,23 @@ namespace codeLess.Avalonia.Tests
                 };
             };
 
-            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, "/tmp", null, null, "", new Dictionary<string, string>());
-            
-            if (payloads.Count > 1) {
-                System.IO.File.WriteAllText("/tmp/payload1_debug.txt", payloads[1]);
-            }
+            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, _testDir, null, null, "", new Dictionary<string, string>());
 
             Assert.Equal(2, payloads.Count);
+            Assert.Single(statusLines);
+            Assert.Equal("all done text mode", res.AssistantReply);
             
             var p1 = _js.DeserializeObject(payloads[0]) as Dictionary<string, object>;
             Assert.True(p1.ContainsKey("tools"), "First request should have tools");
             
             var p2 = _js.DeserializeObject(payloads[1]) as Dictionary<string, object>;
             Assert.False(p2.ContainsKey("tools"), "Second request (retry) should not have tools");
+
+            // Next turn on the same engine with the same vendor+model must also not send tools
+            var res2 = await harness.RunAutonomousAgentLoopAsync("agent", "second turn", harness.Vendors.Last(), "auto", null, _testDir, null, null, "", new Dictionary<string, string>());
+            Assert.Equal(3, payloads.Count);
+            var p3 = _js.DeserializeObject(payloads[2]) as Dictionary<string, object>;
+            Assert.False(p3.ContainsKey("tools"), "Subsequent turn on the same vendor+model should remain text-only");
         }
 
         [Fact]
@@ -179,7 +214,7 @@ namespace codeLess.Avalonia.Tests
                 };
             };
 
-            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, "/tmp", null, null, "", new Dictionary<string, string>());
+            var res = await harness.RunAutonomousAgentLoopAsync("agent", "do it", harness.Vendors.Last(), "auto", null, _testDir, null, null, "", new Dictionary<string, string>());
             
             Assert.Single(payloads);
             var p1 = _js.DeserializeObject(payloads[0]) as Dictionary<string, object>;
@@ -194,6 +229,7 @@ namespace codeLess.Avalonia.Tests
             harness.EnableSseStreaming = true;
             harness.Vendors.Add(new ByokVendor { Id = "openai", ApiKey = "fake_key", SelectedModel = "gpt-4o", BaseUrl = "http://127.0.0.1:8080" });
             
+            string targetPath = Path.Combine(_testDir, "plan_target.txt").Replace("\\", "\\\\");
             var payloads = new List<string>();
             harness.NativeTransportOverride = (payload, vendor) =>
             {
@@ -202,7 +238,7 @@ namespace codeLess.Avalonia.Tests
                 {
                     return new string[]
                     {
-                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/fake.txt\\\",\\\"content\\\":\\\"plan\\\"}\"}}]}}]}",
+                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"" + targetPath + "\\\",\\\"content\\\":\\\"plan\\\"}\"}}]}}]}",
                         "data: [DONE]"
                     };
                 }
@@ -213,7 +249,7 @@ namespace codeLess.Avalonia.Tests
                 };
             };
 
-            var res = await harness.RunAutonomousAgentLoopAsync("plan", "do it", harness.Vendors.Last(), "auto", null, "/tmp", null, null, "", new Dictionary<string, string>());
+            var res = await harness.RunAutonomousAgentLoopAsync("plan", "do it", harness.Vendors.Last(), "auto", null, _testDir, null, null, "", new Dictionary<string, string>());
             
             Assert.Equal(2, payloads.Count);
             

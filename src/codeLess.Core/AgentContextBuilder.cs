@@ -105,6 +105,12 @@ namespace codeLess.Studio
             return sb.ToString();
         }
 
+        private static readonly HashSet<string> DefaultIgnoredDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".git", "node_modules", "bin", "obj", "dist", "build", "target", "vendor",
+            ".venv", "venv", "__pycache__", ".idea", ".vs", "coverage", ".cache", "tmp", "codeless-work"
+        };
+
         private static IEnumerable<string> WalkDirectory(string root)
         {
             var stack = new Stack<string>();
@@ -119,7 +125,15 @@ namespace codeLess.Studio
                 } catch { continue; }
 
                 if (files != null) foreach (var f in files) yield return f;
-                if (dirs != null) foreach (var d in dirs) stack.Push(d);
+                if (dirs != null)
+                {
+                    foreach (var d in dirs)
+                    {
+                        string name = Path.GetFileName(d);
+                        if (!string.IsNullOrEmpty(name) && DefaultIgnoredDirs.Contains(name)) continue;
+                        stack.Push(d);
+                    }
+                }
             }
         }
 

@@ -89,6 +89,24 @@ namespace codeLess.Studio
         public string CompactRepoMap = "";
         public bool LocalOllamaDetected = false;
         private HashSet<string> NativeToolsUnsupportedVendors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static string GetVendorModelKey(ByokVendor vendor)
+        {
+            if (vendor == null) return "";
+            return (vendor.Id ?? "") + ":" + (vendor.SelectedModel ?? "");
+        }
+
+        public bool IsNativeToolCallingEnabledFor(ByokVendor vendor)
+        {
+            if (_settings == null || !_settings.NativeToolCalling) return false;
+            if (vendor != null)
+            {
+                string key = GetVendorModelKey(vendor);
+                if (NativeToolsUnsupportedVendors.Contains(key) || NativeToolsUnsupportedVendors.Contains(vendor.Id ?? ""))
+                    return false;
+            }
+            return true;
+        }
         public string ActiveGitBranch = "";
         public bool EnableSseStreaming = true;
         public volatile bool CancelStreamingRequested = false;
@@ -2284,7 +2302,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                 bool useNative = false;
                 List<object> nativeMessages = new List<object>();
-                if (conversationMessages != null && conversationMessages.Count > 0 && conversationMessages[0].ContainsKey("__json"))
+                if (IsNativeToolCallingEnabledFor(vendor) && conversationMessages != null && conversationMessages.Any(m => m.ContainsKey("__json")))
                 {
                     useNative = true;
                     foreach(var m in conversationMessages) {
@@ -2352,60 +2370,86 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                 string payload = ser.Serialize(reqObj);
 
-                if (NativeTransportOverride != null)
-                {
-                    var lines = NativeTransportOverride(payload, vendor);
-                    
-                    var sb = new StringBuilder();
-                    codeLess.Studio.OpenAiToolCallAccumulator oaiAcc = null;
-                    codeLess.Studio.AnthropicToolCallAccumulator anthAcc = null;
-                    if (vendor.Id == "anthropic") anthAcc = new codeLess.Studio.AnthropicToolCallAccumulator();
-                    else oaiAcc = new codeLess.Studio.OpenAiToolCallAccumulator();
-                    
-                    foreach (var l in lines)
-                    {
-                        if (partOfTurn && CancelStreamingRequested) throw new OperationCanceledException();
-                        
-                        if (l.StartsWith("data:"))
-                        {
-                            string data = l.Substring(5).Trim();
-                            if (data == "[DONE]") continue;
-                            if (string.IsNullOrEmpty(data)) continue;
-                            
-                            var chunk = ser.DeserializeObject(data) as Dictionary<string, object>;
-                            if (vendor.Id == "anthropic") anthAcc.Accumulate(chunk);
-                            else oaiAcc.Accumulate(chunk);
-                        }
-                    }
-                    
-                    if (vendor.Id == "anthropic")
-                    {
-                        if (!useNative) return anthAcc.Text;
-                        var resMsg = new Dictionary<string, object>();
-                        resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseAnthropicHistory(anthAcc.Text, anthAcc.Calls, null)[0]);
-                        resMsg["__calls"] = ser.Serialize(anthAcc.Calls);
-                        resMsg["content"] = anthAcc.Text;
-                        return ser.Serialize(resMsg);
-                    }
-                    else
-                    {
-                        if (!useNative) return oaiAcc.Text;
-                        var resMsg = new Dictionary<string, object>();
-                        resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseOpenAiHistory(oaiAcc.Text, oaiAcc.Calls, null)[0]);
-                        resMsg["__calls"] = ser.Serialize(oaiAcc.Calls);
-                        resMsg["content"] = oaiAcc.Text;
-                        return ser.Serialize(resMsg);
-                    }
-                }
-
-                byte[] bytes = Encoding.UTF8.GetBytes(payload);
-                using (Stream s = ledger.WrapRequestStream(req.GetRequestStream()))
-                {
-                    s.Write(bytes, 0, bytes.Length);
-                }
-
                 try
                 {
+                    if (NativeTransportOverride != null)
+                    {
+                        var lines = NativeTransportOverride(payload, vendor);
+                        
+                        codeLess.Studio.OpenAiToolCallAccumulator oaiAcc = null;
+                        codeLess.Studio.AnthropicToolCallAccumulator anthAcc = null;
+                        if (vendor.Id == "anthropic") anthAcc = new codeLess.Studio.AnthropicToolCallAccumulator();
+                        else oaiAcc = new codeLess.Studio.OpenAiToolCallAccumulator();
+                        
+                        foreach (var l in lines)
+                        {
+                            if (partOfTurn && CancelStreamingRequested) throw new OperationCanceledException();
+                            
+                            if (l.StartsWith("data:"))
+                            {
+                                string data = l.Substring(5).Trim();
+                                if (data == "[DONE]") continue;
+                                if (string.IsNullOrEmpty(data)) continue;
+                                
+                                var chunk = ser.DeserializeObject(data) as Dictionary<string, object>;
+                                if (vendor.Id == "anthropic")
+                                {
+                                    int prevLen = anthAcc.Text.Length;
+                                    anthAcc.Accumulate(chunk);
+                                    if (anthAcc.Text.Length > prevLen)
+                                    {
+                                        string deltaChunk = anthAcc.Text.Substring(prevLen);
+                                        LastStreamingChunkCount++;
+                                        if (partOfTurn && OnStreamingChunk != null)
+                                        {
+                                            try { OnStreamingChunk(deltaChunk); } catch { }
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    int prevLen = oaiAcc.Text.Length;
+                                    oaiAcc.Accumulate(chunk);
+                                    if (oaiAcc.Text.Length > prevLen)
+                                    {
+                                        string deltaChunk = oaiAcc.Text.Substring(prevLen);
+                                        LastStreamingChunkCount++;
+                                        if (partOfTurn && OnStreamingChunk != null)
+                                        {
+                                            try { OnStreamingChunk(deltaChunk); } catch { }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        ledger.Status = 200;
+                        if (vendor.Id == "anthropic")
+                        {
+                            if (!useNative) return anthAcc.Text;
+                            var resMsg = new Dictionary<string, object>();
+                            resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseAnthropicHistory(anthAcc.Text, anthAcc.Calls, null)[0]);
+                            resMsg["__calls"] = ser.Serialize(anthAcc.Calls);
+                            resMsg["content"] = anthAcc.Text;
+                            return ser.Serialize(resMsg);
+                        }
+                        else
+                        {
+                            if (!useNative) return oaiAcc.Text;
+                            var resMsg = new Dictionary<string, object>();
+                            resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseOpenAiHistory(oaiAcc.Text, oaiAcc.Calls, null)[0]);
+                            resMsg["__calls"] = ser.Serialize(oaiAcc.Calls);
+                            resMsg["content"] = oaiAcc.Text;
+                            return ser.Serialize(resMsg);
+                        }
+                    }
+
+                    byte[] bytes = Encoding.UTF8.GetBytes(payload);
+                    using (Stream s = ledger.WrapRequestStream(req.GetRequestStream()))
+                    {
+                        s.Write(bytes, 0, bytes.Length);
+                    }
+
                     using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
                     using (StreamReader sr = new StreamReader(ledger.WrapResponseStream(res.GetResponseStream()), Encoding.UTF8))
                     {
@@ -2421,6 +2465,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         StringBuilder streamedText = new StringBuilder();
                         bool sawSseDataLine = false;
                         string streamErrorMessage = null;
+                        codeLess.Studio.OpenAiToolCallAccumulator httpOaiAcc = vendor.Id == "anthropic" ? null : new codeLess.Studio.OpenAiToolCallAccumulator();
+                        codeLess.Studio.AnthropicToolCallAccumulator httpAnthAcc = vendor.Id == "anthropic" ? new codeLess.Studio.AnthropicToolCallAccumulator() : null;
 
                         string line;
                         while ((line = sr.ReadLine()) != null)
@@ -2445,6 +2491,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                     }
                                     else if (evt != null)
                                     {
+                                        if (httpAnthAcc != null) httpAnthAcc.Accumulate(evt);
+                                        if (httpOaiAcc != null) httpOaiAcc.Accumulate(evt);
+
                                         string deltaChunk = null;
                                         if (evt.ContainsKey("choices") && evt["choices"] is ArrayList)
                                         {
@@ -2498,6 +2547,25 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                 : "Error: " + vendor.Name + " returned an error: " + streamErrorMessage;
                         }
                         if (sawSseDataLine && string.IsNullOrEmpty(ledger.Note)) ledger.Note = "streamed";
+                        if (sawSseDataLine && useNative)
+                        {
+                            if (vendor.Id == "anthropic" && httpAnthAcc != null && (httpAnthAcc.Calls.Count > 0 || httpAnthAcc.Text.Length > 0))
+                            {
+                                var resMsg = new Dictionary<string, object>();
+                                resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseAnthropicHistory(httpAnthAcc.Text, httpAnthAcc.Calls, null)[0]);
+                                resMsg["__calls"] = ser.Serialize(httpAnthAcc.Calls);
+                                resMsg["content"] = httpAnthAcc.Text;
+                                return ser.Serialize(resMsg);
+                            }
+                            if (vendor.Id != "anthropic" && httpOaiAcc != null && (httpOaiAcc.Calls.Count > 0 || httpOaiAcc.Text.Length > 0))
+                            {
+                                var resMsg = new Dictionary<string, object>();
+                                resMsg["__json"] = ser.Serialize(NativeToolCalling.SerialiseOpenAiHistory(httpOaiAcc.Text, httpOaiAcc.Calls, null)[0]);
+                                resMsg["__calls"] = ser.Serialize(httpOaiAcc.Calls);
+                                resMsg["content"] = httpOaiAcc.Text;
+                                return ser.Serialize(resMsg);
+                            }
+                        }
                         if (sawSseDataLine && streamedText.Length > 0)
                             return streamedText.ToString();
                         if (sawSseDataLine)
@@ -2538,34 +2606,56 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         return rawJson;
                     }
                 }
-                                catch (WebException wex)
+                catch (WebException wex)
                 {
                     if (wex.Response != null)
                     {
                         HttpWebResponse errRes = wex.Response as HttpWebResponse;
-                        string statusPrefix = errRes != null ? string.Format("HTTP {0} ({1}): ", (int)errRes.StatusCode, errRes.StatusDescription) : "";
-                        if (errRes != null) ledger.Status = (int)errRes.StatusCode;
-                        using (StreamReader esr = new StreamReader(ledger.WrapResponseStream(wex.Response.GetResponseStream())))
+                        int statusCode = -1;
+                        if (errRes != null) statusCode = (int)errRes.StatusCode;
+                        else
                         {
-                            string errBody = esr.ReadToEnd();
-                            if (useNative && errRes != null && (int)errRes.StatusCode == 400 && 
-                                (errBody.Contains("tool") || errBody.Contains("function") || errBody.Contains("does not support")))
-                            {
-                                NativeToolsUnsupportedVendors.Add(vendor.Id);
-                                if (OnAgentFeedStatus != null) OnAgentFeedStatus("Vendor rejected tools. Falling back to text mode...");
-                                throw new Exception("NATIVE_FALLBACK");
-                            }
-                            throw new Exception("Vendor HTTP Error " + statusPrefix + errBody, wex);
+                            var statusProp = wex.Response.GetType().GetProperty("StatusCode");
+                            if (statusProp != null) statusCode = (int)statusProp.GetValue(wex.Response, null);
                         }
+                        string statusPrefix = errRes != null ? string.Format("HTTP {0} ({1}): ", (int)errRes.StatusCode, errRes.StatusDescription) : (statusCode > 0 ? string.Format("HTTP {0}: ", statusCode) : "");
+                        if (statusCode > 0) ledger.Status = statusCode;
+                        string errBody = "";
+                        Stream respStream = wex.Response.GetResponseStream();
+                        if (respStream != null)
+                        {
+                            using (StreamReader esr = new StreamReader(ledger.WrapResponseStream(respStream)))
+                            {
+                                errBody = esr.ReadToEnd();
+                            }
+                        }
+                        else
+                        {
+                            errBody = wex.Message ?? "";
+                        }
+                        if (useNative && statusCode == 400 &&
+                            (errBody.IndexOf("tool", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             errBody.IndexOf("function", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             errBody.IndexOf("does not support", StringComparison.OrdinalIgnoreCase) >= 0))
+                        {
+                            NativeToolsUnsupportedVendors.Add(GetVendorModelKey(vendor));
+                            if (OnAgentFeedStatus != null) OnAgentFeedStatus("Vendor rejected tools. Falling back to text mode...");
+                            throw new Exception("NATIVE_FALLBACK");
+                        }
+                        throw new Exception("Vendor HTTP Error " + statusPrefix + errBody, wex);
                     }
                     ledger.Fail(wex);
                     throw new Exception("Network/Endpoint Error (" + vendor.Name + "): " + wex.Message, wex);
                 }
                 }
-                                catch (Exception ex)
+                catch (Exception ex)
                 {
                     if (ledger.Status <= 0) ledger.Fail(ex);
-                    if (ex.Message == "NATIVE_FALLBACK") throw;
+                    if (ex.Message == "NATIVE_FALLBACK")
+                    {
+                        NativeToolsUnsupportedVendors.Add(GetVendorModelKey(vendor));
+                        throw;
+                    }
                     throw;
                 }
                 finally
@@ -2577,8 +2667,20 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 } catch (Exception ex) {
                     if (ex.Message == "NATIVE_FALLBACK") {
                         retryTextMode = true;
-                        if (conversationMessages != null && conversationMessages.Count > 0 && conversationMessages[0].ContainsKey("__json")) {
+                        if (conversationMessages != null) {
                             foreach (var m in conversationMessages) m.Remove("__json");
+                        }
+                        if (!string.IsNullOrEmpty(systemPrompt) && systemPrompt.Contains("You can invoke native workspace tools using the provided tool definitions."))
+                        {
+                            var sb = new StringBuilder();
+                            sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
+                            foreach (var t in Tools)
+                            {
+                                sb.AppendLine("<tool_call>");
+                                sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
+                                sb.AppendLine("</tool_call>");
+                            }
+                            systemPrompt = systemPrompt.Replace("You can invoke native workspace tools using the provided tool definitions.", sb.ToString().TrimEnd());
                         }
                     } else throw;
                 }
@@ -2839,11 +2941,11 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, _settings != null && _settings.NativeToolCalling && (activeVendor == null || !NativeToolsUnsupportedVendors.Contains(activeVendor.Id)));
+            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, IsNativeToolCallingEnabledFor(activeVendor));
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
-            bool initialNative = _settings != null && _settings.NativeToolCalling && (activeVendor == null || !NativeToolsUnsupportedVendors.Contains(activeVendor.Id));
+            bool initialNative = IsNativeToolCallingEnabledFor(activeVendor);
             var initialMsg = new Dictionary<string, string> { { "role", "user" }, { "content", fullUserPayload } };
             if (initialNative)
             {
@@ -2916,16 +3018,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp).ConfigureAwait(false);
                     finalReply = llmOutput;
 
-                    // Extract <think> or <thinking> block if present
-                    Match thinkMatch = Regex.Match(llmOutput, @"<(?:think|thinking)>([\s\S]*?)</(?:think|thinking)>", RegexOptions.IgnoreCase);
-                    if (thinkMatch.Success)
-                    {
-                        result.ThinkingProcess = thinkMatch.Groups[1].Value.Trim();
-                    }
-
-                                        bool nativeMode = _settings != null && _settings.NativeToolCalling;
-                    if (nativeMode && activeVendor != null && NativeToolsUnsupportedVendors.Contains(activeVendor.Id)) nativeMode = false;
-                    
+                    bool nativeMode = IsNativeToolCallingEnabledFor(activeVendor);
                     List<Dictionary<string, object>> toolCalls = new List<Dictionary<string, object>>();
                     bool turnUseNative = nativeMode;
                     
@@ -2940,6 +3033,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             {
                                 assistantJson = dict["__json"] as string;
                                 if (dict.ContainsKey("content") && dict["content"] != null) assistantContent = dict["content"].ToString();
+                                else assistantContent = "";
+                                finalReply = assistantContent;
                                 
                                 if (dict.ContainsKey("__calls") && dict["__calls"] != null)
                                 {
@@ -2959,6 +3054,13 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                 }
                             }
                         } catch { }
+                    }
+
+                    // Extract <think> or <thinking> block if present
+                    Match thinkMatch = Regex.Match(assistantContent ?? "", @"<(?:think|thinking)>([\s\S]*?)</(?:think|thinking)>", RegexOptions.IgnoreCase);
+                    if (thinkMatch.Success)
+                    {
+                        result.ThinkingProcess = thinkMatch.Groups[1].Value.Trim();
                     }
 
                     if (toolCalls.Count == 0) toolCalls = ParseToolCalls(assistantContent);
@@ -3020,7 +3122,16 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             bool approved = OnRequestToolApproval != null && OnRequestToolApproval("doom_loop", "");
                             if (!approved)
                             {
-                                toolOutputsSb.AppendLine("<tool_error>\nDoom loop detected. You have repeatedly called this tool with the identical arguments and received the identical failure. You MUST stop using this exact tool/arguments combination and try a different approach, read a different file, or think about why it is failing.\n</tool_error>");
+                                string doomMsg = "Doom loop detected. You have repeatedly called this tool with the identical arguments and received the identical failure. You MUST stop using this exact tool/arguments combination and try a different approach, read a different file, or think about why it is failing.";
+                                toolOutputsSb.AppendLine("<tool_error>\n" + doomMsg + "\n</tool_error>");
+                                if (turnUseNative && tc.ContainsKey("_native_id"))
+                                {
+                                    var ntr = new codeLess.Studio.NativeToolResult();
+                                    ntr.CallId = tc["_native_id"].ToString();
+                                    ntr.Content = doomMsg;
+                                    ntr.IsError = true;
+                                    nativeResults.Add(ntr);
+                                }
                                 doomLoopHistory.Clear();
                                 continue;
                             }
@@ -3280,7 +3391,16 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 {
                     msgText += ". Did you mean '" + closestMatch + "'?";
                 }
+                if (args != null && args.ContainsKey("error") && args["error"] != null)
+                {
+                    msgText += "\n" + args["error"].ToString();
+                }
                 return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = msgText };
+            }
+
+            if (args != null && args.Count == 1 && args.ContainsKey("error") && Convert.ToString(args["error"]) == "Malformed JSON arguments")
+            {
+                return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Malformed JSON arguments", Output = "Malformed JSON arguments" };
             }
 
             string argsJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(args);

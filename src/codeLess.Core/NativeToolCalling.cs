@@ -22,6 +22,8 @@ namespace codeLess.Studio
         
         public Dictionary<string, object> GetArguments()
         {
+            if (string.IsNullOrWhiteSpace(ArgumentsJson))
+                return new Dictionary<string, object>();
             try {
                 var obj = new JavaScriptSerializer().DeserializeObject(ArgumentsJson);
                 if (obj is Dictionary<string, object>) return (Dictionary<string, object>)obj;

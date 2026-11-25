@@ -111,7 +111,10 @@ namespace codeLess.Avalonia.Tests
             
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"read_file\"}}"));
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\": \\\"\"}}"));
-            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"file.txt\\\"\"}}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"fi\"}}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"le\"}}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\".t\"}}"));
+            acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"xt\\\"\"}}"));
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"}\"}}"));
             
             acc.Accumulate((Dictionary<string, object>)_js.DeserializeObject("{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}"));
@@ -176,6 +179,13 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal("call_1", trBlock["tool_use_id"]);
             Assert.Equal("file data", trBlock["content"]);
             Assert.False((bool)trBlock["is_error"]);
+
+            var errResults = new List<NativeToolResult> { new NativeToolResult { CallId = "call_1", Content = "boom", IsError = true } };
+            var anthErrHistory = NativeToolCalling.SerialiseAnthropicHistory("text", calls, errResults);
+            var usrErrAnth = (Dictionary<string, object>)anthErrHistory[1];
+            var trErrBlock = (Dictionary<string, object>)((List<object>)usrErrAnth["content"])[0];
+            Assert.Equal("boom", trErrBlock["content"]);
+            Assert.True((bool)trErrBlock["is_error"]);
         }
     }
 }

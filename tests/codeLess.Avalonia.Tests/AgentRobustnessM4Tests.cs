@@ -149,29 +149,50 @@ namespace codeLess.Avalonia.Tests
         }
     }
 
-    public class DiagnosticsProviderM7bTests
+    public class DiagnosticsProviderM7bTests : IDisposable
     {
+        private readonly string _testDir;
+
+        public DiagnosticsProviderM7bTests()
+        {
+            _testDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "m7b_diag_" + Guid.NewGuid().ToString("N")));
+            Directory.CreateDirectory(_testDir);
+            TestTrust.Trust(_testDir);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_testDir))
+                    Directory.Delete(_testDir, true);
+            }
+            catch { }
+        }
+
         [Fact]
         public async Task Diagnostics_NullProvider_IsFastAndAddsNoBlock()
         {
             var harness = new LlmHarnessAndAgentEngine(new IdePersistentSettings { RequireAgentToolApproval = false });
             harness.MaxAgentIterations = 2;
             harness.DiagnosticsProvider = null;
+            string fastFile = Path.Combine(_testDir, "test_fast.txt").Replace("\\", "/");
+            string otherFile = Path.Combine(_testDir, "other.cs");
             
             harness.OnRequestToolApproval = (tool, args) => true;
             int turns = 0;
             harness.CustomModelResponder = (sys, msgs) =>
             {
                 turns++;
-                if (turns == 1) return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"/tmp/test_fast.txt\", \"content\": \"code\"}}</tool_call>");
+                if (turns == 1) return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"" + fastFile + "\", \"content\": \"code\"}}</tool_call>");
                 return Task.FromResult("Done");
             };
             
             var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var buf = new EditorTabBuffer { FilePath = "/tmp/other.cs" };
+            var buf = new EditorTabBuffer { FilePath = otherFile };
             
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, _testDir, new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             sw.Stop();
             
             Assert.True(sw.ElapsedMilliseconds < 1000, "Turn should be fast without provider");
@@ -182,8 +203,9 @@ namespace codeLess.Avalonia.Tests
         public async Task LspDiagnosticsProvider_ContentMismatch_ReturnsNull()
         {
             var p = new codeLess.AvaloniaApp.LspDiagnosticsProvider();
-            System.IO.File.WriteAllText("/tmp/test_mismatch.txt", "disk_code");
-            var res = await p.GetDiagnosticsAsync("/tmp/test_mismatch.txt", "staged_code", 100);
+            string mismatchFile = Path.Combine(_testDir, "test_mismatch.txt");
+            System.IO.File.WriteAllText(mismatchFile, "disk_code");
+            var res = await p.GetDiagnosticsAsync(mismatchFile, "staged_code", 100);
             Assert.Null(res);
         }
 
@@ -191,16 +213,17 @@ namespace codeLess.Avalonia.Tests
         public async Task LspDiagnosticsProvider_ContentMatch_ReturnsErrors()
         {
             var p = new codeLess.AvaloniaApp.LspDiagnosticsProvider();
-            System.IO.File.WriteAllText("/tmp/test_match.txt", "disk_code");
+            string matchFile = Path.Combine(_testDir, "test_match.txt");
+            System.IO.File.WriteAllText(matchFile, "disk_code");
             
             try {
-                LspDiagnosticsStore.Set("/tmp/test_match.txt", new List<DiagnosticItem> { new DiagnosticItem { Severity = "Error", Line = 1, Message = "Test" } });
-                var res = await p.GetDiagnosticsAsync("/tmp/test_match.txt", "disk_code", 100);
+                LspDiagnosticsStore.Set(matchFile, new List<DiagnosticItem> { new DiagnosticItem { Severity = "Error", Line = 1, Message = "Test" } });
+                var res = await p.GetDiagnosticsAsync(matchFile, "disk_code", 100);
                 Assert.NotNull(res);
                 Assert.Single(res);
                 Assert.Equal("Test", res[0].Message);
             } finally {
-                LspDiagnosticsStore.Set("/tmp/test_match.txt", null);
+                LspDiagnosticsStore.Set(matchFile, null);
             }
         }
 
@@ -224,14 +247,15 @@ namespace codeLess.Avalonia.Tests
             harness.CustomModelResponder = (sys, msgs) =>
             {
                 turns++;
-                if (turns == 1) return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"/tmp/test_" + Guid.NewGuid().ToString() + ".txt\", \"content\": \"code\"}}</tool_call>");
+                string fPath = Path.Combine(_testDir, "test_" + Guid.NewGuid().ToString("N") + ".txt").Replace("\\", "/");
+                if (turns == 1) return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"" + fPath + "\", \"content\": \"code\"}}</tool_call>");
                 return Task.FromResult("Done");
             };
             
             var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var buf = new EditorTabBuffer { FilePath = "/tmp/other.cs" };
+            var buf = new EditorTabBuffer { FilePath = Path.Combine(_testDir, "other.cs") };
             
-            var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, _testDir, new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             
             Assert.Single(res.ToolCalls);
             var tc = res.ToolCalls[0];
@@ -245,14 +269,14 @@ namespace codeLess.Avalonia.Tests
             // Test null provider appends nothing
             harness.DiagnosticsProvider = null;
             turns = 0;
-            var resNull = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            var resNull = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, _testDir, new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             Assert.DoesNotContain("<file_diagnostics path", resNull.ToolCalls[0].Output);
             
             // Test no errors appends nothing
             fakeDiags.Items.Clear();
             harness.DiagnosticsProvider = fakeDiags;
             turns = 0;
-            var resEmpty = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            var resEmpty = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, _testDir, new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             Assert.DoesNotContain("<file_diagnostics path", resEmpty.ToolCalls[0].Output);
         }
         
@@ -266,8 +290,9 @@ namespace codeLess.Avalonia.Tests
             fakeDiags.Items.Add(new DiagnosticItem { Severity = "Error", Line = 1, Column = 1, Message = "PostApplyErr" });
             harness.DiagnosticsProvider = fakeDiags;
             
-            System.IO.File.WriteAllText("/tmp/post_apply_test.txt", "disk_code");
-            harness.NotifyChangesApplied(new[] { "/tmp/post_apply_test.txt" });
+            string postApplyFile = Path.Combine(_testDir, "post_apply_test.txt");
+            System.IO.File.WriteAllText(postApplyFile, "disk_code");
+            harness.NotifyChangesApplied(new[] { postApplyFile });
             
             int turns = 0;
             bool sawErrorInContext = false;
@@ -283,9 +308,9 @@ namespace codeLess.Avalonia.Tests
             };
             
             var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var buf = new EditorTabBuffer { FilePath = "/tmp/other.cs" };
+            var buf = new EditorTabBuffer { FilePath = Path.Combine(_testDir, "other.cs") };
             
-            await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, _testDir, new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             
             Assert.True(sawErrorInContext, "Should see the post-apply diagnostic error in context.");
             Assert.Empty(harness.PendingPostApplyDiagnosticsPaths);
@@ -521,9 +546,14 @@ namespace codeLess.Avalonia.Tests
     public class FakeWebResponse : WebResponse
     {
         private int _statusCode;
+        private string _body;
         private WebHeaderCollection _headers = new WebHeaderCollection();
-        public FakeWebResponse(int statusCode) { _statusCode = statusCode; }
+        public FakeWebResponse(int statusCode, string body = "") { _statusCode = statusCode; _body = body ?? ""; }
         public int StatusCode { get { return _statusCode; } }
         public override WebHeaderCollection Headers { get { return _headers; } }
+        public override Stream GetResponseStream()
+        {
+            return new MemoryStream(System.Text.Encoding.UTF8.GetBytes(_body));
+        }
     }
 }

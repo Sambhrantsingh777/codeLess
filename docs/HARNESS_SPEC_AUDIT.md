@@ -50,6 +50,6 @@
 | Avalonia: Tab toggles Build/Plan | Done | src/codeLess.Avalonia/MainWindow.cs:1571 | `AvaloniaHeadlessTests.Avalonia_Tab_TogglesMode` |
 | M6: Plan mode SEARCH/REPLACE block staging denied | Done | src/LlmHarnessAndAgentEngine.cs:3727 | `M6EnginePermissionsTests.Engine_PlanMode_SearchReplace_Denied_NothingStaged` |
 
-| M7b: Diagnostics appended after edit | Done | src/LlmHarnessAndAgentEngine.cs:2844 | `DiagnosticsProviderM7bTests.Diagnostics_AppendsErrors_CapsAt20_IgnoresWarnings_AndDoesNotHang` |
-| M7c-1: Native Tool Calling Core | Done | src/codeLess.Core/NativeToolCalling.cs | `NativeToolCallingTests.ToolsTable_MatchesExecuteWorkspaceTool` |
-| M7c-2: Engine Wiring (Native) | Done | src/LlmHarnessAndAgentEngine.cs | `NativeToolCallingEngineTests.Engine_Native_OpenAi_ExecutesAndMaintainsHistory` |
+| M7b: Diagnostics appended after edit | Done | src/LlmHarnessAndAgentEngine.cs:3140 | `DiagnosticsProviderM7bTests.Diagnostics_AppendsErrors_CapsAt20_IgnoresWarnings_AndDoesNotHang` |
+| M7c-1: Native Tool Calling Core | Done | src/codeLess.Core/NativeToolCalling.cs:44 | `NativeToolCallingTests.ToolsTable_MatchesExecuteWorkspaceTool`, `NativeToolCallingTests.Builders_ReturnCorrectJsonShape`, `NativeToolCallingTests.OpenAiAccumulator_SingleCall_MixedText_SplitArgs`, `NativeToolCallingTests.AnthropicAccumulator_SingleCall_MixedText_SplitArgs`, `NativeToolCallingTests.HistorySerialisers_ShapeTests` |
+| M7c-2: Engine Wiring (Native) | Done | src/LlmHarnessAndAgentEngine.cs:2303 | `NativeToolCallingEngineTests.Engine_Native_OpenAi_ExecutesAndMaintainsHistory`, `NativeToolCallingEngineTests.Engine_Native_Anthropic_ExecutesAndMaintainsHistory`, `NativeToolCallingEngineTests.Engine_Native_Fallback_On400`, `NativeToolCallingEngineTests.Engine_Native_SettingOff_NoToolsPayload`, `NativeToolCallingEngineTests.Engine_PlanMode_DeniesWriteFile` |

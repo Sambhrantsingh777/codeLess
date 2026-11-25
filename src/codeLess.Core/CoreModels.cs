@@ -1985,6 +1985,16 @@ namespace codeLess.Studio
                         if (!json.Contains("\"ShowWelcomeOnStartup\"")) loaded.ShowWelcomeOnStartup = true;
                         if (!json.Contains("\"ShowBreadcrumbs\"")) loaded.ShowBreadcrumbs = true;
                         if (!json.Contains("\"ActivatePythonEnvironmentInTerminal\"")) loaded.ActivatePythonEnvironmentInTerminal = true;
+                        if (!json.Contains("\"NativeToolCalling\"") && !json.Contains("\"codeless.agent.nativeToolCalling\"")) loaded.NativeToolCalling = true;
+                        try
+                        {
+                            var rawDict = ser.DeserializeObject(json) as Dictionary<string, object>;
+                            if (rawDict != null && rawDict.ContainsKey("codeless.agent.nativeToolCalling") && rawDict["codeless.agent.nativeToolCalling"] is bool)
+                            {
+                                loaded.NativeToolCalling = (bool)rawDict["codeless.agent.nativeToolCalling"];
+                            }
+                        }
+                        catch { }
                         return loaded;
                     }
                 }
