@@ -5142,6 +5142,7 @@ namespace codeLess.Studio
             int line = buf.CursorLine;
             for (int l = line; l >= 0; l--)
             {
+                if (buf.FoldedLines != null && buf.FoldedLines.Contains(l)) continue;
                 int endL = FindFoldEndLine(buf.Lines, l);
                 if (endL > l && endL >= line)
                 {
@@ -5185,8 +5186,16 @@ namespace codeLess.Studio
             if (buf == null) return;
             for (int l = 0; l < buf.Lines.Count; l++)
             {
-                if (FindFoldEndLine(buf.Lines, l) > l)
+                int endL = FindFoldEndLine(buf.Lines, l);
+                if (endL > l)
+                {
                     buf.FoldedLines.Add(l);
+                    if (buf.CursorLine > l && buf.CursorLine <= endL)
+                    {
+                        buf.CursorLine = l;
+                        buf.ClearSelection();
+                    }
+                }
             }
             buf.ClampCursor();
             this.Invalidate();
@@ -6469,6 +6478,11 @@ namespace codeLess.Studio
         protected override void OnKeyPress(KeyPressEventArgs e)
         {
             ClearRowEndAffinityWF();
+            if (!char.IsControl(e.KeyChar) && e.KeyChar != '\x7f' && PreviewCharHandler != null && PreviewCharHandler(e.KeyChar))
+            {
+                e.Handled = true;
+                return;
+            }
             owner.QuickSuggestPending = LspEditing.IsWordChar(e.KeyChar); // typing an identifier opens suggestions (QA #31)
             OnKeyPressCore(e);
             if (e.Handled && !char.IsControl(e.KeyChar) && e.KeyChar != '\x7f' && CharTyped != null) CharTyped(e.KeyChar);
@@ -6476,6 +6490,8 @@ namespace codeLess.Studio
 
         /// <summary>Called before the editor handles a key; return true to swallow it (LSP completion / shortcuts).</summary>
         public Func<KeyEventArgs, bool> PreviewKeyHandler;
+        /// <summary>Called before a typed character is inserted; return true to swallow it (LSP commit characters).</summary>
+        public Func<char, bool> PreviewCharHandler;
         /// <summary>Raised after a typed character was inserted (as-you-type completion, signature help).</summary>
         public event Action<char> CharTyped;
         /// <summary>Raised on mouse moves over the canvas (client coordinates); used for LSP hover.</summary>

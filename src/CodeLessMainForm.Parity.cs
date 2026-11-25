@@ -1147,7 +1147,7 @@ namespace codeLess.Studio
             bool changed = false;
             if (settings != null && settings.FormatOnSave && !backgroundSave && autoSaveDepthWin == 0)
             {
-                if (lspController == null || !lspController.IsActiveFor(buf))
+                if (lspController == null || !lspController.SupportsFormattingFor(buf))
                 {
                     int tabSize = EditorIndentation.EffectiveTabSize(buf, settings.TabSize);
                     bool spaces = EditorIndentation.EffectiveInsertSpaces(buf, settings.InsertSpaces);
@@ -1168,7 +1168,7 @@ namespace codeLess.Studio
         /// <summary>Explicit user save (Ctrl+S, menu, palette): editor.formatOnSave through the language server first.</summary>
         private bool SaveTabBufferUser(EditorTabBuffer buf)
         {
-            if (buf != null && settings.FormatOnSave && lspController != null && !buf.IsLargeFileViewer && !string.IsNullOrEmpty(buf.FilePath) && lspController.IsActiveFor(buf))
+            if (buf != null && settings.FormatOnSave && lspController != null && !buf.IsLargeFileViewer && !string.IsNullOrEmpty(buf.FilePath) && lspController.SupportsFormattingFor(buf))
             {
                 FormatThenSaveWin(buf);
                 return true;

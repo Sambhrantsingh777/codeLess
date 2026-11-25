@@ -138,5 +138,22 @@ namespace codeLess.Studio
             if (it == null) return "";
             return it.Label + (string.IsNullOrEmpty(it.LabelDetail) ? "" : it.LabelDetail);
         }
+
+        /// <summary>
+        /// True when <paramref name="ch"/> should commit the currently selected suggestion before being inserted
+        /// (VS Code: editor.acceptSuggestionOnCommitCharacter + item.commitCharacters / completionProvider.allCommitCharacters).
+        /// </summary>
+        public bool IsCommitCharacter(char ch, IList<string> serverCommitCharacters)
+        {
+            if (!EditorNicetyOptions.AcceptSuggestionOnCommitCharacter) return false;
+            LspCompletionItem sel = Selected;
+            if (sel == null) return false;
+            string s = ch.ToString();
+            if (sel.CommitCharacters != null && sel.CommitCharacters.Count > 0)
+                return sel.CommitCharacters.Contains(s);
+            if (serverCommitCharacters != null && serverCommitCharacters.Count > 0)
+                return serverCommitCharacters.Contains(s);
+            return false;
+        }
     }
 }

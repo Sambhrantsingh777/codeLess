@@ -255,7 +255,7 @@ def handle(msg):
             reply({"isIncomplete": False, "items": [{"label": "member_one", "kind": 2}, {"label": "member_two", "kind": 5}]})
             return True
         items = [
-            {"label": "alpha", "kind": 6, "sortText": "1", "data": {"id": 1}},
+            {"label": "alpha", "kind": 6, "sortText": "1", "commitCharacters": [".", "("], "data": {"id": 1}},
             {"label": "alphabet", "kind": 3, "sortText": "2", "insertText": "alphabet(${1:x})$0", "insertTextFormat": 2},
             {"label": "beta", "kind": 6, "sortText": "3",
              "textEdit": {"range": {"start": {"line": p["line"], "character": max(0, p["character"] - 2)}, "end": p}, "newText": "beta_value"}},

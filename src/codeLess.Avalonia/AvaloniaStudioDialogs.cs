@@ -166,6 +166,7 @@ namespace codeLess.AvaloniaApp
         public void Open(string prefix, List<PaletteEntryItem> entries, string currentThemeId = null)
         {
             QuickOpenFileSearch = null;
+            CustomModeHint = null;
             InitialPrefix = prefix ?? "";
             AllEntries = entries ?? new List<PaletteEntryItem>();
             originalThemeIdBeforePreview = currentThemeId;
@@ -178,10 +179,13 @@ namespace codeLess.AvaloniaApp
 
         /// <summary>Optional fast file search used by Quick Open for big workspaces (set by the host, cleared on Close).</summary>
         public Func<string, int, List<(PaletteEntryItem Entry, int Score)>> QuickOpenFileSearch { get; set; }
+        /// <summary>Optional custom hint for non-Quick-Open pickers (References, Definitions, Code Actions).</summary>
+        public string CustomModeHint { get; set; }
 
         public void Close(bool restorePreviewTheme = false)
         {
             QuickOpenFileSearch = null;
+            CustomModeHint = null;
             AllEntries.Clear();
             FilteredEntries.Clear();
             ResultsListBox.ItemsSource = null;
@@ -220,7 +224,11 @@ namespace codeLess.AvaloniaApp
             else
                 query = query.Trim();
 
-            if (raw.StartsWith(":"))
+            if (!string.IsNullOrEmpty(CustomModeHint))
+            {
+                ModeHintLabel.Text = CustomModeHint;
+            }
+            else if (raw.StartsWith(":"))
             {
                 ModeHintLabel.Text = "Type a line number and press Enter to jump (e.g. :42 or :42:10)";
             }
@@ -243,7 +251,7 @@ namespace codeLess.AvaloniaApp
 
             pendingQuickOpenLine = 0;
             pendingQuickOpenColumn = 0;
-            bool fileMode = raw.Length == 0 || !(raw.StartsWith(">") || raw.StartsWith("@") || raw.StartsWith("#") || raw.StartsWith(":"));
+            bool fileMode = string.IsNullOrEmpty(CustomModeHint) && (raw.Length == 0 || !(raw.StartsWith(">") || raw.StartsWith("@") || raw.StartsWith("#") || raw.StartsWith(":") ));
             bool hasFileEntries = fileMode && (QuickOpenFileSearch != null || AllEntries.Any(en => !string.IsNullOrEmpty(en.FilePath)));
             if (hasFileEntries)
             {

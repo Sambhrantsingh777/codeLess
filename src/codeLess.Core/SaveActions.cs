@@ -120,35 +120,69 @@ namespace codeLess.Studio
             return r == null ? t : string.Join("\n", r.ToArray());
         }
 
-        /// <summary>Built-in fallback formatter when editor.formatOnSave is enabled and no external LSP server is running.</summary>
+        /// <summary>
+        /// Built-in fallback formatter when editor.formatOnSave is enabled and no external LSP formatter is running.
+        /// Provably whitespace-only and safe inside multi-line strings, block comments, Makefiles, and Markdown hard line breaks.
+        /// </summary>
         public static bool FormatBufferFallback(EditorTabBuffer buf, int tabSize, bool insertSpaces)
         {
             if (buf == null || buf.Lines == null || buf.IsLargeFile || buf.IsLargeFileViewer) return false;
             int tab = Math.Max(1, tabSize);
-            bool markdown = IsMarkdown(buf.FilePath);
+            string path = EditorSyntaxSession.EffectiveSyntaxPathFor(buf);
+            bool markdown = IsMarkdown(path);
+            string fileName = "";
+            string ext = "";
+            try
+            {
+                fileName = (Path.GetFileName(path ?? "") ?? "").ToLowerInvariant();
+                ext = (Path.GetExtension(path ?? "") ?? "").ToLowerInvariant();
+            }
+            catch { }
+            bool isMakefile = fileName == "makefile" || fileName == "gnumakefile" || ext == ".mk";
+            bool[] endsInString = markdown ? null : LinesEndingInsideMultilineString(buf.Lines, LanguageFamily(path));
+            BracketLexProfile profile = BracketLexProfile.ForFile(path);
+            EditorBracketCache lexCache = null;
+            if (!markdown && profile != null && profile.Enabled && buf.Lines.Count > 0)
+            {
+                lexCache = new EditorBracketCache(profile);
+                lexCache.Sync(buf.Lines);
+                lexCache.EnsureValid(buf.Lines, buf.Lines.Count - 1, 0);
+            }
             List<string> updated = new List<string>(buf.Lines.Count);
             bool changed = false;
             for (int i = 0; i < buf.Lines.Count; i++)
             {
                 string line = buf.Lines[i] ?? "";
                 string next = line;
-                if (!markdown)
+                bool startsInStringOrComment = (i > 0 && endsInString != null && endsInString[i - 1]) ||
+                    (lexCache != null && lexCache.GetStartState(i) != null && lexCache.GetStartState(i).Mode != BracketLexState.ModeCode);
+                bool endsInStringOrComment = (endsInString != null && endsInString[i]) ||
+                    (lexCache != null && lexCache.GetEndState(i) != null && lexCache.GetEndState(i).Mode != BracketLexState.ModeCode);
+                if (markdown)
                 {
-                    next = next.TrimEnd(' ', '\t');
-                    int ws = 0;
-                    int cols = 0;
-                    while (ws < next.Length && (next[ws] == ' ' || next[ws] == '\t'))
+                    next = TrimMarkdownLine(line, i + 1 < buf.Lines.Count ? buf.Lines[i + 1] : null);
+                }
+                else
+                {
+                    if (!endsInStringOrComment)
+                        next = next.TrimEnd(' ', '\t');
+                    if (!startsInStringOrComment && !isMakefile)
                     {
-                        if (next[ws] == '\t') cols = ((cols / tab) + 1) * tab;
-                        else cols++;
-                        ws++;
-                    }
-                    if (ws > 0)
-                    {
-                        string prefix = insertSpaces
-                            ? new string(' ', cols)
-                            : new string('\t', cols / tab) + new string(' ', cols % tab);
-                        next = prefix + next.Substring(ws);
+                        int ws = 0;
+                        int cols = 0;
+                        while (ws < next.Length && (next[ws] == ' ' || next[ws] == '\t'))
+                        {
+                            if (next[ws] == '\t') cols = ((cols / tab) + 1) * tab;
+                            else cols++;
+                            ws++;
+                        }
+                        if (ws > 0)
+                        {
+                            string prefix = insertSpaces
+                                ? new string(' ', cols)
+                                : new string('\t', cols / tab) + new string(' ', cols % tab);
+                            next = prefix + next.Substring(ws);
+                        }
                     }
                 }
                 if (!string.Equals(next, line, StringComparison.Ordinal)) changed = true;
