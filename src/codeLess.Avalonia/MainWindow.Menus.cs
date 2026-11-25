@@ -165,6 +165,7 @@ namespace codeLess.AvaloniaApp
                 // go
                 ["go.back"] = NavigateBack,
                 ["go.forward"] = NavigateForward,
+                ["go.lastEditLocation"] = NavigateToLastEditLocation,
                 ["go.nextEditor"] = () => CycleEditorTab(1),
                 ["go.previousEditor"] = () => CycleEditorTab(-1),
                 // VS Code openNext/PreviousRecentlyUsedEditor: the MRU list kept by the Ctrl+Tab editor switcher

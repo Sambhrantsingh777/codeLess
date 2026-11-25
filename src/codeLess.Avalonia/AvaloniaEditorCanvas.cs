@@ -504,7 +504,11 @@ namespace codeLess.AvaloniaApp
                 };
                 mi.Click += (s, e) =>
                 {
-                    GoToLine(captured.LineNumber);
+                    var mw = TopLevel.GetTopLevel(this) as MainWindow;
+                    if (mw != null)
+                        mw.JumpToLineAndColumnWithHistory(captured.LineNumber, 1);
+                    else
+                        GoToLine(captured.LineNumber);
                 };
                 items.Add(mi);
             }
@@ -4453,12 +4457,17 @@ namespace codeLess.AvaloniaApp
 
             if (e.Key == Key.Escape)
             {
+                var mw = TopLevel.GetTopLevel(this) as MainWindow;
+                if (mw?.PrimaryLspBinding != null && (mw.PrimaryLspBinding.IsCompletionVisible || mw.PrimaryLspBinding.SignatureTip.IsVisible || mw.PrimaryLspBinding.HoverTip.IsVisible))
+                {
+                    mw.PrimaryLspBinding.HideAll();
+                    e.Handled = true;
+                    return;
+                }
                 if (owner.IsFindOverlayVisible) { owner.HideFindBar(); e.Handled = true; return; }
                 if (owner.IsInlineAiBarVisible) { owner.HideInlineAiBar(); e.Handled = true; return; }
-                if (ExtraCursors.Count > 0 || buf.ExtraCarets.Count > 0) { ExtraCursors.Clear(); buf.ExtraCarets.Clear(); InvalidateVisual(); e.Handled = true; return; }
-                if (buf.HasSelection()) { buf.ClearSelection(); InvalidateVisual(); e.Handled = true; return; }
-                var mw = TopLevel.GetTopLevel(this) as MainWindow;
-                if (mw != null && mw.IsBottomPanelVisible) { mw.ToggleBottomPanel(); e.Handled = true; return; }
+                if (ExtraCursors.Count > 0 || buf.ExtraCarets.Count > 0) { ExtraCursors.Clear(); buf.ExtraCarets.Clear(); owner.NotifyCaretMoved(); InvalidateVisual(); e.Handled = true; return; }
+                if (buf.HasSelection()) { buf.ClearSelection(); owner.NotifyCaretMoved(); InvalidateVisual(); e.Handled = true; return; }
             }
 
             // Find & Replace

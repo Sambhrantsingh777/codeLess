@@ -302,9 +302,9 @@ namespace codeLess.Avalonia.Tests
                 Assert.False(tab.HasSelection());
                 Assert.True(window.IsBottomPanelVisible);
 
-                // Press 5: closes Bottom Panel
+                // Press 5: does NOT close Bottom Panel (VS Code editor Escape chain stops after clearing selection)
                 window.PrimaryEditor.Canvas.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Escape });
-                Assert.False(window.IsBottomPanelVisible);
+                Assert.True(window.IsBottomPanelVisible);
             }
             finally
             {

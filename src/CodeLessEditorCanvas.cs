@@ -59,6 +59,13 @@ namespace codeLess.Studio
         public readonly List<SearchMatch> ActiveSearchMatches = new List<SearchMatch>();
         public int ActiveSearchMatchIndex = -1;
         public bool IsFindBarVisible { get { return findBar != null && findBar.Visible; } }
+        public void HideFindBar()
+        {
+            if (findBar != null) findBar.Visible = false;
+            ActiveSearchMatches.Clear();
+            ActiveSearchMatchIndex = -1;
+            if (virtualCanvas != null) virtualCanvas.Invalidate();
+        }
         private Panel findBar;
         private CodeLessDarkInputBox findInput;
         private CodeLessDarkInputBox replaceInput;
@@ -2033,10 +2040,18 @@ namespace codeLess.Studio
                 selBadge = string.Format(" ({0} ch)", selTxt.Length);
             }
             string wrapBadge = CurrentBuffer.WordWrap ? "  •  Wrap" : "";
+            int effTabSize = (CurrentBuffer.CustomTabSize.HasValue && CurrentBuffer.CustomTabSize.Value > 0)
+                ? CurrentBuffer.CustomTabSize.Value
+                : (TabSize > 0 ? TabSize : 4);
+            string curLineText = (CurrentBuffer.Lines != null && CurrentBuffer.CursorLine >= 0 && CurrentBuffer.CursorLine < CurrentBuffer.Lines.Count)
+                ? (CurrentBuffer.Lines[CurrentBuffer.CursorLine] ?? "")
+                : "";
+            int clampedCol = Math.Max(0, Math.Min(CurrentBuffer.CursorCol, curLineText.Length));
+            int visualCol1 = EditorTextLayout.VisualColumn(curLineText, clampedCol, effTabSize) + 1;
             cursorPosLabel.Text = string.Format(
                 "Ln {0}, Col {1}{2}{3}  •  {4}{5}",
                 CurrentBuffer.CursorLine + 1,
-                CurrentBuffer.CursorCol + 1,
+                visualCol1,
                 selBadge,
                 wrapBadge,
                 (CurrentBuffer.Language ?? "TXT").ToUpperInvariant(),
@@ -6443,7 +6458,9 @@ namespace codeLess.Studio
             if (e.KeyCode == Keys.Escape)
             {
                 buf.GhostText = null;
-                if (buf.HasMultiCursors)
+                if (owner.IsFindBarVisible)
+                    owner.HideFindBar();
+                else if (buf.HasMultiCursors)
                     buf.ClearExtraCarets();
                 else
                     buf.ClearSelection();
