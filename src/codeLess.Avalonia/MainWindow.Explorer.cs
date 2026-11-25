@@ -30,15 +30,33 @@ namespace codeLess.AvaloniaApp
         private static extern int malloc_trim(UIntPtr pad);
 
         private static DateTime lastTrimUtc = DateTime.MinValue;
+        private static DateTime lastLargeFreeUtc = DateTime.MinValue;
+        private static int trimCount;
+
+        public static int TrimCount => trimCount;
 
         public static void Trim(bool compactManagedHeap)
         {
             if ((DateTime.UtcNow - lastTrimUtc).TotalSeconds < 60) return;
             lastTrimUtc = DateTime.UtcNow;
+            ExecuteCompactAndTrim(compactManagedHeap);
+        }
+
+        /// <summary>Called after closing a workspace, a window, or a large file buffer (throttled to at most once per 5s).</summary>
+        public static void NotifyLargeFree()
+        {
+            if ((DateTime.UtcNow - lastLargeFreeUtc).TotalSeconds < 5) return;
+            lastLargeFreeUtc = DateTime.UtcNow;
+            ExecuteCompactAndTrim(compactManagedHeap: true);
+        }
+
+        private static void ExecuteCompactAndTrim(bool compactManagedHeap)
+        {
             try
             {
                 if (compactManagedHeap)
                 {
+                    Interlocked.Increment(ref trimCount);
                     System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
                     GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
                 }
@@ -510,7 +528,7 @@ namespace codeLess.AvaloniaApp
             }
             try
             {
-                if (!string.IsNullOrEmpty(root)) aiEngine.IndexWorkspace(root, files, CancellationToken.None, null);
+                if (!string.IsNullOrEmpty(root)) EnsureAiEngine().IndexWorkspace(root, files, CancellationToken.None, null);
             }
             catch { }
             finally

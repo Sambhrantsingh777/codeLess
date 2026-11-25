@@ -589,7 +589,10 @@ namespace codeLess.AvaloniaApp
                     sidebarHeaderTitle.Text = "SOURCE CONTROL";
                     RefreshGitStatus();
                     break;
-                case "run": sidebarHeaderTitle.Text = "RUN AND DEBUG"; break;
+                case "run":
+                    sidebarHeaderTitle.Text = "RUN AND DEBUG";
+                    EnsureDebugSidebarRealized();
+                    break;
                 case "extensions": sidebarHeaderTitle.Text = "EXTENSIONS"; break;
                 case "harness": sidebarHeaderTitle.Text = "AI HARNESS & BYOK"; break;
             }
@@ -638,6 +641,8 @@ namespace codeLess.AvaloniaApp
 
             problemsListBox.IsVisible = activeBottomTab == "problems";
             outputStreamBox.IsVisible = activeBottomTab == "output" || activeBottomTab == "ports";
+            if (activeBottomTab == "debug") EnsureDebugConsoleRealized();
+            if (debugConsoleHostGrid != null) debugConsoleHostGrid.IsVisible = activeBottomTab == "debug";
             if (debugConsolePanel != null) debugConsolePanel.IsVisible = activeBottomTab == "debug";
             terminalHostGrid.IsVisible = activeBottomTab == "terminal";
 
@@ -908,8 +913,9 @@ namespace codeLess.AvaloniaApp
 
             void jump()
             {
-                var wsSym = aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.Ordinal))
-                            ?? aiEngine?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.OrdinalIgnoreCase));
+                var eng = EnsureAiEngine();
+                var wsSym = eng?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.Ordinal))
+                            ?? eng?.WorkspaceSymbolMap?.FirstOrDefault(s => string.Equals(s.SymbolName, word, StringComparison.OrdinalIgnoreCase));
                 if (wsSym != null && File.Exists(wsSym.FilePath))
                 {
                     OpenFileAtLocation(wsSym.FilePath, wsSym.LineNumber, 1, 0, preview: false, focusEditor: true);
@@ -950,24 +956,43 @@ namespace codeLess.AvaloniaApp
         public void CloseAllTabs()
         {
             if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, CloseAllTabs)) return;
+            var closing = openTabs.ToList();
             openTabs.Clear();
+            editorMru.Clear();
+            foreach (var t in closing) ReleaseClosedTabReferences(t);
             ActivateTab(null);
+            SweepClosedLargeFileTabs();
         }
 
         public void CloseWorkspaceFolder()
         {
             if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, CloseWorkspaceFolder)) return;
+            bool hadWorkspace = !string.IsNullOrEmpty(workspaceRoot) || workspaceFiles.Count > 0 || openTabs.Count > 0;
             StopWorkspaceWatcher();
             workspaceRoot = "";
             InitializeWorkspaceSettingsWatcher();
             LspOnWorkspaceChanged();
             workspaceFiles.Clear();
+            lock (workspaceIndexLock)
+            {
+                workspaceIndexState = 0;
+                indexCandidateFiles = null;
+            }
+            aiEngine?.ClearWorkspaceIndex();
+            ExplorerTree.ProblemCountByFullPath.Clear();
+            ExplorerTree.GitStatusByFullPath.Clear();
+            ExplorerTree.ModifiedFolderPaths.Clear();
             ExplorerTree.Nodes.Clear();
             ExplorerTree.RebuildTreeLayout(false);
+            var closing = openTabs.ToList();
             openTabs.Clear();
+            editorMru.Clear();
+            foreach (var t in closing) ReleaseClosedTabReferences(t);
             ActivateTab(null);
+            SweepClosedLargeFileTabs();
             UpdateWindowTitle();
             UpdateStatusBar();
+            if (hadWorkspace) ProcessMemoryTrimmer.NotifyLargeFree();
         }
 
         // Explorer Context Menu & File Operations
@@ -2392,7 +2417,7 @@ namespace codeLess.AvaloniaApp
         {
             string prompt = (overridePrompt ?? chatPromptInput.Text ?? "").Trim();
             if (string.IsNullOrEmpty(prompt)) return;
-            if (aiEngine.IsTurnRunning)
+            if (EnsureAiEngine().IsTurnRunning)
             {
                 // Keep the prompt in the composer: one request at a time per chat (VS Code), Stop is on the send button.
                 SetStatusMessage(LlmHarnessAndAgentEngine.BusyReply);
@@ -2647,9 +2672,10 @@ namespace codeLess.AvaloniaApp
             {
                 EnsureWorkspaceIndexed(); // lazy index: built on first workspace-symbol search
                 var wsSymEntries = new List<PaletteEntryItem>();
-                if (aiEngine?.WorkspaceSymbolMap != null)
+                var eng = EnsureAiEngine();
+                if (eng?.WorkspaceSymbolMap != null)
                 {
-                    foreach (var s in aiEngine.WorkspaceSymbolMap.Take(200))
+                    foreach (var s in eng.WorkspaceSymbolMap.Take(200))
                     {
                         var captured = s;
                         wsSymEntries.Add(new PaletteEntryItem
@@ -2873,7 +2899,7 @@ namespace codeLess.AvaloniaApp
                 {
                     ModalHost.CloseModal();
                     string activeNorm = StudioSettings.NormalizeProviderId(updated.ActiveProvider);
-                    foreach (var v in aiEngine.Vendors)
+                    foreach (var v in EnsureAiEngine().Vendors)
                     {
                         string savedKey = updated.GetApiKeyForProvider(v.Id);
                         if (savedKey != null) v.ApiKey = savedKey;
@@ -3322,7 +3348,7 @@ namespace codeLess.AvaloniaApp
         public EditorTextBridge Editor => editorBridge ??= new EditorTextBridge(this);
         public string WorkspacePath => workspaceRoot;
         public bool IsCommandPaletteVisible => CommandPalette != null && CommandPalette.IsVisible;
-        public LlmHarnessAndAgentEngine HarnessEngine => aiEngine;
+        public LlmHarnessAndAgentEngine HarnessEngine => EnsureAiEngine();
         public List<StudioTheme> BuiltInThemes => StudioTheme.GetAllBuiltInThemes();
         public string ActiveActivityView => (activeSidebarView ?? "explorer").ToUpperInvariant();
         public IReadOnlyList<AvaloniaAgentFeedItem> ChatHistoryItems => AgentFeed.Items;
@@ -3513,12 +3539,12 @@ namespace codeLess.AvaloniaApp
         }
 
         /// <summary>True while a chat turn runs; the send button is a Stop button meanwhile.</summary>
-        public bool IsChatTurnRunning => aiEngine.IsTurnRunning;
+        public bool IsChatTurnRunning => aiEngine != null && aiEngine.IsTurnRunning;
 
         /// <summary>Stop: cancels the running chat turn (its provider stream and remaining agent steps).</summary>
         public void StopChatTurn()
         {
-            if (!aiEngine.IsTurnRunning) return;
+            if (aiEngine == null || !aiEngine.IsTurnRunning) return;
             aiEngine.CancelStreamingRequested = true;
             SetStatusMessage("Stopping the agent…");
         }
@@ -3536,7 +3562,9 @@ namespace codeLess.AvaloniaApp
         public async Task<string> SendChatMessageAsync(string prompt)
         {
             if (string.IsNullOrWhiteSpace(prompt)) return "";
-            if (aiEngine.IsTurnRunning)
+            var eng = EnsureAiEngine();
+            var trust = EnsureAgentTrust();
+            if (eng.IsTurnRunning)
             {
                 AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = LlmHarnessAndAgentEngine.BusyReply });
                 return LlmHarnessAndAgentEngine.BusyReply;
@@ -3550,11 +3578,11 @@ namespace codeLess.AvaloniaApp
             };
             AgentFeed.AddMessage(userItem);
 
-            var preferredVendor = aiEngine.Vendors.FirstOrDefault(v =>
+            var preferredVendor = eng.Vendors.FirstOrDefault(v =>
                 string.Equals(v.Name, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(v.Id, StudioSettings.NormalizeProviderId(settings.ActiveProvider), StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(v.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase))
-                ?? aiEngine.Vendors.FirstOrDefault();
+                ?? eng.Vendors.FirstOrDefault();
 
             var pills = new List<string>(attachedContextPills);
             if (!string.IsNullOrEmpty(activeTab?.FileName) && !pills.Contains(activeTab.FileName))
@@ -3570,7 +3598,7 @@ namespace codeLess.AvaloniaApp
             string termText = activeTerminalSession?.Control?.GetVisibleScreenText() ?? "";
             var turnRequest = BuildAgentTurnRequest(prompt, mode, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText);
             // Per-turn checkpoint: files changed by the turn's terminal commands are detected and recorded.
-            var tracker = agentTrust.BeginTurn(aiEngine, wsSnapshot, prompt);
+            var tracker = trust.BeginTurn(eng, wsSnapshot, prompt);
             userItem.TurnId = tracker.TurnId; // the message's Restore button undoes back to this turn
             List<TurnFileChange> terminalChanges = null;
             var loopTask = Task.Run(async () =>
@@ -3578,11 +3606,11 @@ namespace codeLess.AvaloniaApp
                 try
                 {
                     EnsureWorkspaceIndexed(); // lazy index: built on first AI use, off the UI thread
-                    return await aiEngine.RunAutonomousAgentLoopAsync(mode, prompt, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText).ConfigureAwait(false);
+                    return await eng.RunAutonomousAgentLoopAsync(mode, prompt, preferredVendor, harnessId, tabSnapshot, wsSnapshot, filesSnapshot, pills, termText).ConfigureAwait(false);
                 }
                 finally
                 {
-                    terminalChanges = agentTrust.EndTurn(aiEngine, tracker);
+                    terminalChanges = trust.EndTurn(eng, tracker);
                 }
             });
             SetChatTurnBusy(true);

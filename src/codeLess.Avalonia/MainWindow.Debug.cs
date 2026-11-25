@@ -26,6 +26,8 @@ namespace codeLess.AvaloniaApp
         private AvaloniaDebugSidebar debugSidebar;
         private AvaloniaDebugConsole debugConsolePanel;
         private AvaloniaDebugToolbar debugToolbar;
+        private Grid debugSidebarHostGrid;
+        private Grid debugConsoleHostGrid;
         private Border debugNotification;
         private Border debugHoverBox;
         private TextBlock debugHoverText;
@@ -44,10 +46,10 @@ namespace codeLess.AvaloniaApp
         /// <summary>When a debug session runs, F5/F10/F11 reach the workbench even from the terminal (VS Code skipShell).</summary>
         internal static volatile bool DebugKeysSkipShell;
 
-        public DebugController Debugger => debugController;
-        public AvaloniaDebugSidebar DebugSidebar => debugSidebar;
-        public AvaloniaDebugConsole DebugConsole => debugConsolePanel;
-        public AvaloniaDebugToolbar DebugToolbar => debugToolbar;
+        public DebugController Debugger => EnsureDebugController();
+        public AvaloniaDebugSidebar DebugSidebar => EnsureDebugSidebarRealized();
+        public AvaloniaDebugConsole DebugConsole => EnsureDebugConsoleRealized();
+        public AvaloniaDebugToolbar DebugToolbar => EnsureDebugToolbarRealized();
         public Button StatusPythonButton => statusPythonBtn;
         public Button EditorRunPythonButton => editorRunPythonBtn;
         public bool IsDebugHoverVisible => debugHoverBox != null && debugHoverBox.IsVisible;
@@ -82,21 +84,23 @@ namespace codeLess.AvaloniaApp
             public IdePersistentSettings Settings => w.settings;
         }
 
-        private void EnsureDebugController()
+        private DebugController EnsureDebugController()
         {
-            if (debugController != null) return;
+            if (debugController != null) return debugController;
             debugUiPost = UiPost.CaptureCurrent();
             debugController = new DebugController(new AvaloniaDebugHost(this));
             debugController.StateChanged += OnDebugStateChanged;
             PythonInterpreterService.BindSettings(settings);
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
+                debugController.ApplyDecorations(activeTab);
+            return debugController;
         }
 
-        /// <summary>Hook from BuildPrimarySidebar: the RUN AND DEBUG view.</summary>
-        private Grid BuildDebugSidebarView()
+        private AvaloniaDebugSidebar EnsureDebugSidebarRealized()
         {
-            EnsureDebugController();
-            var grid = new Grid { IsVisible = false };
-            debugSidebar = new AvaloniaDebugSidebar(debugController);
+            if (debugSidebar != null) return debugSidebar;
+            var dc = EnsureDebugController();
+            debugSidebar = new AvaloniaDebugSidebar(dc);
             debugSidebar.StartRequested += StartDebugging;
             debugSidebar.ConfigurationChosen += name =>
             {
@@ -111,29 +115,73 @@ namespace codeLess.AvaloniaApp
             };
             debugSidebar.EditBreakpointRequested += bp => PromptBreakpointOptions(bp.FilePath, bp.Line, null);
             debugSidebar.OpenLocationRequested += (path, line) => { if (OpenFileInTab(path, preview: false) != null) PrimaryEditor.GoToLine(line); };
-            grid.Children.Add(debugSidebar);
-            grid.PropertyChanged += (s, e) => { if (e.Property == IsVisibleProperty && grid.IsVisible) RefreshDebugConfigurations(); };
-            return grid;
+            if (currentTheme != null) debugSidebar.ApplyTheme(currentTheme);
+            if (debugSidebarHostGrid != null && !debugSidebarHostGrid.Children.Contains(debugSidebar))
+                debugSidebarHostGrid.Children.Add(debugSidebar);
+            RefreshDebugConfigurations();
+            return debugSidebar;
         }
 
-        /// <summary>Hook from BuildBottomPanel: the DEBUG CONSOLE body.</summary>
-        private Control BuildDebugConsolePanel()
+        private AvaloniaDebugConsole EnsureDebugConsoleRealized()
         {
-            EnsureDebugController();
-            debugConsolePanel = new AvaloniaDebugConsole(debugController);
+            if (debugConsolePanel != null) return debugConsolePanel;
+            var dc = EnsureDebugController();
+            debugConsolePanel = new AvaloniaDebugConsole(dc);
+            if (currentTheme != null) debugConsolePanel.ApplyTheme(currentTheme);
+            if (debugConsoleHostGrid != null && !debugConsoleHostGrid.Children.Contains(debugConsolePanel))
+                debugConsoleHostGrid.Children.Add(debugConsolePanel);
             return debugConsolePanel;
         }
 
-        /// <summary>Hook from the constructor (after layout + theme): toolbar, status items, editor ▶, hover, keys.</summary>
+        private AvaloniaDebugToolbar EnsureDebugToolbarRealized()
+        {
+            if (debugToolbar != null) return debugToolbar;
+            var dc = EnsureDebugController();
+            debugToolbar = new AvaloniaDebugToolbar(dc, () => dc.Restart(), () => _ = dc.StopAsync());
+            if (currentTheme != null) debugToolbar.ApplyTheme(currentTheme);
+            if (editorSplitGrid != null && !editorSplitGrid.Children.Contains(debugToolbar))
+            {
+                Grid.SetColumnSpan(debugToolbar, 2);
+                editorSplitGrid.Children.Add(debugToolbar);
+            }
+            return debugToolbar;
+        }
+
+        /// <summary>Hook from BuildPrimarySidebar: the RUN AND DEBUG view (lazy: realized when shown or accessed).</summary>
+        private Grid BuildDebugSidebarView()
+        {
+            debugSidebarHostGrid = new Grid { IsVisible = false };
+            debugSidebarHostGrid.PropertyChanged += (s, e) =>
+            {
+                if (e.Property == IsVisibleProperty && debugSidebarHostGrid.IsVisible)
+                {
+                    EnsureDebugSidebarRealized();
+                    RefreshDebugConfigurations();
+                }
+            };
+            return debugSidebarHostGrid;
+        }
+
+        /// <summary>Hook from BuildBottomPanel: the DEBUG CONSOLE body (lazy: realized when shown or accessed).</summary>
+        private Control BuildDebugConsolePanel()
+        {
+            debugConsoleHostGrid = new Grid { IsVisible = false };
+            debugConsoleHostGrid.PropertyChanged += (s, e) =>
+            {
+                if (e.Property == IsVisibleProperty && debugConsoleHostGrid.IsVisible)
+                {
+                    EnsureDebugConsoleRealized();
+                }
+            };
+            return debugConsoleHostGrid;
+        }
+
+        /// <summary>Hook from the constructor (after layout + theme): status items, editor ▶, hover, keys.</summary>
         private void InitDebugWorkbench()
         {
             if (debugWorkbenchInitialized) return;
             debugWorkbenchInitialized = true;
-            EnsureDebugController();
-
-            debugToolbar = new AvaloniaDebugToolbar(debugController, () => debugController.Restart(), () => _ = debugController.StopAsync());
-            Grid.SetColumnSpan(debugToolbar, 2);
-            editorSplitGrid.Children.Add(debugToolbar);
+            debugUiPost = UiPost.CaptureCurrent();
 
             debugHoverText = new TextBlock { FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"), FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 520 };
             debugHoverBox = new Border
@@ -206,7 +254,7 @@ namespace codeLess.AvaloniaApp
             Closed += (s, e) =>
             {
                 PythonInterpreterService.Changed -= OnPythonInterpretersChanged;
-                try { debugController.Session?.Dispose(); } catch { }
+                try { debugController?.Session?.Dispose(); } catch { }
                 DebugKeysSkipShell = false;
             };
             ApplyDebugTheme(currentTheme);
@@ -265,6 +313,8 @@ namespace codeLess.AvaloniaApp
 
         private void OnDebugStateChanged()
         {
+            if (debugController == null) return;
+            if (debugController.IsActive) EnsureDebugToolbarRealized();
             DebugKeysSkipShell = debugController.IsActive;
             UpdateDebugStatusBarColor();
             debugToolbar?.Refresh();
@@ -296,7 +346,7 @@ namespace codeLess.AvaloniaApp
             if (!ReferenceEquals(activeTab, lastDebugDecoratedTab))
             {
                 lastDebugDecoratedTab = activeTab;
-                if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) debugController.ApplyDecorations(activeTab);
+                if (debugController != null && activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) debugController.ApplyDecorations(activeTab);
             }
         }
 
@@ -348,16 +398,18 @@ namespace codeLess.AvaloniaApp
         /// <summary>F5 / Start: continue when stopped, else start the selected configuration (or Debug Active File).</summary>
         public void StartOrContinueDebugging()
         {
-            if (debugController.IsActive) { debugController.ContinueOrPause(); return; }
+            var dc = EnsureDebugController();
+            if (dc.IsActive) { dc.ContinueOrPause(); return; }
             StartDebugging();
         }
 
         public void StartDebugging()
         {
-            if (debugController.IsActive) { SetStatusMessage("A debug session is already running."); return; }
+            var dc = EnsureDebugController();
+            if (dc.IsActive) { SetStatusMessage("A debug session is already running."); return; }
             if (debugSidebar?.SelectedConfiguration != null) selectedDebugConfigName = debugSidebar.SelectedConfiguration;
-            var cfg = debugController.PickConfiguration(selectedDebugConfigName, activeTab?.FilePath, out string err);
-            if (debugController.ShouldRunWithoutDebugging(cfg, activeTab?.FilePath))
+            var cfg = dc.PickConfiguration(selectedDebugConfigName, activeTab?.FilePath, out string err);
+            if (dc.ShouldRunWithoutDebugging(cfg, activeTab?.FilePath))
             {
                 RunActiveFileInTerminal();
                 SetStatusMessage("No debugger for " + Path.GetExtension(activeTab?.FilePath ?? "") + " files: ran it in the terminal instead");
@@ -369,6 +421,9 @@ namespace codeLess.AvaloniaApp
 
         private void StartDebugConfiguration(DebugLaunchConfig cfg)
         {
+            var dc = EnsureDebugController();
+            EnsureDebugToolbarRealized();
+            EnsureDebugConsoleRealized();
             // Save the active file first (VS Code: debug.saveBeforeStart).
             if (activeTab != null && activeTab.IsDirty && !activeTab.IsUntitled && !string.IsNullOrEmpty(activeTab.FilePath)) SaveBufferToDisk(activeTab);
             HideDebugNotification();
@@ -376,7 +431,7 @@ namespace codeLess.AvaloniaApp
             string console = DapJson.Str(cfg.Properties, "console") ?? (cfg.AdapterFamily == "python" ? "integratedTerminal" : "internalConsole");
             if (console != "integratedTerminal") SwitchBottomTab("debug");
             if (sidebarBorder.IsVisible && activeSidebarView != "run") SwitchSidebarView("run");
-            _ = debugController.StartAsync(cfg, activeTab?.FilePath);
+            _ = dc.StartAsync(cfg, activeTab?.FilePath);
         }
 
         public void DebugPythonFile()
@@ -384,23 +439,22 @@ namespace codeLess.AvaloniaApp
             if (activeTab == null || string.IsNullOrEmpty(activeTab.FilePath)) { SetStatusMessage("Save the file first to debug it."); return; }
             var cfg = DebugLaunchConfigurations.CreateDefaultForFile(activeTab.FilePath, workspaceRoot, out string err);
             if (cfg == null) { ShowDebugNotification(err, null, null); return; }
-            if (debugController.IsActive) { SetStatusMessage("A debug session is already running."); return; }
+            if (EnsureDebugController().IsActive) { SetStatusMessage("A debug session is already running."); return; }
             StartDebugConfiguration(cfg);
         }
 
         /// <summary>Workbench keys: F5/Shift+F5/Ctrl+Shift+F5/F6/F9/F10/F11/Shift+F11 (hook in HandleWorkbenchKeyEvent).</summary>
         private bool HandleDebugFunctionKey(Key key, KeyModifiers mods)
         {
-            if (debugController == null) return false;
             bool shift = (mods & KeyModifiers.Shift) != 0;
             bool primary = MacKeymap.IsPrimary(mods) || (mods & KeyModifiers.Control) != 0;
             bool alt = (mods & KeyModifiers.Alt) != 0;
             if (alt) return false;
-            bool active = debugController.IsActive;
+            bool active = debugController != null && debugController.IsActive;
             switch (key)
             {
                 case Key.F5:
-                    if (primary && shift) { if (active || debugController.LastConfig != null) debugController.Restart(); return true; }
+                    if (primary && shift) { if (active || debugController?.LastConfig != null) EnsureDebugController().Restart(); return true; }
                     if (shift) { if (active) _ = debugController.StopAsync(); return true; }
                     if (primary) { RunActiveFileInTerminal(); return true; } // Run Without Debugging
                     StartOrContinueDebugging();
@@ -427,7 +481,7 @@ namespace codeLess.AvaloniaApp
         {
             if (activeTab == null) { SetStatusMessage("No active editor for breakpoint"); return; }
             if (string.IsNullOrEmpty(activeTab.FilePath)) { SetStatusMessage("Save the file to set breakpoints"); return; }
-            debugController.ToggleBreakpoint(activeTab, activeTab.CursorLine);
+            EnsureDebugController().ToggleBreakpoint(activeTab, activeTab.CursorLine);
             PrimaryEditor.Canvas.InvalidateVisual();
             SplitEditor.Canvas.InvalidateVisual();
         }
@@ -440,20 +494,21 @@ namespace codeLess.AvaloniaApp
                 if (!context) { if (!buf.Breakpoints.Remove(line)) buf.Breakpoints.Add(line); }
                 return;
             }
-            if (!context) { debugController.ToggleBreakpoint(buf, line); return; }
-            var existing = debugController.Breakpoints.Find(buf.FilePath, line);
+            var dc = EnsureDebugController();
+            if (!context) { dc.ToggleBreakpoint(buf, line); return; }
+            var existing = dc.Breakpoints.Find(buf.FilePath, line);
             var items = new List<object>();
             if (existing == null)
             {
-                items.Add(MakeCtxItem("Add Breakpoint", () => debugController.ToggleBreakpoint(buf, line)));
+                items.Add(MakeCtxItem("Add Breakpoint", () => dc.ToggleBreakpoint(buf, line)));
                 items.Add(MakeCtxItem("Add Conditional Breakpoint...", () => PromptBreakpointOptions(buf.FilePath, line, "condition")));
                 items.Add(MakeCtxItem("Add Logpoint...", () => PromptBreakpointOptions(buf.FilePath, line, "log")));
             }
             else
             {
-                items.Add(MakeCtxItem("Remove Breakpoint", () => debugController.RemoveBreakpoint(existing)));
+                items.Add(MakeCtxItem("Remove Breakpoint", () => dc.RemoveBreakpoint(existing)));
                 items.Add(MakeCtxItem("Edit Breakpoint...", () => PromptBreakpointOptions(buf.FilePath, line, null)));
-                items.Add(MakeCtxItem(existing.Enabled ? "Disable Breakpoint" : "Enable Breakpoint", () => debugController.SetBreakpointEnabled(existing, !existing.Enabled)));
+                items.Add(MakeCtxItem(existing.Enabled ? "Disable Breakpoint" : "Enable Breakpoint", () => dc.SetBreakpointEnabled(existing, !existing.Enabled)));
             }
             new ContextMenu { ItemsSource = items }.Open(PrimaryEditor.Canvas);
         }
@@ -461,7 +516,8 @@ namespace codeLess.AvaloniaApp
         /// <summary>Condition / hit count / log message editor (VS Code's inline breakpoint widget, as a small modal).</summary>
         public void PromptBreakpointOptions(string path, int line, string focus)
         {
-            var bp = debugController.Breakpoints.Find(path, line);
+            var dc = EnsureDebugController();
+            var bp = dc.Breakpoints.Find(path, line);
             Color fg = AvaloniaColorHelper.ToAvColor(currentTheme.TextPrimary);
             var stack = new StackPanel { Spacing = 6 };
             TextBox Field(string label, string value, string watermark)
@@ -478,7 +534,7 @@ namespace codeLess.AvaloniaApp
             void Apply()
             {
                 ModalHost.CloseModal();
-                debugController.SetBreakpointOptions(path, line, cond.Text, hits.Text, log.Text);
+                dc.SetBreakpointOptions(path, line, cond.Text, hits.Text, log.Text);
             }
             ok.Click += (s, e) => Apply();
             foreach (var tb in new[] { cond, hits, log })
@@ -666,7 +722,7 @@ namespace codeLess.AvaloniaApp
         {
             if (canvasPoint.HasValue) debugHoverPoint = canvasPoint.Value;
             var buf = PrimaryEditor.CurrentBuffer;
-            if (buf == null || !debugController.IsStopped) return;
+            if (buf == null || debugController == null || !debugController.IsStopped) return;
             if (!PrimaryEditor.Canvas.TryGetDocPositionAt(debugHoverPoint, out int line, out int col)) return;
             string expr = DebugController.ExpressionAt(buf.Lines[line], col);
             if (string.IsNullOrEmpty(expr)) return;
@@ -695,16 +751,16 @@ namespace codeLess.AvaloniaApp
             {
                 new PaletteEntryItem { Category = "Debug", Title = "Start Debugging", Shortcut = "F5", Execute = StartOrContinueDebugging },
                 new PaletteEntryItem { Category = "Debug", Title = "Run Without Debugging", Shortcut = "Ctrl+F5", Execute = RunActiveFileInTerminal },
-                new PaletteEntryItem { Category = "Debug", Title = "Stop", Shortcut = "Shift+F5", Execute = () => _ = debugController.StopAsync() },
-                new PaletteEntryItem { Category = "Debug", Title = "Restart", Shortcut = "Ctrl+Shift+F5", Execute = () => debugController.Restart() },
-                new PaletteEntryItem { Category = "Debug", Title = "Pause", Shortcut = "F6", Execute = () => debugController.Pause() },
-                new PaletteEntryItem { Category = "Debug", Title = "Step Over", Shortcut = "F10", Execute = () => debugController.StepOver() },
-                new PaletteEntryItem { Category = "Debug", Title = "Step Into", Shortcut = "F11", Execute = () => debugController.StepInto() },
-                new PaletteEntryItem { Category = "Debug", Title = "Step Out", Shortcut = "Shift+F11", Execute = () => debugController.StepOut() },
+                new PaletteEntryItem { Category = "Debug", Title = "Stop", Shortcut = "Shift+F5", Execute = () => { if (debugController != null) _ = debugController.StopAsync(); } },
+                new PaletteEntryItem { Category = "Debug", Title = "Restart", Shortcut = "Ctrl+Shift+F5", Execute = () => debugController?.Restart() },
+                new PaletteEntryItem { Category = "Debug", Title = "Pause", Shortcut = "F6", Execute = () => debugController?.Pause() },
+                new PaletteEntryItem { Category = "Debug", Title = "Step Over", Shortcut = "F10", Execute = () => debugController?.StepOver() },
+                new PaletteEntryItem { Category = "Debug", Title = "Step Into", Shortcut = "F11", Execute = () => debugController?.StepInto() },
+                new PaletteEntryItem { Category = "Debug", Title = "Step Out", Shortcut = "Shift+F11", Execute = () => debugController?.StepOut() },
                 new PaletteEntryItem { Category = "Debug", Title = "Toggle Breakpoint", Shortcut = "F9", Execute = ToggleBreakpointAtCursor },
                 new PaletteEntryItem { Category = "Debug", Title = "Add Conditional Breakpoint...", Execute = () => { if (activeTab?.FilePath != null) PromptBreakpointOptions(activeTab.FilePath, activeTab.CursorLine, "condition"); } },
                 new PaletteEntryItem { Category = "Debug", Title = "Add Logpoint...", Execute = () => { if (activeTab?.FilePath != null) PromptBreakpointOptions(activeTab.FilePath, activeTab.CursorLine, "log"); } },
-                new PaletteEntryItem { Category = "Debug", Title = "Remove All Breakpoints", Execute = () => debugController.Breakpoints.RemoveAll() },
+                new PaletteEntryItem { Category = "Debug", Title = "Remove All Breakpoints", Execute = () => debugController?.Breakpoints.RemoveAll() },
                 new PaletteEntryItem { Category = "Debug", Title = "Debug Active File", Execute = () => { selectedDebugConfigName = DebugController.ActiveFileConfigName; StartDebugging(); } },
                 new PaletteEntryItem { Category = "Debug", Title = "Create launch.json", Execute = CreateLaunchJson },
                 new PaletteEntryItem { Category = "Debug", Title = "Open Debug Console", Shortcut = "Ctrl+Shift+Y", Execute = () => { btmDebugConsoleTabBtn.IsVisible = true; SwitchBottomTab("debug"); } },

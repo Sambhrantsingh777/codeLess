@@ -604,5 +604,17 @@ namespace codeLess.Studio
             owner.UpdateCursorStatusLabel();
             Invalidate();
         }
+
+        public void ReleaseBufferReferencesWF(EditorTabBuffer buf)
+        {
+            if (buf != null) buf.ExtraCaretsForUndo = null;
+            if (buf == null || ReferenceEquals(wfOccBuf, buf)) { wfOccBuf = null; wfOccTarget = null; }
+            if (buf == null || ReferenceEquals(wfGuideBuf, buf)) { wfGuideBuf = null; wfGuide = ActiveIndentGuide.None; }
+            if (buf == null || ReferenceEquals(wfAnimBuf, buf)) { wfAnimBuf = null; wfVAnim.Finish(); wfHAnim.Finish(); }
+            if (buf == null || ReferenceEquals(wfRevealBuf, buf)) { wfRevealBuf = null; }
+            if (buf == null || ReferenceEquals(wfCaretBuf, buf)) { wfCaretBuf = null; wfCaretHasLast = false; }
+            wfSession = null;
+            wfFrameSpans.Clear();
+        }
     }
 }

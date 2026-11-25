@@ -33,6 +33,15 @@ namespace codeLess.AvaloniaApp
             ClipToBounds = true;
         }
 
+        internal void ReleaseBuffer(EditorTabBuffer buf)
+        {
+            if (buf == null || ReferenceEquals(lastBuf, buf))
+            {
+                lastBuf = null;
+                hasLast = false;
+            }
+        }
+
         /// <summary>True while the caret glides to a new position (the canvas keeps requesting animation frames).</summary>
         public bool NeedsFrames => move.IsActive;
         /// <summary>Primary caret rectangle painted in the last frame (tests); empty when hidden.</summary>

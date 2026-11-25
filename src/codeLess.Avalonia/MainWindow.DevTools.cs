@@ -48,25 +48,46 @@ namespace codeLess.AvaloniaApp
         private int bufferEditStamp;
 
         public AuxPaneHost AuxPane => auxPane;
-        public GitBlameService BlameService => blameService;
+        public GitBlameService BlameService => EnsureBlameService();
         public bool IsLineBlameEnabled => settings != null && settings.ShowInlineGitBlame;
         public bool IsFileBlameEnabled => fileBlameMode;
         public bool IsAuxPaneVisible => auxPane != null && auxPane.IsVisible;
         public Border BlameHoverCard => blameCard;
 
+        private GitBlameService EnsureBlameService()
+        {
+            if (blameService == null)
+            {
+                blameService = new GitBlameService();
+                blameService.BlameReady += path => devToolsUi?.Post(() =>
+                {
+                    if (activeTab != null && string.Equals(activeTab.FilePath, path, StringComparison.OrdinalIgnoreCase))
+                    {
+                        PrimaryEditor.Canvas.InvalidateVisual();
+                        if (isEditorSplit) SplitEditor.Canvas.InvalidateVisual();
+                    }
+                });
+                blameService.StatusMessage += msg => devToolsUi?.Post(() => SetStatusMessage(msg));
+            }
+            return blameService;
+        }
+
+        private void UpdateDevToolsPollTimer()
+        {
+            if (devToolsPoll == null || windowClosed) return;
+            if (IsLineBlameEnabled || fileBlameMode)
+            {
+                if (!devToolsPoll.IsEnabled) devToolsPoll.Start();
+            }
+            else
+            {
+                devToolsPoll.Stop();
+            }
+        }
+
         private void InitializeDevTools()
         {
             devToolsUi = UiPost.CaptureCurrent();
-            blameService = new GitBlameService();
-            blameService.BlameReady += path => devToolsUi.Post(() =>
-            {
-                if (activeTab != null && string.Equals(activeTab.FilePath, path, StringComparison.OrdinalIgnoreCase))
-                {
-                    PrimaryEditor.Canvas.InvalidateVisual();
-                    if (isEditorSplit) SplitEditor.Canvas.InvalidateVisual();
-                }
-            });
-            blameService.StatusMessage += msg => devToolsUi.Post(() => SetStatusMessage(msg));
 
             blameDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
             blameDebounce.Tick += (s, e) => { blameDebounce.Stop(); RequestBlameForActiveBuffer(); };
@@ -84,7 +105,7 @@ namespace codeLess.AvaloniaApp
                     ScheduleBlame();
                 }
             };
-            devToolsPoll.Start();
+            UpdateDevToolsPollTimer();
 
             foreach (var ed in new[] { PrimaryEditor, SplitEditor })
             {
@@ -277,7 +298,7 @@ namespace codeLess.AvaloniaApp
 
         private void ScheduleBlame()
         {
-            if (blameDebounce == null) return;
+            if (blameDebounce == null || (!IsLineBlameEnabled && !fileBlameMode)) return;
             blameDebounce.Stop();
             blameDebounce.Start();
         }
@@ -291,7 +312,7 @@ namespace codeLess.AvaloniaApp
             if (buf.HasFinalNewline) content += "\n";
             string key = GitBlameService.ComputeContentKey(content);
             expectedBlameKeys[buf.FilePath] = key;
-            blameService.Request(buf.FilePath, content, buf.IsDirty, buf.CursorLine, buf.Lines.Count);
+            EnsureBlameService().Request(buf.FilePath, content, buf.IsDirty, buf.CursorLine, buf.Lines.Count);
             PrimaryEditor.Canvas.InvalidateVisual();
         }
 
@@ -299,6 +320,7 @@ namespace codeLess.AvaloniaApp
         {
             settings.ShowInlineGitBlame = !settings.ShowInlineGitBlame;
             try { settings.Save(); } catch { }
+            UpdateDevToolsPollTimer();
             SetStatusMessage("Inline git blame: " + (IsLineBlameEnabled ? "On" : "Off"));
             if (IsLineBlameEnabled) RequestBlameForActiveBuffer();
             PrimaryEditor.Canvas.InvalidateVisual();
@@ -307,6 +329,7 @@ namespace codeLess.AvaloniaApp
         public void ToggleFileBlame()
         {
             fileBlameMode = !fileBlameMode;
+            UpdateDevToolsPollTimer();
             SetStatusMessage("File blame: " + (fileBlameMode ? "On" : "Off"));
             if (fileBlameMode) RequestBlameForActiveBuffer();
             PrimaryEditor.Canvas.InvalidateVisual();
@@ -357,7 +380,8 @@ namespace codeLess.AvaloniaApp
             if (devToolsOverlay == null || bl == null || bl.Commit == null) return;
             var c = bl.Commit;
             var t = currentTheme;
-            var res = blameService.TryGetCached(buf.FilePath);
+            var bs = EnsureBlameService();
+            var res = bs.TryGetCached(buf.FilePath);
             string repo = res != null ? res.RepoRoot : GitCli.FindRepoRoot(buf.FilePath);
             if (blameCard == null)
             {
@@ -395,14 +419,14 @@ namespace codeLess.AvaloniaApp
                 });
                 var msg = new SelectableTextBlock { Text = c.Summary, TextWrapping = TextWrapping.Wrap, Foreground = fg, FontSize = 12.5, Margin = new Thickness(0, 4, 0, 4) };
                 sp.Children.Add(msg);
-                string full = blameService.TryGetFullMessage(repo, c.Hash);
+                string full = bs.TryGetFullMessage(repo, c.Hash);
                 if (full != null) msg.Text = full;
                 else
                 {
                     string capturedRepo = repo, hash = c.Hash;
                     Task.Run(() =>
                     {
-                        string m = blameService.LoadFullMessage(capturedRepo, hash);
+                        string m = bs.LoadFullMessage(capturedRepo, hash);
                         devToolsUi.Post(() => { if (!string.IsNullOrEmpty(m)) msg.Text = m; });
                     });
                 }

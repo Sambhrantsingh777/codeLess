@@ -78,17 +78,72 @@ namespace codeLess.Studio
 
         public List<ByokVendor> Vendors = new List<ByokVendor>();
         public List<LlmHarnessProfile> Harnesses = new List<LlmHarnessProfile>();
-        public List<Bm25CodeChunk> IndexedChunks = new List<Bm25CodeChunk>();
-        public List<string> WorkspaceSymbols = new List<string>();
-        public List<WorkspaceSymbolLocation> WorkspaceSymbolMap = new List<WorkspaceSymbolLocation>();
+        private List<Bm25CodeChunk> _indexedChunks = new List<Bm25CodeChunk>();
+        private List<string> _workspaceSymbols = new List<string>();
+        private List<WorkspaceSymbolLocation> _workspaceSymbolMap = new List<WorkspaceSymbolLocation>();
         public List<HarnessTraceEntry> TraceHistory = new List<HarnessTraceEntry>();
         public FileTimeTracker FileTimeTracker = new FileTimeTracker();
 
 
         private Dictionary<string, int> docFreq = new Dictionary<string, int>();
         private double avgChunkTokens = 100.0;
-        public string ProjectRulesText = "";
-        public string CompactRepoMap = "";
+        private string _projectRulesText = "";
+        private string _compactRepoMap = "";
+        public Action OnEnsureIndexed;
+        private bool _isEnsuringIndex;
+
+        private void EnsureIndexedIfNeeded()
+        {
+            if (_isEnsuringIndex) return;
+            var cb = OnEnsureIndexed;
+            if (cb == null) return;
+            if (_indexedChunks != null && _indexedChunks.Count == 0 && _workspaceSymbolMap != null && _workspaceSymbolMap.Count == 0)
+            {
+                _isEnsuringIndex = true;
+                try { cb(); }
+                finally { _isEnsuringIndex = false; }
+            }
+        }
+
+        public List<Bm25CodeChunk> IndexedChunks
+        {
+            get { EnsureIndexedIfNeeded(); return _indexedChunks; }
+            set { _indexedChunks = value ?? new List<Bm25CodeChunk>(); }
+        }
+
+        public List<string> WorkspaceSymbols
+        {
+            get { EnsureIndexedIfNeeded(); return _workspaceSymbols; }
+            set { _workspaceSymbols = value ?? new List<string>(); }
+        }
+
+        public List<WorkspaceSymbolLocation> WorkspaceSymbolMap
+        {
+            get { EnsureIndexedIfNeeded(); return _workspaceSymbolMap; }
+            set { _workspaceSymbolMap = value ?? new List<WorkspaceSymbolLocation>(); }
+        }
+
+        public string ProjectRulesText
+        {
+            get { EnsureIndexedIfNeeded(); return _projectRulesText; }
+            set { _projectRulesText = value ?? ""; }
+        }
+
+        public string CompactRepoMap
+        {
+            get { EnsureIndexedIfNeeded(); return _compactRepoMap; }
+            set { _compactRepoMap = value ?? ""; }
+        }
+
+        public void ClearWorkspaceIndex()
+        {
+            _indexedChunks = new List<Bm25CodeChunk>();
+            _workspaceSymbols = new List<string>();
+            _workspaceSymbolMap = new List<WorkspaceSymbolLocation>();
+            docFreq = new Dictionary<string, int>();
+            _projectRulesText = "";
+            _compactRepoMap = "";
+        }
         public bool LocalOllamaDetected = false;
         private HashSet<string> NativeToolsUnsupportedVendors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -887,16 +942,25 @@ namespace codeLess.Studio
             return null;
         }
 
+        private static readonly Regex SharedExtraMethodRegex = new Regex(
+            @"^\s*(?:(?:public|private|protected|internal|static|virtual|override|async|export|default)\s+)*(?:[A-Za-z_][A-Za-z0-9_<>,\.\[\]\?]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*(?:\{|=>|:)",
+            RegexOptions.Compiled);
+
+        private static readonly HashSet<string> SharedControlKeywords = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "if", "for", "foreach", "while", "switch", "catch", "using", "lock", "return", "new", "sizeof", "typeof", "nameof", "await"
+        };
+
         public void IndexWorkspace(string workspaceRoot, List<string> filePaths, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken), Action<int> onProgress = null)
         {
             if (string.IsNullOrEmpty(workspaceRoot) || !Directory.Exists(workspaceRoot) || filePaths == null)
             {
-                IndexedChunks = new List<Bm25CodeChunk>();
-                WorkspaceSymbols = new List<string>();
-                WorkspaceSymbolMap = new List<WorkspaceSymbolLocation>();
+                _indexedChunks = new List<Bm25CodeChunk>();
+                _workspaceSymbols = new List<string>();
+                _workspaceSymbolMap = new List<WorkspaceSymbolLocation>();
                 docFreq = new Dictionary<string, int>();
-                ProjectRulesText = "";
-                CompactRepoMap = "<repository_map>\n  (No workspace folder open)\n</repository_map>";
+                _projectRulesText = "";
+                _compactRepoMap = "<repository_map>\n  (No workspace folder open)\n</repository_map>";
                 return;
             }
 
@@ -913,7 +977,8 @@ namespace codeLess.Studio
 
             List<Bm25CodeChunk> newChunks = new List<Bm25CodeChunk>();
             List<WorkspaceSymbolLocation> newSymbolMap = new List<WorkspaceSymbolLocation>();
-            Dictionary<string, int> newDocFreq = new Dictionary<string, int>();
+            Dictionary<string, int> newDocFreq = new Dictionary<string, int>(StringComparer.Ordinal);
+            Dictionary<string, string> termPool = new Dictionary<string, string>(StringComparer.Ordinal);
 
             StringBuilder repoMapSb = new StringBuilder();
             repoMapSb.AppendLine("<repository_map workspace=\"" + Path.GetFileName(workspaceRoot) + "\">");
@@ -922,13 +987,8 @@ namespace codeLess.Studio
 
             HashSet<string> uniqueSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int indexedFiles = 0;
-            Regex extraMethodRegex = new Regex(
-                @"^\s*(?:(?:public|private|protected|internal|static|virtual|override|async|export|default)\s+)*(?:[A-Za-z_][A-Za-z0-9_<>,\.\[\]\?]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*(?:\{|=>|:)",
-                RegexOptions.Compiled);
-            HashSet<string> controlKeywords = new HashSet<string>(StringComparer.Ordinal)
-            {
-                "if", "for", "foreach", "while", "switch", "catch", "using", "lock", "return", "new", "sizeof", "typeof", "nameof", "await"
-            };
+            Regex extraMethodRegex = SharedExtraMethodRegex;
+            HashSet<string> controlKeywords = SharedControlKeywords;
 
             int maxFiles = 2500;
             foreach (string rawPath in filePaths)
@@ -1037,8 +1097,14 @@ namespace codeLess.Studio
                         };
 
                         List<string> indexedTerms = TokenizeSearchTerms(relPath + " " + detectedSym + " " + snippet);
-                        foreach (string term in indexedTerms)
+                        foreach (string rawTerm in indexedTerms)
                         {
+                            string term;
+                            if (!termPool.TryGetValue(rawTerm, out term))
+                            {
+                                term = rawTerm;
+                                termPool[rawTerm] = rawTerm;
+                            }
                             int count;
                             chunk.TermFreq.TryGetValue(term, out count);
                             chunk.TermFreq[term] = count + 1;
@@ -1062,12 +1128,12 @@ namespace codeLess.Studio
 
             if (ct.IsCancellationRequested) return;
             repoMapSb.AppendLine("</repository_map>");
-            ProjectRulesText = newRulesText;
-            CompactRepoMap = repoMapSb.ToString();
-            WorkspaceSymbols = uniqueSymbols.OrderBy(s => s).ToList();
-            WorkspaceSymbolMap = newSymbolMap;
+            _projectRulesText = newRulesText;
+            _compactRepoMap = repoMapSb.ToString();
+            _workspaceSymbols = uniqueSymbols.OrderBy(s => s).ToList();
+            _workspaceSymbolMap = newSymbolMap;
             docFreq = newDocFreq;
-            IndexedChunks = newChunks;
+            _indexedChunks = newChunks;
 
             if (newChunks.Count > 0)
             {

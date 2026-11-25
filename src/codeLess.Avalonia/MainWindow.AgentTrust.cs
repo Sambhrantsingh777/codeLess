@@ -42,25 +42,35 @@ namespace codeLess.AvaloniaApp
         /// <summary>Test hook: answers the undo / redo confirmation ("cancel", "skip" = keep conflicting files, "overwrite").</summary>
         public Func<TurnRestorePlan, string> AgentRestoreConfirmOverride { get; set; }
 
-        public AgentTrustCoordinator AgentTrust => agentTrust;
+        public AgentTrustCoordinator AgentTrust => EnsureAgentTrust();
+
+        private AgentTrustCoordinator EnsureAgentTrust()
+        {
+            if (agentTrust == null)
+            {
+                if (agentTrustUi == null) agentTrustUi = UiPost.CaptureCurrent();
+                agentTrust = new AgentTrustCoordinator(settings) { RequestApproval = RequestVerifyApproval };
+            }
+            return agentTrust;
+        }
 
         private void InitAgentTrust()
         {
             agentTrustUi = UiPost.CaptureCurrent();
-            agentTrust = new AgentTrustCoordinator(settings) { RequestApproval = RequestVerifyApproval };
-            Closed += (s, e) => { agentTrustClosed = true; agentTrust.CancelRun(); SubscribeStore(null); };
+            Closed += (s, e) => { agentTrustClosed = true; agentTrust?.CancelRun(); SubscribeStore(null); };
             AgentFeed.CustomCardBuilder = BuildAgentTrustCard;
             AgentFeed.RestoreCheckpointRequested += (item, index) => _ = RestoreToUserMessageAsync(item);
             PrimaryEditor.DiffAllDecisionRequested += OnEditorDiffAllDecision;
             AddAgentTrustComposerControls();
             AddAgentTrustBannerButton();
-            // Verification copies left behind by a crash are removed at the next start.
-            Task.Run(() => { try { VerificationOverlay.CleanupStale(TimeSpan.FromHours(12)); } catch { } });
+            // Verification copies left behind by a crash are removed at the next start (only on live desktop).
+            if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime)
+                Task.Run(() => { try { VerificationOverlay.CleanupStale(TimeSpan.FromHours(12)); } catch { } });
         }
 
         private AgentTurnCheckpointStore CurrentTurnStore()
         {
-            var store = agentTrust?.GetStore(workspaceRoot);
+            var store = EnsureAgentTrust().GetStore(workspaceRoot);
             SubscribeStore(store);
             return store;
         }
@@ -175,7 +185,7 @@ namespace codeLess.AvaloniaApp
                 IsVisible = false
             };
             csAcceptVerifiedBtn.Name = "AcceptIfVerifiedBtn";
-            csAcceptVerifiedBtn.Click += (s, e) => { var cs = agentTrust.ActiveChangeSet; if (cs != null) AcceptAgentChangeSet(cs, onlyIfVerified: true); };
+            csAcceptVerifiedBtn.Click += (s, e) => { var cs = agentTrust?.ActiveChangeSet; if (cs != null) AcceptAgentChangeSet(cs, onlyIfVerified: true); };
             Grid.SetColumn(csAcceptVerifiedBtn, csGrid.ColumnDefinitions.Count - 1);
             csGrid.Children.Add(csAcceptVerifiedBtn);
         }
@@ -230,7 +240,7 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Agent", Title = "Verification: Verify Proposed Changes", Execute = () => SetAgentVerifyMode(AgentVerifyMode.Verify) },
                 new PaletteEntryItem { Category = "Agent", Title = "Verification: Verify + Auto-Repair", Execute = () => SetAgentVerifyMode(AgentVerifyMode.VerifyAndRepair) },
                 new PaletteEntryItem { Category = "Agent", Title = "Verification Command...", Execute = ShowVerificationSettingsModal },
-                new PaletteEntryItem { Category = "Agent", Title = "Verify Pending Changes", Execute = () => { var cs = agentTrust.ActiveChangeSet; if (cs != null) _ = ReverifyAgentChangeSetAsync(cs, false); else SetStatusMessage("No pending agent changes."); } },
+                new PaletteEntryItem { Category = "Agent", Title = "Verify Pending Changes", Execute = () => { var cs = agentTrust?.ActiveChangeSet; if (cs != null) _ = ReverifyAgentChangeSetAsync(cs, false); else SetStatusMessage("No pending agent changes."); } },
                 new PaletteEntryItem { Category = "Agent", Title = "Timeline (Undo / Redo Turns)...", Execute = ShowAgentTimelineModal },
                 new PaletteEntryItem { Category = "Agent", Title = "Redo Last Undone Turn", Execute = () => _ = RedoAgentTurnAsync() },
                 new PaletteEntryItem { Category = "Agent", Title = "Best-of-N Arena...", Execute = ShowBestOfNModal },
@@ -303,7 +313,7 @@ namespace codeLess.AvaloniaApp
             return new AgentTurnRequest
             {
                 // A detached copy of the editor: repair / Best-of-N turns run on worker threads.
-                Engine = aiEngine, Mode = mode, Prompt = prompt, Vendor = vendor, HarnessId = harnessId, ActiveTab = AgentTurnInputs.SnapshotTab(tab),
+                Engine = EnsureAiEngine(), Mode = mode, Prompt = prompt, Vendor = vendor, HarnessId = harnessId, ActiveTab = AgentTurnInputs.SnapshotTab(tab),
                 WorkspaceRoot = ws, WorkspaceFiles = files ?? new List<string>(), Pills = pills ?? new List<string>(), TerminalText = term ?? "",
                 BaseTextProvider = SnapshotBufferTexts()
             };
@@ -336,7 +346,7 @@ namespace codeLess.AvaloniaApp
                 AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = $"Completed in {turn?.ElapsedMs ?? 0} ms" });
                 return;
             }
-            var cs = agentTrust.CreateChangeSet(staged, req.WorkspaceRoot, req.BaseTextProvider, ShortLabel(req.Prompt), turnId);
+            var cs = EnsureAgentTrust().CreateChangeSet(staged, req.WorkspaceRoot, req.BaseTextProvider, ShortLabel(req.Prompt), turnId);
             cs.ProviderLabel = turn.ProviderUsed;
             PresentChangeSet(cs, stageActiveInline: true);
             var mode = settings.EffectiveAgentVerifyMode;
@@ -346,12 +356,13 @@ namespace codeLess.AvaloniaApp
 
         private void PresentChangeSet(AgentChangeSet cs, bool stageActiveInline)
         {
+            var trust = EnsureAgentTrust();
             CurrentTurnStore();
             if (!string.IsNullOrEmpty(cs.TurnId)) sessionTurnIds.Add(cs.TurnId);
             foreach (var f in cs.Files)
             {
                 // A newer proposal for the same file supersedes older pending ones.
-                foreach (var older in agentTrust.ChangeSets.Where(c => !ReferenceEquals(c, cs)).ToList())
+                foreach (var older in trust.ChangeSets.Where(c => !ReferenceEquals(c, cs)).ToList())
                 {
                     var stale = older.Find(f.FullPath);
                     if (stale != null && stale.IsPending) { stale.Status = "Rejected"; SyncDiffCardStatuses(older); }
@@ -433,9 +444,10 @@ namespace codeLess.AvaloniaApp
         /// <summary>Verifies (and in Verify+Repair mode repairs) a change set; progress and the result show in a chat card.</summary>
         public async Task<AgentVerifiedTurnOutcome> RunAgentVerificationAsync(AgentChangeSet cs, AgentTurnRequest req, AgentVerifyMode mode)
         {
+            var trust = EnsureAgentTrust();
             var item = new AvaloniaAgentFeedItem { Role = "verification", ChangeSet = cs, IsRunning = true, ProgressText = "Preparing a temporary copy of the workspace…" };
             AgentFeed.AddMessage(item);
-            var token = agentTrust.BeginRun();
+            var token = trust.BeginRun();
             var ui = agentTrustUi;
             RefreshChangesetBanner();
             // Live progress only drives the "Verifying…" line; the final transcript is built from the outcome.
@@ -445,7 +457,7 @@ namespace codeLess.AvaloniaApp
                 item.ProgressText = e.Message;
                 AgentFeed.RebuildVisualFeed();
             });
-            var t = agentTrust.VerifyAndRepairAsync(cs, req, mode, progress, token); // snapshots proposals here, then runs on the pool
+            var t = trust.VerifyAndRepairAsync(cs, req, mode, progress, token); // snapshots proposals here, then runs on the pool
             AgentVerifiedTurnOutcome outcome = null;
             try
             {
@@ -457,7 +469,7 @@ namespace codeLess.AvaloniaApp
             }
             finally
             {
-                agentTrust.EndRun(token);
+                trust.EndRun(token);
             }
             AgentTrustCoordinator.ApplyOutcome(cs, outcome, req?.BaseTextProvider);
             item.IsRunning = false;
@@ -577,7 +589,7 @@ namespace codeLess.AvaloniaApp
                     summary.Conflicts.Add(f.RelativePath + " has unsaved changes in the editor");
                     continue;
                 }
-                var res = agentTrust.Accept(cs, new[] { f }, overwriteConflicts);
+                var res = EnsureAgentTrust().Accept(cs, new[] { f }, overwriteConflicts);
                 summary.Written.AddRange(res.Written);
                 summary.Conflicts.AddRange(res.Conflicts.Select(c => c + " changed on disk since the proposal"));
                 summary.Errors.AddRange(res.Errors);
@@ -946,7 +958,8 @@ namespace codeLess.AvaloniaApp
             string mode = currentAgentMode == "ask" ? "composer" : currentAgentMode;
             var req = BuildAgentTurnRequest(prompt, mode, ResolvePreferredVendor(), settings.ActiveHarnessId, activeTab, workspaceRoot, workspaceFiles.ToList(), pills,
                 activeTerminalSession?.Control?.GetVisibleScreenText() ?? "");
-            var run = agentTrust.PlanBestOfN(req, settings.EffectiveAgentBestOfNCount);
+            var trust = EnsureAgentTrust();
+            var run = trust.PlanBestOfN(req, settings.EffectiveAgentBestOfNCount);
             if (run.Specs.Count < 2)
             {
                 AgentFeed.AddMessage(new AvaloniaAgentFeedItem
@@ -958,7 +971,7 @@ namespace codeLess.AvaloniaApp
             }
             var item = new AvaloniaAgentFeedItem { Role = "bestofn", BestOfN = run, IsRunning = true, Content = prompt };
             AgentFeed.AddMessage(item);
-            var token = agentTrust.BeginRun();
+            var token = trust.BeginRun();
             var ui = agentTrustUi;
             Action<BestOfNCandidateResult> onUpdate = r => ui.Post(() =>
             {
@@ -969,7 +982,7 @@ namespace codeLess.AvaloniaApp
             var t = Task.Run(async () =>
             {
                 EnsureWorkspaceIndexed();
-                return await agentTrust.RunBestOfNAsync(req, run, true, onUpdate, token).ConfigureAwait(false);
+                return await trust.RunBestOfNAsync(req, run, true, onUpdate, token).ConfigureAwait(false);
             });
             try
             {
@@ -979,7 +992,7 @@ namespace codeLess.AvaloniaApp
             {
                 item.ProgressLog.Add("Best-of-N failed: " + ex.Message);
             }
-            finally { agentTrust.EndRun(token); }
+            finally { trust.EndRun(token); }
             item.IsRunning = false;
             AgentFeed.RebuildVisualFeed();
             AgentFeed.ScrollToBottom();
@@ -991,7 +1004,7 @@ namespace codeLess.AvaloniaApp
         /// <summary>Adopts a candidate: it becomes the reviewable change set (nothing is written).</summary>
         public AgentChangeSet AdoptBestOfNCandidate(AvaloniaAgentFeedItem item, BestOfNCandidateResult candidate)
         {
-            var cs = agentTrust.Adopt(candidate);
+            var cs = EnsureAgentTrust().Adopt(candidate);
             if (cs == null) return null;
             if (item != null) item.ProgressText = "Adopted: " + candidate.Spec.Label;
             AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = "Adopted " + candidate.Spec.Label + " — review the changes below; nothing is written until you accept." });
@@ -1161,7 +1174,7 @@ namespace codeLess.AvaloniaApp
             var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
             void AddBtn(Button b) { b.Margin = new Thickness(0, 2, 6, 0); buttons.Children.Add(b); }
             var cs = item.ChangeSet;
-            if (item.IsRunning) AddBtn(SmallButton("Stop", false, () => agentTrust.CancelRun(), "VerifyStopBtn"));
+            if (item.IsRunning) AddBtn(SmallButton("Stop", false, () => agentTrust?.CancelRun(), "VerifyStopBtn"));
             else if (cs != null && cs.HasPending)
             {
                 if (cs.IsVerifiedPassing) AddBtn(SmallButton("Accept All (Verified)", true, () => AcceptAgentChangeSet(cs, onlyIfVerified: true), "AcceptVerifiedBtn"));
@@ -1343,7 +1356,7 @@ namespace codeLess.AvaloniaApp
             }
             if (adopted) stack.Children.Add(new TextBlock { Text = item.ProgressText, FontSize = UiTokens.FontSmall, Foreground = WorkbenchStyles.B(currentTheme.FgSecondary) });
             foreach (var log in item.ProgressLog) stack.Children.Add(new TextBlock { Text = log, FontSize = UiTokens.FontSmall, TextWrapping = TextWrapping.Wrap, Foreground = WorkbenchStyles.B(currentTheme.FgSecondary) });
-            if (item.IsRunning) stack.Children.Add(SmallButton("Stop", false, () => agentTrust.CancelRun()));
+            if (item.IsRunning) stack.Children.Add(SmallButton("Stop", false, () => agentTrust?.CancelRun()));
             return Card(stack);
         }
     }

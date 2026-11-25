@@ -136,7 +136,11 @@ namespace codeLess.AvaloniaApp
 
         private void LspOnTabClosed(EditorTabBuffer tab)
         {
-            foreach (var b in lspBindings) b.HideAll();
+            foreach (var b in lspBindings)
+            {
+                b.ReleaseBuffer(tab);
+                b.HideAll();
+            }
             if (lsp == null) return;
             LspSyncOpenDocuments();
         }
@@ -929,6 +933,12 @@ namespace codeLess.AvaloniaApp
 
         private EditorTabBuffer noWordsBuf;
         private int noWordsLine = -1, noWordsStart = -1, noWordsCol = -1;
+
+        internal void ReleaseBuffer(EditorTabBuffer tab)
+        {
+            if (tab == null || ReferenceEquals(noWordsBuf, tab)) noWordsBuf = null;
+            if (tab == null || ReferenceEquals(popupOwner, tab)) popupOwner = null;
+        }
 
         /// <summary>Words of the open documents of the same language + the language's snippets, in the suggest widget.</summary>
         public void ShowWordBasedSuggestions()

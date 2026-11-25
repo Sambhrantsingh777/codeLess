@@ -208,12 +208,13 @@ namespace codeLess.AvaloniaApp
                     using var probe = new BenchProbe();
                     await Task.Run(() => EnsureWorkspaceIndexed());
                     double t = probe.Sw.Elapsed.TotalMilliseconds;
-                    int chunks = aiEngine.IndexedChunks?.Count ?? 0;
-                    int filesIdx = aiEngine.IndexedChunks?.Select(c => c.FilePath).Distinct().Count() ?? 0;
+                    var eng = EnsureAiEngine();
+                    int chunks = eng.IndexedChunks?.Count ?? 0;
+                    int filesIdx = eng.IndexedChunks?.Select(c => c.FilePath).Distinct().Count() ?? 0;
                     long peak = probe.PeakRss / 1048576;
                     probe.Dispose();
                     long liveAfter = LiveManagedMbAfterGc();
-                    Log($"bm25: time_ms={t:F0} cpu_ms={probe.CpuMs:F0} files={filesIdx} chunks={chunks} symbols={aiEngine.WorkspaceSymbols?.Count ?? 0} " +
+                    Log($"bm25: time_ms={t:F0} cpu_ms={probe.CpuMs:F0} files={filesIdx} chunks={chunks} symbols={eng.WorkspaceSymbols?.Count ?? 0} " +
                         $"peak_rss_mb={peak} managed_live_delta_mb={liveAfter - liveBefore} max_ui_stall_ms={probe.MaxUiGapMs:F0} status={LastIndexStatusForBench()}");
                 }
 

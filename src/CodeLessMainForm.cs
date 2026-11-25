@@ -8968,7 +8968,12 @@ if __name__ == '__main__':
                 closedTabPaths.Push(captured.FilePath);
 
             openTabs.Remove(captured);
-            if (captured.OnClosed != null) { try { captured.OnClosed(); } catch { } }
+            if (captured.OnClosed != null)
+            {
+                Action cb = captured.OnClosed;
+                captured.OnClosed = null;
+                try { cb(); } catch { }
+            }
             bool anySameFileRemaining = openTabs.Any(t =>
                 (!string.IsNullOrEmpty(captured.FilePath) && string.Equals(t.FilePath, captured.FilePath, StringComparison.OrdinalIgnoreCase)) ||
                 (!string.IsNullOrEmpty(captured.FileName) && string.Equals(t.FileName, captured.FileName, StringComparison.OrdinalIgnoreCase)));
@@ -8998,6 +9003,11 @@ if __name__ == '__main__':
                     editorControl.LoadBuffer(activeTab);
                 }
             }
+            editorMruWin.Remove(captured);
+            if (editorControl != null && editorControl.Canvas != null)
+                editorControl.Canvas.ReleaseBufferReferencesWF(captured);
+            if (splitEditorControl != null && splitEditorControl.Canvas != null)
+                splitEditorControl.Canvas.ReleaseBufferReferencesWF(captured);
             if (explorerTree != null)
             {
                 explorerTree.ActiveEditorFilePath = activeTab != null ? activeTab.FilePath : "";
@@ -9030,6 +9040,11 @@ if __name__ == '__main__':
                 try { workspaceFileWatcher.Dispose(); } catch { }
                 workspaceFileWatcher = null;
             }
+            editorMruWin.Clear();
+            if (editorControl != null && editorControl.Canvas != null)
+                editorControl.Canvas.ReleaseBufferReferencesWF(null);
+            if (splitEditorControl != null && splitEditorControl.Canvas != null)
+                splitEditorControl.Canvas.ReleaseBufferReferencesWF(null);
             base.OnFormClosing(e);
         }
 

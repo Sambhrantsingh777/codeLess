@@ -21,11 +21,12 @@ namespace codeLess.AvaloniaApp
     {
         private ByokVendor ResolvePreferredVendor()
         {
-            return aiEngine.Vendors.FirstOrDefault(v =>
+            var eng = EnsureAiEngine();
+            return eng.Vendors.FirstOrDefault(v =>
                        string.Equals(v.Name, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase) ||
                        string.Equals(v.Id, StudioSettings.NormalizeProviderId(settings.ActiveProvider), StringComparison.OrdinalIgnoreCase) ||
                        string.Equals(v.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase))
-                   ?? aiEngine.Vendors.FirstOrDefault();
+                   ?? eng.Vendors.FirstOrDefault();
         }
 
         /// <summary>Returns the first fenced code block's body, or the trimmed reply when there is none.</summary>
@@ -105,7 +106,7 @@ namespace codeLess.AvaloniaApp
             string reply;
             try
             {
-                reply = await Task.Run(() => aiEngine.CallByokVendorAsync(vendor, system, user, 0.1));
+                reply = await Task.Run(() => EnsureAiEngine().CallByokVendorAsync(vendor, system, user, 0.1));
             }
             catch (Exception ex)
             {
@@ -166,7 +167,7 @@ namespace codeLess.AvaloniaApp
             string user = $"Current directory: {cwd}\nRequest: {prompt.Trim()}";
             try
             {
-                string reply = await Task.Run(() => aiEngine.CallByokVendorAsync(vendor, system, user, 0.0));
+                string reply = await Task.Run(() => EnsureAiEngine().CallByokVendorAsync(vendor, system, user, 0.0));
                 if (string.IsNullOrWhiteSpace(reply) || reply.StartsWith("Error:", StringComparison.Ordinal))
                     throw new Exception(string.IsNullOrWhiteSpace(reply) ? "empty response" : reply);
                 string cmd = ExtractFirstCodeBlock(reply);

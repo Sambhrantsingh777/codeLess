@@ -40,6 +40,35 @@ namespace codeLess.AvaloniaApp
         private StudioSettings settings;
         private StudioTheme currentTheme;
         private LlmHarnessAndAgentEngine aiEngine;
+
+        private LlmHarnessAndAgentEngine EnsureAiEngine()
+        {
+            if (aiEngine == null)
+            {
+                aiEngine = new LlmHarnessAndAgentEngine(settings);
+                aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
+                aiEngine.OnEnsureIndexed = EnsureWorkspaceIndexed;
+                aiEngine.DiagnosticsProvider = new LspDiagnosticsProvider();
+                aiEngine.OnAgentFeedStatus = msg => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (!windowClosed && AgentFeed != null)
+                        AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
+                });
+                aiEngine.OnTodosChanged = () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (!windowClosed && AgentFeed != null && aiEngine != null)
+                        AgentFeed.UpdateTodos(aiEngine.AgentTodos);
+                });
+            }
+            return aiEngine;
+        }
+
+        public bool IsAgentEngineCreated => aiEngine != null;
+        public bool IsAgentTrustCreated => agentTrust != null;
+        public bool IsDebuggerCreated => debugController != null;
+        public bool IsBlameServiceCreated => blameService != null;
+        public bool IsLanguageServerManagerCreated => lsp != null;
+        public bool IsNetworkPanelCreated => networkActivityWindow != null;
         private string workspaceRoot = "";
         private readonly List<string> workspaceFiles = new List<string>();
         private readonly List<string> additionalWorkspaceFolders = new List<string>();
@@ -499,16 +528,6 @@ namespace codeLess.AvaloniaApp
             if (PrimaryEditor?.Canvas != null) PrimaryEditor.Canvas.DisplayTabSize = Math.Max(1, Math.Min(16, settings.TabSize <= 0 ? 4 : settings.TabSize));
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
             EditorNicetyOptions.ApplyFrom(settings);
-            aiEngine = new LlmHarnessAndAgentEngine(settings);
-            aiEngine.DiagnosticsProvider = new LspDiagnosticsProvider();
-                        aiEngine.OnAgentFeedStatus = msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => {
-                if (AgentFeed != null)
-                    AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
-            });
-            aiEngine.OnTodosChanged = () => Avalonia.Threading.Dispatcher.UIThread.Post(() => {
-                if (AgentFeed != null)
-                    AgentFeed.UpdateTodos(aiEngine.AgentTodos);
-            });
             InitNetworkPrivacy();
             
             codeLess.Studio.IdeSettingsWatcher.Start();
@@ -518,7 +537,6 @@ namespace codeLess.AvaloniaApp
 
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
-            aiEngine.OnRequestToolApproval = RequestAgentToolApproval;
 
             BuildWorkbenchLayout();
             InitializeKeybindings();
@@ -618,6 +636,27 @@ namespace codeLess.AvaloniaApp
 
         private bool closeConfirmed;
 
+        public new void Close()
+        {
+            if (!IsVisible && !windowClosed)
+            {
+                if (!closeConfirmed && !SuppressUnsavedPrompts && openTabs.Any(t => t.IsDirty))
+                {
+                    if (!ConfirmSaveOrDiscardDirtyTabs(openTabs, () => { closeConfirmed = true; Close(); }))
+                        return;
+                    closeConfirmed = true;
+                }
+                base.Close();
+                if (!windowClosed) OnClosed(EventArgs.Empty);
+                return;
+            }
+            base.Close();
+            if (!windowClosed && (closeConfirmed || SuppressUnsavedPrompts || !openTabs.Any(UntitledFileDefaults.NeedsSavePrompt)))
+            {
+                OnClosed(EventArgs.Empty);
+            }
+        }
+
         protected override void OnClosing(WindowClosingEventArgs e)
         {
             // VS Code parity: quitting (Cmd+Q / red close button / Alt+F4) with modified files asks to save first.
@@ -635,9 +674,23 @@ namespace codeLess.AvaloniaApp
 
         protected override void OnClosed(EventArgs e)
         {
+            if (windowClosed)
+            {
+                base.OnClosed(e);
+                return;
+            }
             windowClosed = true; // late background results (analysis) must not touch this window any more
             codeLess.Studio.IdeSettingsWatcher.OnSettingsFileChanged -= OnSettingsFileChanged;
             codeLess.Studio.IdePersistentSettings.OnSettingsSavedInProcess -= OnSettingsFileChanged;
+            PythonInterpreterService.Changed -= OnPythonInterpretersChanged;
+            TaskProblemStore.Changed -= OnTaskProblemsChanged;
+            if (sharedUpdates != null) sharedUpdates.Changed -= OnUpdatesChangedAnyThread;
+            NetworkLedger.OfflineModeChanged -= OnNetworkOfflineModeChanged;
+            NetworkLedger.EntryAdded -= OnNetworkEntryAdded;
+            NetworkLedger.Cleared -= OnNetworkLedgerCleared;
+            try { networkActivityWindow?.Close(); } catch { }
+            networkActivityWindow = null;
+
             SaveWorkspaceSession();
             foreach (var tab in openTabs.ToList())
             {
@@ -647,7 +700,12 @@ namespace codeLess.AvaloniaApp
                     tab.OnClosed = null;
                     try { cb(); } catch { }
                 }
+                ReleaseClosedTabReferences(tab);
             }
+            openTabs.Clear();
+            editorMru.Clear();
+            activeTab = null;
+
             App.WindowManager?.UnregisterWindow(this);
             StopWorkspaceWatcher();
             if (workspaceSettingsTimer != null) { workspaceSettingsTimer.Dispose(); workspaceSettingsTimer = null; }
@@ -657,35 +715,101 @@ namespace codeLess.AvaloniaApp
             if (keybindingsWatcher != null) { keybindingsWatcher.Dispose(); keybindingsWatcher = null; }
             ShutdownLanguageServers();
             try { workspaceLoadCts?.Cancel(); } catch { }
-            if (debouncedUiSyncTimer != null)
-                debouncedUiSyncTimer.Stop();
+            try { workspaceSearchCts?.Cancel(); } catch { }
+            try { gitOpCts?.Cancel(); } catch { }
+
+            debouncedUiSyncTimer?.Stop();
+            devToolsPoll?.Stop();
+            blameDebounce?.Stop();
+            markdownDebounce?.Stop();
+            blameHoverTimer?.Stop();
+            debugHoverTimer?.Stop();
+            fsChangeDebounceTimer?.Stop();
+            autoFetchTimer?.Stop();
+            statusMessageTimer?.Stop();
+            searchOnTypeTimer?.Stop();
+            taskProblemsDebounce?.Stop();
+            autoSaveTimer?.Stop();
+            updatePeriodicTimer?.Stop();
+            sidebarProgressBar?.StopProgress();
+            chatProgressBar?.StopProgress();
+            PrimaryEditor?.Canvas?.StopAllTimersAndCaches();
+            SplitEditor?.Canvas?.StopAllTimersAndCaches();
+            auxPane?.CloseAll();
+
+            agentTrustClosed = true;
+            if (agentTrust != null)
+            {
+                try { agentTrust.CancelRun(); } catch { }
+                SubscribeStore(null);
+            }
+            if (debugController != null)
+            {
+                try { debugController.Session?.Dispose(); } catch { }
+            }
+            DebugKeysSkipShell = false;
+            foreach (var rt in runningTasks.ToList()) { try { rt.Exec.Terminate?.Invoke(); } catch { } }
+            runningTasks.Clear();
+
             foreach (var ts in terminalSessions.ToList())
             {
                 try { ts.Control?.StopShell(notifyExit: false); } catch { }
             }
             terminalSessions.Clear();
+            activeTerminalSession = null;
+            secondarySplitTerminalSession = null;
+            workspaceFiles.Clear();
+            indexCandidateFiles = null;
+            aiEngine?.ClearWorkspaceIndex();
+            tabDirtyDots.Clear();
+            tabCloseButtons.Clear();
+            DismissActiveNotificationToast();
+            foreach (var n in NotificationsHistory) { if (n != null) n.OnAction = null; }
+            NotificationsHistory.Clear();
+            SuppressedNotificationIds.Clear();
+            explorerClipboardPath = "";
+            ExplorerTree?.ProblemCountByFullPath?.Clear();
+            ExplorerTree?.GitStatusByFullPath?.Clear();
+            ExplorerTree?.ModifiedFolderPaths?.Clear();
+            ExplorerTree?.Nodes?.Clear();
+            CommandPalette?.RecentCommandTitles?.Clear();
+            try { NativeMenu.SetMenu(this, null); } catch { }
+            try { FocusManager?.ClearFocus(); } catch { }
             base.OnClosed(e);
+            Content = null;
+            ProcessMemoryTrimmer.NotifyLargeFree();
         }
+
+        private static WindowIcon s_sharedWindowIcon;
+        private static bool s_sharedWindowIconProbed;
 
         private void TryLoadWindowIcon()
         {
             try
             {
-                string[] candidates = new[]
+                if (!s_sharedWindowIconProbed)
                 {
-                    Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_bolt.png"),
-                    Path.Combine(AppContext.BaseDirectory, "..", "Resources", "assets", "savatarr_bolt.png"),
-                    Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_bolt.png"),
-                    Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_bolt.png"),
-                    Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_logo_source.png"),
-                    Path.Combine(AppContext.BaseDirectory, "..", "Resources", "assets", "savatarr_logo_source.png"),
-                    Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_logo_source.png"),
-                    Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_logo_source.png")
-                };
-                string iconPath = candidates.FirstOrDefault(File.Exists);
-                if (!string.IsNullOrEmpty(iconPath))
+                    s_sharedWindowIconProbed = true;
+                    string[] candidates = new[]
+                    {
+                        Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_bolt.png"),
+                        Path.Combine(AppContext.BaseDirectory, "..", "Resources", "assets", "savatarr_bolt.png"),
+                        Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_bolt.png"),
+                        Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_bolt.png"),
+                        Path.Combine(AppContext.BaseDirectory, "assets", "savatarr_logo_source.png"),
+                        Path.Combine(AppContext.BaseDirectory, "..", "Resources", "assets", "savatarr_logo_source.png"),
+                        Path.Combine(Environment.CurrentDirectory, "assets", "savatarr_logo_source.png"),
+                        Path.Combine(Environment.CurrentDirectory, "codeLess", "assets", "savatarr_logo_source.png")
+                    };
+                    string iconPath = candidates.FirstOrDefault(File.Exists);
+                    if (!string.IsNullOrEmpty(iconPath))
+                    {
+                        s_sharedWindowIcon = new WindowIcon(iconPath);
+                    }
+                }
+                if (s_sharedWindowIcon != null)
                 {
-                    Icon = new WindowIcon(iconPath);
+                    Icon = s_sharedWindowIcon;
                 }
             }
             catch { }
@@ -2390,9 +2514,7 @@ namespace codeLess.AvaloniaApp
                 {
                     workspaceIndexState = 0;
                     indexCandidateFiles = null;
-                    aiEngine.IndexedChunks = new List<Bm25CodeChunk>();
-                    aiEngine.WorkspaceSymbolMap = new List<WorkspaceSymbolLocation>();
-                    aiEngine.WorkspaceSymbols = new List<string>();
+                    aiEngine?.ClearWorkspaceIndex();
                 }
             }
 
@@ -2449,10 +2571,9 @@ namespace codeLess.AvaloniaApp
             bool isLiveDesktop = AvaloniaTerminalEmulatorControl.IsDesktopRuntime;
             if (!isLiveDesktop)
             {
-                // Headless test mode: complete indexing synchronously for immediate deterministic assertions
+                // Headless mode: collect workspace file list synchronously, but keep BM25/symbol indexing lazy until first use.
                 CollectWorkspaceFilesRecursive(workspaceRoot, excluded, depth: 0, seenSet: seenFiles, maxLimit: 1400, ct: CancellationToken.None);
-                aiEngine.IndexWorkspace(workspaceRoot, workspaceFiles);
-                lock (workspaceIndexLock) { workspaceIndexState = 2; indexCandidateFiles = new List<string>(workspaceFiles); }
+                lock (workspaceIndexLock) { workspaceIndexState = 0; indexCandidateFiles = new List<string>(workspaceFiles); }
                 if (!noGit) RefreshGitStatus();
                 UpdateWindowTitle();
                 UpdateStatusBar();
@@ -2652,7 +2773,10 @@ namespace codeLess.AvaloniaApp
             {
                 var prevTab = openTabs.FirstOrDefault(t => t.IsPreviewTab && !t.IsDirty && !t.IsPinned);
                 if (prevTab != null)
+                {
                     openTabs.Remove(prevTab);
+                    ReleaseClosedTabReferences(prevTab);
+                }
             }
             if (TryOpenLargeFileTab(fullPath, preview, out var largeFileTab)) return largeFileTab;
 
@@ -2801,6 +2925,36 @@ namespace codeLess.AvaloniaApp
             UpdateWindowTitle();
         }
 
+        private void ReleaseClosedTabReferences(EditorTabBuffer tab)
+        {
+            if (tab == null) return;
+            bool wasLarge = (tab.Content != null && tab.Content.Length > 64 * 1024) || (tab.Lines != null && tab.Lines.Count > 2000) || tab.IsLargeFile || tab.IsLargeFileViewer;
+            editorMru.Remove(tab);
+            pendingAutoSave.Remove(tab);
+            tabDirtyDots.Remove(tab);
+            tabCloseButtons.Remove(tab);
+            if (!string.IsNullOrEmpty(tab.FilePath))
+                ExplorerTree?.ProblemCountByFullPath?.Remove(tab.FilePath);
+            tab.ExtraCaretsForUndo = null;
+            if (ReferenceEquals(pendingDebouncedBuffer, tab)) pendingDebouncedBuffer = null;
+            if (ReferenceEquals(lastRenderedTabRef, tab)) lastRenderedTabRef = null;
+            if (ReferenceEquals(lastPolledBuffer, tab)) lastPolledBuffer = null;
+            if (ReferenceEquals(httpDocBuffer, tab)) { httpDocBuffer = null; httpDoc = null; httpLensCache.Clear(); }
+            if (ReferenceEquals(pendingMarkdownBuffer, tab)) pendingMarkdownBuffer = null;
+            if (ReferenceEquals(lastDebugDecoratedTab, tab)) lastDebugDecoratedTab = null;
+            if (ReferenceEquals(hunkPopupBuffer, tab)) hunkPopupBuffer = null;
+            if (ReferenceEquals(focusedEditorBufferForAutoSave, tab)) focusedEditorBufferForAutoSave = null;
+            if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, tab))
+            {
+                var fallback = openTabs.FirstOrDefault(t => !ReferenceEquals(t, tab));
+                SplitEditor.LoadBuffer(fallback);
+            }
+            PrimaryEditor?.ReleaseBufferReferences(tab);
+            SplitEditor?.ReleaseBufferReferences(tab);
+            LspOnTabClosed(tab);
+            if (wasLarge) ProcessMemoryTrimmer.NotifyLargeFree();
+        }
+
         public bool CloseTab(EditorTabBuffer tab, bool forceWithoutPrompt = false)
         {
             if (tab == null) return true;
@@ -2815,12 +2969,14 @@ namespace codeLess.AvaloniaApp
 
             int idx = openTabs.IndexOf(tab);
             openTabs.Remove(tab);
+            var nextMru = editorMru.MostRecentOther(openTabs, tab);
             if (tab.OnClosed != null)
             {
                 var cb = tab.OnClosed;
                 tab.OnClosed = null;
                 try { cb(); } catch { }
             }
+            ReleaseClosedTabReferences(tab);
             SaveWorkspaceSession();
             SweepClosedLargeFileTabs();
 
@@ -2830,7 +2986,7 @@ namespace codeLess.AvaloniaApp
                 {
                     // VS Code (workbench.editor.focusRecentEditorAfterClose): the most recently used editor takes over.
                     int nextIdx = Math.Max(0, Math.Min(openTabs.Count - 1, idx));
-                    ActivateTab(editorMru.MostRecentOther(openTabs, tab) ?? openTabs[nextIdx]);
+                    ActivateTab(nextMru ?? openTabs[nextIdx]);
                 }
                 else
                 {
@@ -2842,7 +2998,6 @@ namespace codeLess.AvaloniaApp
                 RefreshTabStrip();
                 RefreshOpenEditorsSection();
             }
-            LspOnTabClosed(tab);
             return true;
         }
 

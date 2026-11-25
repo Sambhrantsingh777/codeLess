@@ -131,9 +131,32 @@ Effect on idle CPU / wakeups of the real app: **not measured** (requires launchi
 and the in-app probe `codeLess --idle-probe report.txt` measure it). Structurally, an inactive window with an editor
 and a terminal used to wake the UI thread about 3.8 times per second for blinking alone; now 0.
 
+## 4. Managed memory profile & leak regressions (measured 2026-11-25)
+
+Measured in-process with the headless profiler (`MemoryProfileAndLeakTests.MemoryProfile_EndToEnd_StepsAndRetainers`,
+`GC.GetTotalMemory(true)` after a compacting full GC on Apple Silicon, .NET 8.0.428; see `docs/MEMORY.md` for full details):
+
+| Step | Before (`a3dfb17`) | After (`work/mem`) | Change |
+|---|---:|---:|---:|
+| Startup with empty window (delta over baseline) | `+17.42 MB` (`18.11 MB` live) | **`+14.86 MB`** (`17.61 MB` live) | `-14.7%` |
+| Open workspace (this repo, ~398 files, delta) | `+77.24 MB` (`95.35 MB` live) | **`+0.46 MB`** (`18.07 MB` live) | **`-99.4%`** (lazy BM25/symbol index) |
+| Open 10 source files (12,447 lines, total live) | `109.71 MB` (`+14.36 MB` step delta) | **`28.20 MB`** (`+10.13 MB` step delta) | **`-74.3%`** total live heap |
+| Open search, SCM, terminal, and chat panels (step delta) | `+5.20 MB` (`114.92 MB` live) | **`+1.05 MB`** (`29.24 MB` live) | **`-79.8%`** |
+| Open a second window (step delta) | `+16.39 MB` (`131.31 MB` live) | **`+13.98 MB`** (`43.22 MB` live) | `-14.7%` |
+| Close all tabs, workspace, and both windows (live heap) | `126.43 MB` (`w1/w2/tab` leaked) | **`6.70 MB`** (`w1/w2/tab` collected) | **`-94.7%`** |
+| `StudioTheme.GetById` × 50 calls (allocated bytes) | `1,994,000 B` | **`0 B`** | **`-100%`** |
+
+Note on full-desktop GUI `phys_footprint` / RSS numbers in the Head-to-head table above: **pending re-measurement** on an idle desktop session after the `work/mem` lazy-subsystem and leak fixes (launching GUI apps is disabled in the automated agent sandbox). To re-measure live desktop RSS / `phys_footprint`, run:
+
+```bash
+python3 bench/run_bench.py -n 5
+python3 bench/run_bench.py --apps codeless,vscode --include-vscode -n 3 --huge-mb 300 --huge-iterations 1
+```
+
 ## Reproducing
 
 ```bash
+zsh /tmp/codeless-work/tools/cl-test.sh /tmp/codeless-work/mem "MemoryProfileAndLeakTests"
 bench/run_largefile_bench.sh "100 1024" 3
 bench/run_monorepo_bench.sh 38000 10000 5
 python3 bench/run_bench.py -n 5                                   # codeLess GUI metrics

@@ -128,6 +128,9 @@ namespace codeLess.AvaloniaApp
             if (idx < 0) return;
             docs.RemoveAt(idx);
             try { doc.Closed?.Invoke(); } catch { }
+            doc.Closed = null;
+            doc.ApplyTheme = null;
+            doc.Content = null;
             if (ReferenceEquals(active, doc))
             {
                 active = null;
