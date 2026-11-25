@@ -3584,30 +3584,15 @@ namespace codeLess.AvaloniaApp
         public List<WorkspaceSearchMatch> RunWorkspaceSearch(string query)
         {
             ExecuteWorkspaceSearch(query);
-            var matches = new List<WorkspaceSearchMatch>();
-            if (string.IsNullOrWhiteSpace(query)) return matches;
-            foreach (string file in workspaceFiles)
-            {
-                if (!File.Exists(file)) continue;
-                try
+            return searchGroups
+                .SelectMany(g => g.Matches)
+                .Select(m => new WorkspaceSearchMatch
                 {
-                    string[] lines = File.ReadAllLines(file);
-                    for (int i = 0; i < lines.Length; i++)
-                    {
-                        if (lines[i].IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            matches.Add(new WorkspaceSearchMatch
-                            {
-                                FilePath = file,
-                                LineNumber = i + 1,
-                                LineText = lines[i].Trim()
-                            });
-                        }
-                    }
-                }
-                catch { }
-            }
-            return matches;
+                    FilePath = m.FilePath,
+                    LineNumber = m.LineNumber,
+                    LineText = m.LinePreview ?? ""
+                })
+                .ToList();
         }
 
         public void HandleKeyShortcut(KeyEventArgs e)
