@@ -7,11 +7,13 @@ using codeLess.Studio;
 
 namespace codeLess.AvaloniaApp.Tests
 {
+    [Collection("SettingsTests")]
     public class RestoreWindowTests
     {
         [Fact]
         public void ProcessArgs_RestoreWindows_All()
         {
+            Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-rw1-" + Guid.NewGuid().ToString("N")));
             var wm = new FakeWindowManager();
             var settings = IdePersistentSettings.Load();
             settings.WindowRestoreWindows = "all";
@@ -30,6 +32,7 @@ namespace codeLess.AvaloniaApp.Tests
         [Fact]
         public void ProcessArgs_RestoreWindows_One()
         {
+            Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-rw2-" + Guid.NewGuid().ToString("N")));
             var wm = new FakeWindowManager();
             var settings = IdePersistentSettings.Load();
             settings.WindowRestoreWindows = "one";
@@ -45,6 +48,7 @@ namespace codeLess.AvaloniaApp.Tests
         [Fact]
         public void ProcessArgs_RestoreWindows_None()
         {
+            Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-rw3-" + Guid.NewGuid().ToString("N")));
             var wm = new FakeWindowManager();
             var settings = IdePersistentSettings.Load();
             settings.WindowRestoreWindows = "none";

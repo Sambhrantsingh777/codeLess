@@ -284,7 +284,7 @@ namespace codeLess.Studio
                 C("term.clear", "Clear Terminal", null),
                 C("term.kill", "Kill Terminal", null)));
 
-            r.Add(M("Window", MenuPlatform.All,
+            r.Add(M("Window", MenuPlatform.MacOnly,
                 C("win.minimize", "Minimize", null, "Cmd+M"),
                 C("win.zoom", "Zoom", null),
                 Sep(),

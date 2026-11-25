@@ -7,6 +7,7 @@ using codeLess.Studio;
 
 namespace codeLess.AvaloniaApp.Tests
 {
+    [Collection("SettingsTests")]
     public class IdeSettingsWatcherTests
     {
         [Fact]
@@ -23,19 +24,27 @@ namespace codeLess.AvaloniaApp.Tests
                 Interlocked.Increment(ref fires);
             };
             IdeSettingsWatcher.OnSettingsFileChanged += handler;
+            
+            int timerChanges = 0;
+            IdeSettingsWatcher.DebounceTimerChangeSeam = (ms) => { Interlocked.Increment(ref timerChanges); };
+            
             IdeSettingsWatcher.Start();
 
             // Simulate external writes
             File.WriteAllText(path, "{\"TabSize\": 2}");
-            Thread.Sleep(50);
+            Thread.Sleep(200); // give FSW time to catch it
             File.WriteAllText(path, "{\"TabSize\": 4}");
-            Thread.Sleep(50);
+            Thread.Sleep(200);
             File.WriteAllText(path, "{\"TabSize\": 8}");
+            Thread.Sleep(200);
 
-            // Wait for debounce
-            Thread.Sleep(1000);
+            // Trigger manual tick ONCE to simulate debounce completion
+            IdeSettingsWatcher.ForceDebounceTickForTests();
 
             Assert.Equal(1, fires);
+            Assert.True(timerChanges >= 1);
+            
+            IdeSettingsWatcher.DebounceTimerChangeSeam = null;
             IdeSettingsWatcher.OnSettingsFileChanged -= handler;
             
             // cleanup

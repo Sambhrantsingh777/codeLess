@@ -29,10 +29,17 @@ namespace codeLess.Studio
             _debounceTimer = new Timer(OnDebounceTick, null, Timeout.Infinite, Timeout.Infinite);
         }
 
+        public static Action<int> DebounceTimerChangeSeam;
+
         private static void OnFileEvent(object sender, FileSystemEventArgs e)
         {
-            try { _debounceTimer.Change(300, Timeout.Infinite); } catch { }
+            try { 
+                if (DebounceTimerChangeSeam != null) DebounceTimerChangeSeam(300);
+                else _debounceTimer.Change(300, Timeout.Infinite); 
+            } catch { }
         }
+
+        public static void ForceDebounceTickForTests() { OnDebounceTick(null); }
 
         private static void OnDebounceTick(object state)
         {

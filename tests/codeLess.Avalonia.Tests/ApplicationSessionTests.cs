@@ -135,11 +135,13 @@ namespace codeLess.AvaloniaApp.Tests
         }
     }
 
+    [Collection("SettingsTests")]
     public class ApplicationSessionTests
     {
         [Fact]
         public void ProcessArgs_NoArgs_CreatesOrFocuses()
         {
+            Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-rw4-" + Guid.NewGuid().ToString("N")));
             var wm = new FakeWindowManager();
             ApplicationSession.ProcessArgs(new string[0], "", wm);
             Assert.Single(wm.Windows);
