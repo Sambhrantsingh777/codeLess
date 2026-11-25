@@ -150,6 +150,7 @@ namespace codeLess.Avalonia.Tests
             Assert.Contains("editor.cursorSurroundingLines", checkedSettings);
             Assert.Contains("editor.useTabStops", checkedSettings);
             Assert.Contains("editor.emptySelectionClipboard", checkedSettings);
+            Assert.Contains("editor.formatOnSave", checkedSettings);
             Assert.Contains("files.hotExit", checkedSettings);
             Assert.Contains("files.autoGuessEncoding", checkedSettings);
             Assert.Contains("files.eol", checkedSettings);
