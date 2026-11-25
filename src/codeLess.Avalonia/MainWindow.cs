@@ -860,10 +860,22 @@ namespace codeLess.AvaloniaApp
             ExplorerTree?.ModifiedFolderPaths?.Clear();
             ExplorerTree?.Nodes?.Clear();
             CommandPalette?.RecentCommandTitles?.Clear();
+            if (CommandPalette != null)
+            {
+                CommandPalette.AllEntries?.Clear();
+                CommandPalette.FilteredEntries?.Clear();
+                if (CommandPalette.ResultsListBox != null) CommandPalette.ResultsListBox.ItemsSource = null;
+            }
+            tabStripStack?.Children.Clear();
+            openEditorsStack?.Children.Clear();
+            contextPillsWrap?.Children.Clear();
+            if (outlineListBox != null) outlineListBox.ItemsSource = null;
+            if (problemsListBox != null) problemsListBox.ItemsSource = null;
             try { NativeMenu.SetMenu(this, null); } catch { }
             try { FocusManager?.ClearFocus(); } catch { }
             base.OnClosed(e);
             Content = null;
+            try { UpdateLayout(); } catch { }
             ProcessMemoryTrimmer.NotifyLargeFree();
         }
 
@@ -3726,7 +3738,12 @@ namespace codeLess.AvaloniaApp
                 }
 
                 // VS Code: the close glyph shows on the active tab and on hover; a dirty tab shows its dot instead until hovered.
-                var closeBtn = WorkbenchStyles.IconButton("close", "Close (Ctrl+W)", () => CloseTab(captured), currentTheme, 20, 14);
+                var weakTab = new WeakReference<EditorTabBuffer>(captured);
+                var weakWin = new WeakReference<MainWindow>(this);
+                var closeBtn = WorkbenchStyles.IconButton("close", "Close (Ctrl+W)", () =>
+                {
+                    if (weakWin.TryGetTarget(out var w) && weakTab.TryGetTarget(out var t)) w.CloseTab(t);
+                }, currentTheme, 20, 14);
                 WorkbenchStyles.ThemeIconButton(closeBtn, currentTheme, isActive);
                 closeBtn.IsVisible = !captured.IsDirty;
                 closeBtn.Opacity = (!captured.IsDirty && isActive) ? 1 : 0;
@@ -3745,32 +3762,33 @@ namespace codeLess.AvaloniaApp
                 var tabHoverBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.Hover(currentTheme, currentTheme.TabBarBg)));
                 tabBorder.PointerEntered += (s, e) =>
                 {
-                    SetTabHoverState(captured, true);
+                    if (weakWin.TryGetTarget(out var w) && weakTab.TryGetTarget(out var t)) w.SetTabHoverState(t, true);
                     if (!isActive) tabBorder.Background = tabHoverBrush;
                 };
                 tabBorder.PointerExited += (s, e) =>
                 {
-                    SetTabHoverState(captured, false);
+                    if (weakWin.TryGetTarget(out var w) && weakTab.TryGetTarget(out var t)) w.SetTabHoverState(t, false);
                     if (!isActive) tabBorder.Background = new SolidColorBrush(inactiveBg);
                 };
                 tabBorder.PointerPressed += (s, e) =>
                 {
+                    if (!weakWin.TryGetTarget(out var w) || !weakTab.TryGetTarget(out var t)) return;
                     var props = e.GetCurrentPoint(tabBorder).Properties;
                     if (props.IsRightButtonPressed)
                     {
-                        OpenTabContextMenu(captured, tabBorder);
+                        w.OpenTabContextMenu(t, tabBorder);
                         e.Handled = true;
                     }
                     else if (props.IsMiddleButtonPressed)
                     {
-                        CloseTab(captured);
+                        w.CloseTab(t);
                         e.Handled = true;
                     }
                     else
                     {
-                        if (e.ClickCount >= 2 && captured.IsPreviewTab)
-                            captured.IsPreviewTab = false;
-                        ActivateTab(captured);
+                        if (e.ClickCount >= 2 && t.IsPreviewTab)
+                            t.IsPreviewTab = false;
+                        w.ActivateTab(t);
                     }
                 };
                 tabStripStack.Children.Add(tabBorder);
@@ -3788,9 +3806,11 @@ namespace codeLess.AvaloniaApp
             Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
 
             var disambiguatedFolders = WorkbenchParityHelper.ComputeDisambiguatedFolders(openTabs);
+            var weakWin = new WeakReference<MainWindow>(this);
             foreach (var tab in openTabs)
             {
                 var captured = tab;
+                var weakTab = new WeakReference<EditorTabBuffer>(captured);
                 bool isActive = ReferenceEquals(captured, activeTab);
                 var rowGrid = new Grid
                 {
@@ -3835,7 +3855,7 @@ namespace codeLess.AvaloniaApp
                         ? new SolidColorBrush(Color.FromArgb(40, accent.R, accent.G, accent.B))
                         : Brushes.Transparent
                 };
-                btn.Click += (s, e) => ActivateTab(captured);
+                btn.Click += (s, e) => { if (weakWin.TryGetTarget(out var w) && weakTab.TryGetTarget(out var t)) w.ActivateTab(t); };
                 openEditorsStack.Children.Add(btn);
             }
         }
