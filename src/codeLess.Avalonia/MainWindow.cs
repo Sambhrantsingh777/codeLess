@@ -651,10 +651,25 @@ namespace codeLess.AvaloniaApp
         private bool isApplicationQuitting;
         private DispatcherTimer hotExitBackupTimer;
         private readonly HashSet<EditorTabBuffer> pendingHotExitBackups = new HashSet<EditorTabBuffer>();
+        private readonly Dictionary<string, DateTime> internalSaveTimestamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<EditorTabBuffer, TextBlock> tabTitleBlocks = new Dictionary<EditorTabBuffer, TextBlock>();
         private readonly List<string> lastConflictNotificationChoices = new List<string>();
 
         public bool IsHotExitTimerRunning => hotExitBackupTimer != null && hotExitBackupTimer.IsEnabled;
+        public bool AreAllBackgroundTimersStopped =>
+            !(debouncedUiSyncTimer?.IsEnabled ?? false) &&
+            !(devToolsPoll?.IsEnabled ?? false) &&
+            !(blameDebounce?.IsEnabled ?? false) &&
+            !(markdownDebounce?.IsEnabled ?? false) &&
+            !(blameHoverTimer?.IsEnabled ?? false) &&
+            !(debugHoverTimer?.IsEnabled ?? false) &&
+            !(fsChangeDebounceTimer?.IsEnabled ?? false) &&
+            !(autoFetchTimer?.IsEnabled ?? false) &&
+            !(statusMessageTimer?.IsEnabled ?? false) &&
+            !(searchOnTypeTimer?.IsEnabled ?? false) &&
+            !(taskProblemsDebounce?.IsEnabled ?? false) &&
+            !(autoSaveTimer?.IsEnabled ?? false) &&
+            !(hotExitBackupTimer?.IsEnabled ?? false);
         public IdePersistentSettings Settings => settings;
         public Func<EditorTabBuffer, ExternalConflictAction> ExternalConflictDecisionOverride { get; set; }
         public Func<EditorTabBuffer, ExternalConflictAction> SaveConflictDecisionOverride { get; set; }
@@ -784,10 +799,19 @@ namespace codeLess.AvaloniaApp
             autoSaveTimer?.Stop();
             hotExitBackupTimer?.Stop();
             pendingHotExitBackups.Clear();
+            internalSaveTimestamps.Clear();
             tabTitleBlocks.Clear();
+            lastConflictNotificationChoices.Clear();
+            chatAtMentionSuggestions.Clear();
+            if (chatAtMentionListBox != null) chatAtMentionListBox.ItemsSource = null;
+            ExternalConflictDecisionOverride = null;
+            SaveConflictDecisionOverride = null;
+            UnsavedPromptOverride = null;
             updatePeriodicTimer?.Stop();
             sidebarProgressBar?.StopProgress();
             chatProgressBar?.StopProgress();
+            PrimaryEditor?.HideBinaryPlaceholder();
+            SplitEditor?.HideBinaryPlaceholder();
             PrimaryEditor?.Canvas?.StopAllTimersAndCaches();
             SplitEditor?.Canvas?.StopAllTimersAndCaches();
             auxPane?.CloseAll();
@@ -3136,6 +3160,7 @@ namespace codeLess.AvaloniaApp
             editorMru.Remove(tab);
             pendingAutoSave.Remove(tab);
             pendingHotExitBackups.Remove(tab);
+            if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop();
             tabDirtyDots.Remove(tab);
             tabCloseButtons.Remove(tab);
             tabTitleBlocks.Remove(tab);
@@ -3330,6 +3355,10 @@ namespace codeLess.AvaloniaApp
 
             try
             {
+                if (!string.IsNullOrEmpty(tab.FilePath))
+                {
+                    lock (internalSaveTimestamps) { internalSaveTimestamps[tab.FilePath] = DateTime.UtcNow; }
+                }
                 tab.PreDiffContent = null;
                 tab.DiffHunks?.Clear();
                 tab.SyncProposedDiffProjection();
@@ -3345,6 +3374,7 @@ namespace codeLess.AvaloniaApp
                 tab.HasExternalDiskConflict = false;
                 tab.RecordDiskBaseline(tab.FilePath);
                 pendingHotExitBackups.Remove(tab);
+                if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop();
                 HotExitService.DeleteBackup(workspaceRoot, tab);
                 tab.RefreshGutterDiff();
                 RefreshTabStrip();
@@ -3406,6 +3436,7 @@ namespace codeLess.AvaloniaApp
             tab.IsDeletedOnDisk = false;
             tab.HasExternalDiskConflict = false;
             pendingHotExitBackups.Remove(tab);
+            if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop();
             HotExitService.DeleteBackup(workspaceRoot, tab);
             tab.RefreshGutterDiff();
             if (ReferenceEquals(activeTab, tab))
@@ -3438,6 +3469,27 @@ namespace codeLess.AvaloniaApp
             }
             hotExitBackupTimer.Stop();
             hotExitBackupTimer.Start();
+        }
+
+        public void DrainOneShotDebounceTimers()
+        {
+            if (fsChangeDebounceTimer != null && fsChangeDebounceTimer.IsEnabled)
+            {
+                fsChangeDebounceTimer.Stop();
+                fsFirstPendingUtc = DateTime.MinValue;
+                FlushFsChanges();
+            }
+            if (statusMessageTimer != null && statusMessageTimer.IsEnabled)
+            {
+                statusMessageTimer.Stop();
+                if (statusMessageLabel != null) statusMessageLabel.Text = "";
+            }
+            if (debouncedUiSyncTimer != null && debouncedUiSyncTimer.IsEnabled)
+            {
+                debouncedUiSyncTimer.Stop();
+                pendingDebouncedBuffer = null;
+            }
+            FlushDevToolsDebounce();
         }
 
         public void FlushPendingHotExitBackups()
