@@ -4892,6 +4892,9 @@ namespace codeLess.Studio
             this.Invalidate();
         }
 
+        // Ctrl+D started from an empty selection searches whole words, case-sensitively (VS Code)
+        private string wfCtrlDWholeWordNeedle;
+
         public void AddNextOccurrenceCursor()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
@@ -4902,6 +4905,7 @@ namespace codeLess.Studio
             {
                 buf.ClearExtraCarets();
                 SelectWordAt(buf.CursorLine, buf.CursorCol);
+                wfCtrlDWholeWordNeedle = buf.HasSelection() ? buf.GetSelectedText() : null;
                 owner.UpdateCursorStatusLabel();
                 this.Invalidate();
                 return;
@@ -4909,15 +4913,20 @@ namespace codeLess.Studio
 
             string word = buf.GetSelectedText();
             if (string.IsNullOrEmpty(word) || word.Contains("\n")) return;
+            bool whole = wfCtrlDWholeWordNeedle != null && word == wfCtrlDWholeWordNeedle;
 
-            // Start search after last existing caret
-            int startLine = buf.CursorLine;
-            int startCol = buf.CursorCol;
+            // Start search after last existing caret (normalized end of selection)
+            int pStartL, pStartC, pEndL, pEndC;
+            buf.GetNormalizedSelection(out pStartL, out pStartC, out pEndL, out pEndC);
+            int startLine = pEndL;
+            int startCol = pEndC;
             if (buf.ExtraCarets != null && buf.ExtraCarets.Count > 0)
             {
                 EditorCaret last = buf.ExtraCarets[buf.ExtraCarets.Count - 1];
-                startLine = last.CursorLine;
-                startCol = last.CursorCol;
+                int lsL, lsC, leL, leC;
+                last.GetNormalizedRange(out lsL, out lsC, out leL, out leC);
+                startLine = leL;
+                startCol = leC;
             }
 
             for (int pass = 0; pass < 2; pass++)
@@ -4931,22 +4940,30 @@ namespace codeLess.Studio
                     int idx = ln.IndexOf(word, searchFrom, StringComparison.Ordinal);
                     while (idx >= 0)
                     {
-                        bool alreadyPrimary = (l == buf.CursorLine && idx == Math.Min(buf.SelectionAnchorCol, buf.CursorCol));
-                        bool alreadyExtra = buf.ExtraCarets.Any(ec => ec.CursorLine == l && Math.Min(ec.AnchorCol, ec.CursorCol) == idx);
-                        if (!alreadyPrimary && !alreadyExtra)
+                        int endCol = idx + word.Length;
+                        bool boundary = !whole || ((idx == 0 || !IsIdentifierChar(ln[idx - 1])) && (endCol >= ln.Length || !IsIdentifierChar(ln[endCol])));
+                        bool alreadyPrimary = (l == pStartL && l == pEndL && idx == pStartC && endCol == pEndC);
+                        bool alreadyExtra = buf.ExtraCarets.Any(ec =>
+                        {
+                            int esL, esC, eeL, eeC;
+                            ec.GetNormalizedRange(out esL, out esC, out eeL, out eeC);
+                            return esL == l && eeL == l && esC == idx && eeC == endCol;
+                        });
+                        if (boundary && alreadyPrimary && pass == 1) return;
+                        if (boundary && !alreadyPrimary && !alreadyExtra)
                         {
                             buf.ExtraCarets.Add(new EditorCaret
                             {
                                 AnchorLine = l,
                                 AnchorCol = idx,
                                 CursorLine = l,
-                                CursorCol = idx + word.Length
+                                CursorCol = endCol
                             });
                             owner.UpdateCursorStatusLabel();
                             this.Invalidate();
                             return;
                         }
-                        idx = ln.IndexOf(word, idx + word.Length, StringComparison.Ordinal);
+                        idx = ln.IndexOf(word, idx + 1, StringComparison.Ordinal);
                     }
                 }
             }
@@ -5045,18 +5062,20 @@ namespace codeLess.Studio
             }
             else
             {
+                int lastTouched = (eL > sL && eC == 0) ? eL - 1 : eL;
+                bool alreadyFullLines = sC == 0 && ((eL > sL && eC == 0) || (eL == buf.Lines.Count - 1 && eC == (buf.Lines[eL] ?? "").Length));
+                int targetLastLine = alreadyFullLines ? Math.Min(buf.Lines.Count - 1, lastTouched + 1) : lastTouched;
                 buf.SelectionAnchorLine = sL;
                 buf.SelectionAnchorCol = 0;
-                int targetEndLine = (eC == 0 && eL > sL) ? (eL + 1) : (eL + 1);
-                if (targetEndLine < buf.Lines.Count)
+                if (targetLastLine + 1 < buf.Lines.Count)
                 {
-                    buf.CursorLine = targetEndLine;
+                    buf.CursorLine = targetLastLine + 1;
                     buf.CursorCol = 0;
                 }
                 else
                 {
-                    buf.CursorLine = buf.Lines.Count - 1;
-                    buf.CursorCol = (buf.Lines[buf.CursorLine] ?? "").Length;
+                    buf.CursorLine = targetLastLine;
+                    buf.CursorCol = (buf.Lines[targetLastLine] ?? "").Length;
                 }
             }
             EnsureCursorVisible();
@@ -5248,15 +5267,28 @@ namespace codeLess.Studio
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
+            SortedDictionary<int, bool> lineSet = new SortedDictionary<int, bool>();
             int sLine, sCol, eLine, eCol;
             buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
             if (eLine > sLine && eCol == 0) eLine--;
+            for (int l = sLine; l <= eLine && l < buf.Lines.Count; l++) lineSet[l] = true;
+            if (buf.ExtraCarets != null)
+            {
+                foreach (EditorCaret ec in buf.ExtraCarets)
+                {
+                    int esL, esC, eeL, eeC;
+                    ec.GetNormalizedRange(out esL, out esC, out eeL, out eeC);
+                    if (eeL > esL && eeC == 0) eeL--;
+                    for (int l = esL; l <= eeL && l < buf.Lines.Count; l++) lineSet[l] = true;
+                }
+            }
             int tab = TabWF(buf);
             bool spaces = SpacesWF(buf);
-            bool multi = eLine > sLine;
+            bool multi = lineSet.Count > 1;
             bool any = false;
-            for (int l = sLine; l <= eLine && l < buf.Lines.Count; l++)
+            foreach (int l in new List<int>(lineSet.Keys))
             {
+                if (l < 0 || l >= buf.Lines.Count) continue;
                 string ln = buf.Lines[l] ?? "";
                 if (indent && multi && ln.Trim().Length == 0) continue;
                 string nl = indent ? EditorIndentation.IndentLine(ln, tab, spaces) : EditorIndentation.OutdentLine(ln, tab, spaces);
@@ -5268,7 +5300,24 @@ namespace codeLess.Studio
                 if (buf.HasSelection() && l == buf.SelectionAnchorLine && !(indent && buf.SelectionAnchorCol == 0))
                     buf.SelectionAnchorCol = buf.SelectionAnchorCol >= oldWs ? Math.Max(0, buf.SelectionAnchorCol + d) : Math.Min(buf.SelectionAnchorCol, oldWs + d);
                 if (l == buf.CursorLine)
+                {
                     buf.CursorCol = buf.CursorCol >= oldWs ? Math.Max(0, buf.CursorCol + d) : (indent ? buf.CursorCol + d : Math.Min(buf.CursorCol, oldWs + d));
+                    if (!buf.HasSelection()) buf.SelectionAnchorCol = buf.CursorCol;
+                }
+                if (buf.ExtraCarets != null)
+                {
+                    foreach (EditorCaret ec in buf.ExtraCarets)
+                    {
+                        bool ecSel = ec.HasSelection();
+                        if (ecSel && l == ec.AnchorLine && !(indent && ec.AnchorCol == 0))
+                            ec.AnchorCol = ec.AnchorCol >= oldWs ? Math.Max(0, ec.AnchorCol + d) : Math.Min(ec.AnchorCol, oldWs + d);
+                        if (l == ec.CursorLine)
+                        {
+                            ec.CursorCol = ec.CursorCol >= oldWs ? Math.Max(0, ec.CursorCol + d) : (indent ? ec.CursorCol + d : Math.Min(ec.CursorCol, oldWs + d));
+                            if (!ecSel) ec.AnchorCol = ec.CursorCol;
+                        }
+                    }
+                }
             }
             if (!any) return;
             owner.NotifyBufferContentChanged();
@@ -5530,37 +5579,24 @@ namespace codeLess.Studio
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            List<CaretBinding> ordered = CollectOrderedCaretsDesc(buf);
-            List<CaretBinding> processed = new List<CaretBinding>();
             string safeText = (insertText ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
-            if (safeText.Contains("\n")) safeText = safeText.Split('\n')[0];
-
-            foreach (CaretBinding cb in ordered)
+            int validExtras = 0;
+            if (buf.ExtraCarets != null)
             {
-                int lineIdx, sCol;
-                CollapseCaretSelectionRange(buf, cb, processed, out lineIdx, out sCol);
-                string ln = buf.Lines[lineIdx] ?? "";
-                sCol = Math.Max(0, Math.Min(ln.Length, sCol));
-
-                buf.Lines[lineIdx] = ln.Substring(0, sCol) + safeText + ln.Substring(sCol);
-                int newCol = sCol + safeText.Length;
-
-                if (cb.IsPrimary)
+                for (int i = 0; i < buf.ExtraCarets.Count; i++)
                 {
-                    buf.CursorLine = lineIdx;
-                    buf.CursorCol = newCol;
-                    buf.ClearSelection();
+                    EditorCaret ec = buf.ExtraCarets[i];
+                    if (ec != null && ec.Line >= 0 && ec.Line < buf.Lines.Count) validExtras++;
                 }
-                else
-                {
-                    cb.Extra.CursorLine = lineIdx;
-                    cb.Extra.CursorCol = newCol;
-                    cb.Extra.AnchorLine = lineIdx;
-                    cb.Extra.AnchorCol = newCol;
-                }
-                processed.Add(cb);
             }
-            DeduplicateExtraCarets(buf);
+            int totalCarets = 1 + validExtras;
+            string[] distributed = EditorMultiCaret.TrySplitPasteForCarets(safeText, totalCarets);
+            EditorMultiCaret.ApplyToAllCarets(buf, delegate(EditorTabBuffer bb, int k)
+            {
+                int ascIdx = totalCarets - 1 - k;
+                string piece = (distributed != null && ascIdx >= 0 && ascIdx < distributed.Length) ? distributed[ascIdx] : safeText;
+                EditorMultiCaret.InsertAtCaret(bb, piece);
+            }, null);
         }
 
         private void DeleteAllCarets()
@@ -6086,35 +6122,13 @@ namespace codeLess.Studio
             if (e.Control && e.Shift && e.KeyCode == Keys.K) // Ctrl+Shift+K Delete Line (VS Code)
             {
                 e.SuppressKeyPress = true;
-                buf.ClearExtraCarets();
-                buf.PushUndoSnapshot();
-                if (buf.Lines.Count > 1) buf.Lines.RemoveAt(buf.CursorLine);
-                else buf.Lines[0] = "";
-                buf.ClampCursor();
-                owner.NotifyBufferContentChanged();
-                this.Invalidate();
+                DeleteActiveLines();
                 return;
             }
             if ((e.Control && e.Shift && e.KeyCode == Keys.D) || (e.Shift && e.Alt && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up))) // Duplicate Line(s) (VS Code)
             {
                 e.SuppressKeyPress = true;
-                buf.PushUndoSnapshot();
-                int sLine, sCol, eLine, eCol;
-                buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-                int count = eLine - sLine + 1;
-                List<string> block = new List<string>();
-                for (int i = sLine; i <= eLine && i < buf.Lines.Count; i++)
-                    block.Add(buf.Lines[i]);
-                buf.Lines.InsertRange(eLine + 1, block);
-                if (e.KeyCode != Keys.Up)
-                {
-                    if (buf.HasSelection())
-                        buf.SelectionAnchorLine += count;
-                    buf.CursorLine += count;
-                }
-                owner.NotifyBufferContentChanged();
-                EnsureCursorVisible();
-                this.Invalidate();
+                CopyLines(e.KeyCode == Keys.Up);
                 return;
             }
             if (e.Shift && e.Alt && e.KeyCode == Keys.F) // Shift+Alt+F Format Document (VS Code)
@@ -6179,34 +6193,7 @@ namespace codeLess.Studio
             if (e.Alt && !e.Shift && (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down)) // Alt+Up/Down Move Line(s)
             {
                 e.SuppressKeyPress = true;
-                int sLine, sCol, eLine, eCol;
-                buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-                if (e.KeyCode == Keys.Up && sLine > 0)
-                {
-                    bool hadSel = buf.HasSelection();
-                    buf.PushUndoSnapshot();
-                    string above = buf.Lines[sLine - 1];
-                    buf.Lines.RemoveAt(sLine - 1);
-                    buf.Lines.Insert(eLine, above);
-                    if (hadSel) buf.SelectionAnchorLine = Math.Max(0, buf.SelectionAnchorLine - 1);
-                    buf.CursorLine = Math.Max(0, buf.CursorLine - 1);
-                    owner.NotifyBufferContentChanged();
-                    EnsureCursorVisible();
-                    this.Invalidate();
-                }
-                else if (e.KeyCode == Keys.Down && eLine + 1 < buf.Lines.Count)
-                {
-                    bool hadSel = buf.HasSelection();
-                    buf.PushUndoSnapshot();
-                    string below = buf.Lines[eLine + 1];
-                    buf.Lines.RemoveAt(eLine + 1);
-                    buf.Lines.Insert(sLine, below);
-                    if (hadSel) buf.SelectionAnchorLine = Math.Min(buf.Lines.Count - 1, buf.SelectionAnchorLine + 1);
-                    buf.CursorLine = Math.Min(buf.Lines.Count - 1, buf.CursorLine + 1);
-                    owner.NotifyBufferContentChanged();
-                    EnsureCursorVisible();
-                    this.Invalidate();
-                }
+                MoveLines(e.KeyCode == Keys.Up);
                 return;
             }
             if (e.Control && e.KeyCode == Keys.A)
@@ -6711,12 +6698,13 @@ namespace codeLess.Studio
             if (buf == null || string.IsNullOrEmpty(clipText)) return;
             buf.PushUndoSnapshot();
             string norm = clipText.Replace("\r\n", "\n").Replace("\r", "\n");
-            if (lastWholeLineCopyWF != null && norm == lastWholeLineCopyWF && !buf.HasMultiCursors && !buf.HasSelection())
+            if (lastWholeLineCopyWF != null && norm == lastWholeLineCopyWF && !buf.HasMultiCursors && !buf.HasSelection() && norm.EndsWith("\n"))
             {
                 // VS Code: a line copied without a selection is pasted above the caret line
                 string[] lines = norm.Substring(0, norm.Length - 1).Split('\n');
                 buf.Lines.InsertRange(buf.CursorLine, lines);
                 buf.CursorLine += lines.Length;
+                buf.ClearSelection();
             }
             else if (buf.HasMultiCursors) ReplaceAllCaretsText(norm);
             else ReplaceSelectionWithText(norm);
@@ -6802,6 +6790,8 @@ namespace codeLess.Studio
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
+            CommentTokens tok = EditorComments.For(buf.FilePath ?? buf.FileName ?? ("x." + (buf.Language ?? "")));
+            if (tok.Line == null && tok.BlockStart == null) return;
             List<int[]> ranges = new List<int[]>();
             int sLine, sCol, eLine, eCol;
             buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
@@ -6812,11 +6802,12 @@ namespace codeLess.Studio
                 {
                     int a, b, c, d;
                     ec.GetNormalizedRange(out a, out b, out c, out d);
+                    if (c > a && d == 0) c--;
                     ranges.Add(new int[] { a, c });
                 }
             buf.PushUndoSnapshot();
             List<CommentEdit> edits = EditorComments.ToggleLineComments(buf, ranges);
-            if (edits == null || edits.Count == 0) return;
+            if (edits == null || edits.Count == 0) { buf.PopUndoSnapshotAndRestore(); return; }
             if (buf.ExtraCarets != null)
                 foreach (EditorCaret ec in buf.ExtraCarets)
                 {
@@ -6932,21 +6923,10 @@ namespace codeLess.Studio
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            buf.PushUndoSnapshot();
-            int sLine, sCol, eLine, eCol;
-            buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-            int count = eLine - sLine + 1;
-            List<string> block = new List<string>();
-            for (int i = sLine; i <= eLine && i < buf.Lines.Count; i++)
-                block.Add(buf.Lines[i]);
-            buf.Lines.InsertRange(eLine + 1, block);
-            if (!up)
-            {
-                if (buf.HasSelection()) buf.SelectionAnchorLine += count;
-                buf.CursorLine += count;
-            }
+            if (!EditorMultiCaret.CopyLines(buf, up ? -1 : 1)) return;
             owner.NotifyBufferContentChanged();
             EnsureCursorVisible();
+            owner.UpdateCursorStatusLabel();
             this.Invalidate();
         }
 
@@ -6954,32 +6934,100 @@ namespace codeLess.Studio
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            int sLine, sCol, eLine, eCol;
-            buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-            if (up && sLine > 0)
+            if (!EditorMultiCaret.MoveLines(buf, up ? -1 : 1)) return;
+            owner.NotifyBufferContentChanged();
+            EnsureCursorVisible();
+            owner.UpdateCursorStatusLabel();
+            this.Invalidate();
+        }
+
+        public void DeleteActiveLines()
+        {
+            EditorTabBuffer buf = owner.CurrentBuffer;
+            if (buf == null) return;
+            if (buf.ExtraCarets == null || buf.ExtraCarets.Count == 0)
             {
+                int sLine, sCol, eLine, eCol;
+                buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
+                int first = sLine;
+                int last = (eLine > sLine && eCol == 0) ? eLine - 1 : eLine;
+                int col = buf.CursorCol;
                 buf.PushUndoSnapshot();
-                string above = buf.Lines[sLine - 1];
-                buf.Lines.RemoveAt(sLine - 1);
-                buf.Lines.Insert(eLine, above);
-                buf.SelectionAnchorLine = Math.Max(0, buf.SelectionAnchorLine - 1);
-                buf.CursorLine = Math.Max(0, buf.CursorLine - 1);
+                if (last - first + 1 >= buf.Lines.Count)
+                {
+                    buf.Lines.Clear();
+                    buf.Lines.Add("");
+                    buf.CursorLine = 0;
+                }
+                else
+                {
+                    buf.Lines.RemoveRange(first, last - first + 1);
+                    buf.CursorLine = Math.Min(first, buf.Lines.Count - 1);
+                }
+                buf.CursorCol = Math.Min(col, (buf.Lines[buf.CursorLine] ?? "").Length);
+                buf.ClearSelection();
                 owner.NotifyBufferContentChanged();
-                EnsureCursorVisible();
+                owner.UpdateCursorStatusLabel();
                 this.Invalidate();
+                return;
             }
-            else if (!up && eLine + 1 < buf.Lines.Count)
+
+            List<int[]> caretEntries = new List<int[]>();
+            int psL, psC, peL, peC;
+            buf.GetNormalizedSelection(out psL, out psC, out peL, out peC);
+            caretEntries.Add(new int[] { 1, psL, (peL > psL && peC == 0) ? peL - 1 : peL, buf.CursorCol });
+            foreach (EditorCaret ec in buf.ExtraCarets)
             {
-                buf.PushUndoSnapshot();
-                string below = buf.Lines[eLine + 1];
-                buf.Lines.RemoveAt(eLine + 1);
-                buf.Lines.Insert(sLine, below);
-                buf.SelectionAnchorLine = Math.Min(buf.Lines.Count - 1, buf.SelectionAnchorLine + 1);
-                buf.CursorLine = Math.Min(buf.Lines.Count - 1, buf.CursorLine + 1);
-                owner.NotifyBufferContentChanged();
-                EnsureCursorVisible();
-                this.Invalidate();
+                int esL, esC, eeL, eeC;
+                ec.GetNormalizedRange(out esL, out esC, out eeL, out eeC);
+                caretEntries.Add(new int[] { 0, esL, (eeL > esL && eeC == 0) ? eeL - 1 : eeL, ec.CursorCol });
             }
+            SortedDictionary<int, bool> toRemove = new SortedDictionary<int, bool>();
+            foreach (int[] ce in caretEntries)
+                for (int l = ce[1]; l <= ce[2] && l < buf.Lines.Count; l++)
+                    if (l >= 0) toRemove[l] = true;
+
+            buf.PushUndoSnapshot();
+            if (toRemove.Count >= buf.Lines.Count)
+            {
+                buf.Lines.Clear();
+                buf.Lines.Add("");
+                buf.CursorLine = 0;
+                buf.CursorCol = 0;
+                buf.ClearSelection();
+                buf.ClearExtraCarets();
+                owner.NotifyBufferContentChanged();
+                owner.UpdateCursorStatusLabel();
+                this.Invalidate();
+                return;
+            }
+            List<int> desc = new List<int>(toRemove.Keys);
+            for (int i = desc.Count - 1; i >= 0; i--)
+                buf.Lines.RemoveAt(desc[i]);
+
+            buf.ClearExtraCarets();
+            HashSet<int> seenLines = new HashSet<int>();
+            foreach (int[] ce in caretEntries)
+            {
+                int removedBefore = 0;
+                foreach (int d in desc) if (d < ce[1]) removedBefore++;
+                int newLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, ce[1] - removedBefore));
+                int newCol = Math.Min(ce[3], (buf.Lines[newLine] ?? "").Length);
+                if (ce[0] == 1)
+                {
+                    buf.CursorLine = newLine;
+                    buf.CursorCol = newCol;
+                    buf.ClearSelection();
+                    seenLines.Add(newLine);
+                }
+                else if (seenLines.Add(newLine))
+                {
+                    buf.ExtraCarets.Add(new EditorCaret { Line = newLine, Col = newCol, AnchorLine = newLine, AnchorCol = newCol });
+                }
+            }
+            owner.NotifyBufferContentChanged();
+            owner.UpdateCursorStatusLabel();
+            this.Invalidate();
         }
 
         public void DuplicateSelectionOrLine()
@@ -7048,15 +7096,15 @@ namespace codeLess.Studio
             ChangeAllOccurrences();
         }
 
-        /// <summary>Toggle Block Comment (Shift+Alt+A): language block tokens around the selection, or an empty block at the caret.</summary>
+        /// <summary>Toggle Block Comment (Shift+Alt+A): language block tokens around every selection, or an empty block at every caret.</summary>
         public void ToggleBlockCommentOnSelection()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            buf.PushUndoSnapshot();
-            if (!EditorComments.ToggleBlockComment(buf)) return;
+            if (!EditorMultiCaret.ToggleBlockComments(buf)) return;
             buf.ClampCursor();
             owner.NotifyBufferContentChanged();
+            owner.UpdateCursorStatusLabel();
             this.Invalidate();
         }
 

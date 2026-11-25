@@ -236,7 +236,10 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.closeFolder", () => CloseWorkspaceFolder());
             keybindings.BindAction("workbench.action.selectTheme", () => OpenThemePickerPalette());
             keybindings.BindAction("workbench.action.closeUnmodifiedEditors", () => { var saved = openTabs.Where(t => !t.IsDirty && !t.IsPinned).ToList(); foreach (var t in saved) CloseTab(t, forceWithoutPrompt: true); });
-            keybindings.BindAction("workbench.action.keepEditor", () => { if (activeTab != null) { activeTab.IsPinned = true; activeTab.IsPreviewTab = false; RefreshTabStrip(); } });
+            keybindings.BindAction("workbench.action.keepEditor", () => { if (activeTab != null) { activeTab.IsPreviewTab = false; RefreshTabStrip(); } });
+            keybindings.BindAction("workbench.action.pinEditor", () => { if (activeTab != null) PinTab(activeTab, true); });
+            keybindings.BindAction("workbench.action.unpinEditor", () => { if (activeTab != null) PinTab(activeTab, false); });
+            keybindings.BindAction("workbench.action.files.revert", () => RevertActiveTab());
             keybindings.BindAction("copyFilePath", () => { if (activeTab != null) _ = CopyPathToClipboardAsync(activeTab.FilePath ?? activeTab.FileName); });
             keybindings.BindAction("revealFileInOS", () => { if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RevealInOsFileManager(activeTab.FilePath); });
             keybindings.BindAction("workbench.action.editor.changeLanguageMode", () => OpenLanguageModePicker());
@@ -254,6 +257,12 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("cursorWordLeftSelect", () => ActiveEditorCanvas?.MoveCaretHorizontal(-1, true, true));
             keybindings.BindAction("cursorWordEndRight", () => ActiveEditorCanvas?.MoveCaretHorizontal(1, false, true));
             keybindings.BindAction("cursorWordEndRightSelect", () => ActiveEditorCanvas?.MoveCaretHorizontal(1, true, true));
+            keybindings.BindAction("cursorWordPartLeft", () => ActiveEditorCanvas?.MoveCaretSubword(-1, false));
+            keybindings.BindAction("cursorWordPartLeftSelect", () => ActiveEditorCanvas?.MoveCaretSubword(-1, true));
+            keybindings.BindAction("cursorWordPartRight", () => ActiveEditorCanvas?.MoveCaretSubword(1, false));
+            keybindings.BindAction("cursorWordPartRightSelect", () => ActiveEditorCanvas?.MoveCaretSubword(1, true));
+            keybindings.BindAction("deleteWordPartLeft", () => ActiveEditorCanvas?.DeleteSubwordLeft());
+            keybindings.BindAction("deleteWordPartRight", () => ActiveEditorCanvas?.DeleteSubwordRight());
 
             contextKeyService = new WindowContextKeyService(this);
             InitializeVscodeSettingsWatcher();
@@ -323,10 +332,19 @@ namespace codeLess.AvaloniaApp
             }
         }
 
+        private string lastSurfacedSettingsError;
+        public bool IsSettingsOrKeybindingsErrorVisible =>
+            keybindingsNotification != null && editorSplitGrid != null && editorSplitGrid.Children.Contains(keybindingsNotification);
+        public string ActiveSettingsOrKeybindingsErrorText { get; private set; } = "";
+
         private void ShowKeybindingsNotification(string message)
         {
-            HideKeybindingsNotification();
-            keybindingsNotification = WorkbenchStyles.BuildNotification(currentTheme, "error", new Avalonia.Controls.TextBlock { Text = message, TextWrapping = Avalonia.Media.TextWrapping.Wrap }, null, new Avalonia.Controls.Button[0], false, HideKeybindingsNotification);
+            if (string.Equals(lastSurfacedSettingsError, message, StringComparison.Ordinal) && IsSettingsOrKeybindingsErrorVisible)
+                return;
+            HideKeybindingsNotification(clearLastError: false);
+            lastSurfacedSettingsError = message;
+            ActiveSettingsOrKeybindingsErrorText = message ?? "";
+            keybindingsNotification = WorkbenchStyles.BuildNotification(currentTheme, "error", new Avalonia.Controls.TextBlock { Text = message, TextWrapping = Avalonia.Media.TextWrapping.Wrap }, null, new Avalonia.Controls.Button[0], false, () => HideKeybindingsNotification(clearLastError: false));
             keybindingsNotification.Margin = new Avalonia.Thickness(0, 0, 12, 12);
             keybindingsNotification.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right;
             keybindingsNotification.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Bottom;
@@ -335,8 +353,13 @@ namespace codeLess.AvaloniaApp
             editorSplitGrid.Children.Add(keybindingsNotification);
         }
 
-        private void HideKeybindingsNotification()
+        private void HideKeybindingsNotification(bool clearLastError = true)
         {
+            if (clearLastError)
+            {
+                lastSurfacedSettingsError = null;
+                ActiveSettingsOrKeybindingsErrorText = "";
+            }
             if (keybindingsNotification != null)
             {
                 editorSplitGrid.Children.Remove(keybindingsNotification);
@@ -422,21 +445,7 @@ namespace codeLess.AvaloniaApp
                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     {
                         if (!weakWin.TryGetTarget(out var w3) || w3.windowClosed) return;
-                        try
-                        {
-                            var clone = codeLess.Studio.StudioSettings.Load();
-                            string userPath = VscodeSettingsManager.GetUserSettingsPath();
-                            if (System.IO.File.Exists(userPath)) VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(userPath), clone);
-                            if (System.IO.File.Exists(path))
-                            {
-                                string content = System.IO.File.ReadAllText(path);
-                                string err = VscodeSettingsManager.ApplySettings(content, clone);
-                                if (err != null) w3.ShowKeybindingsNotification("Workspace settings parse error: " + err);
-                                else w3.HideKeybindingsNotification();
-                            }
-                            w3.ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
-                        }
-                        catch { }
+                        w3.ReloadAllVscodeSettingsFromDisk();
                     });
                 }, null, 100, System.Threading.Timeout.Infinite);
             };
@@ -449,15 +458,53 @@ namespace codeLess.AvaloniaApp
             {
                 if (System.IO.File.Exists(path))
                 {
-                    var clone = codeLess.Studio.StudioSettings.Load();
-                    string userPath = VscodeSettingsManager.GetUserSettingsPath();
-                    if (System.IO.File.Exists(userPath)) VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(userPath), clone);
-                    string err = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(path), clone);
-                    if (err != null) ShowKeybindingsNotification("Workspace settings parse error: " + err);
-                    ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
+                    ReloadAllVscodeSettingsFromDisk();
                 }
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Reloads user settings.json and workspace .vscode/settings.json error-tolerantly:
+        /// starts from the last known good settings (never resetting to defaults on syntax error),
+        /// applies all parsable settings, surfaces any syntax error once, and hides the error notification on recovery.
+        /// </summary>
+        public string ReloadAllVscodeSettingsFromDisk()
+        {
+            try
+            {
+                var baseSource = effectiveWorkspaceSettings ?? settings;
+                var clone = codeLess.Studio.StudioSettings.Load();
+                if (baseSource != null)
+                {
+                    foreach (var pi in typeof(codeLess.Studio.IdePersistentSettings).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                    {
+                        if (!pi.CanRead || !pi.CanWrite) continue;
+                        try { pi.SetValue(clone, pi.GetValue(baseSource, null), null); } catch { }
+                    }
+                }
+                string err = null;
+                string userPath = VscodeSettingsManager.GetUserSettingsPath();
+                if (!string.IsNullOrEmpty(userPath) && System.IO.File.Exists(userPath))
+                {
+                    string uErr = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(userPath), clone);
+                    if (uErr != null) err = "Settings parse error: " + uErr;
+                }
+                string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(workspaceRoot);
+                if (!string.IsNullOrEmpty(wsPath) && System.IO.File.Exists(wsPath))
+                {
+                    string wsErr = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(wsPath), clone);
+                    if (wsErr != null && err == null) err = "Workspace settings parse error: " + wsErr;
+                }
+                ApplyVscodeSettings("", clone);
+                if (err != null) ShowKeybindingsNotification(err);
+                else HideKeybindingsNotification(clearLastError: true);
+                return err;
+            }
+            catch (Exception ex)
+            {
+                return ex.Message;
+            }
         }
 
         private void InitializeVscodeSettingsWatcher()
@@ -492,23 +539,7 @@ namespace codeLess.AvaloniaApp
                     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     {
                         if (!weakWin.TryGetTarget(out var w3) || w3.windowClosed) return;
-                        try
-                        {
-                            string content = System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : "";
-                            var clone = codeLess.Studio.StudioSettings.Load();
-                            string err = VscodeSettingsManager.ApplySettings(content, clone);
-
-                            string wsPath = VscodeSettingsManager.GetWorkspaceSettingsPath(w3.workspaceRoot);
-                            if (wsPath != null && System.IO.File.Exists(wsPath))
-                            {
-                                string wsErr = VscodeSettingsManager.ApplySettings(System.IO.File.ReadAllText(wsPath), clone);
-                                if (err == null) err = wsErr;
-                            }
-                            w3.ApplyVscodeSettings("", clone as codeLess.Studio.StudioSettings);
-                            if (err != null) w3.ShowKeybindingsNotification("Settings parse error: " + err);
-                            else w3.HideKeybindingsNotification();
-                        }
-                        catch { }
+                        w3.ReloadAllVscodeSettingsFromDisk();
                     });
                 }, null, 100, System.Threading.Timeout.Infinite);
             };

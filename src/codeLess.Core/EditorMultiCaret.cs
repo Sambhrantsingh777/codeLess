@@ -40,6 +40,25 @@ namespace codeLess.Studio
             col = (b.Lines[line] ?? "").Length;
         }
 
+        /// <summary>
+        /// VS Code multi-cursor paste distribution: when pasting N lines onto N carets (or N lines with a single trailing
+        /// newline from whole-line copy), returns the N lines in document order; otherwise returns null so the full text
+        /// is inserted at every caret. Preserves empty lines (e.g. when the last copied selection was empty).
+        /// </summary>
+        public static string[] TrySplitPasteForCarets(string normalizedText, int caretCount)
+        {
+            if (string.IsNullOrEmpty(normalizedText) || caretCount <= 1) return null;
+            string[] raw = normalizedText.Split('\n');
+            if (raw.Length == caretCount) return raw;
+            if (raw.Length == caretCount + 1 && raw[caretCount].Length == 0)
+            {
+                string[] trimmed = new string[caretCount];
+                Array.Copy(raw, 0, trimmed, 0, caretCount);
+                return trimmed;
+            }
+            return null;
+        }
+
         private static long TotalLength(EditorTabBuffer b)
         {
             long t = Math.Max(0, b.Lines.Count - 1);
@@ -311,6 +330,341 @@ namespace codeLess.Studio
                 if (bb.HasSelection()) DeleteSelection(bb);
                 InsertAtCaret(bb, EditorIndentation.TabInsertText(bb.Lines[bb.CursorLine], bb.CursorCol, tabSize, insertSpaces));
             }, trackedOffsets);
+        }
+
+        private sealed class LineBlock
+        {
+            public int First;
+            public int Last;
+            public readonly List<Caret> Carets = new List<Caret>();
+        }
+
+        private static void GetCaretLineRange(Caret c, int maxLine, out int first, out int last)
+        {
+            if (c.AnchorLine >= 0 && (c.AnchorLine != c.Line || c.AnchorCol != c.Col))
+            {
+                int sL = Math.Min(c.Line, c.AnchorLine);
+                int eL = Math.Max(c.Line, c.AnchorLine);
+                int endCol = (c.Line > c.AnchorLine || (c.Line == c.AnchorLine && c.Col >= c.AnchorCol)) ? c.Col : c.AnchorCol;
+                first = Math.Max(0, Math.Min(maxLine, sL));
+                last = Math.Max(first, Math.Min(maxLine, (eL > sL && endCol == 0) ? eL - 1 : eL));
+            }
+            else
+            {
+                first = last = Math.Max(0, Math.Min(maxLine, c.Line));
+            }
+        }
+
+        /// <summary>
+        /// Groups all carets into line blocks and merges overlapping or adjacent blocks (VS Code MoveLinesCommand / CopyLinesCommand).
+        /// Returned blocks are ordered top-to-bottom.
+        /// </summary>
+        private static List<LineBlock> BuildMergedLineBlocks(EditorTabBuffer b, List<Caret> carets)
+        {
+            int maxLine = Math.Max(0, b.Lines.Count - 1);
+            List<LineBlock> raw = new List<LineBlock>(carets.Count);
+            for (int i = 0; i < carets.Count; i++)
+            {
+                Caret c = carets[i];
+                int f, l;
+                GetCaretLineRange(c, maxLine, out f, out l);
+                LineBlock blk = new LineBlock();
+                blk.First = f;
+                blk.Last = l;
+                blk.Carets.Add(c);
+                raw.Add(blk);
+            }
+            raw.Sort(delegate(LineBlock x, LineBlock y)
+            {
+                int cmp = x.First.CompareTo(y.First);
+                return cmp != 0 ? cmp : x.Last.CompareTo(y.Last);
+            });
+            List<LineBlock> merged = new List<LineBlock>();
+            for (int i = 0; i < raw.Count; i++)
+            {
+                LineBlock cur = raw[i];
+                if (merged.Count > 0 && cur.First <= merged[merged.Count - 1].Last + 1)
+                {
+                    LineBlock prev = merged[merged.Count - 1];
+                    if (cur.Last > prev.Last) prev.Last = cur.Last;
+                    prev.Carets.AddRange(cur.Carets);
+                }
+                else
+                {
+                    merged.Add(cur);
+                }
+            }
+            return merged;
+        }
+
+        private static void RestoreCaretsByIndex(EditorTabBuffer b, List<Caret> updated, int totalCount)
+        {
+            Caret[] byIdx = new Caret[totalCount];
+            for (int i = 0; i < updated.Count; i++)
+            {
+                Caret c = updated[i];
+                if (c.Index >= 0 && c.Index < totalCount) byIdx[c.Index] = c;
+            }
+            int maxLine = Math.Max(0, b.Lines.Count - 1);
+            for (int i = 0; i < totalCount; i++)
+            {
+                Caret c = byIdx[i];
+                c.Line = Math.Max(0, Math.Min(maxLine, c.Line));
+                c.Col = Math.Max(0, Math.Min((b.Lines[c.Line] ?? "").Length, c.Col));
+                if (c.AnchorLine >= 0)
+                {
+                    c.AnchorLine = Math.Max(0, Math.Min(maxLine, c.AnchorLine));
+                    c.AnchorCol = Math.Max(0, Math.Min((b.Lines[c.AnchorLine] ?? "").Length, c.AnchorCol));
+                    if (c.AnchorLine == c.Line && c.AnchorCol == c.Col) { c.AnchorLine = -1; c.AnchorCol = -1; }
+                }
+                byIdx[i] = c;
+            }
+            WritePrimary(b, byIdx[0]);
+            if (b.ExtraCarets == null) b.ExtraCarets = new List<EditorCaret>();
+            else b.ExtraCarets.Clear();
+            for (int i = 1; i < totalCount; i++)
+            {
+                Caret c = byIdx[i];
+                EditorCaret ec = new EditorCaret();
+                ec.Line = c.Line;
+                ec.Col = c.Col;
+                ec.AnchorLine = c.AnchorLine;
+                ec.AnchorCol = c.AnchorCol;
+                b.ExtraCarets.Add(ec);
+            }
+        }
+
+        /// <summary>
+        /// VS Code MoveLinesCommand (Alt+Up / Alt+Down) across single or multiple carets/selections:
+        /// overlapping or adjacent line blocks merge first; each disjoint block moves independently (a block at the top
+        /// or bottom of the document is a no-op for that block only); all carets and selections are preserved in one undo step.
+        /// Returns true if at least one block moved.
+        /// </summary>
+        public static bool MoveLines(EditorTabBuffer b, int direction)
+        {
+            if (b == null || b.Lines == null || b.Lines.Count == 0 || direction == 0) return false;
+            List<Caret> carets = Collect(b);
+            List<LineBlock> blocks = BuildMergedLineBlocks(b, carets);
+            int lineCount = b.Lines.Count;
+            bool anyCanMove = false;
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                if (direction < 0 && blocks[i].First > 0) { anyCanMove = true; break; }
+                if (direction > 0 && blocks[i].Last < lineCount - 1) { anyCanMove = true; break; }
+            }
+            if (!anyCanMove) return false;
+
+            b.PushUndoSnapshot();
+            List<Caret> updated = new List<Caret>(carets.Count);
+            if (direction < 0)
+            {
+                for (int i = 0; i < blocks.Count; i++)
+                {
+                    LineBlock blk = blocks[i];
+                    if (blk.First <= 0)
+                    {
+                        updated.AddRange(blk.Carets);
+                        continue;
+                    }
+                    string above = b.Lines[blk.First - 1];
+                    b.Lines.RemoveAt(blk.First - 1);
+                    b.Lines.Insert(blk.Last, above);
+                    for (int k = 0; k < blk.Carets.Count; k++)
+                    {
+                        Caret c = blk.Carets[k];
+                        c.Line = Math.Max(0, c.Line - 1);
+                        if (c.AnchorLine >= 0) c.AnchorLine = Math.Max(0, c.AnchorLine - 1);
+                        updated.Add(c);
+                    }
+                }
+            }
+            else
+            {
+                for (int i = blocks.Count - 1; i >= 0; i--)
+                {
+                    LineBlock blk = blocks[i];
+                    if (blk.Last >= lineCount - 1)
+                    {
+                        updated.AddRange(blk.Carets);
+                        continue;
+                    }
+                    string below = b.Lines[blk.Last + 1];
+                    b.Lines.RemoveAt(blk.Last + 1);
+                    b.Lines.Insert(blk.First, below);
+                    for (int k = 0; k < blk.Carets.Count; k++)
+                    {
+                        Caret c = blk.Carets[k];
+                        if (c.AnchorLine >= 0)
+                        {
+                            if (c.Line + 1 >= lineCount && c.Col == 0)
+                            {
+                                c.Line = lineCount - 1;
+                                c.Col = (b.Lines[c.Line] ?? "").Length;
+                            }
+                            else c.Line = Math.Min(lineCount - 1, c.Line + 1);
+
+                            if (c.AnchorLine + 1 >= lineCount && c.AnchorCol == 0)
+                            {
+                                c.AnchorLine = lineCount - 1;
+                                c.AnchorCol = (b.Lines[c.AnchorLine] ?? "").Length;
+                            }
+                            else c.AnchorLine = Math.Min(lineCount - 1, c.AnchorLine + 1);
+                        }
+                        else
+                        {
+                            c.Line = Math.Min(lineCount - 1, c.Line + 1);
+                        }
+                        updated.Add(c);
+                    }
+                }
+            }
+            RestoreCaretsByIndex(b, updated, carets.Count);
+            return true;
+        }
+
+        /// <summary>
+        /// VS Code CopyLinesCommand (Shift+Alt+Up / Shift+Alt+Down) across single or multiple carets/selections:
+        /// overlapping or adjacent line blocks merge first; each disjoint block is duplicated independently;
+        /// carets/selections stay on the upper copy for Up and move to the lower copy for Down, in one undo step.
+        /// </summary>
+        public static bool CopyLines(EditorTabBuffer b, int direction)
+        {
+            if (b == null || b.Lines == null || b.Lines.Count == 0 || direction == 0) return false;
+            List<Caret> carets = Collect(b);
+            List<LineBlock> blocks = BuildMergedLineBlocks(b, carets);
+            if (blocks.Count == 0) return false;
+
+            b.PushUndoSnapshot();
+            List<Caret> updated = new List<Caret>(carets.Count);
+            int cumInserted = 0;
+            for (int i = 0; i < blocks.Count; i++)
+            {
+                LineBlock blk = blocks[i];
+                int curFirst = blk.First + cumInserted;
+                int curLast = blk.Last + cumInserted;
+                int count = blk.Last - blk.First + 1;
+                List<string> slice = b.Lines.GetRange(curFirst, count);
+                b.Lines.InsertRange(direction < 0 ? curFirst : curLast + 1, slice);
+                int shift = cumInserted + (direction > 0 ? count : 0);
+                for (int k = 0; k < blk.Carets.Count; k++)
+                {
+                    Caret c = blk.Carets[k];
+                    c.Line += shift;
+                    if (c.AnchorLine >= 0) c.AnchorLine += shift;
+                    updated.Add(c);
+                }
+                cumInserted += count;
+            }
+            RestoreCaretsByIndex(b, updated, carets.Count);
+            return true;
+        }
+
+        private struct CaretOffsetPair
+        {
+            public int Index;
+            public long CursorOff;
+            public long AnchorOff;
+        }
+
+        /// <summary>
+        /// VS Code BlockCommentCommand (Shift+Alt+A) across single or multiple carets/selections:
+        /// each selection/caret toggles its block comment independently in one undo step, preserving all carets and selections.
+        /// </summary>
+        public static bool ToggleBlockComments(EditorTabBuffer b)
+        {
+            if (b == null || b.Lines == null || b.Lines.Count == 0) return false;
+            CommentTokens tok = EditorComments.For(b.FilePath ?? b.FileName ?? ("x." + (b.Language ?? "")));
+            if (tok.Line == null && tok.BlockStart == null) return false;
+            if (tok.BlockStart == null)
+            {
+                // Language has only line comments (e.g. Python): fall back to multi-cursor line comments
+                List<int[]> ranges = new List<int[]>();
+                List<Caret> all = Collect(b);
+                for (int i = 0; i < all.Count; i++)
+                {
+                    int first, last;
+                    GetCaretLineRange(all[i], b.Lines.Count - 1, out first, out last);
+                    ranges.Add(new int[] { first, last });
+                }
+                b.PushUndoSnapshot();
+                List<CommentEdit> edits = EditorComments.ToggleLineComments(b, ranges);
+                if (edits == null || edits.Count == 0) { b.PopUndoSnapshotAndRestore(); return false; }
+                if (b.ExtraCarets != null)
+                {
+                    for (int i = 0; i < b.ExtraCarets.Count; i++)
+                    {
+                        EditorCaret ec = b.ExtraCarets[i];
+                        ec.Col = EditorComments.AdjustColumn(edits, ec.Line, ec.Col);
+                        if (ec.AnchorLine >= 0) ec.AnchorCol = EditorComments.AdjustColumn(edits, ec.AnchorLine, ec.AnchorCol);
+                    }
+                }
+                return true;
+            }
+
+            List<Caret> carets = Collect(b);
+            b.PushUndoSnapshot();
+            if (carets.Count == 1)
+            {
+                if (!EditorComments.ToggleBlockComment(b)) { b.PopUndoSnapshotAndRestore(); return false; }
+                return true;
+            }
+
+            List<Caret> ordered = new List<Caret>(carets);
+            ordered.Sort(delegate(Caret x, Caret y)
+            {
+                int cmp = y.End.CompareTo(x.End);
+                if (cmp != 0) return cmp;
+                return y.Index.CompareTo(x.Index);
+            });
+
+            List<CaretOffsetPair> done = new List<CaretOffsetPair>(ordered.Count);
+            bool anyChanged = false;
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                Caret item = ordered[i];
+                WritePrimary(b, item);
+                long before = TotalLength(b);
+                if (EditorComments.ToggleBlockComment(b)) anyChanged = true;
+                long delta = TotalLength(b) - before;
+                for (int d = 0; d < done.Count; d++)
+                {
+                    CaretOffsetPair prev = done[d];
+                    prev.CursorOff += delta;
+                    if (prev.AnchorOff >= 0) prev.AnchorOff += delta;
+                    done[d] = prev;
+                }
+                CaretOffsetPair cur = new CaretOffsetPair();
+                cur.Index = item.Index;
+                cur.CursorOff = OffsetOf(b, b.CursorLine, b.CursorCol);
+                cur.AnchorOff = b.HasSelection() ? OffsetOf(b, b.SelectionAnchorLine, b.SelectionAnchorCol) : -1;
+                done.Add(cur);
+            }
+            if (!anyChanged)
+            {
+                b.PopUndoSnapshotAndRestore();
+                return false;
+            }
+
+            List<Caret> restored = new List<Caret>(done.Count);
+            for (int i = 0; i < done.Count; i++)
+            {
+                CaretOffsetPair p = done[i];
+                Caret rc = new Caret();
+                rc.Index = p.Index;
+                PositionOf(b, p.CursorOff, out rc.Line, out rc.Col);
+                if (p.AnchorOff >= 0)
+                {
+                    PositionOf(b, p.AnchorOff, out rc.AnchorLine, out rc.AnchorCol);
+                }
+                else
+                {
+                    rc.AnchorLine = -1;
+                    rc.AnchorCol = -1;
+                }
+                restored.Add(rc);
+            }
+            RestoreCaretsByIndex(b, restored, carets.Count);
+            return true;
         }
     }
 }

@@ -685,7 +685,10 @@ namespace codeLess.AvaloniaApp
         public IdePersistentSettings Settings => settings;
         public Func<EditorTabBuffer, ExternalConflictAction> ExternalConflictDecisionOverride { get; set; }
         public Func<EditorTabBuffer, ExternalConflictAction> SaveConflictDecisionOverride { get; set; }
+        public Func<EditorTabBuffer, SaveFailureAction> SaveFailureDecisionOverride { get; set; }
+        public Func<GitStatusEntry, bool> DiscardConfirmOverride { get; set; }
         public string SaveConflictSaveAsPath { get; set; }
+        public string SaveFailureSaveAsPath { get; set; }
         public string LastConflictNotificationMessage { get; private set; } = "";
         public IReadOnlyList<string> LastConflictNotificationChoices => lastConflictNotificationChoices;
 
@@ -819,6 +822,8 @@ namespace codeLess.AvaloniaApp
             if (chatAtMentionListBox != null) chatAtMentionListBox.ItemsSource = null;
             ExternalConflictDecisionOverride = null;
             SaveConflictDecisionOverride = null;
+            SaveFailureDecisionOverride = null;
+            DiscardConfirmOverride = null;
             UnsavedPromptOverride = null;
             updatePeriodicTimer?.Stop();
             sidebarProgressBar?.StopProgress();
@@ -3305,19 +3310,18 @@ namespace codeLess.AvaloniaApp
             while (closedTabHistory.Count > 0)
             {
                 string path = closedTabHistory.Pop();
-                if (File.Exists(path))
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+                if (openTabs.Any(t => string.Equals(t.FilePath, path, PathKeyComparison))) continue;
+                var reopened = OpenFileInTab(path, preview: false);
+                if (reopened != null && closedTabStates.TryGetValue(path, out var st))
                 {
-                    var reopened = OpenFileInTab(path, preview: false);
-                    if (reopened != null && closedTabStates.TryGetValue(path, out var st))
-                    {
-                        reopened.CursorLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.Line));
-                        reopened.CursorCol = Math.Max(0, Math.Min((reopened.Lines[reopened.CursorLine] ?? "").Length, st.Col));
-                        reopened.ScrollTopLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.ScrollTop));
-                        PrimaryEditor?.Canvas?.InvalidateVisual();
-                        UpdateStatusBar();
-                    }
-                    return;
+                    reopened.CursorLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.Line));
+                    reopened.CursorCol = Math.Max(0, Math.Min((reopened.Lines[reopened.CursorLine] ?? "").Length, st.Col));
+                    reopened.ScrollTopLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.ScrollTop));
+                    PrimaryEditor?.Canvas?.InvalidateVisual();
+                    UpdateStatusBar();
                 }
+                return;
             }
         }
 
@@ -3342,13 +3346,19 @@ namespace codeLess.AvaloniaApp
 
         public bool SaveBufferToDisk(EditorTabBuffer tab)
         {
-            return SaveBufferToDisk(tab, forceOverwriteConflict: false);
+            return SaveBufferToDisk(tab, forceOverwriteConflict: false, forceOverwriteReadOnly: false);
         }
 
         public bool SaveBufferToDisk(EditorTabBuffer tab, bool forceOverwriteConflict)
         {
+            return SaveBufferToDisk(tab, forceOverwriteConflict, forceOverwriteReadOnly: false);
+        }
+
+        public bool SaveBufferToDisk(EditorTabBuffer tab, bool forceOverwriteConflict, bool forceOverwriteReadOnly)
+        {
             if (tab == null) return false;
             if (tab.IsLargeFileViewer) { SetStatusMessage($"{tab.FileName} is open read-only in the large-file viewer and cannot be saved."); return false; }
+            if (tab.IsReadOnlyDiffPreview) { SetStatusMessage($"{tab.FileName} is open in read-only diff preview and cannot be saved."); return false; }
             if (string.IsNullOrWhiteSpace(tab.FilePath) && AvaloniaTerminalEmulatorControl.IsDesktopRuntime && StorageProvider != null)
             {
                 // Untitled: ask where to save it (VS Code) instead of silently writing "Untitled-1" somewhere.
@@ -3384,6 +3394,7 @@ namespace codeLess.AvaloniaApp
                         tab.FilePath = Path.GetFullPath(SaveConflictSaveAsPath);
                         tab.FileName = Path.GetFileName(tab.FilePath);
                         tab.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, tab.FilePath) : tab.FileName;
+                        tab.Language = Path.GetExtension(tab.FilePath).TrimStart('.').ToLowerInvariant();
                         tab.HasExternalDiskConflict = false;
                     }
                     else if (decision == ExternalConflictAction.Compare)
@@ -3410,18 +3421,34 @@ namespace codeLess.AvaloniaApp
 
             try
             {
+                bool isDiskReadOnly = !string.IsNullOrEmpty(tab.FilePath) && File.Exists(tab.FilePath) &&
+                                      (File.GetAttributes(tab.FilePath) & FileAttributes.ReadOnly) != 0;
+                if ((tab.IsReadOnly || isDiskReadOnly) && !forceOverwriteReadOnly)
+                {
+                    throw new UnauthorizedAccessException("File is read-only. Select 'Overwrite' to make it writable.");
+                }
+                if (forceOverwriteReadOnly)
+                {
+                    tab.IsReadOnly = false;
+                    if (!string.IsNullOrEmpty(tab.FilePath) && File.Exists(tab.FilePath))
+                    {
+                        var attrs = File.GetAttributes(tab.FilePath);
+                        if ((attrs & FileAttributes.ReadOnly) != 0)
+                            File.SetAttributes(tab.FilePath, attrs & ~FileAttributes.ReadOnly);
+                    }
+                }
                 if (!string.IsNullOrEmpty(tab.FilePath))
                 {
                     lock (internalSaveTimestamps) { internalSaveTimestamps[tab.FilePath] = DateTime.UtcNow; }
                 }
-                tab.PreDiffContent = null;
-                tab.DiffHunks?.Clear();
-                tab.SyncProposedDiffProjection();
                 ApplySaveParticipants(tab);
                 tab.SyncContentFromLines();
                 var agentSave = BeginAgentTrackedSave(tab);
                 tab.WriteFilePreservingMetadata(tab.FilePath);
                 EndAgentTrackedSave(agentSave, tab);
+                tab.PreDiffContent = null;
+                tab.DiffHunks?.Clear();
+                tab.SyncProposedDiffProjection();
                 tab.SavedContent = tab.Content;
                 tab.IsDirty = false;
                 tab.IsPreviewTab = false;
@@ -3432,6 +3459,11 @@ namespace codeLess.AvaloniaApp
                 if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop();
                 HotExitService.DeleteBackup(workspaceRoot, tab);
                 tab.RefreshGutterDiff();
+                if (isEditorSplit)
+                {
+                    if (ReferenceEquals(PrimaryEditor?.CurrentBuffer, tab)) PrimaryEditor.Canvas.InvalidateVisual();
+                    if (ReferenceEquals(SplitEditor?.CurrentBuffer, tab)) SplitEditor.Canvas.InvalidateVisual();
+                }
                 RefreshTabStrip();
                 RefreshOpenEditorsSection();
                 RefreshGitStatus();
@@ -3444,6 +3476,53 @@ namespace codeLess.AvaloniaApp
             catch (Exception ex)
             {
                 SetStatusMessage("Save error: " + ex.Message);
+                string errMsg = $"Failed to save '{tab.FileName}': {ex.Message}";
+                RecordConflictNotification(errMsg, new[] { "Retry", "Save As", "Overwrite" });
+                if (SaveFailureDecisionOverride != null)
+                {
+                    var decision = SaveFailureDecisionOverride(tab);
+                    if (decision == SaveFailureAction.Retry)
+                    {
+                        var prev = SaveFailureDecisionOverride;
+                        SaveFailureDecisionOverride = null;
+                        try { return SaveBufferToDisk(tab, forceOverwriteConflict, forceOverwriteReadOnly); }
+                        finally { SaveFailureDecisionOverride = prev; }
+                    }
+                    if (decision == SaveFailureAction.Overwrite)
+                    {
+                        var prev = SaveFailureDecisionOverride;
+                        SaveFailureDecisionOverride = null;
+                        try { return SaveBufferToDisk(tab, forceOverwriteConflict: true, forceOverwriteReadOnly: true); }
+                        finally { SaveFailureDecisionOverride = prev; }
+                    }
+                    if (decision == SaveFailureAction.SaveAs)
+                    {
+                        string saveAsTarget = !string.IsNullOrEmpty(SaveFailureSaveAsPath) ? SaveFailureSaveAsPath : SaveConflictSaveAsPath;
+                        if (!string.IsNullOrEmpty(saveAsTarget))
+                        {
+                            HotExitService.DeleteBackup(workspaceRoot, tab);
+                            tab.FilePath = Path.GetFullPath(saveAsTarget);
+                            tab.FileName = Path.GetFileName(tab.FilePath);
+                            tab.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, tab.FilePath) : tab.FileName;
+                            tab.Language = Path.GetExtension(tab.FilePath).TrimStart('.').ToLowerInvariant();
+                            tab.IsReadOnly = false;
+                            tab.HasExternalDiskConflict = false;
+                            var prev = SaveFailureDecisionOverride;
+                            SaveFailureDecisionOverride = null;
+                            try { return SaveBufferToDisk(tab, forceOverwriteConflict: true, forceOverwriteReadOnly: true); }
+                            finally { SaveFailureDecisionOverride = prev; }
+                        }
+                    }
+                }
+                else
+                {
+                    ShowWorkbenchNotification(
+                        $"save-error:{tab.FilePath}",
+                        "error",
+                        errMsg,
+                        "Overwrite",
+                        () => SaveBufferToDisk(tab, forceOverwriteConflict: true, forceOverwriteReadOnly: true));
+                }
                 return false;
             }
         }
@@ -3460,6 +3539,10 @@ namespace codeLess.AvaloniaApp
                 if (ReferenceEquals(activeTab, tab))
                 {
                     PrimaryEditor.LoadBuffer(tab);
+                }
+                if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, tab))
+                {
+                    SplitEditor.LoadBuffer(tab);
                 }
             }
             catch { }
@@ -3496,6 +3579,8 @@ namespace codeLess.AvaloniaApp
             tab.RefreshGutterDiff();
             if (ReferenceEquals(activeTab, tab))
                 PrimaryEditor.LoadBuffer(tab);
+            if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, tab))
+                SplitEditor.LoadBuffer(tab);
             RefreshTabStrip();
             RefreshOpenEditorsSection();
             UpdateWindowTitle();
@@ -3602,8 +3687,16 @@ namespace codeLess.AvaloniaApp
 
             RefreshChangesetBanner();
             UpdateStatusBar();
+            if (isEditorSplit)
+            {
+                if (ReferenceEquals(PrimaryEditor?.CurrentBuffer, buf)) PrimaryEditor.Canvas?.InvalidateVisual();
+                if (ReferenceEquals(SplitEditor?.CurrentBuffer, buf)) SplitEditor.Canvas?.InvalidateVisual();
+            }
             if (HotExitService.IsEnabled(settings))
                 ScheduleHotExitBackup(buf);
+
+            var effAutoSave = EffectiveAutoSaveSettings;
+            bool autoSaveAfterDelay = effAutoSave != null && effAutoSave.AutoSave;
 
             // For large files on live desktop, coalesce Outline/Problems/AutoSave/GutterDiff rebuilds via 280ms idle debounce
             if (buf.Lines != null && buf.Lines.Count > AvaloniaVirtualEditorCanvas.DeferAnalysisLineThreshold)
@@ -3618,12 +3711,15 @@ namespace codeLess.AvaloniaApp
                         var target = pendingDebouncedBuffer;
                         pendingDebouncedBuffer = null;
                         if (target == null) return;
-                        if (settings.AutoSave && !string.IsNullOrEmpty(target.FilePath) && File.Exists(target.FilePath))
+                        var effTarget = EffectiveAutoSaveSettings;
+                        if (effTarget != null && effTarget.AutoSave && !string.IsNullOrEmpty(target.FilePath) && File.Exists(target.FilePath))
                             ScheduleAutoSave(target);
                         if (!target.IsLargeFile)
                             target.RefreshGutterDiff();
                         if (ReferenceEquals(target, activeTab))
                             PrimaryEditor?.Canvas?.InvalidateVisual(); // gutter bars now; outline / squiggles when analyzed
+                        if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, target))
+                            SplitEditor?.Canvas?.InvalidateVisual();
                         // the AST / diagnostics pass runs on the thread pool; a result for an outdated version is dropped (QA #35)
                         if (!target.IsLargeFile)
                             AnalyzeBufferSoon(target, OnBufferAnalyzed);
@@ -3634,7 +3730,7 @@ namespace codeLess.AvaloniaApp
             }
             else
             {
-                if (settings.AutoSave && !string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath))
+                if (autoSaveAfterDelay && !string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath))
                     ScheduleAutoSave(buf);
                 if (!buf.IsLargeFile && !buf.IsAnalysisCurrent)
                     LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(buf);

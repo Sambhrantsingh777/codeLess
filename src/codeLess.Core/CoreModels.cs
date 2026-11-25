@@ -1401,16 +1401,17 @@ namespace codeLess.Studio
             if (string.IsNullOrEmpty(path)) return;
             SyncContentFromLines();
             string norm = GetNormalizedContentRespectingFinalNewline();
+            string dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+            string eol = string.IsNullOrEmpty(EolSequence) ? "\r\n" : EolSequence;
+            string diskText = eol != "\n" ? norm.Replace("\n", eol) : norm;
+            Encoding used;
+            WriteFilePreservingMetadataLossless(path, diskText, FileEncoding, HasBom, out used);
             Content = norm;
             SavedContent = norm;
             IsDirty = false;
             SyncLinesFromContent();
-            string dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-            string diskText = GetDiskTextWithMetadata();
-            Encoding used;
-            WriteFilePreservingMetadataLossless(path, diskText, FileEncoding, HasBom, out used);
             if (used != null && FileEncoding != null && used.CodePage != FileEncoding.CodePage)
             {
                 // Upgraded to UTF-8 because the text no longer fits the legacy encoding: the status bar must say so.

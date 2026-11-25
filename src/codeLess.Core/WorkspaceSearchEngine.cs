@@ -11,6 +11,23 @@ using System.Threading.Tasks;
 // (no string interpolation, no ?., no expression-bodied members, no out var, no auto-property initializers).
 namespace codeLess.Studio
 {
+    public sealed class WorkspaceReplaceUndoEntry
+    {
+        public string FilePath;
+        public bool TouchedDisk;
+        public string PreDiskRaw;
+        public string PostDiskRaw;
+        public Encoding PreEncoding;
+        public bool PreHasBom;
+        public string PreEol;
+        public bool PreHasFinalNewline;
+        public bool WasOpen;
+        public bool WasDirty;
+        public string PreOpenContent;
+        public string PreOpenSavedContent;
+        public string PostOpenContent;
+    }
+
     /// <summary>One match occurrence (VS Code shows one result row per occurrence, highlighting its range).</summary>
     public class WorkspaceSearchMatch
     {
@@ -752,11 +769,52 @@ namespace codeLess.Studio
             {
                 Match m = rx.Match(line, col);
                 while (m.Success && m.Index < col) m = m.NextMatch();
-                if (m.Success && m.Index == col && m.Length == len) return m.Result(rep);
+                if (m.Success && m.Index == col && m.Length == len)
+                {
+                    string normRep = NormalizeNumberedCaptures(rep, m.Groups.Count);
+                    return m.Result(normRep);
+                }
             }
             catch (RegexMatchTimeoutException) { }
             catch (ArgumentException) { }
             return rep;
+        }
+
+        /// <summary>
+        /// VS Code replacePattern parity: when a 2-digit capture $nn exceeds the regex's group count but the 1-digit
+        /// capture $n exists (e.g. "$20" with 2 groups -> group $2 followed by literal '0'), disambiguates to "${n}d".
+        /// </summary>
+        private static string NormalizeNumberedCaptures(string rep, int groupCount)
+        {
+            if (string.IsNullOrEmpty(rep) || rep.IndexOf('$') < 0) return rep;
+            StringBuilder sb = new StringBuilder(rep.Length + 4);
+            for (int i = 0; i < rep.Length; i++)
+            {
+                char c = rep[i];
+                if (c == '$' && i + 1 < rep.Length)
+                {
+                    char next = rep[i + 1];
+                    if (next == '$')
+                    {
+                        sb.Append("$$");
+                        i++;
+                        continue;
+                    }
+                    if (next >= '1' && next <= '9' && i + 2 < rep.Length && rep[i + 2] >= '0' && rep[i + 2] <= '9')
+                    {
+                        int twoDigit = (next - '0') * 10 + (rep[i + 2] - '0');
+                        int oneDigit = next - '0';
+                        if (twoDigit >= groupCount && oneDigit < groupCount)
+                        {
+                            sb.Append("${").Append(next).Append('}').Append(rep[i + 2]);
+                            i += 2;
+                            continue;
+                        }
+                    }
+                }
+                sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         /// <summary>Counts the matches <see cref="ReplaceInText"/> would replace (same per-line semantics as the search).</summary>
@@ -808,6 +866,42 @@ namespace codeLess.Studio
                 catch { }
             }
             return updatedFiles;
+        }
+
+        /// <summary>
+        /// Checks whether a file touched by Replace in Files has been modified on disk or in an open editor since
+        /// the replacement was applied. Undo must never overwrite a file that changed after the replace.
+        /// </summary>
+        public static bool HasFileChangedSinceReplace(WorkspaceReplaceUndoEntry entry, EditorTabBuffer openTab)
+        {
+            if (entry == null) return true;
+            if (entry.TouchedDisk)
+            {
+                if (string.IsNullOrEmpty(entry.FilePath) || !File.Exists(entry.FilePath))
+                    return true;
+                try
+                {
+                    Encoding cEnc;
+                    bool cBom;
+                    string cEol;
+                    bool cNl;
+                    string currentDisk = EditorTabBuffer.ReadFilePreservingMetadata(entry.FilePath, out cEnc, out cBom, out cEol, out cNl);
+                    if (entry.PostDiskRaw != null && !string.Equals(currentDisk, entry.PostDiskRaw, StringComparison.Ordinal))
+                        return true;
+                }
+                catch
+                {
+                    return true;
+                }
+                if (openTab != null && !entry.WasDirty && openTab.IsDirty)
+                    return true;
+                if (openTab != null && entry.PostOpenContent != null && !string.Equals(openTab.Content ?? "", entry.PostOpenContent, StringComparison.Ordinal))
+                    return true;
+                return false;
+            }
+            if (openTab != null && entry.PostOpenContent != null && !string.Equals(openTab.Content ?? "", entry.PostOpenContent, StringComparison.Ordinal))
+                return true;
+            return false;
         }
 
         /// <summary>

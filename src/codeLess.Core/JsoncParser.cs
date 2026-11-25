@@ -12,30 +12,133 @@ namespace codeLess.Core
             errorMessage = null;
             if (string.IsNullOrEmpty(jsonc)) return null;
 
-            string cleanJson = StripJsonc(jsonc);
+            bool hadUnterminatedString;
+            string cleanJson = StripJsoncInternal(jsonc, out hadUnterminatedString);
+            string syntaxErr = DetectJsonSyntaxError(cleanJson, hadUnterminatedString);
+            if (syntaxErr != null)
+                errorMessage = syntaxErr;
+
             var serializer = new JavaScriptSerializer();
             serializer.MaxJsonLength = int.MaxValue;
             try
             {
-                return serializer.Deserialize<object>(cleanJson);
+                object parsed = serializer.Deserialize<object>(cleanJson);
+                var dict = parsed as Dictionary<string, object>;
+                if (dict != null && dict.ContainsKey(""))
+                {
+                    if (errorMessage == null)
+                        errorMessage = "JSON parse error: expected quoted property name";
+                    dict.Remove("");
+                }
+                return parsed;
             }
             catch (ArgumentException ex)
             {
-                // JavaScriptSerializer throws ArgumentException for parse errors.
-                // We'll just return the exception message. Real line number extraction
-                // would require custom parsing, but we can do a best effort.
-                errorMessage = "JSON parse error: " + ex.Message;
-                return null;
+                if (errorMessage == null)
+                    errorMessage = "JSON parse error: " + ex.Message;
+                return TryRecoverPartialObject(cleanJson);
             }
             catch (Exception ex)
             {
-                errorMessage = "JSON error: " + ex.Message;
-                return null;
+                if (errorMessage == null)
+                    errorMessage = "JSON error: " + ex.Message;
+                return TryRecoverPartialObject(cleanJson);
             }
+        }
+
+        private static Dictionary<string, object> TryRecoverPartialObject(string cleanJson)
+        {
+            var dict = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(cleanJson)) return dict;
+            var rx = new System.Text.RegularExpressions.Regex("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*(\"((?:[^\"\\\\]|\\\\.)*)\"|true|false|null|-?\\d+(?:\\.\\d+)?)");
+            var matches = rx.Matches(cleanJson);
+            foreach (System.Text.RegularExpressions.Match m in matches)
+            {
+                string key = m.Groups[1].Value;
+                string rawVal = m.Groups[2].Value;
+                if (m.Groups[3].Success) dict[key] = m.Groups[3].Value;
+                else if (string.Equals(rawVal, "true", StringComparison.OrdinalIgnoreCase)) dict[key] = true;
+                else if (string.Equals(rawVal, "false", StringComparison.OrdinalIgnoreCase)) dict[key] = false;
+                else if (string.Equals(rawVal, "null", StringComparison.OrdinalIgnoreCase)) dict[key] = null;
+                else
+                {
+                    int iv;
+                    double dv;
+                    if (int.TryParse(rawVal, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out iv))
+                        dict[key] = iv;
+                    else if (double.TryParse(rawVal, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out dv))
+                        dict[key] = dv;
+                }
+            }
+            return dict;
+        }
+
+        private static string DetectJsonSyntaxError(string cleanJson, bool hadUnterminatedString)
+        {
+            if (hadUnterminatedString)
+                return "JSON parse error: unterminated string literal";
+            if (string.IsNullOrEmpty(cleanJson))
+                return "JSON parse error: empty JSON input";
+
+            string trimmed = cleanJson.Trim();
+            if (trimmed.Length == 0)
+                return "JSON parse error: empty JSON input";
+
+            int braceDepth = 0;
+            int bracketDepth = 0;
+            bool inStr = false;
+            bool esc = false;
+            char prevSig = '\0';
+            for (int i = 0; i < cleanJson.Length; i++)
+            {
+                char c = cleanJson[i];
+                if (inStr)
+                {
+                    if (esc) esc = false;
+                    else if (c == '\\') esc = true;
+                    else if (c == '"') { inStr = false; prevSig = '"'; }
+                    continue;
+                }
+                if (char.IsWhiteSpace(c)) continue;
+                if (c == '"')
+                {
+                    inStr = true;
+                    continue;
+                }
+                if (c == ',')
+                {
+                    if (prevSig == '{' || prevSig == '[' || prevSig == ',' || prevSig == ':')
+                        return "JSON parse error: unexpected comma";
+                }
+                if (c == '{') braceDepth++;
+                else if (c == '}')
+                {
+                    braceDepth--;
+                    if (braceDepth < 0) return "JSON parse error: unexpected '}'";
+                }
+                else if (c == '[') bracketDepth++;
+                else if (c == ']')
+                {
+                    bracketDepth--;
+                    if (bracketDepth < 0) return "JSON parse error: unexpected ']'";
+                }
+                prevSig = c;
+            }
+            if (inStr) return "JSON parse error: unterminated string literal";
+            if (braceDepth != 0) return "JSON parse error: unexpected end of JSON input (unclosed '{')";
+            if (bracketDepth != 0) return "JSON parse error: unexpected end of JSON input (unclosed '[')";
+            return null;
         }
 
         public static string StripJsonc(string input)
         {
+            bool unused;
+            return StripJsoncInternal(input, out unused);
+        }
+
+        private static string StripJsoncInternal(string input, out bool hadUnterminatedString)
+        {
+            hadUnterminatedString = false;
             if (string.IsNullOrEmpty(input)) return input;
             
             var sb = new StringBuilder(input.Length);
@@ -49,6 +152,16 @@ namespace codeLess.Core
                 
                 if (inString)
                 {
+                    if (c == '\n' || c == '\r')
+                    {
+                        hadUnterminatedString = true;
+                        inString = false;
+                        escape = false;
+                        sb.Append('"');
+                        sb.Append(c);
+                        i++;
+                        continue;
+                    }
                     sb.Append(c);
                     if (escape) escape = false;
                     else if (c == '\\') escape = true;
@@ -106,6 +219,11 @@ namespace codeLess.Core
                         i++;
                     }
                 }
+            }
+            if (inString)
+            {
+                hadUnterminatedString = true;
+                sb.Append('"');
             }
             
             // Remove trailing commas (lazy approach: replace commas that are followed only by whitespace and closing bracket/brace)

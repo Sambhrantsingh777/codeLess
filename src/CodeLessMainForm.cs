@@ -191,6 +191,8 @@ namespace codeLess.Studio
         private Button tabOverflowBtn;
         private EditorTabBuffer draggedTab = null;
         private Stack<string> closedTabPaths = new Stack<string>();
+        private sealed class ClosedTabStateWin { public int Line; public int Col; public int ScrollTop; }
+        private readonly Dictionary<string, ClosedTabStateWin> closedTabStatesWin = new Dictionary<string, ClosedTabStateWin>(StringComparer.OrdinalIgnoreCase);
         private Button splitEditorTabBtn;
         private Button wordWrapTabBtn;
         private Label explorerFolderHeaderLabel;
@@ -874,10 +876,19 @@ namespace codeLess.Studio
             while (closedTabPaths.Count > 0)
             {
                 string path = closedTabPaths.Pop();
-                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+                if (openTabs.Any(t => string.Equals(t.FilePath, path, StringComparison.OrdinalIgnoreCase))) continue;
+                EditorTabBuffer reopened = OpenFileInTab(path);
+                ClosedTabStateWin st;
+                if (reopened != null && closedTabStatesWin.TryGetValue(path, out st) && st != null)
                 {
-                    return OpenFileInTab(path);
+                    reopened.CursorLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.Line));
+                    reopened.CursorCol = Math.Max(0, Math.Min((reopened.Lines[reopened.CursorLine] ?? "").Length, st.Col));
+                    reopened.ScrollTopLine = Math.Max(0, Math.Min(reopened.Lines.Count - 1, st.ScrollTop));
+                    if (editorControl != null) editorControl.Invalidate(true);
+                    UpdateStatusBarCursorAndLanguage(reopened);
                 }
+                return reopened;
             }
             return null;
         }
@@ -1602,7 +1613,9 @@ namespace codeLess.Studio
         private readonly HashSet<EditorTabBuffer> pendingHotExitBackupsWin = new HashSet<EditorTabBuffer>();
         public Func<EditorTabBuffer, ExternalConflictAction> ExternalConflictDecisionOverride;
         public Func<EditorTabBuffer, ExternalConflictAction> SaveConflictDecisionOverride;
+        public Func<EditorTabBuffer, SaveFailureAction> SaveFailureDecisionOverride;
         public string SaveConflictSaveAsPath;
+        public string SaveFailureSaveAsPath;
 
         public void ScheduleHotExitBackupWin(EditorTabBuffer buf)
         {
@@ -1857,23 +1870,35 @@ namespace codeLess.Studio
         public void RevertActiveFile()
         {
             if (activeTab == null || string.IsNullOrEmpty(activeTab.FilePath) || !File.Exists(activeTab.FilePath)) return;
+            if (activeTab.IsLargeFileViewer) return;
             Encoding enc;
             bool hasBom;
             string eol;
             bool hasFinalNl;
-            string disk = EditorTabBuffer.ReadFilePreservingMetadata(activeTab.FilePath, out enc, out hasBom, out eol, out hasFinalNl);
+            string disk = EditorTabBuffer.ReadFilePreservingMetadata(activeTab.FilePath, settings != null && settings.AutoGuessEncoding, out enc, out hasBom, out eol, out hasFinalNl);
             activeTab.PushUndoSnapshot();
+            activeTab.PreDiffContent = null;
+            if (activeTab.DiffHunks != null) activeTab.DiffHunks.Clear();
             activeTab.FileEncoding = enc;
             activeTab.HasBom = hasBom;
             activeTab.EolSequence = eol;
             activeTab.HasFinalNewline = hasFinalNl;
             activeTab.Content = disk;
             activeTab.SavedContent = disk;
+            activeTab.RecordDiskBaseline(activeTab.FilePath);
             activeTab.SyncLinesFromContent();
             activeTab.IsDirty = false;
+            activeTab.IsDeletedOnDisk = false;
+            activeTab.HasExternalDiskConflict = false;
+            pendingHotExitBackupsWin.Remove(activeTab);
+            if (pendingHotExitBackupsWin.Count == 0 && hotExitBackupTimer != null)
+                hotExitBackupTimer.Stop();
+            HotExitService.DeleteBackup(workspaceRoot, activeTab);
             activeTab.RefreshGutterDiff();
             LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(activeTab);
             editorControl.LoadBuffer(activeTab);
+            if (isSplitEditorActive && splitEditorControl != null && splitEditorControl.CurrentBuffer == activeTab)
+                splitEditorControl.LoadBuffer(activeTab);
             RefreshTabStrip();
             UpdateWindowTitle();
         }
@@ -4233,6 +4258,29 @@ if __name__ == '__main__':
             }
         }
 
+        private void RepathSingleOpenTabWin(EditorTabBuffer tab, string updatedPath)
+        {
+            if (tab == null || string.IsNullOrEmpty(updatedPath)) return;
+            HotExitService.DeleteBackup(workspaceRoot, tab);
+            tab.FilePath = updatedPath;
+            tab.FileName = Path.GetFileName(updatedPath);
+            tab.RelativePath = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, updatedPath);
+            string newExt = Path.GetExtension(updatedPath).TrimStart('.').ToLowerInvariant();
+            if (!string.IsNullOrEmpty(newExt) && !string.Equals(tab.Language, newExt, StringComparison.OrdinalIgnoreCase))
+            {
+                tab.Language = newExt;
+                EditorSyntaxSession.For(tab).Prepare(tab);
+            }
+            if (tab.IsDirty)
+                ScheduleHotExitBackupWin(tab);
+            if (tab == activeTab)
+            {
+                if (explorerTree != null) explorerTree.ActiveEditorFilePath = updatedPath;
+                UpdateStatusBarCursorAndLanguage(tab);
+                if (editorControl != null) editorControl.Invalidate(true);
+            }
+        }
+
         private void RepathOpenTabsForFileOrDirectoryMove(string oldPath, string newPath, bool isDirectory)
         {
             if (string.IsNullOrEmpty(oldPath) || string.IsNullOrEmpty(newPath)) return;
@@ -4240,9 +4288,7 @@ if __name__ == '__main__':
             {
                 foreach (var tab in openTabs.Where(t => string.Equals(t.FilePath, oldPath, StringComparison.OrdinalIgnoreCase)))
                 {
-                    tab.FilePath = newPath;
-                    tab.FileName = Path.GetFileName(newPath);
-                    tab.RelativePath = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, newPath);
+                    RepathSingleOpenTabWin(tab, newPath);
                 }
             }
             else
@@ -4254,14 +4300,14 @@ if __name__ == '__main__':
                     {
                         string subRel = tab.FilePath.Substring(prefix.Length);
                         string updatedFull = Path.Combine(newPath, subRel);
-                        tab.FilePath = updatedFull;
-                        tab.FileName = Path.GetFileName(updatedFull);
-                        tab.RelativePath = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, updatedFull);
+                        RepathSingleOpenTabWin(tab, updatedFull);
                     }
                 }
             }
+            PersistOpenTabPaths();
             RefreshTabStrip();
             RefreshOpenEditorsSection();
+            UpdateWindowTitle();
         }
 
         private static Panel CreateVerticalSpacer(int height)
@@ -4923,6 +4969,98 @@ if __name__ == '__main__':
             else { searchInput.Focus(); searchInput.SelectAll(); }
         }
 
+        private readonly List<WorkspaceReplaceUndoEntry> lastWorkspaceReplaceUndoWin = new List<WorkspaceReplaceUndoEntry>();
+
+        /// <summary>
+        /// Undoes the most recent Replace in Files batch across closed disk files and open tabs in WinForms.
+        /// Never overwrites a file that changed on disk after the replace (skips it and reports).
+        /// </summary>
+        public int UndoLastWorkspaceReplace()
+        {
+            List<string> skipped;
+            return UndoLastWorkspaceReplace(out skipped);
+        }
+
+        public int UndoLastWorkspaceReplace(out List<string> skippedFiles)
+        {
+            skippedFiles = new List<string>();
+            if (lastWorkspaceReplaceUndoWin.Count == 0) return 0;
+            List<WorkspaceReplaceUndoEntry> snapshot = lastWorkspaceReplaceUndoWin.ToList();
+            lastWorkspaceReplaceUndoWin.Clear();
+            int restored = 0;
+            foreach (WorkspaceReplaceUndoEntry entry in snapshot)
+            {
+                try
+                {
+                    EditorTabBuffer open = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FilePath, StringComparison.OrdinalIgnoreCase));
+                    if (WorkspaceSearchEngine.HasFileChangedSinceReplace(entry, open))
+                    {
+                        if (!string.IsNullOrEmpty(entry.FilePath))
+                            skippedFiles.Add(entry.FilePath);
+                        continue;
+                    }
+                    if (entry.TouchedDisk && !string.IsNullOrEmpty(entry.FilePath))
+                    {
+                        lock (internalSaveTimestamps) { internalSaveTimestamps[entry.FilePath] = DateTime.UtcNow; }
+                        EditorTabBuffer.WriteFilePreservingMetadata(
+                            entry.FilePath,
+                            entry.PreDiskRaw,
+                            entry.PreEncoding,
+                            entry.PreHasBom,
+                            entry.PreEol,
+                            entry.PreHasFinalNewline);
+                    }
+                    if (open != null && entry.WasOpen)
+                    {
+                        open.PushUndoSnapshot();
+                        open.Content = entry.PreOpenContent;
+                        open.SavedContent = entry.PreOpenSavedContent;
+                        open.SyncLinesFromContent();
+                        open.IsDirty = entry.WasDirty;
+                        if (entry.TouchedDisk && File.Exists(entry.FilePath))
+                            open.RecordDiskBaseline(entry.FilePath);
+                        if (!open.IsDirty)
+                        {
+                            pendingHotExitBackupsWin.Remove(open);
+                            HotExitService.DeleteBackup(workspaceRoot, open);
+                        }
+                        if (!open.IsLargeFile)
+                        {
+                            open.RefreshGutterDiff();
+                            LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(open);
+                        }
+                    }
+                    restored++;
+                }
+                catch { }
+            }
+            if (activeTab != null)
+            {
+                activeTab.CursorLine = Math.Max(0, Math.Min(activeTab.CursorLine, activeTab.Lines.Count - 1));
+                activeTab.CursorCol = Math.Max(0, Math.Min(activeTab.CursorCol, activeTab.Lines[activeTab.CursorLine].Length));
+                activeTab.ClearSelection();
+                if (editorControl != null) editorControl.LoadBuffer(activeTab);
+            }
+            if (splitEditorControl != null && splitEditorControl.CurrentBuffer != null)
+                splitEditorControl.LoadBuffer(splitEditorControl.CurrentBuffer);
+            RefreshTabStrip();
+            if (!string.IsNullOrEmpty(workspaceRoot))
+                RefreshGitSidebarStatus();
+            UpdateWindowTitle();
+            if (skippedFiles.Count > 0)
+            {
+                string names = string.Join(", ", skippedFiles.Select(Path.GetFileName));
+                string msg = string.Format("Undid replace in {0} file(s); skipped {1} modified file(s): {2}", restored, skippedFiles.Count, names);
+                if (statusLeftLabel != null) statusLeftLabel.Text = msg;
+                ShowToastNotification("Undo Replace in Files", msg);
+            }
+            else
+            {
+                if (statusLeftLabel != null) statusLeftLabel.Text = string.Format("Undid replace in {0} file(s)", restored);
+            }
+            return restored;
+        }
+
         private void ExecuteSidebarReplaceAllWin()
         {
             string q = searchInput.Text ?? "";
@@ -4964,6 +5102,7 @@ if __name__ == '__main__':
                         .Matches.Select(m => m.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 }
                 Dictionary<string, string> updatedOnDisk = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                List<WorkspaceReplaceUndoEntry> diskUndoEntries = new List<WorkspaceReplaceUndoEntry>();
                 List<string> dirtyTargets = new List<string>();
                 int replacedTotal = 0;
                 foreach (string fp in targets)
@@ -4984,7 +5123,25 @@ if __name__ == '__main__':
                         if (n == 0) continue;
                         lock (internalSaveTimestamps) internalSaveTimestamps[fp] = DateTime.UtcNow;
                         EditorTabBuffer.WriteFilePreservingMetadata(fp, next, fEnc, fBom, fEol, fFinalNl);
-                        updatedOnDisk[fp] = EditorTabBuffer.ReadFilePreservingMetadata(fp, out fEnc, out fBom, out fEol, out fFinalNl);
+                        Encoding wEnc; bool wBom; string wEol; bool wNl;
+                        string written = EditorTabBuffer.ReadFilePreservingMetadata(fp, out wEnc, out wBom, out wEol, out wNl);
+                        updatedOnDisk[fp] = written;
+                        diskUndoEntries.Add(new WorkspaceReplaceUndoEntry
+                        {
+                            FilePath = fp,
+                            TouchedDisk = true,
+                            PreDiskRaw = raw,
+                            PostDiskRaw = written,
+                            PreEncoding = fEnc,
+                            PreHasBom = fBom,
+                            PreEol = fEol,
+                            PreHasFinalNewline = fFinalNl,
+                            WasOpen = false,
+                            WasDirty = false,
+                            PreOpenContent = raw,
+                            PreOpenSavedContent = raw,
+                            PostOpenContent = written
+                        });
                         replacedTotal += n;
                     }
                     catch { }
@@ -4992,6 +5149,7 @@ if __name__ == '__main__':
 
                 PostToUiWin(() =>
                 {
+                    List<WorkspaceReplaceUndoEntry> batchUndo = new List<WorkspaceReplaceUndoEntry>(diskUndoEntries);
                     int modified = updatedOnDisk.Count;
                     int total = replacedTotal;
                     foreach (string fp in dirtyTargets)
@@ -4999,8 +5157,19 @@ if __name__ == '__main__':
                         EditorTabBuffer buf = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fp, StringComparison.OrdinalIgnoreCase));
                         if (buf == null) continue;
                         int n;
-                        string next = WorkspaceSearchEngine.ReplaceInText(buf.Content ?? "", rx, rep, out n);
+                        string preContent = buf.Content ?? "";
+                        string next = WorkspaceSearchEngine.ReplaceInText(preContent, rx, rep, out n);
                         if (n == 0) continue;
+                        batchUndo.Add(new WorkspaceReplaceUndoEntry
+                        {
+                            FilePath = fp,
+                            TouchedDisk = false,
+                            WasOpen = true,
+                            WasDirty = true,
+                            PreOpenContent = preContent,
+                            PreOpenSavedContent = buf.SavedContent,
+                            PostOpenContent = next
+                        });
                         // Unsaved editor: edit the buffer (undoable, stays dirty) instead of clobbering the unsaved text.
                         buf.PushUndoSnapshot();
                         buf.Content = next;
@@ -5013,13 +5182,26 @@ if __name__ == '__main__':
                     {
                         EditorTabBuffer openBuf = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, kvp.Key, StringComparison.OrdinalIgnoreCase));
                         if (openBuf == null) continue;
+                        WorkspaceReplaceUndoEntry matchEntry = batchUndo.FirstOrDefault(e => string.Equals(e.FilePath, kvp.Key, StringComparison.OrdinalIgnoreCase));
+                        if (matchEntry != null)
+                        {
+                            matchEntry.WasOpen = true;
+                            matchEntry.PreOpenContent = openBuf.Content;
+                            matchEntry.PreOpenSavedContent = openBuf.SavedContent;
+                        }
                         openBuf.PushUndoSnapshot();
                         openBuf.Content = kvp.Value;
                         openBuf.SavedContent = kvp.Value;
+                        openBuf.RecordDiskBaseline(kvp.Key);
                         openBuf.SyncLinesFromContent();
                         openBuf.IsDirty = false;
                         openBuf.RefreshGutterDiff();
                         LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(openBuf);
+                    }
+                    if (batchUndo.Count > 0)
+                    {
+                        lastWorkspaceReplaceUndoWin.Clear();
+                        lastWorkspaceReplaceUndoWin.AddRange(batchUndo);
                     }
                     if (searchProgressBar != null) searchProgressBar.StopProgress();
                     if (activeTab != null)
@@ -9169,7 +9351,15 @@ if __name__ == '__main__':
                 return false;
 
             if (!string.IsNullOrEmpty(captured.FilePath))
+            {
                 closedTabPaths.Push(captured.FilePath);
+                closedTabStatesWin[captured.FilePath] = new ClosedTabStateWin
+                {
+                    Line = captured.CursorLine,
+                    Col = captured.CursorCol,
+                    ScrollTop = captured.ScrollTopLine
+                };
+            }
 
             openTabs.Remove(captured);
             if (captured.OnClosed != null)
@@ -9778,12 +9968,17 @@ if __name__ == '__main__':
 
         public bool SaveTabBuffer(EditorTabBuffer buf)
         {
-            return SaveTabBuffer(buf, false);
+            return SaveTabBuffer(buf, false, false, false);
+        }
+
+        public bool SaveTabBuffer(EditorTabBuffer buf, bool backgroundSave)
+        {
+            return SaveTabBuffer(buf, backgroundSave, false, false);
         }
 
         // backgroundSave: autosave tick. Must not reload the editor (LoadBuffer hides the autocomplete popup and
         // resets the symbol dropdown every few seconds while the user is typing).
-        public bool SaveTabBuffer(EditorTabBuffer buf, bool backgroundSave)
+        public bool SaveTabBuffer(EditorTabBuffer buf, bool backgroundSave, bool forceOverwriteConflict, bool forceOverwriteReadOnly)
         {
             if (buf == null) return false;
             if (buf.IsLargeFileViewer)
@@ -9791,13 +9986,82 @@ if __name__ == '__main__':
                 if (statusLeftLabel != null) statusLeftLabel.Text = buf.FileName + " is open read-only in the large-file viewer and cannot be saved.";
                 return false;
             }
+            if (buf.IsReadOnlyDiffPreview)
+            {
+                if (statusLeftLabel != null) statusLeftLabel.Text = buf.FileName + " is open in read-only diff preview and cannot be saved.";
+                return false;
+            }
+            if (backgroundSave && !AutoSavePolicy.IsEligible(buf))
+                return false;
             if (buf.IsUntitled || string.IsNullOrEmpty(buf.FilePath))
             {
+                if (backgroundSave) return false;
                 activeTab = buf;
                 return PromptSaveAsDialog(buf);
             }
+            string extDisk;
+            if (!forceOverwriteConflict && buf.IsDirty && (buf.HasExternalDiskConflict || buf.HasDiskModifiedExternally(out extDisk)))
+            {
+                buf.HasExternalDiskConflict = true;
+                if (backgroundSave) return false;
+                if (SaveConflictDecisionOverride != null)
+                {
+                    ExternalConflictAction decision = SaveConflictDecisionOverride(buf);
+                    if (decision == ExternalConflictAction.Overwrite)
+                    {
+                        // proceed to overwrite
+                    }
+                    else if (decision == ExternalConflictAction.SaveAs && !string.IsNullOrEmpty(SaveConflictSaveAsPath))
+                    {
+                        HotExitService.DeleteBackup(workspaceRoot, buf);
+                        buf.FilePath = Path.GetFullPath(SaveConflictSaveAsPath);
+                        buf.FileName = Path.GetFileName(buf.FilePath);
+                        buf.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, buf.FilePath) : buf.FileName;
+                        buf.Language = Path.GetExtension(buf.FilePath).TrimStart('.').ToLowerInvariant();
+                        buf.HasExternalDiskConflict = false;
+                    }
+                    else if (decision == ExternalConflictAction.Compare)
+                    {
+                        try
+                        {
+                            Encoding cEnc; bool cBom; string cEol; bool cNl;
+                            string disk = EditorTabBuffer.ReadFilePreservingMetadata(buf.FilePath, settings != null && settings.AutoGuessEncoding, out cEnc, out cBom, out cEol, out cNl);
+                            buf.PreDiffContent = InlineDiffReview.Normalize(disk ?? "");
+                            InlineDiffReview.Refresh(buf);
+                            if (activeTab == buf) editorControl.LoadBuffer(buf);
+                        }
+                        catch { }
+                        return false;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    ShowToastNotification("Save Conflict", "Failed to save '" + buf.FileName + "': The content of the file is newer.", "Overwrite", delegate { SaveTabBuffer(buf, false, true, forceOverwriteReadOnly); });
+                    return false;
+                }
+            }
             try
             {
+                bool isDiskReadOnly = !string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath) &&
+                                      (File.GetAttributes(buf.FilePath) & FileAttributes.ReadOnly) != 0;
+                if ((buf.IsReadOnly || isDiskReadOnly) && !forceOverwriteReadOnly)
+                {
+                    throw new UnauthorizedAccessException("File is read-only. Select 'Overwrite' to make it writable.");
+                }
+                if (forceOverwriteReadOnly)
+                {
+                    buf.IsReadOnly = false;
+                    if (!string.IsNullOrEmpty(buf.FilePath) && File.Exists(buf.FilePath))
+                    {
+                        FileAttributes attrs = File.GetAttributes(buf.FilePath);
+                        if ((attrs & FileAttributes.ReadOnly) != 0)
+                            File.SetAttributes(buf.FilePath, attrs & ~FileAttributes.ReadOnly);
+                    }
+                }
                 internalSaveTimestamps[buf.FilePath] = DateTime.UtcNow;
                 ApplySaveParticipantsWin(buf, backgroundSave);
                 object agentSave = BeginAgentTrackedSaveWin(buf);
@@ -9821,6 +10085,13 @@ if __name__ == '__main__':
                     else
                         editorControl.LoadBuffer(buf);
                 }
+                if (isSplitEditorActive && splitEditorControl != null && splitEditorControl.CurrentBuffer == buf)
+                {
+                    if (backgroundSave)
+                        splitEditorControl.RefreshAfterBackgroundSave();
+                    else
+                        splitEditorControl.LoadBuffer(buf);
+                }
                 RefreshOutlineAndProblems(activeTab ?? buf);
                 RefreshTabStrip();
                 if (!string.IsNullOrEmpty(workspaceRoot))
@@ -9833,9 +10104,50 @@ if __name__ == '__main__':
             catch (Exception ex)
             {
                 if (backgroundSave)
+                {
                     statusLeftLabel.Text = "Auto Save failed for " + buf.FileName + ": " + ex.Message;
-                else if (!SuppressUnsavedPrompts && Application.MessageLoop)
-                    MessageBox.Show("Failed saving file: " + ex.Message, "codeLess IDE");
+                    return false;
+                }
+                if (SaveFailureDecisionOverride != null)
+                {
+                    SaveFailureAction decision = SaveFailureDecisionOverride(buf);
+                    if (decision == SaveFailureAction.Retry)
+                    {
+                        Func<EditorTabBuffer, SaveFailureAction> prev = SaveFailureDecisionOverride;
+                        SaveFailureDecisionOverride = null;
+                        try { return SaveTabBuffer(buf, false, forceOverwriteConflict, forceOverwriteReadOnly); }
+                        finally { SaveFailureDecisionOverride = prev; }
+                    }
+                    if (decision == SaveFailureAction.Overwrite)
+                    {
+                        Func<EditorTabBuffer, SaveFailureAction> prev = SaveFailureDecisionOverride;
+                        SaveFailureDecisionOverride = null;
+                        try { return SaveTabBuffer(buf, false, true, true); }
+                        finally { SaveFailureDecisionOverride = prev; }
+                    }
+                    if (decision == SaveFailureAction.SaveAs)
+                    {
+                        string saveAsTarget = !string.IsNullOrEmpty(SaveFailureSaveAsPath) ? SaveFailureSaveAsPath : SaveConflictSaveAsPath;
+                        if (!string.IsNullOrEmpty(saveAsTarget))
+                        {
+                            HotExitService.DeleteBackup(workspaceRoot, buf);
+                            buf.FilePath = Path.GetFullPath(saveAsTarget);
+                            buf.FileName = Path.GetFileName(buf.FilePath);
+                            buf.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, buf.FilePath) : buf.FileName;
+                            buf.Language = Path.GetExtension(buf.FilePath).TrimStart('.').ToLowerInvariant();
+                            buf.IsReadOnly = false;
+                            buf.HasExternalDiskConflict = false;
+                            Func<EditorTabBuffer, SaveFailureAction> prev = SaveFailureDecisionOverride;
+                            SaveFailureDecisionOverride = null;
+                            try { return SaveTabBuffer(buf, false, true, true); }
+                            finally { SaveFailureDecisionOverride = prev; }
+                        }
+                    }
+                }
+                else
+                {
+                    ShowToastNotification("Save Failed", "Failed to save '" + buf.FileName + "': " + ex.Message, "Overwrite", delegate { SaveTabBuffer(buf, false, true, true); });
+                }
                 return false;
             }
         }
@@ -11633,29 +11945,14 @@ if __name__ == '__main__':
                             bool hadPill = attachedContextPills.Any(p => DoesPillMatchFile(p, path, oldName, oldRel));
                             RemoveContextPillsForFile(path, oldName, oldRel);
                             File.Move(path, newPath);
-                            foreach (var tab in openTabs.Where(t => string.Equals(t.FilePath, path, StringComparison.OrdinalIgnoreCase)).ToList())
-                            {
-                                tab.FilePath = newPath;
-                                tab.FileName = Path.GetFileName(newPath);
-                                tab.RelativePath = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, newPath);
-                            }
+                            RepathOpenTabsForFileOrDirectoryMove(path, newPath, false);
                             if (hadPill)
                                 AddContextPill("@" + Path.GetFileName(newPath));
                         }
                         else if (Directory.Exists(path))
                         {
                             Directory.Move(path, newPath);
-                            string oldPrefix = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-                            string newPrefix = newPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-                            foreach (var tab in openTabs.ToList())
-                            {
-                                if (!string.IsNullOrEmpty(tab.FilePath) && tab.FilePath.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    tab.FilePath = newPrefix + tab.FilePath.Substring(oldPrefix.Length);
-                                    tab.FileName = Path.GetFileName(tab.FilePath);
-                                    tab.RelativePath = LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, tab.FilePath);
-                                }
-                            }
+                            RepathOpenTabsForFileOrDirectoryMove(path, newPath, true);
                         }
                         AfterExplorerFileOperation(newPath);
                         RefreshTabStrip();
@@ -12140,7 +12437,7 @@ if __name__ == '__main__':
             tabCtx.Items.Add(CreateMenuItem("Close", "Ctrl+F4", () => CloseTabBuffer(captured)));
             tabCtx.Items.Add(CreateMenuItem("Close Others", "", () =>
             {
-                foreach (var other in openTabs.Where(t => t != captured).ToList())
+                foreach (var other in openTabs.Where(t => t != captured && !t.IsPinned).ToList())
                 {
                     if (!CloseTabBuffer(other))
                         return;
@@ -12153,7 +12450,7 @@ if __name__ == '__main__':
                 int idx = openTabs.IndexOf(captured);
                 if (idx >= 0)
                 {
-                    foreach (var rightTab in openTabs.Skip(idx + 1).ToList())
+                    foreach (var rightTab in openTabs.Skip(idx + 1).Where(t => !t.IsPinned).ToList())
                     {
                         if (!CloseTabBuffer(rightTab))
                             return;
@@ -12162,7 +12459,7 @@ if __name__ == '__main__':
             }));
             tabCtx.Items.Add(CreateMenuItem("Close Saved", "Ctrl+K U", () =>
             {
-                foreach (var cleanTab in openTabs.Where(t => !t.IsDirty).ToList())
+                foreach (var cleanTab in openTabs.Where(t => !t.IsDirty && !t.IsPinned).ToList())
                 {
                     if (!CloseTabBuffer(cleanTab))
                         return;

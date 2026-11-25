@@ -38,10 +38,19 @@ namespace codeLess.Studio
         /// <summary>True when auto save may write this buffer now.</summary>
         public static bool IsEligible(EditorTabBuffer b)
         {
-            if (b == null || !b.IsDirty || b.IsUntitled || b.IsLargeFileViewer || b.IsReadOnlyDiffPreview) return false;
+            if (b == null || !b.IsDirty || b.IsUntitled || b.IsLargeFileViewer || b.IsReadOnlyDiffPreview || b.IsReadOnly) return false;
             if (string.IsNullOrEmpty(b.FilePath) || b.IsDeletedOnDisk) return false;
+            if (b.HasExternalDiskConflict) return false;
             if (IsUnderReview(b)) return false;
-            try { return File.Exists(b.FilePath); } catch { return false; }
+            try
+            {
+                if (!File.Exists(b.FilePath)) return false;
+                if ((File.GetAttributes(b.FilePath) & FileAttributes.ReadOnly) != 0) return false;
+                string diskText;
+                if (b.HasDiskModifiedExternally(out diskText)) return false;
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>An inline proposal (agent, inline AI, code-block apply) is waiting for Accept / Reject.</summary>

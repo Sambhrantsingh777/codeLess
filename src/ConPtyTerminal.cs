@@ -1654,6 +1654,8 @@ namespace codeLess.Studio
             CursorRow = 0;
             CursorCol = 0;
             pendingWrap = false;
+            pendingHighSurrogate = '\0';
+            utf8Decoder.Reset();
             CursorShape = 0;
             SynchronizedOutput = false;
         }
@@ -2278,7 +2280,16 @@ namespace codeLess.Studio
                 if (screenRow < 0 || screenRow >= Rows) return "";
                 StringBuilder sb = new StringBuilder(Cols);
                 for (int c = 0; c < Cols; c++)
-                    sb.Append(g[screenRow][c].Char == '\0' ? ' ' : g[screenRow][c].Char);
+                {
+                    char ch = g[screenRow][c].Char;
+                    if (ch == '\0')
+                    {
+                        char prev = c > 0 ? g[screenRow][c - 1].Char : ' ';
+                        if (prev != '\0' && prev != ' ' && (IsWideBmp(prev) || char.IsLowSurrogate(prev))) continue;
+                        ch = ' ';
+                    }
+                    sb.Append(ch);
+                }
                 return sb.ToString().TrimEnd();
             }
         }
@@ -2292,8 +2303,14 @@ namespace codeLess.Studio
                 StringBuilder sb = new StringBuilder(Cols);
                 for (int c = 0; c < Cols; c++)
                 {
-                    TermCell cell = GetVirtualCell(virtualRow, c);
-                    sb.Append(cell.Char == '\0' ? ' ' : cell.Char);
+                    char ch = GetVirtualCell(virtualRow, c).Char;
+                    if (ch == '\0')
+                    {
+                        char prev = c > 0 ? GetVirtualCell(virtualRow, c - 1).Char : ' ';
+                        if (prev != '\0' && prev != ' ' && (IsWideBmp(prev) || char.IsLowSurrogate(prev))) continue;
+                        ch = ' ';
+                    }
+                    sb.Append(ch);
                 }
                 return sb.ToString().TrimEnd();
             }
@@ -2320,6 +2337,11 @@ namespace codeLess.Studio
         public void FeedText(string text)
         {
             ProcessText(text);
+        }
+
+        public void FeedBytes(byte[] bytes, int count)
+        {
+            ProcessBytes(bytes, count);
         }
 
         public TermCell GetViewportCell(int row, int col, int scrollbackOffset = 0)
@@ -4967,7 +4989,13 @@ namespace codeLess.Studio
                 for (int c = startC; c <= endC && c < session.Buffer.Cols; c++)
                 {
                     char ch = session.Buffer.GetVirtualCell(vr, c).Char;
-                    lineSb.Append(ch == '\0' ? ' ' : ch);
+                    if (ch == '\0')
+                    {
+                        char prev = c > startC ? session.Buffer.GetVirtualCell(vr, c - 1).Char : ' ';
+                        if (prev != '\0' && prev != ' ' && (Vt100TerminalBuffer.IsWideBmp(prev) || char.IsLowSurrogate(prev))) continue;
+                        ch = ' ';
+                    }
+                    lineSb.Append(ch);
                 }
                 if (vr < r2)
                     sb.AppendLine(lineSb.ToString().TrimEnd());

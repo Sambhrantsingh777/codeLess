@@ -192,28 +192,34 @@ namespace codeLess.Core
             if (string.IsNullOrWhiteSpace(jsonContent)) return null;
             string err;
             var parsed = JsoncParser.Parse(jsonContent, out err);
-            if (err != null) return err;
-            if (parsed == null) return "Invalid JSON: null root object";
+            if (parsed == null) return err ?? "Invalid JSON: null root object";
             Dictionary<string, object> dict = parsed as Dictionary<string, object>;
-            if (dict == null) return "Invalid JSON: expected a JSON object";
-            if (dict.ContainsKey("invalid")) return "Invalid format: missing value";
-            if (err == null && dict != null)
+            if (dict == null) return err ?? "Invalid JSON: expected a JSON object";
+            if (dict.ContainsKey("invalid"))
             {
+                if (err == null) err = "Invalid format: missing value";
+                dict.Remove("invalid");
+            }
+            if (dict != null && target != null)
+            {
+                float fVal;
+                int iVal;
+                bool bVal;
                 if (dict.ContainsKey("workbench.colorTheme")) target.ActiveThemeId = dict["workbench.colorTheme"] != null ? dict["workbench.colorTheme"].ToString() : null;
-                if (dict.ContainsKey("editor.fontSize")) target.EditorFontSize = Convert.ToSingle(dict["editor.fontSize"]);
+                if (dict.ContainsKey("editor.fontSize") && TryGetSingle(dict["editor.fontSize"], out fVal) && fVal > 0f) target.EditorFontSize = fVal;
                 if (dict.ContainsKey("editor.fontFamily")) target.EditorFontFamily = dict["editor.fontFamily"] != null ? dict["editor.fontFamily"].ToString() : null;
-                if (dict.ContainsKey("editor.tabSize")) target.TabSize = Convert.ToInt32(dict["editor.tabSize"]);
-                if (dict.ContainsKey("editor.insertSpaces")) target.InsertSpaces = Convert.ToBoolean(dict["editor.insertSpaces"]);
+                if (dict.ContainsKey("editor.tabSize") && TryGetInt32(dict["editor.tabSize"], out iVal) && iVal > 0) target.TabSize = iVal;
+                if (dict.ContainsKey("editor.insertSpaces") && TryGetBoolean(dict["editor.insertSpaces"], out bVal)) target.InsertSpaces = bVal;
                 if (dict.ContainsKey("editor.wordWrap")) {
                     object w = dict["editor.wordWrap"];
                     target.WordWrap = w != null && (w.ToString() == "on" || w.ToString() == "bounded" || w.ToString() == "wordWrapColumn" || w.ToString() == "True");
                 }
-                if (dict.ContainsKey("editor.minimap.enabled")) target.ShowMinimap = Convert.ToBoolean(dict["editor.minimap.enabled"]);
+                if (dict.ContainsKey("editor.minimap.enabled") && TryGetBoolean(dict["editor.minimap.enabled"], out bVal)) target.ShowMinimap = bVal;
                 if (dict.ContainsKey("search.exclude")) {
                     Dictionary<string, object> sx = dict["search.exclude"] as Dictionary<string, object>;
                     if (sx != null) {
                         var keys = new List<string>();
-                        foreach(var kv in sx) if (Convert.ToBoolean(kv.Value)) keys.Add(kv.Key);
+                        foreach(var kv in sx) if (TryGetBoolean(kv.Value, out bVal) && bVal) keys.Add(kv.Key);
                         if (keys.Count > 0) target.ExcludedFolders = string.Join(", ", keys);
                     }
                 }
@@ -222,14 +228,14 @@ namespace codeLess.Core
                     target.ShowRenderWhitespace = s == "all";
                     target.EditorRenderWhitespace = s ?? "selection";
                 }
-                if (dict.ContainsKey("editor.emptySelectionClipboard")) target.EditorEmptySelectionClipboard = Convert.ToBoolean(dict["editor.emptySelectionClipboard"]);
-                if (dict.ContainsKey("editor.useTabStops")) target.EditorUseTabStops = Convert.ToBoolean(dict["editor.useTabStops"]);
+                if (dict.ContainsKey("editor.emptySelectionClipboard") && TryGetBoolean(dict["editor.emptySelectionClipboard"], out bVal)) target.EditorEmptySelectionClipboard = bVal;
+                if (dict.ContainsKey("editor.useTabStops") && TryGetBoolean(dict["editor.useTabStops"], out bVal)) target.EditorUseTabStops = bVal;
                 if (dict.ContainsKey("editor.acceptSuggestionOnEnter")) {
                     object v = dict["editor.acceptSuggestionOnEnter"];
                     if (v is bool) target.EditorAcceptSuggestionOnEnter = (bool)v;
                     else if (v != null) target.EditorAcceptSuggestionOnEnter = !string.Equals(v.ToString(), "off", StringComparison.OrdinalIgnoreCase) && !string.Equals(v.ToString(), "false", StringComparison.OrdinalIgnoreCase);
                 }
-                if (dict.ContainsKey("editor.cursorSurroundingLines")) target.EditorCursorSurroundingLines = Convert.ToInt32(dict["editor.cursorSurroundingLines"]);
+                if (dict.ContainsKey("editor.cursorSurroundingLines") && TryGetInt32(dict["editor.cursorSurroundingLines"], out iVal) && iVal >= 0) target.EditorCursorSurroundingLines = iVal;
                 if (dict.ContainsKey("editor.wordSeparators") && dict["editor.wordSeparators"] != null) target.EditorWordSeparators = dict["editor.wordSeparators"].ToString();
                 if (dict.ContainsKey("editor.cursorStyle")) {
                     target.EditorCursorStyle = dict["editor.cursorStyle"] != null ? dict["editor.cursorStyle"].ToString() : null;
@@ -243,24 +249,24 @@ namespace codeLess.Core
                     target.ShowWelcomeOnStartup = s == "welcomePage" || s == "newUntitledFile";
                 }
                 if (dict.ContainsKey("editor.cursorBlinking")) target.EditorCursorBlinking = dict["editor.cursorBlinking"] != null ? dict["editor.cursorBlinking"].ToString() : null;
-                if (dict.ContainsKey("terminal.integrated.fontSize")) target.TerminalFontSize = Convert.ToSingle(dict["terminal.integrated.fontSize"]);
-                if (dict.ContainsKey("editor.formatOnSave")) target.FormatOnSave = Convert.ToBoolean(dict["editor.formatOnSave"]);
+                if (dict.ContainsKey("terminal.integrated.fontSize") && TryGetSingle(dict["terminal.integrated.fontSize"], out fVal) && fVal > 0f) target.TerminalFontSize = fVal;
+                if (dict.ContainsKey("editor.formatOnSave") && TryGetBoolean(dict["editor.formatOnSave"], out bVal)) target.FormatOnSave = bVal;
                 if (dict.ContainsKey("files.autoSave")) {
                     string mode = dict["files.autoSave"] != null ? dict["files.autoSave"].ToString() : null;
                     target.SetAutoSaveMode(mode);
                 }
-                if (dict.ContainsKey("files.autoSaveDelay")) {
-                    target.AutoSaveDelayMs = Convert.ToInt32(dict["files.autoSaveDelay"]);
+                if (dict.ContainsKey("files.autoSaveDelay") && TryGetInt32(dict["files.autoSaveDelay"], out iVal) && iVal > 0) {
+                    target.AutoSaveDelayMs = iVal;
                 }
                 if (dict.ContainsKey("git.autofetch")) {
                     object af = dict["git.autofetch"];
                     target.GitAutoFetch = af != null && !string.Equals(af.ToString(), "false", StringComparison.OrdinalIgnoreCase) && !string.Equals(af.ToString(), "off", StringComparison.OrdinalIgnoreCase);
                 }
-                if (dict.ContainsKey("git.rebaseWhenSync")) {
-                    target.GitRebaseWhenSync = Convert.ToBoolean(dict["git.rebaseWhenSync"]);
+                if (dict.ContainsKey("git.rebaseWhenSync") && TryGetBoolean(dict["git.rebaseWhenSync"], out bVal)) {
+                    target.GitRebaseWhenSync = bVal;
                 }
-                if (dict.ContainsKey("codeless.agent.nativeToolCalling")) {
-                    target.NativeToolCalling = Convert.ToBoolean(dict["codeless.agent.nativeToolCalling"]);
+                if (dict.ContainsKey("codeless.agent.nativeToolCalling") && TryGetBoolean(dict["codeless.agent.nativeToolCalling"], out bVal)) {
+                    target.NativeToolCalling = bVal;
                 }
                 if (dict.ContainsKey("files.hotExit")) {
                     string he = dict["files.hotExit"] != null ? dict["files.hotExit"].ToString() : null;
@@ -269,22 +275,22 @@ namespace codeLess.Core
                 if (dict.ContainsKey("files.eol")) {
                     target.FilesEol = dict["files.eol"] != null ? dict["files.eol"].ToString() : "auto";
                 }
-                if (dict.ContainsKey("files.autoGuessEncoding")) {
-                    target.AutoGuessEncoding = Convert.ToBoolean(dict["files.autoGuessEncoding"]);
+                if (dict.ContainsKey("files.autoGuessEncoding") && TryGetBoolean(dict["files.autoGuessEncoding"], out bVal)) {
+                    target.AutoGuessEncoding = bVal;
                 }
-                if (dict.ContainsKey("files.trimFinalNewlines")) {
-                    target.TrimFinalNewlinesOnSave = Convert.ToBoolean(dict["files.trimFinalNewlines"]);
+                if (dict.ContainsKey("files.trimFinalNewlines") && TryGetBoolean(dict["files.trimFinalNewlines"], out bVal)) {
+                    target.TrimFinalNewlinesOnSave = bVal;
                 }
-                if (dict.ContainsKey("files.maxMemoryForLargeFilesMB")) {
-                    target.LargeFileThresholdMB = Convert.ToInt32(dict["files.maxMemoryForLargeFilesMB"]);
+                if (dict.ContainsKey("files.maxMemoryForLargeFilesMB") && TryGetInt32(dict["files.maxMemoryForLargeFilesMB"], out iVal) && iVal > 0) {
+                    target.LargeFileThresholdMB = iVal;
                 }
-                if (dict.ContainsKey("files.trimTrailingWhitespace")) target.TrimTrailingWhitespaceOnSave = Convert.ToBoolean(dict["files.trimTrailingWhitespace"]);
-                if (dict.ContainsKey("files.insertFinalNewline")) target.InsertFinalNewlineOnSave = Convert.ToBoolean(dict["files.insertFinalNewline"]);
+                if (dict.ContainsKey("files.trimTrailingWhitespace") && TryGetBoolean(dict["files.trimTrailingWhitespace"], out bVal)) target.TrimTrailingWhitespaceOnSave = bVal;
+                if (dict.ContainsKey("files.insertFinalNewline") && TryGetBoolean(dict["files.insertFinalNewline"], out bVal)) target.InsertFinalNewlineOnSave = bVal;
                 if (dict.ContainsKey("files.exclude")) {
                     Dictionary<string, object> ex = dict["files.exclude"] as Dictionary<string, object>;
                     if (ex != null) {
                         var keys = new List<string>();
-                        foreach(var kv in ex) if (Convert.ToBoolean(kv.Value)) keys.Add(kv.Key);
+                        foreach(var kv in ex) if (TryGetBoolean(kv.Value, out bVal) && bVal) keys.Add(kv.Key);
                         if (keys.Count > 0) target.ExcludedFolders = string.Join(", ", keys);
                     }
                 }
@@ -295,7 +301,45 @@ namespace codeLess.Core
                     McpConfigLoader.MergeFromRootDictionary(dict, target.McpServers);
                 }
             }
-            return null;
+            return err;
+        }
+
+        private static bool TryGetSingle(object val, out float result)
+        {
+            result = 0f;
+            if (val == null || val is bool || val is IDictionary<string, object> || val is System.Collections.IEnumerable && !(val is string))
+                return false;
+            try
+            {
+                float f = Convert.ToSingle(val, System.Globalization.CultureInfo.InvariantCulture);
+                if (float.IsNaN(f) || float.IsInfinity(f)) return false;
+                result = f;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static bool TryGetInt32(object val, out int result)
+        {
+            result = 0;
+            if (val == null || val is bool || val is IDictionary<string, object> || val is System.Collections.IEnumerable && !(val is string))
+                return false;
+            try
+            {
+                result = Convert.ToInt32(val, System.Globalization.CultureInfo.InvariantCulture);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static bool TryGetBoolean(object val, out bool result)
+        {
+            result = false;
+            if (val == null) return false;
+            if (val is bool) { result = (bool)val; return true; }
+            string s = val as string;
+            if (s != null) return bool.TryParse(s, out result);
+            return false;
         }
     }
 }
