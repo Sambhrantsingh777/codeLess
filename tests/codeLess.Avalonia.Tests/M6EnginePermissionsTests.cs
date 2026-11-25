@@ -81,16 +81,28 @@ namespace codeLess.Avalonia.Tests
             var untrustedDir = Path.Combine(Path.GetTempPath(), "m6_untrusted_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(untrustedDir);
             untrustedDir = Path.GetFullPath(untrustedDir);
+            
+            string untrustedFile = Path.Combine(untrustedDir, "test.txt");
+            File.WriteAllText(untrustedFile, "content");
+            string trustedFile = Path.Combine(testDir, "test.txt");
+            File.WriteAllText(trustedFile, "content");
+            
             try
             {
                 var engine = new LlmHarnessAndAgentEngine(settings);
                 bool asked = false;
                 engine.OnRequestToolApproval = (t, j) => { asked = true; return false; }; // deny
                 
-                var res = engine.ExecuteWorkspaceTool("webfetch", new Dictionary<string, object>(), untrustedDir, new List<string>(), null, new Dictionary<string, string>(), "build", settings);
+                // Control: trusted dir does not ask
+                var resTrusted = engine.ExecuteWorkspaceTool("read_file", new Dictionary<string, object> { { "path", "test.txt" } }, testDir, new List<string>(), null, new Dictionary<string, string>(), "build", settings);
+                Assert.False(asked, "Should not ask in trusted dir");
+                Assert.True(resTrusted.Success, "Should succeed in trusted dir");
                 
-                Assert.True(asked);
-                Assert.Contains("Approval Denied", res.Summary);
+                // Variable: untrusted dir DOES ask
+                var resUntrusted = engine.ExecuteWorkspaceTool("read_file", new Dictionary<string, object> { { "path", "test.txt" } }, untrustedDir, new List<string>(), null, new Dictionary<string, string>(), "build", settings);
+                Assert.True(asked, "Should ask in untrusted dir");
+                Assert.Contains("Approval Denied", resUntrusted.Summary);
+                Assert.False(resUntrusted.Success);
             }
             finally
             {

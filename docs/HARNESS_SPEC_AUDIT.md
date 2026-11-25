@@ -28,13 +28,13 @@
 | M2: modified-since-read | Done | src/LlmHarnessAndAgentEngine.cs:3429 | `M2M3M4MissingTests.ModifiedSinceRead_Enforced` |
 | M2: staged edits counting as reads | Done | src/LlmHarnessAndAgentEngine.cs:3419 | `M2M3M4MissingTests.StagedEditsCountAsReads` |
 | M3: glob semantics and truncation | Done | src/LlmHarnessAndAgentEngine.cs:3174 | `M2M3M4MissingTests.GlobTruncation_Works` |
-| M3: grep output format and the 100 limit | Done | src/LlmHarnessAndAgentEngine.cs:3233 | `M2M3M4MissingTests.GrepOutput_FormatAndLimit` |
+| M3: grep output format and the 100 limit | Done | src/LlmHarnessAndAgentEngine.cs:3380 | `M2M3M4MissingTests.GrepOutput_FormatAndLimit` |
 | M3: list limit | Done | src/LlmHarnessAndAgentEngine.cs:3197 | `M2M3M4MissingTests.ListLimit_Enforced` |
 | M3: terminal 30k head+tail truncation | Done | src/LlmHarnessAndAgentEngine.cs:3300 | `M2M3M4MissingTests.TerminalTruncation_Works` |
-| M4: tool-name repair (case, alias, invalid) | Done | src/LlmHarnessAndAgentEngine.cs:3005 | `M2M3M4MissingTests.ToolName_Repair` |
+| M4: tool-name repair (case, alias, invalid) | Done | src/LlmHarnessAndAgentEngine.cs:3005 | `AgentRobustnessM4Tests.ToolName_Repair_CaseInsensitive_And_Unknown` |
 | M4: invalid JSON feedback | Done | src/LlmHarnessAndAgentEngine.cs:2961 | `AgentRobustnessM4Tests.ParseToolCalls_InvalidJson_SynthesizesError` |
-| M4: doom loop with and without approval | Done | src/LlmHarnessAndAgentEngine.cs:2838 | `AgentRobustnessM4Tests.DoomLoop_InterceptsFourthAttempt` |
-| M4: retry schedule with retry-after-ms / seconds / date / cap / 5 attempts / cancellation | Done | src/codeLess.Core/ApiRetryHandler.cs:10 | `AgentRobustnessM4Tests.ApiRetryHandler_RetriesOn502` |
+| M4: doom loop with and without approval | Done | src/LlmHarnessAndAgentEngine.cs:2838 | `AgentRobustnessM4Tests.DoomLoop_TestsBothGrantedAndDenied` |
+| M4: retry schedule with retry-after-ms / seconds / date / cap / 5 attempts / cancellation | Done | src/codeLess.Core/ApiRetryHandler.cs:10 | `AgentRobustnessM4Tests.ApiRetryHandler_RetriesAndHeadersAndCancellation` |
 | M5: instruction discovery (16KB) | Done | src/codeLess.Core/AgentContextBuilder.cs:10 | `AgentContextM5Tests.DiscoverInstructions_DedupesAndCaps` |
 | M5: env block | Done | src/codeLess.Core/AgentContextBuilder.cs:10 | `AgentContextM5Tests.BuildEnvBlock_ContainsExpectedFields` |
 | M5: per-family prompts | Done | src/codeLess.Core/AgentContextBuilder.cs:10 | `AgentContextM5Tests.GetProviderPrompt_SelectsFamily` |

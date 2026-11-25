@@ -8,10 +8,10 @@ namespace codeLess.Studio
 {
     public static class ApiRetryHandler
     {
-        public static Action<int> DelayMsAction = (ms) => Thread.Sleep(ms);
+        public static Func<int, CancellationToken, Task> DelayTaskAsync = (ms, ct) => Task.Delay(ms, ct);
         public static Action<int, int> OnRetryStatus = null; // (seconds, attempt)
 
-        public static async Task<string> ExecuteWithRetriesAsync(Func<Task<string>> apiCall, Func<bool> isCancelled)
+        public static async Task<string> ExecuteWithRetriesAsync(Func<Task<string>> apiCall, CancellationToken cancellationToken)
         {
             // For C# 5 sync-over-async fallback or await inside harness
             // Since this class is pure Core, we can just return strings.
@@ -22,15 +22,16 @@ namespace codeLess.Studio
 
             while (true)
             {
-                if (isCancelled != null && isCancelled()) break;
+                cancellationToken.ThrowIfCancellationRequested();
 
+                int delayMsToWait = 0;
                 try
                 {
                     return await apiCall();
                 }
                 catch (Exception ex)
                 {
-                    if (attempt >= maxAttempts || (isCancelled != null && isCancelled()))
+                    if (attempt >= maxAttempts || cancellationToken.IsCancellationRequested)
                         throw;
 
                     int delayMs = GetDelayMs(ex, attempt);
@@ -40,10 +41,13 @@ namespace codeLess.Studio
                     {
                         OnRetryStatus(delayMs / 1000, attempt);
                     }
-
-                    if (DelayMsAction != null)
-                        DelayMsAction(delayMs);
-
+                    delayMsToWait = delayMs;
+                }
+                
+                if (delayMsToWait > 0)
+                {
+                    if (DelayTaskAsync != null)
+                        await DelayTaskAsync(delayMsToWait, cancellationToken);
                     attempt++;
                 }
             }
@@ -53,10 +57,15 @@ namespace codeLess.Studio
         private static int GetDelayMs(Exception ex, int attempt)
         {
             var wex = ex as WebException ?? ex.InnerException as WebException;
-            if (wex != null && wex.Response is HttpWebResponse)
+            if (wex != null && wex.Response != null)
             {
-                var resp = (HttpWebResponse)wex.Response;
-                int status = (int)resp.StatusCode;
+                var resp = wex.Response;
+                int status = -1;
+                if (resp is HttpWebResponse) status = (int)((HttpWebResponse)resp).StatusCode;
+                else {
+                    var statusProp = resp.GetType().GetProperty("StatusCode");
+                    if (statusProp != null) status = (int)statusProp.GetValue(resp, null);
+                }
 
                 // 429, 500, 502, 503, 504, 529
                 if (status == 429 || status == 500 || status == 502 || status == 503 || status == 504 || status == 529)

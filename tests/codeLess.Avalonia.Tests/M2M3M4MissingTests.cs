@@ -106,9 +106,12 @@ namespace codeLess.Avalonia.Tests
         [Fact]
         public void GrepOutput_FormatAndLimit() 
         { 
-            File.WriteAllText(Path.Combine(testDir, "test.txt"), "match\nmatch\nmatch\nmatch");
+            string matches = "";
+            for(int i = 0; i < 150; i++) matches += "match\n";
+            File.WriteAllText(Path.Combine(testDir, "test.txt"), matches);
             var res = RunTool("grep_search", new Dictionary<string, object>{{"query", "match"}, {"path", "test.txt"}});
-            Assert.Contains("Found 4 matches", res.Output);
+            Assert.Contains("Found 150 matches", res.Output);
+            Assert.Contains("Results are truncated", res.Output);
         }
 
         [Fact]
