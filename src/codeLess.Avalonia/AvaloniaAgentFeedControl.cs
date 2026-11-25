@@ -38,6 +38,8 @@ namespace codeLess.AvaloniaApp
         public string ProgressText { get; set; } = "";
         public List<string> ProgressLog { get; set; } = new List<string>();
         public string TurnId { get; set; } = "";
+        public bool HasStagedChanges { get; set; }
+        public bool IsTurnReverted { get; set; }
         public BestOfNRun BestOfN { get; set; }
         public bool DetailsExpanded { get; set; }
     }
@@ -54,6 +56,7 @@ namespace codeLess.AvaloniaApp
         public event Action<AvaloniaAgentFeedItem, bool> CommandApprovalClicked; // (item, approved)
         public event Action<AvaloniaAgentFeedItem, bool> DiffDecisionClicked; // (item, accepted)
         public event Action<AvaloniaAgentFeedItem, int> RestoreCheckpointRequested;
+        public event Action<AvaloniaAgentFeedItem> RevertTurnRequested;
         public event Action<string> QuickPromptClicked;
         public event Action OpenSettingsRequested;
         /// <summary>Renders agent-trust cards (MainWindow.AgentTrust.cs); null = default rendering.</summary>
@@ -355,6 +358,22 @@ namespace codeLess.AvaloniaApp
                 };
                 Grid.SetColumn(badge, 1);
                 headerGrid.Children.Add(badge);
+            }
+            if (item.HasStagedChanges || !string.IsNullOrEmpty(item.TurnId))
+            {
+                var revertBtn = new Button
+                {
+                    Name = "TurnRevertButton",
+                    Content = item.IsTurnReverted ? "↷ Redo" : "↺ Revert",
+                    FontSize = 10.5,
+                    Padding = new Thickness(6, 2),
+                    Margin = new Thickness(4, 0, 0, 0),
+                    Background = Brushes.Transparent,
+                    Foreground = new SolidColorBrush(textSecondary)
+                };
+                revertBtn.Click += (s, e) => RevertTurnRequested?.Invoke(item);
+                Grid.SetColumn(revertBtn, 2);
+                headerGrid.Children.Add(revertBtn);
             }
             stack.Children.Add(headerGrid);
 

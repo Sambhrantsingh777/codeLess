@@ -60,6 +60,7 @@ namespace codeLess.AvaloniaApp
             Closed += (s, e) => { agentTrustClosed = true; agentTrust?.CancelRun(); SubscribeStore(null); };
             AgentFeed.CustomCardBuilder = BuildAgentTrustCard;
             AgentFeed.RestoreCheckpointRequested += (item, index) => _ = RestoreToUserMessageAsync(item);
+            AgentFeed.RevertTurnRequested += item => _ = RevertOrRedoFromChatCardAsync(item);
             PrimaryEditor.DiffAllDecisionRequested += OnEditorDiffAllDecision;
             AddAgentTrustComposerControls();
             AddAgentTrustBannerButton();
@@ -771,14 +772,219 @@ namespace codeLess.AvaloniaApp
         /// <summary>"Restore" on a user message (previously not wired on macOS/Linux): undo that turn and every later one.</summary>
         public async Task<TurnRestoreResult> RestoreToUserMessageAsync(AvaloniaAgentFeedItem userItem)
         {
-            var store = CurrentTurnStore();
             string id = userItem?.TurnId;
+            var stagedSnap = !string.IsNullOrEmpty(id) ? EnsureAgentTrust().StagedHistory.FindSnapshot(id) : null;
+            var store = CurrentTurnStore();
+            if (stagedSnap != null && !stagedSnap.Undone && store?.FindTurn(id) == null)
+            {
+                await HandleSlashUndoAsync(id);
+                return null;
+            }
             if (string.IsNullOrEmpty(id) || store?.FindTurn(id) == null)
             {
                 SetStatusMessage("This message's turn didn't change any files (or nothing was accepted), so there is nothing to restore.");
                 return null;
             }
             return await UndoAgentTurnAsync(id, true);
+        }
+
+        public Dictionary<string, string> GetActiveStagedFileContents()
+        {
+            return EnsureAgentTrust().StagedHistory.CurrentStagedFiles;
+        }
+
+        public async Task RevertOrRedoFromChatCardAsync(AvaloniaAgentFeedItem item)
+        {
+            if (item == null) return;
+            if (item.IsTurnReverted)
+                await HandleSlashRedoAsync(item.TurnId);
+            else
+                await HandleSlashUndoAsync(item.TurnId);
+        }
+
+        /// <summary>
+        /// M9d `/undo` and chat turn Revert button:
+        /// - If the target turn (or latest turn) has unapplied staged changes, restores StagedFileContents and active
+        ///   change sets to the state before the turn without touching disk.
+        /// - If the turn's changes were already applied to disk, reverts via AgentTurnCheckpointStore with confirmation.
+        /// </summary>
+        public async Task<string> HandleSlashUndoAsync(string specificTurnId = null)
+        {
+            var trust = EnsureAgentTrust();
+            var store = CurrentTurnStore();
+
+            // Determine whether we should undo staged (unapplied) changes or already-applied disk changes
+            StagedTurnSnapshot candidateStaged = !string.IsNullOrEmpty(specificTurnId)
+                ? trust.StagedHistory.FindSnapshot(specificTurnId)
+                : trust.StagedHistory.Snapshots.LastOrDefault(s => !s.Undone);
+
+            bool isAppliedOnDisk = candidateStaged != null && store?.FindTurn(candidateStaged.TurnId) != null && !store.FindTurn(candidateStaged.TurnId).Undone;
+
+            if (candidateStaged != null && !candidateStaged.Undone && !isAppliedOnDisk)
+            {
+                StagedTurnSnapshot undone = trust.StagedHistory.Undo(candidateStaged.TurnId);
+                aiEngine?.StagedHistory.Undo();
+                if (undone != null)
+                {
+                    ApplyStagedSnapshotStateToUi(undone.BeforeStaged, undone.TurnId, reverted: true);
+                    string msg = $"Reverted staged changes from turn {undone.TurnId}.";
+                    AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
+                    SetStatusMessage(msg);
+                    return msg;
+                }
+            }
+
+            // Otherwise check if an applied disk turn can be undone via the normal checkpoint store + confirmation
+            string diskTurnId = specificTurnId;
+            if (string.IsNullOrEmpty(diskTurnId) && store != null)
+            {
+                var lastApplied = store.Turns.LastOrDefault(t => !t.Undone);
+                if (lastApplied != null) diskTurnId = lastApplied.Id;
+            }
+
+            if (!string.IsNullOrEmpty(diskTurnId) && store?.FindTurn(diskTurnId) != null)
+            {
+                var res = await UndoAgentTurnAsync(diskTurnId, backToHere: !string.IsNullOrEmpty(specificTurnId));
+                if (res != null)
+                {
+                    foreach (var feedItem in AgentFeed.Items.Where(i => i.TurnId == diskTurnId))
+                        feedItem.IsTurnReverted = true;
+                    AgentFeed.RebuildVisualFeed();
+                    return $"Restored {res.Restored.Count} applied file(s) from turn {diskTurnId}.";
+                }
+                return "Undo cancelled.";
+            }
+
+            string none = "Nothing to undo.";
+            AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = none });
+            SetStatusMessage(none);
+            return none;
+        }
+
+        /// <summary>
+        /// M9d `/redo`: re-applies the last undone staged turn snapshot (without touching disk), or re-applies
+        /// the last undone disk checkpoint via AgentTurnCheckpointStore.
+        /// </summary>
+        public async Task<string> HandleSlashRedoAsync(string specificTurnId = null)
+        {
+            var trust = EnsureAgentTrust();
+            var store = CurrentTurnStore();
+
+            if (trust.StagedHistory.CanRedo)
+            {
+                StagedTurnSnapshot redone = trust.StagedHistory.Redo(specificTurnId);
+                aiEngine?.StagedHistory.Redo();
+                if (redone != null)
+                {
+                    ApplyStagedSnapshotStateToUi(redone.AfterStaged, redone.TurnId, reverted: false);
+                    string msg = $"Re-applied staged changes from turn {redone.TurnId}.";
+                    AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
+                    SetStatusMessage(msg);
+                    return msg;
+                }
+            }
+
+            if (store != null && store.CanRedo)
+            {
+                var res = await RedoAgentTurnAsync();
+                if (res != null)
+                {
+                    foreach (var feedItem in AgentFeed.Items.Where(i => i.IsTurnReverted))
+                        feedItem.IsTurnReverted = false;
+                    AgentFeed.RebuildVisualFeed();
+                    return $"Redid {res.Restored.Count} applied file(s).";
+                }
+                return "Redo cancelled.";
+            }
+
+            string none = "Nothing to redo.";
+            AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = none });
+            SetStatusMessage(none);
+            return none;
+        }
+
+        private void ApplyStagedSnapshotStateToUi(Dictionary<string, string> targetStaged, string turnId, bool reverted)
+        {
+            var trust = EnsureAgentTrust();
+            var targetCS = trust.ChangeSets.LastOrDefault(c => c.TurnId == turnId);
+
+            if (reverted)
+            {
+                // Mark files of undone change sets as Rejected unless an earlier staged version exists in targetStaged
+                foreach (var cs in trust.ChangeSets)
+                {
+                    bool isTargetOrLater = ReferenceEquals(cs, targetCS) ||
+                        (targetCS != null && trust.ChangeSets.IndexOf(cs) >= trust.ChangeSets.IndexOf(targetCS));
+                    if (!isTargetOrLater) continue;
+
+                    foreach (var f in cs.Files)
+                    {
+                        if (targetStaged != null && targetStaged.TryGetValue(f.FullPath, out string earlierText))
+                        {
+                            f.ProposedText = earlierText;
+                            f.Status = "Pending";
+                            AgentChangeSet.RecountDiff(f);
+                            if (activeTab != null && SamePath(activeTab.FilePath, f.FullPath))
+                                RestageInline(earlierText);
+                        }
+                        else
+                        {
+                            f.Status = "Rejected";
+                            if (activeTab != null && SamePath(activeTab.FilePath, f.FullPath) &&
+                                PrimaryEditor.CurrentBuffer != null && PrimaryEditor.CurrentBuffer.HasPendingDiff)
+                            {
+                                suppressDiffDecision = true;
+                                try { PrimaryEditor.RejectAllPendingDiffs(); }
+                                finally { suppressDiffDecision = false; }
+                            }
+                        }
+                    }
+                    SyncDiffCardStatuses(cs);
+                }
+
+                // Restore any earlier change set whose file is now the active staged version
+                if (targetStaged != null)
+                {
+                    foreach (var kv in targetStaged)
+                    {
+                        var earlierCs = trust.ChangeSets
+                            .Where(c => c != targetCS)
+                            .LastOrDefault(c => c.Find(kv.Key) != null);
+                        var ef = earlierCs?.Find(kv.Key);
+                        if (ef != null)
+                        {
+                            ef.ProposedText = kv.Value;
+                            ef.Status = "Pending";
+                            AgentChangeSet.RecountDiff(ef);
+                            SyncDiffCardStatuses(earlierCs);
+                            if (activeTab != null && SamePath(activeTab.FilePath, ef.FullPath))
+                                RestageInline(kv.Value);
+                        }
+                    }
+                }
+            }
+            else if (targetCS != null && targetStaged != null)
+            {
+                foreach (var f in targetCS.Files)
+                {
+                    if (targetStaged.TryGetValue(f.FullPath, out string restoredText))
+                    {
+                        f.ProposedText = restoredText;
+                        f.Status = "Pending";
+                        AgentChangeSet.RecountDiff(f);
+                        if (activeTab != null && SamePath(activeTab.FilePath, f.FullPath))
+                            RestageInline(restoredText);
+                    }
+                }
+                SyncDiffCardStatuses(targetCS);
+            }
+
+            foreach (var item in AgentFeed.Items.Where(i => i.TurnId == turnId))
+            {
+                item.IsTurnReverted = reverted;
+            }
+            AgentFeed.RebuildVisualFeed();
+            RefreshChangesetBanner();
         }
 
         public async Task<TurnRestoreResult> RedoAgentTurnAsync()

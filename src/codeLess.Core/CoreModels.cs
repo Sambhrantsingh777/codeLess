@@ -2111,6 +2111,8 @@ namespace codeLess.Studio
         public string AgentPermissionEdit { get; set; }
         public string AgentPermissionWebfetch { get; set; }
         public Dictionary<string, string> AgentPermissionBash { get; set; }
+        public Dictionary<string, string> AgentPermissionMcp { get; set; }
+        public Dictionary<string, McpServerConfig> McpServers { get; set; }
 
         /// <summary>Check GitHub Releases for a newer codeLess at most once a day (anonymous request, can be disabled).</summary>
         public bool AutoCheckForUpdates { get; set; }
@@ -2171,6 +2173,8 @@ namespace codeLess.Studio
             AgentPermissionEdit = "allow";
             AgentPermissionWebfetch = "ask";
             AgentPermissionBash = new Dictionary<string, string>();
+            AgentPermissionMcp = new Dictionary<string, string>();
+            McpServers = new Dictionary<string, McpServerConfig>(StringComparer.OrdinalIgnoreCase);
 
             AutoCheckForUpdates = true;
             EnableInlineGhostText = true;
@@ -2249,6 +2253,12 @@ namespace codeLess.Studio
                             if (rawDict != null && rawDict.ContainsKey("codeless.agent.nativeToolCalling") && rawDict["codeless.agent.nativeToolCalling"] is bool)
                             {
                                 loaded.NativeToolCalling = (bool)rawDict["codeless.agent.nativeToolCalling"];
+                            }
+                            if (rawDict != null)
+                            {
+                                if (loaded.McpServers == null)
+                                    loaded.McpServers = new Dictionary<string, McpServerConfig>(StringComparer.OrdinalIgnoreCase);
+                                McpConfigLoader.MergeFromRootDictionary(rawDict, loaded.McpServers);
                             }
                         }
                         catch { }
