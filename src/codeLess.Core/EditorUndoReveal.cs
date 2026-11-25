@@ -110,7 +110,8 @@ namespace codeLess.Studio
             UndoRedoRevision++;
 
             // the step pushed for the opposite direction lives in the old document's coordinates
-            if (counterpart != null && !SnapshotTouches(counterpart, ch.StartLine, Math.Max(ch.StartLine, ch.OldEndLine)))
+            // (allow +/- 1 line so line duplication / insert-line-below at the caret line is recognized as touching the change)
+            if (counterpart != null && !SnapshotTouches(counterpart, Math.Max(0, ch.StartLine - 1), Math.Max(ch.StartLine, ch.OldEndLine) + 1))
             {
                 if (undo) { counterpart.CursorLine = ch.OldEndLine; counterpart.CursorCol = ch.OldEndCol; }   // redo: after the edit
                 else { counterpart.CursorLine = ch.StartLine; counterpart.CursorCol = ch.StartCol; }        // undo again: before it
@@ -119,7 +120,7 @@ namespace codeLess.Studio
                 counterpart.ExtraCarets = null;
             }
 
-            if (!CaretsTouch(ch.StartLine, Math.Max(ch.StartLine, ch.NewEndLine)))
+            if (!CaretsTouch(Math.Max(0, ch.StartLine - 1), Math.Max(ch.StartLine, ch.NewEndLine) + 1))
             {
                 if (undo) { CursorLine = ch.StartLine; CursorCol = ch.StartCol; }
                 else { CursorLine = ch.NewEndLine; CursorCol = ch.NewEndCol; }

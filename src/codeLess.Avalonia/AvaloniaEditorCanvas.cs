@@ -3523,51 +3523,29 @@ namespace codeLess.AvaloniaApp
             last = (el > sl && ec == 0) ? el - 1 : el;
         }
 
-        /// <summary>Alt+Up / Alt+Down: move the selected lines (or the caret line) and keep the selection (VS Code).</summary>
+        /// <summary>Alt+Up / Alt+Down: move the selected lines (or caret lines) across all carets and keep selections (VS Code).</summary>
         public void MoveActiveLine(int direction)
         {
             var buf = Buffer;
             if (buf == null) return;
-            ExtraCursors.Clear();
-            SelectedLineRange(buf, out int first, out int last);
-            if (direction < 0 && first == 0) return;
-            if (direction > 0 && last >= buf.Lines.Count - 1) return;
-            buf.PushUndoSnapshot();
-            if (direction < 0)
-            {
-                string above = buf.Lines[first - 1];
-                buf.Lines.RemoveAt(first - 1);
-                buf.Lines.Insert(last, above);
-            }
-            else
-            {
-                string below = buf.Lines[last + 1];
-                buf.Lines.RemoveAt(last + 1);
-                buf.Lines.Insert(first, below);
-            }
-            bool hadSel = buf.HasSelection();
-            buf.CursorLine += direction;
-            if (hadSel) buf.SelectionStartLine += direction;
+            ClampExtraCursors(buf);
+            SyncExtraCursorsToBuffer(buf);
+            bool moved = EditorMultiCaret.MoveLines(buf, direction);
+            SyncExtraCursorsFromBuffer(buf);
+            if (!moved) return;
             FinalizeBufferEdit(buf);
         }
 
-        /// <summary>Shift+Alt+Up / Down: duplicate the selected lines above / below, selecting the copy when going down (VS Code).</summary>
+        /// <summary>Shift+Alt+Up / Down: duplicate the selected lines above / below across all carets, selecting the copy when going down (VS Code).</summary>
         public void CopyActiveLine(int direction)
         {
             var buf = Buffer;
             if (buf == null) return;
-            ExtraCursors.Clear();
-            SelectedLineRange(buf, out int first, out int last);
-            buf.PushUndoSnapshot();
-            var block = buf.Lines.GetRange(first, last - first + 1);
-            int count = block.Count;
-            buf.Lines.InsertRange(direction < 0 ? first : last + 1, block);
-            if (direction > 0)
-            {
-                bool hadSel = buf.HasSelection();
-                buf.CursorLine += count;
-                if (hadSel) buf.SelectionStartLine += count;
-            }
+            ClampExtraCursors(buf);
+            SyncExtraCursorsToBuffer(buf);
+            bool copied = EditorMultiCaret.CopyLines(buf, direction);
+            SyncExtraCursorsFromBuffer(buf);
+            if (!copied) return;
             FinalizeBufferEdit(buf);
         }
 
@@ -3849,16 +3827,16 @@ namespace codeLess.AvaloniaApp
             FinalizeBufferEdit(buf);
         }
 
-        /// <summary>Toggle Block Comment (Shift+Alt+A): language block tokens around the selection, or an empty block at the caret.</summary>
+        /// <summary>Toggle Block Comment (Shift+Alt+A): language block tokens around every selection, or an empty block at every caret.</summary>
         public void ToggleBlockComment()
         {
             var buf = Buffer;
             if (buf == null) return;
-            var tok = EditorComments.For(buf.FilePath ?? buf.FileName ?? ("x." + (buf.Language ?? "")));
-            if (tok.Line == null && tok.BlockStart == null) return;
-            buf.PushUndoSnapshot();
-            if (!EditorComments.ToggleBlockComment(buf)) { buf.PopUndoSnapshotAndRestore(); return; }
-            ExtraCursors.Clear();
+            ClampExtraCursors(buf);
+            SyncExtraCursorsToBuffer(buf);
+            bool changed = EditorMultiCaret.ToggleBlockComments(buf);
+            SyncExtraCursorsFromBuffer(buf);
+            if (!changed) return;
             FinalizeBufferEdit(buf);
         }
 
