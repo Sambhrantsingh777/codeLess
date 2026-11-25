@@ -55,6 +55,14 @@ namespace codeLess.Studio
 
         public static string EvaluateTool(string mode, string toolName, string argsJson, bool restricted, IdePersistentSettings settings)
         {
+            return EvaluateTool(mode, toolName, argsJson, restricted, settings, null);
+        }
+
+        public static string EvaluateTool(string mode, string toolName, string argsJson, bool restricted, IdePersistentSettings settings, CustomAgentDefinition customAgent)
+        {
+            if (customAgent != null && !customAgent.IsToolEnabled(toolName))
+                return "deny";
+
             string baseLevel = (settings != null && settings.RequireAgentToolApproval) ? "ask" : "allow";
             if (restricted) baseLevel = "ask";
 
@@ -63,6 +71,16 @@ namespace codeLess.Studio
             if (toolName == "write_file" || toolName == "edit_file" || toolName == "multiedit")
             {
                 if (isPlan) return "deny";
+
+                if (customAgent != null && customAgent.Permissions != null)
+                {
+                    string customEdit;
+                    if (customAgent.Permissions.TryGetValue(toolName, out customEdit) ||
+                        customAgent.Permissions.TryGetValue("edit", out customEdit))
+                    {
+                        return MergeStricter(baseLevel, customEdit.Trim().ToLowerInvariant());
+                    }
+                }
                 
                 string userPerm = settings != null && !string.IsNullOrEmpty(settings.AgentPermissionEdit) ? settings.AgentPermissionEdit.ToLowerInvariant() : "allow";
                 return MergeStricter(baseLevel, userPerm);
@@ -70,6 +88,17 @@ namespace codeLess.Studio
             
             if (toolName == "webfetch")
             {
+                if (customAgent != null && customAgent.Permissions != null)
+                {
+                    string customWf;
+                    if (customAgent.Permissions.TryGetValue("webfetch", out customWf) && !string.IsNullOrEmpty(customWf))
+                    {
+                        string wfPerm = customWf.Trim().ToLowerInvariant();
+                        if (wfPerm == "deny") return "deny";
+                        if (wfPerm == "ask") return "ask";
+                        if (wfPerm == "allow") return restricted ? "ask" : "allow";
+                    }
+                }
                 string userPerm = settings != null && !string.IsNullOrEmpty(settings.AgentPermissionWebfetch) ? settings.AgentPermissionWebfetch.ToLowerInvariant() : "ask";
                 return MergeStricter(baseLevel, userPerm);
             }
@@ -84,6 +113,26 @@ namespace codeLess.Studio
                     if (args != null && args.ContainsKey("command")) cmd = args["command"].ToString();
                 } 
                 catch { }
+
+                if (customAgent != null)
+                {
+                    if (customAgent.BashPermissions != null && customAgent.BashPermissions.Count > 0)
+                    {
+                        string agentBashMatch = MatchWildcardPatterns(cmd, customAgent.BashPermissions);
+                        if (agentBashMatch != null)
+                            return MergeStricter(baseLevel, agentBashMatch);
+                    }
+                    if (customAgent.Permissions != null)
+                    {
+                        string agentBashScalar;
+                        if (customAgent.Permissions.TryGetValue("bash", out agentBashScalar) ||
+                            customAgent.Permissions.TryGetValue("run_terminal", out agentBashScalar))
+                        {
+                            if (!string.IsNullOrEmpty(agentBashScalar))
+                                return MergeStricter(baseLevel, agentBashScalar.Trim().ToLowerInvariant());
+                        }
+                    }
+                }
 
                 if (isPlan)
                 {
@@ -113,6 +162,17 @@ namespace codeLess.Studio
                 }
                 
                 return baseLevel;
+            }
+
+            if (customAgent != null && customAgent.Permissions != null && customAgent.Permissions.Count > 0)
+            {
+                string customToolPerm = MatchWildcardPatterns(toolName, customAgent.Permissions);
+                if (customToolPerm != null)
+                {
+                    if (customToolPerm == "deny") return "deny";
+                    if (customToolPerm == "ask") return "ask";
+                    if (customToolPerm == "allow") return restricted ? "ask" : "allow";
+                }
             }
 
             if (IsMcpToolName(toolName))

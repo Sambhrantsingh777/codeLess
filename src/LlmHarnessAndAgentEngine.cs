@@ -73,7 +73,7 @@ namespace codeLess.Studio
             new AgentToolDefinition { Name = "todowrite", Aliases = new string[] { }, Description = "Write the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\"}},\"required\":[\"todos\"]}", IsReadOnly = false },
             new AgentToolDefinition { Name = "todoread", Aliases = new string[] { }, Description = "Read the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}", IsReadOnly = true },
             new AgentToolDefinition { Name = "webfetch", Aliases = new string[] { }, Description = "Fetch content from a URL (http/https) as markdown, text, or html.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\",\"enum\":[\"text\",\"markdown\",\"html\"]},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}", IsReadOnly = true },
-            new AgentToolDefinition { Name = "task", Aliases = new string[] { }, Description = "Launch a read-only subagent to research or answer a complex question.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"description\",\"prompt\"]}", IsReadOnly = true }
+            new AgentToolDefinition { Name = "task", Aliases = new string[] { }, Description = "Launch a read-only subagent to research or answer a complex question.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"},\"subagent_type\":{\"type\":\"string\"}},\"required\":[\"description\",\"prompt\"]}", IsReadOnly = true }
         };
 
         public List<ByokVendor> Vendors = new List<ByokVendor>();
@@ -84,6 +84,9 @@ namespace codeLess.Studio
         public List<HarnessTraceEntry> TraceHistory = new List<HarnessTraceEntry>();
         public FileTimeTracker FileTimeTracker = new FileTimeTracker();
         public McpServerManager McpManager = new McpServerManager();
+        public CustomAgentDefinition ActiveCustomAgent;
+        public string CustomSettingsDirOverride;
+        public Func<string, string, string> CustomShellCommandRunner;
         private string _currentTurnWorkspaceRoot = "";
 
 
@@ -201,20 +204,74 @@ namespace codeLess.Studio
 
         public IEnumerable<AgentToolDefinition> GetAvailableToolsForCurrentDepth(string workspaceRoot = null)
         {
+            return GetAvailableToolsForCurrentDepth(workspaceRoot, ActiveCustomAgent);
+        }
+
+        public IEnumerable<AgentToolDefinition> GetAvailableToolsForCurrentDepth(string workspaceRoot, CustomAgentDefinition customAgent)
+        {
+            IEnumerable<AgentToolDefinition> baseTools;
             if (SubagentDepth >= 1)
-                return Tools.Where(t => t.IsReadOnly && t.Name != "task");
-            string ws = !string.IsNullOrEmpty(workspaceRoot) ? workspaceRoot : _currentTurnWorkspaceRoot;
-            if (McpManager != null)
             {
-                List<AgentToolDefinition> mcpTools = McpManager.GetAgentToolDefinitions(ws, _settings);
-                if (mcpTools != null && mcpTools.Count > 0)
+                baseTools = Tools.Where(t => t.IsReadOnly && t.Name != "task");
+            }
+            else
+            {
+                string ws = !string.IsNullOrEmpty(workspaceRoot) ? workspaceRoot : _currentTurnWorkspaceRoot;
+                if (McpManager != null)
                 {
-                    List<AgentToolDefinition> combined = new List<AgentToolDefinition>(Tools);
-                    combined.AddRange(mcpTools);
-                    return combined;
+                    List<AgentToolDefinition> mcpTools = McpManager.GetAgentToolDefinitions(ws, _settings);
+                    if (mcpTools != null && mcpTools.Count > 0)
+                    {
+                        List<AgentToolDefinition> combined = new List<AgentToolDefinition>(Tools);
+                        combined.AddRange(mcpTools);
+                        baseTools = combined;
+                    }
+                    else
+                    {
+                        baseTools = Tools;
+                    }
+                }
+                else
+                {
+                    baseTools = Tools;
                 }
             }
-            return Tools;
+
+            CustomAgentDefinition effAgent = customAgent ?? ActiveCustomAgent;
+            if (effAgent != null)
+            {
+                baseTools = baseTools.Where(t => effAgent.IsToolEnabled(t.Name, t.Aliases)).ToList();
+            }
+            return baseTools;
+        }
+
+        public ByokVendor ResolveVendorWithModelOverride(ByokVendor baseVendor, string modelSpec)
+        {
+            if (string.IsNullOrWhiteSpace(modelSpec)) return baseVendor;
+            string spec = modelSpec.Trim();
+            string providerPart = "";
+            string modelPart = spec;
+            int slash = spec.IndexOf('/');
+            if (slash > 0 && slash + 1 < spec.Length)
+            {
+                string maybeProvider = spec.Substring(0, slash);
+                ByokVendor matchedVendor = Vendors.FirstOrDefault(v => string.Equals(v.Id, maybeProvider, StringComparison.OrdinalIgnoreCase));
+                if (matchedVendor != null)
+                {
+                    providerPart = maybeProvider;
+                    modelPart = spec.Substring(slash + 1);
+                    baseVendor = matchedVendor;
+                }
+            }
+
+            if (baseVendor == null)
+            {
+                baseVendor = Vendors.FirstOrDefault() ?? new ByokVendor { Id = string.IsNullOrEmpty(providerPart) ? "openai" : providerPart, Name = "Custom", SelectedModel = modelPart };
+            }
+
+            ByokVendor cloned = CloneVendor(baseVendor);
+            cloned.SelectedModel = modelPart;
+            return cloned;
         }
         public IDiagnosticsProvider DiagnosticsProvider { get; set; }
         public HashSet<string> PendingPostApplyDiagnosticsPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1995,7 +2052,13 @@ updated replacement lines
                 envBlock, providerRules, instructions, hName, hDirective);
 
             string normMode = (mode ?? "").Trim().ToLowerInvariant();
-            if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan")
+            CustomAgentDefinition customModeAgent = null;
+            if (normMode != "agent" && normMode != "autofix" && normMode != "build" && normMode != "plan" &&
+                normMode != "ctrl_k" && normMode != "composer" && normMode != "architect" && !string.IsNullOrEmpty(normMode))
+            {
+                CustomAgentAndCommandRegistry.TryGetAgent(mode, workspaceRoot, out customModeAgent);
+            }
+            if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan" || customModeAgent != null)
             {
                 var sb = new StringBuilder();
                 sb.AppendLine("[AUTONOMOUS TOOL EXECUTION PROTOCOL]");
@@ -2011,6 +2074,8 @@ updated replacement lines
                     {
                         if (isSubagent && (!t.IsReadOnly || t.Name == "task"))
                             continue;
+                        if (customModeAgent != null && !customModeAgent.IsToolEnabled(t.Name, t.Aliases))
+                            continue;
                         sb.AppendLine("<tool_call>");
                         sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
                         sb.AppendLine("</tool_call>");
@@ -2019,6 +2084,12 @@ updated replacement lines
                 if (isSubagent)
                 {
                     sb.AppendLine("You are running as a read-only research subagent (depth 1). Only read-only tools are permitted; do not attempt to modify files or spawn nested subagents.");
+                }
+                if (customModeAgent != null && !string.IsNullOrEmpty(customModeAgent.Prompt))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("[CUSTOM AGENT INSTRUCTIONS: " + customModeAgent.Name + "]");
+                    sb.AppendLine(customModeAgent.Prompt);
                 }
                 return basePrompt + "\n\n" + sb.ToString();
             }
@@ -2901,7 +2972,51 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 else if (LocalOllamaDetected) activeVendor = Vendors.FirstOrDefault(v => v.Id == "ollama");
             }
 
+            CustomCommandDefinition matchedSlashCommand = null;
+            if (SubagentDepth == 0 && !string.IsNullOrWhiteSpace(userInstruction) && userInstruction.TrimStart().StartsWith("/"))
+            {
+                string expandedSlashPrompt;
+                if (CustomAgentAndCommandRegistry.TryExpandSlashCommand(
+                    userInstruction,
+                    workspaceRoot,
+                    _settings,
+                    mode,
+                    OnRequestToolApproval,
+                    CustomShellCommandRunner,
+                    out expandedSlashPrompt,
+                    out matchedSlashCommand,
+                    CustomSettingsDirOverride))
+                {
+                    userInstruction = expandedSlashPrompt;
+                    if (!string.IsNullOrEmpty(matchedSlashCommand.Agent))
+                        mode = matchedSlashCommand.Agent;
+                }
+            }
+
+            CustomAgentDefinition previousCustomAgent = ActiveCustomAgent;
+            CustomAgentDefinition turnCustomAgent = ActiveCustomAgent;
+            if (turnCustomAgent == null && !string.IsNullOrEmpty(mode))
+            {
+                string lowM = mode.Trim().ToLowerInvariant();
+                if (lowM != "build" && lowM != "plan" && lowM != "agent" && lowM != "autofix" && lowM != "ctrl_k" && lowM != "composer" && lowM != "architect")
+                {
+                    CustomAgentAndCommandRegistry.TryGetAgent(mode, workspaceRoot, out turnCustomAgent, CustomSettingsDirOverride);
+                }
+            }
+            ActiveCustomAgent = turnCustomAgent;
+
+            string modelOverride = (matchedSlashCommand != null && !string.IsNullOrEmpty(matchedSlashCommand.Model))
+                ? matchedSlashCommand.Model
+                : (turnCustomAgent != null ? turnCustomAgent.Model : "");
+            if (!string.IsNullOrEmpty(modelOverride))
+            {
+                activeVendor = ResolveVendorWithModelOverride(activeVendor, modelOverride);
+            }
+
             LlmHarnessProfile harness = ResolveHarnessForVendor(activeVendor, preferredHarnessId);
+            double turnTemperature = (turnCustomAgent != null && turnCustomAgent.HasTemperature)
+                ? turnCustomAgent.Temperature
+                : harness.RecommendedTemp;
             result.HarnessUsed = harness.Name;
             _currentTurnVendor = activeVendor;
             _currentTurnWorkspaceRoot = workspaceRoot ?? "";
@@ -3073,8 +3188,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            IEnumerable<AgentToolDefinition> turnTools = GetAvailableToolsForCurrentDepth(workspaceRoot);
+            IEnumerable<AgentToolDefinition> turnTools = GetAvailableToolsForCurrentDepth(workspaceRoot, turnCustomAgent);
             string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, IsNativeToolCallingEnabledFor(activeVendor), SubagentDepth >= 1, turnTools);
+            if (turnCustomAgent != null && !string.IsNullOrEmpty(turnCustomAgent.Prompt) && sysPrompt.IndexOf(turnCustomAgent.Prompt, StringComparison.Ordinal) < 0)
+            {
+                sysPrompt += "\n\n[CUSTOM AGENT INSTRUCTIONS: " + turnCustomAgent.Name + "]\n" + turnCustomAgent.Prompt;
+            }
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
@@ -3148,7 +3267,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         if (OnAgentFeedStatus != null) OnAgentFeedStatus("Context compacted");
                     }
                     
-                    string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, harness.RecommendedTemp).ConfigureAwait(false);
+                    string llmOutput = await CallByokVendorMultiTurnAsync(activeVendor, sysPrompt, messages, turnTemperature).ConfigureAwait(false);
                     finalReply = llmOutput;
 
                     bool nativeMode = IsNativeToolCallingEnabledFor(activeVendor);
@@ -3390,6 +3509,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 RecordHarnessTrace(result, mode, sysPrompt);
                 return result;
             }
+            finally
+            {
+                ActiveCustomAgent = previousCustomAgent;
+            }
         }
 
         private void RecordHarnessTrace(AgentExecutionTurnResult res, string mode, string sysPrompt)
@@ -3575,8 +3698,29 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             string argsJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(args);
 
+            CustomAgentDefinition customAgent = ActiveCustomAgent;
+            if (customAgent == null && !string.IsNullOrEmpty(agentMode))
+            {
+                string lowM = agentMode.Trim().ToLowerInvariant();
+                if (lowM != "build" && lowM != "plan" && lowM != "agent" && lowM != "autofix" && lowM != "ctrl_k" && lowM != "composer" && lowM != "architect")
+                {
+                    CustomAgentAndCommandRegistry.TryGetAgent(agentMode, workspaceRoot, out customAgent, CustomSettingsDirOverride);
+                }
+            }
+
+            if (customAgent != null && !customAgent.IsToolEnabled(toolName))
+            {
+                return new AgentToolCallResult
+                {
+                    ToolName = toolName,
+                    Success = false,
+                    Summary = "Permission Denied",
+                    Output = "Tool '" + toolName + "' is disabled for custom agent '" + customAgent.Name + "'."
+                };
+            }
+
             bool isRestricted = codeLess.Studio.WorkspaceTrust.IsRestricted(workspaceRoot);
-            string permission = codeLess.Studio.AgentPermissions.EvaluateTool(agentMode, toolName, argsJson, isRestricted, settings);
+            string permission = codeLess.Studio.AgentPermissions.EvaluateTool(agentMode, toolName, argsJson, isRestricted, settings, customAgent);
 
             if (permission == "deny")
             {
@@ -3745,6 +3889,27 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         };
                     }
 
+                    string subagentType = args.ContainsKey("subagent_type") && args["subagent_type"] != null
+                        ? Convert.ToString(args["subagent_type"]).Trim()
+                        : "";
+                    CustomAgentDefinition subagentDef = null;
+                    if (!string.IsNullOrEmpty(subagentType))
+                    {
+                        if (!CustomAgentAndCommandRegistry.TryGetSubagent(subagentType, workspaceRoot, out subagentDef, CustomSettingsDirOverride) &&
+                            !string.Equals(subagentType, "general", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(subagentType, "explore", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(subagentType, "default", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return new AgentToolCallResult
+                            {
+                                ToolName = "task",
+                                Success = false,
+                                Summary = "Unknown subagent_type: " + subagentType,
+                                Output = "Unknown subagent_type '" + subagentType + "'."
+                            };
+                        }
+                    }
+
                     LlmHarnessAndAgentEngine child = new LlmHarnessAndAgentEngine(_settings);
                     child.ParentEngine = this;
                     child.SubagentDepth = this.SubagentDepth + 1;
@@ -3760,10 +3925,14 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     child.DiagnosticsProvider = this.DiagnosticsProvider;
                     child.AgentTodos = this.AgentTodos;
                     child.FileTimeTracker = this.FileTimeTracker;
+                    child.ActiveCustomAgent = subagentDef;
+                    child.CustomSettingsDirOverride = this.CustomSettingsDirOverride;
+                    child.CustomShellCommandRunner = this.CustomShellCommandRunner;
 
+                    string childMode = subagentDef != null ? subagentDef.Name : "plan";
                     Dictionary<string, string> childStaged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     AgentExecutionTurnResult childResult = child.RunAutonomousAgentLoopCoreAsync(
-                        "plan",
+                        childMode,
                         prompt,
                         _currentTurnVendor,
                         "auto",

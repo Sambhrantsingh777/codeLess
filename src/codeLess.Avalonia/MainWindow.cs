@@ -1958,8 +1958,7 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (e.Key == Key.Tab)
                 {
-                    
-                    SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
+                    SetAgentMode(AgentUiParity.CycleBuildPlanMode(currentAgentMode, workspaceRoot));
                     e.Handled = true;
                 }
             }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
@@ -2491,6 +2490,7 @@ namespace codeLess.AvaloniaApp
                 additionalWorkspaceFolders.AddRange(WorkspaceFolders.Load(settings, newRoot));
             }
             workspaceRoot = newRoot;
+            AgentUiParity.ActiveWorkspaceRoot = workspaceRoot;
             aiEngine?.McpManager?.OnWorkspaceChanged(workspaceRoot);
             InitializeWorkspaceSettingsWatcher();
             settings.AddRecentWorkspace(workspaceRoot);

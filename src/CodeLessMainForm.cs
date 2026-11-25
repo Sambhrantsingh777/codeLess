@@ -7140,6 +7140,7 @@ if __name__ == '__main__':
                 else if (e.KeyCode == Keys.Tab)
                 {
                     e.SuppressKeyPress = true;
+                    AgentUiParity.ActiveWorkspaceRoot = workspaceRoot;
                     SetAgentMode(AgentUiParity.CycleBuildPlanMode(currentAgentMode));
                 }
             };
