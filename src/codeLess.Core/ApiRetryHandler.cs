@@ -13,10 +13,6 @@ namespace codeLess.Studio
 
         public static async Task<string> ExecuteWithRetriesAsync(Func<Task<string>> apiCall, Func<bool> isCancelled = null, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // For C# 5 sync-over-async fallback or await inside harness
-            // Since this class is pure Core, we can just return strings.
-            // Wait, we need the response headers to check retry-after!
-            // But if `apiCall` throws WebException, we can catch it and read the response.
             int attempt = 1;
             int maxAttempts = 5;
 
@@ -50,10 +46,18 @@ namespace codeLess.Studio
                     if (DelayTaskAsync != null)
                     {
                         try {
-                            await DelayTaskAsync(delayMsToWait, cancellationToken);
+                            int remaining = delayMsToWait;
+                            while (remaining > 0)
+                            {
+                                if (isCancelled != null && isCancelled()) break;
+                                cancellationToken.ThrowIfCancellationRequested();
+                                int slice = Math.Min(200, remaining);
+                                await DelayTaskAsync(slice, cancellationToken);
+                                remaining -= slice;
+                            }
                         } catch (OperationCanceledException) {
                             if (isCancelled != null && isCancelled()) break;
-                cancellationToken.ThrowIfCancellationRequested();
+                            cancellationToken.ThrowIfCancellationRequested();
                         }
                     }
                     attempt++;

@@ -100,7 +100,8 @@ namespace codeLess.Studio
         public Func<string, string, bool> OnRequestToolApproval;
         public Func<string, string> OnExecuteTerminalCommandInConPty;
         public Func<string, List<Dictionary<string, string>>, Task<string>> CustomModelResponder;
-        public int MaxAgentIterations = 8;
+                public int MaxAgentIterations = 8;
+        
         public int AgentLoopTimeoutMs = 60000;
         public int HttpTimeoutMs = 60000;
 
@@ -2243,7 +2244,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
             bool partOfTurn = InTurnOfThisEngine;
 
-            return await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
+            string ret = await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
             {
                 return await Task.Run(() =>
                 {
@@ -2470,6 +2471,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 }
                 });
             }, () => partOfTurn && CancelStreamingRequested);
+            return ret ?? "";
         }
 
         public async Task<string> RequestModelGhostCompletionAsync(ByokVendor preferredVendor, EditorTabBuffer buf)

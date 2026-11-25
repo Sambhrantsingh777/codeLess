@@ -258,6 +258,7 @@ namespace codeLess.AvaloniaApp
             AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
             EditorNicetyOptions.ApplyFrom(settings);
             aiEngine = new LlmHarnessAndAgentEngine(settings);
+            aiEngine.DiagnosticsProvider = new LspDiagnosticsProvider();
                         aiEngine.OnAgentFeedStatus = msg => Avalonia.Threading.Dispatcher.UIThread.Post(() => {
                 if (AgentFeed != null)
                     AgentFeed.AddMessage(new AvaloniaAgentFeedItem { Role = "system", Content = msg });
@@ -1569,7 +1570,7 @@ namespace codeLess.AvaloniaApp
                 }
                 else if (e.Key == Key.Tab)
                 {
-                    System.Console.WriteLine("TAB KEY DOWN! Mode was: " + currentAgentMode);
+                    
                     SetAgentMode(currentAgentMode == "build" ? "plan" : "build");
                     e.Handled = true;
                 }
