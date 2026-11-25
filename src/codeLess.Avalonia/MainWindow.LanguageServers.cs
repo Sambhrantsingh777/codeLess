@@ -808,6 +808,13 @@ namespace codeLess.AvaloniaApp
                     case Key.PageDown when plain: Move(LspCompletionPopup.VisibleRows); return true;
                     case Key.PageUp when plain: Move(-LspCompletionPopup.VisibleRows); return true;
                     case Key.Enter when plain && !shift:
+                        if (!EditorNicetyOptions.AcceptSuggestionOnEnter)
+                        {
+                            CloseCompletion();
+                            break;
+                        }
+                        _ = AcceptSelectedAsync();
+                        return true;
                     case Key.Tab when plain && !shift:
                         _ = AcceptSelectedAsync();
                         return true;
@@ -822,10 +829,11 @@ namespace codeLess.AvaloniaApp
                 }
             }
             if (e.Key == Key.Escape && SignatureTip.IsVisible) { HideSignature(); return true; }
-            // Ctrl+Space on every platform (Cmd+Space is Spotlight on macOS), like VS Code.
-            if (e.Key == Key.Space && ctrl && !alt && !meta)
+            // Ctrl+Space on every platform (Cmd+Space is Spotlight on macOS), like VS Code; Cmd+Shift+Space / Ctrl+Shift+Space triggers Parameter Hints.
+            if (e.Key == Key.Space && (ctrl || meta) && !alt)
             {
                 if (shift) TriggerSignatureHelp(null, false);
+                else if (Completion.IsVisible && session != null) Completion.ToggleDetailsVisible();
                 else TriggerCompletion(null, explicitInvoke: true);
                 return true;
             }

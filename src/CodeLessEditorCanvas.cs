@@ -4883,10 +4883,8 @@ namespace codeLess.Studio
             if (buf == null) return;
             string txt = buf.Lines[line];
             if (string.IsNullOrEmpty(txt)) return;
-            int idx = Math.Max(0, Math.Min(txt.Length - 1, col));
-            int s = idx, e = idx;
-            while (s > 0 && (char.IsLetterOrDigit(txt[s - 1]) || txt[s - 1] == '_')) s--;
-            while (e < txt.Length && (char.IsLetterOrDigit(txt[e]) || txt[e] == '_')) e++;
+            int s, e;
+            EditorWordNavigation.WordAt(txt, col, out s, out e);
             buf.SelectionAnchorLine = line;
             buf.SelectionAnchorCol = s;
             buf.CursorLine = line;
@@ -5680,16 +5678,7 @@ namespace codeLess.Studio
                         return;
                     }
                     int c = Math.Min(col, ln.Length);
-                    while (c > 0 && char.IsWhiteSpace(ln[c - 1])) c--;
-                    if (c > 0 && IsIdentifierChar(ln[c - 1]))
-                    {
-                        while (c > 0 && IsIdentifierChar(ln[c - 1])) c--;
-                    }
-                    else
-                    {
-                        while (c > 0 && !char.IsWhiteSpace(ln[c - 1]) && !IsIdentifierChar(ln[c - 1])) c--;
-                    }
-                    col = c;
+                    col = EditorWordNavigation.WordLeft(ln, c);
                 }
                 else
                 {
@@ -5708,16 +5697,7 @@ namespace codeLess.Studio
                         return;
                     }
                     int c = Math.Max(0, col);
-                    while (c < ln.Length && char.IsWhiteSpace(ln[c])) c++;
-                    if (c < ln.Length && IsIdentifierChar(ln[c]))
-                    {
-                        while (c < ln.Length && IsIdentifierChar(ln[c])) c++;
-                    }
-                    else
-                    {
-                        while (c < ln.Length && !char.IsWhiteSpace(ln[c]) && !IsIdentifierChar(ln[c])) c++;
-                    }
-                    col = c;
+                    col = EditorWordNavigation.WordRight(ln, c);
                 }
                 else
                 {

@@ -62,6 +62,14 @@ namespace codeLess.AvaloniaApp
 
         public LspCompletionSession Session => session;
         public string DocumentationText => docPanel.IsVisible ? docText.Text : "";
+        public bool DetailsEnabled { get; set; } = true;
+        private string lastDocText = "";
+
+        public void ToggleDetailsVisible()
+        {
+            DetailsEnabled = !DetailsEnabled;
+            docPanel.IsVisible = DetailsEnabled && !string.IsNullOrEmpty(lastDocText);
+        }
 
         public void ApplyTheme(StudioTheme t)
         {
@@ -94,8 +102,9 @@ namespace codeLess.AvaloniaApp
         public void SetDocumentation(string text)
         {
             text = (text ?? "").Trim();
+            lastDocText = text;
             docText.Text = text;
-            docPanel.IsVisible = text.Length > 0;
+            docPanel.IsVisible = DetailsEnabled && text.Length > 0;
         }
 
         public void Render()
@@ -119,13 +128,31 @@ namespace codeLess.AvaloniaApp
                     new TextBlock { Text = KindGlyph(it.Kind), Foreground = KindBrush(it.Kind), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
                 var label = new TextBlock
                 {
-                    Text = LspCompletionSession.LeftText(it),
                     Foreground = fg,
                     FontSize = UiTokens.FontUi,
                     VerticalAlignment = VerticalAlignment.Center,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     TextDecorations = it.Deprecated ? TextDecorations.Strikethrough : null
                 };
+                string leftText = LspCompletionSession.LeftText(it);
+                var matched = LspCompletionList.MatchedIndices(it.Label ?? "", session.Prefix ?? "");
+                if (matched.Count > 0 && label.Inlines != null)
+                {
+                    var matchSet = new HashSet<int>(matched);
+                    for (int ci = 0; ci < leftText.Length; ci++)
+                    {
+                        bool isMatch = ci < (it.Label ?? "").Length && matchSet.Contains(ci);
+                        label.Inlines.Add(new Run(leftText[ci].ToString())
+                        {
+                            Foreground = isMatch ? accent : fg,
+                            FontWeight = isMatch ? FontWeight.Bold : FontWeight.Normal
+                        });
+                    }
+                }
+                else
+                {
+                    label.Text = leftText;
+                }
                 var right = new TextBlock { Text = LspCompletionSession.RightText(it), Foreground = fg2, FontSize = UiTokens.FontSmall, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0), MaxWidth = 170, TextTrimming = TextTrimming.CharacterEllipsis };
                 row.Children.Add(glyph);
                 Grid.SetColumn(label, 1); row.Children.Add(label);

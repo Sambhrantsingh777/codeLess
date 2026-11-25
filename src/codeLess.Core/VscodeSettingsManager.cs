@@ -220,7 +220,17 @@ namespace codeLess.Core
                 if (dict.ContainsKey("editor.renderWhitespace")) {
                     string s = dict["editor.renderWhitespace"] != null ? dict["editor.renderWhitespace"].ToString() : null;
                     target.ShowRenderWhitespace = s == "all";
+                    target.EditorRenderWhitespace = s ?? "selection";
                 }
+                if (dict.ContainsKey("editor.emptySelectionClipboard")) target.EditorEmptySelectionClipboard = Convert.ToBoolean(dict["editor.emptySelectionClipboard"]);
+                if (dict.ContainsKey("editor.useTabStops")) target.EditorUseTabStops = Convert.ToBoolean(dict["editor.useTabStops"]);
+                if (dict.ContainsKey("editor.acceptSuggestionOnEnter")) {
+                    object v = dict["editor.acceptSuggestionOnEnter"];
+                    if (v is bool) target.EditorAcceptSuggestionOnEnter = (bool)v;
+                    else if (v != null) target.EditorAcceptSuggestionOnEnter = !string.Equals(v.ToString(), "off", StringComparison.OrdinalIgnoreCase) && !string.Equals(v.ToString(), "false", StringComparison.OrdinalIgnoreCase);
+                }
+                if (dict.ContainsKey("editor.cursorSurroundingLines")) target.EditorCursorSurroundingLines = Convert.ToInt32(dict["editor.cursorSurroundingLines"]);
+                if (dict.ContainsKey("editor.wordSeparators") && dict["editor.wordSeparators"] != null) target.EditorWordSeparators = dict["editor.wordSeparators"].ToString();
                 if (dict.ContainsKey("editor.cursorStyle")) {
                     target.EditorCursorStyle = dict["editor.cursorStyle"] != null ? dict["editor.cursorStyle"].ToString() : null;
                 }

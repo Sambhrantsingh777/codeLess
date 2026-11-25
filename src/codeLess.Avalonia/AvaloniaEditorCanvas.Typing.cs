@@ -123,13 +123,16 @@ namespace codeLess.AvaloniaApp
                 b.SyncContentFromLines(false);
                 return;
             }
-            int n = EditorIndentation.BackspaceDeleteCount(ln, col, tab);
-            if (n > 1)
+            if (EditorNicetyOptions.UseTabStops)
             {
-                b.Lines[b.CursorLine] = ln.Remove(col - n, n);
-                b.CursorCol = col - n;
-                b.SyncContentFromLines(false);
-                return;
+                int n = EditorIndentation.BackspaceDeleteCount(ln, col, tab);
+                if (n > 1)
+                {
+                    b.Lines[b.CursorLine] = ln.Remove(col - n, n);
+                    b.CursorCol = col - n;
+                    b.SyncContentFromLines(false);
+                    return;
+                }
             }
             b.PerformBackspace();
         }
@@ -169,7 +172,7 @@ namespace codeLess.AvaloniaApp
             bool anySelection = buf.HasSelection() || ExtraCursors.Any(c => c.HasSelection);
 
             // auto-surround: every caret has a selection
-            if (anySelection && isOpener && EditorAutoClosing.TryGetSurroundPair(ch, path, out string open, out string close) &&
+            if (anySelection && (isOpener || EditorAutoClosing.IsQuote(ch)) && EditorAutoClosing.TryGetSurroundPair(ch, path, out string open, out string close) &&
                 buf.HasSelection() && ExtraCursors.All(c => c.HasSelection))
             {
                 buf.PushUndoSnapshot();

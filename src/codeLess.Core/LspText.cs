@@ -371,21 +371,45 @@ namespace codeLess.Studio
         /// </summary>
         public static string ExpandSnippet(string snippet, out int caretOffset, out int selectionLength)
         {
+            List<int[]> orderedStops;
+            return ExpandSnippetWithStops(snippet, out caretOffset, out selectionLength, out orderedStops);
+        }
+
+        public static string ExpandSnippetWithStops(string snippet, out int caretOffset, out int selectionLength, out List<int[]> orderedStops)
+        {
             caretOffset = -1;
             selectionLength = 0;
+            orderedStops = new List<int[]>();
             if (string.IsNullOrEmpty(snippet)) { caretOffset = 0; return ""; }
             Dictionary<int, int[]> stops = new Dictionary<int, int[]>();
             StringBuilder sb = new StringBuilder(snippet.Length);
             int i = 0;
             ExpandSnippetInto(snippet, ref i, sb, stops, '\0');
-            int[] best = null;
-            int bestIdx = int.MaxValue;
-            foreach (KeyValuePair<int, int[]> kv in stops)
+            List<int> positiveKeys = new List<int>();
+            foreach (int k in stops.Keys)
             {
-                if (kv.Key > 0 && kv.Key < bestIdx) { bestIdx = kv.Key; best = kv.Value; }
+                if (k > 0) positiveKeys.Add(k);
             }
-            if (best == null && stops.ContainsKey(0)) best = stops[0];
-            if (best != null) { caretOffset = best[0]; selectionLength = best[1]; }
+            positiveKeys.Sort();
+            foreach (int k in positiveKeys)
+            {
+                int[] st = stops[k];
+                orderedStops.Add(new int[] { st[0], st[1], k });
+            }
+            if (stops.ContainsKey(0))
+            {
+                int[] st0 = stops[0];
+                orderedStops.Add(new int[] { st0[0], st0[1], 0 });
+            }
+            else if (orderedStops.Count > 0)
+            {
+                orderedStops.Add(new int[] { sb.Length, 0, 0 });
+            }
+            if (orderedStops.Count > 0)
+            {
+                caretOffset = orderedStops[0][0];
+                selectionLength = orderedStops[0][1];
+            }
             else caretOffset = sb.Length;
             return sb.ToString();
         }

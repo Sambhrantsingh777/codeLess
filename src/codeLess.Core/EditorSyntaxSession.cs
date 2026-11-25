@@ -18,6 +18,11 @@ namespace codeLess.Studio
         public static bool LinkedTagEditing = true;
         public static bool EmmetOnTab = true;
         public static bool TextMateHighlighting = true;
+        public static bool EmptySelectionClipboard = true;
+        public static bool UseTabStops = true;
+        public static bool AcceptSuggestionOnEnter = true;
+        public static int CursorSurroundingLines = 0;
+        public static string RenderWhitespace = "selection";
 
         public static void ApplyFrom(IdePersistentSettings s)
         {
@@ -31,6 +36,12 @@ namespace codeLess.Studio
             LinkedTagEditing = s.EditorLinkedTagEditing;
             EmmetOnTab = s.EditorEmmetOnTab;
             TextMateHighlighting = s.EditorTextMateHighlighting;
+            EmptySelectionClipboard = s.EditorEmptySelectionClipboard;
+            UseTabStops = s.EditorUseTabStops;
+            AcceptSuggestionOnEnter = s.EditorAcceptSuggestionOnEnter;
+            CursorSurroundingLines = s.EditorCursorSurroundingLines;
+            RenderWhitespace = string.IsNullOrEmpty(s.EditorRenderWhitespace) ? (s.ShowRenderWhitespace ? "all" : "selection") : s.EditorRenderWhitespace;
+            EditorWordNavigation.WordSeparators = string.IsNullOrEmpty(s.EditorWordSeparators) ? EditorWordNavigation.DefaultWordSeparators : s.EditorWordSeparators;
             EditorScrollOptions.ApplyFrom(s); // smooth scrolling / caret settings travel with the editor switches
             TerminalOptions.ApplyFrom(s); // terminal cursor / font / scrolling settings too
         }
@@ -47,6 +58,12 @@ namespace codeLess.Studio
             s.EditorLinkedTagEditing = LinkedTagEditing;
             s.EditorEmmetOnTab = EmmetOnTab;
             s.EditorTextMateHighlighting = TextMateHighlighting;
+            s.EditorEmptySelectionClipboard = EmptySelectionClipboard;
+            s.EditorUseTabStops = UseTabStops;
+            s.EditorAcceptSuggestionOnEnter = AcceptSuggestionOnEnter;
+            s.EditorCursorSurroundingLines = CursorSurroundingLines;
+            s.EditorRenderWhitespace = RenderWhitespace;
+            s.EditorWordSeparators = EditorWordNavigation.WordSeparators;
             EditorScrollOptions.CopyTo(s);
             TerminalOptions.CopyTo(s);
         }
@@ -64,6 +81,12 @@ namespace codeLess.Studio
         private bool editorLinkedTagEditing = true;
         private bool editorEmmetOnTab = true;
         private bool editorTextMateHighlighting = true;
+        private bool editorEmptySelectionClipboard = true;
+        private bool editorUseTabStops = true;
+        private bool editorAcceptSuggestionOnEnter = true;
+        private int editorCursorSurroundingLines = 0;
+        private string editorRenderWhitespace = "selection";
+        private string editorWordSeparators = EditorWordNavigation.DefaultWordSeparators;
 
         public bool EditorBracketPairColorization { get { return editorBracketPairColorization; } set { editorBracketPairColorization = value; } }
         public bool EditorBracketPairGuides { get { return editorBracketPairGuides; } set { editorBracketPairGuides = value; } }
@@ -74,6 +97,12 @@ namespace codeLess.Studio
         public bool EditorLinkedTagEditing { get { return editorLinkedTagEditing; } set { editorLinkedTagEditing = value; } }
         public bool EditorEmmetOnTab { get { return editorEmmetOnTab; } set { editorEmmetOnTab = value; } }
         public bool EditorTextMateHighlighting { get { return editorTextMateHighlighting; } set { editorTextMateHighlighting = value; } }
+        public bool EditorEmptySelectionClipboard { get { return editorEmptySelectionClipboard; } set { editorEmptySelectionClipboard = value; } }
+        public bool EditorUseTabStops { get { return editorUseTabStops; } set { editorUseTabStops = value; } }
+        public bool EditorAcceptSuggestionOnEnter { get { return editorAcceptSuggestionOnEnter; } set { editorAcceptSuggestionOnEnter = value; } }
+        public int EditorCursorSurroundingLines { get { return editorCursorSurroundingLines; } set { editorCursorSurroundingLines = Math.Max(0, value); } }
+        public string EditorRenderWhitespace { get { return editorRenderWhitespace; } set { editorRenderWhitespace = value ?? "selection"; } }
+        public string EditorWordSeparators { get { return editorWordSeparators; } set { editorWordSeparators = string.IsNullOrEmpty(value) ? EditorWordNavigation.DefaultWordSeparators : value; } }
     }
 
     /// <summary>A colored run of a line: [Start, Start + Length) in character indices.</summary>

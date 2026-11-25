@@ -218,6 +218,9 @@ namespace codeLess.AvaloniaApp
 
             keybindings.BindAction("workbench.action.toggleActivityBarVisibility", () => { if (activityBarBorder != null) activityBarBorder.IsVisible = !activityBarBorder.IsVisible; });
             keybindings.BindAction("editor.action.joinLines", () => PrimaryEditor?.Canvas?.JoinLines());
+            keybindings.BindAction("editor.action.sortLinesAscending", () => PrimaryEditor?.Canvas?.SortLinesAscending());
+            keybindings.BindAction("editor.action.sortLinesDescending", () => PrimaryEditor?.Canvas?.SortLinesDescending());
+            keybindings.BindAction("editor.action.transposeLetters", () => PrimaryEditor?.Canvas?.TransposeLetters());
             keybindings.BindAction("editor.action.transformToUppercase", () => PrimaryEditor?.Canvas?.TransformToUppercase());
             keybindings.BindAction("editor.action.transformToLowercase", () => PrimaryEditor?.Canvas?.TransformToLowercase());
             keybindings.BindAction("editor.action.trimTrailingWhitespace", () => PrimaryEditor?.Canvas?.TrimTrailingWhitespace());

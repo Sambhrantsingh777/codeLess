@@ -72,6 +72,11 @@ namespace codeLess.AvaloniaApp
                                 .ThenBy(c => c.AnchorLine >= 0 && c.AnchorLine < c.Line ? c.AnchorCol : c.Col).ToList();
             if (!anySelection)
             {
+                if (!EditorNicetyOptions.EmptySelectionClipboard)
+                {
+                    lastWholeLineCopy = null;
+                    return "";
+                }
                 var sb = new StringBuilder();
                 var seen = new HashSet<int>();
                 foreach (var c in ordered)
@@ -108,9 +113,26 @@ namespace codeLess.AvaloniaApp
         }
 
         /// <summary>Cut: delete every selection, or the caret lines when nothing is selected (one undo step).</summary>
-        internal void CutSelectionsOrLines(EditorTabBuffer buf)
+        public void CutSelectionsOrLines(EditorTabBuffer buf)
         {
+            if (buf == null) return;
             bool anySelection = buf.HasSelection() || ExtraCursors.Any(c => c.HasSelection);
+            if (!anySelection && !EditorNicetyOptions.EmptySelectionClipboard)
+            {
+                lastWholeLineCopy = null;
+                return;
+            }
+            if (!anySelection)
+            {
+                var seen = new SortedSet<int> { Math.Max(0, Math.Min(buf.Lines.Count - 1, buf.CursorLine)) };
+                foreach (var ec in ExtraCursors)
+                    if (ec.Line >= 0 && ec.Line < buf.Lines.Count) seen.Add(ec.Line);
+                lastWholeLineCopy = string.Concat(seen.Select(l => (buf.Lines[l] ?? "") + "\n"));
+            }
+            else
+            {
+                lastWholeLineCopy = null;
+            }
             if (!anySelection && ExtraCursors.Count == 0) { DeleteActiveLine(); return; }
             buf.PushUndoSnapshot();
             ClampExtraCursors(buf);

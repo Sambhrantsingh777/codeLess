@@ -138,6 +138,9 @@ namespace codeLess.AvaloniaApp
             return new List<PaletteEntryItem>
             {
                 new PaletteEntryItem { Category = "Edit", Title = "Change All Occurrences", Shortcut = "Ctrl+F2", Execute = () => PrimaryEditor.Canvas.ChangeAllOccurrences() },
+                new PaletteEntryItem { Category = "Edit", Title = "Sort Lines Ascending", Execute = () => PrimaryEditor.Canvas.SortLinesAscending() },
+                new PaletteEntryItem { Category = "Edit", Title = "Sort Lines Descending", Execute = () => PrimaryEditor.Canvas.SortLinesDescending() },
+                new PaletteEntryItem { Category = "Edit", Title = "Transpose Letters", Shortcut = "Ctrl+T", Execute = () => PrimaryEditor.Canvas.TransposeLetters() },
                 new PaletteEntryItem { Category = "View", Title = "Toggle Sticky Scroll", Execute = () => ToggleEditorNicety("Sticky Scroll", () => EditorNicetyOptions.StickyScroll, v => EditorNicetyOptions.StickyScroll = v) },
                 new PaletteEntryItem { Category = "View", Title = "Toggle Bracket Pair Colorization", Execute = () => ToggleEditorNicety("Bracket Pair Colorization", () => EditorNicetyOptions.BracketPairColorization, v => EditorNicetyOptions.BracketPairColorization = v) },
                 new PaletteEntryItem { Category = "View", Title = "Toggle Bracket Pair Guides", Execute = () => ToggleEditorNicety("Bracket Pair Guides", () => EditorNicetyOptions.BracketPairGuides, v => EditorNicetyOptions.BracketPairGuides = v) },

@@ -7,6 +7,13 @@ using System.Text;
 
 namespace codeLess.Studio
 {
+    public sealed class SnippetTabStop
+    {
+        public int Index;
+        public int Offset;
+        public int Length;
+    }
+
     /// <summary>Result of expanding a snippet body: text to insert plus where the caret / selection goes.</summary>
     public sealed class SnippetExpansion
     {
@@ -15,6 +22,7 @@ namespace codeLess.Studio
         public int CaretOffset;
         /// <summary>Length of the first tab stop's placeholder text (selected after insertion).</summary>
         public int SelectionLength;
+        public List<SnippetTabStop> TabStops = new List<SnippetTabStop>();
     }
 
     /// <summary>
@@ -125,15 +133,33 @@ namespace codeLess.Studio
 
             SnippetExpansion r = new SnippetExpansion();
             r.Text = outSb.ToString();
-            int first = -1;
-            foreach (int n in stopOffsets.Keys) if (n > 0 && (first < 0 || n < first)) first = n;
-            if (first < 0 && stopOffsets.ContainsKey(0)) first = 0;
-            if (first >= 0)
+            List<int> posKeys = new List<int>();
+            foreach (int n in stopOffsets.Keys) if (n > 0) posKeys.Add(n);
+            posKeys.Sort();
+            foreach (int n in posKeys)
             {
-                int start = stopOffsets[first];
-                int end = start + stopLengths[first];
-                r.CaretOffset = map[Math.Min(start, sb.Length)];
-                r.SelectionLength = map[Math.Min(end, sb.Length)] - r.CaretOffset;
+                int st = stopOffsets[n];
+                int en = st + stopLengths[n];
+                int mappedStart = map[Math.Min(st, sb.Length)];
+                int mappedLen = map[Math.Min(en, sb.Length)] - mappedStart;
+                r.TabStops.Add(new SnippetTabStop { Index = n, Offset = mappedStart, Length = mappedLen });
+            }
+            if (stopOffsets.ContainsKey(0))
+            {
+                int st0 = stopOffsets[0];
+                int en0 = st0 + stopLengths[0];
+                int mappedStart0 = map[Math.Min(st0, sb.Length)];
+                int mappedLen0 = map[Math.Min(en0, sb.Length)] - mappedStart0;
+                r.TabStops.Add(new SnippetTabStop { Index = 0, Offset = mappedStart0, Length = mappedLen0 });
+            }
+            else if (r.TabStops.Count > 0)
+            {
+                r.TabStops.Add(new SnippetTabStop { Index = 0, Offset = r.Text.Length, Length = 0 });
+            }
+            if (r.TabStops.Count > 0)
+            {
+                r.CaretOffset = r.TabStops[0].Offset;
+                r.SelectionLength = r.TabStops[0].Length;
             }
             else r.CaretOffset = r.Text.Length;
             return r;
@@ -349,6 +375,189 @@ namespace codeLess.Studio
                 buf.CursorLine = startLine + sl;
                 buf.CursorCol = sc;
             }
+
+            if (ex.TabStops.Count > 1)
+            {
+                List<SnippetStopEntry> entries = new List<SnippetStopEntry>();
+                foreach (SnippetTabStop ts in ex.TabStops)
+                {
+                    int tsl, tsc, tel, tec;
+                    OffsetToLineCol(parts, before.Length + ts.Offset, out tsl, out tsc);
+                    OffsetToLineCol(parts, before.Length + ts.Offset + ts.Length, out tel, out tec);
+                    int docLine = startLine + tsl;
+                    int lineLen = (docLine >= 0 && docLine < buf.Lines.Count) ? buf.Lines[docLine].Length : 0;
+                    entries.Add(new SnippetStopEntry
+                    {
+                        Index = ts.Index,
+                        Line = docLine,
+                        StartCol = tsc,
+                        EndCol = (tel == tsl) ? tec : tsc,
+                        InitialLineLength = lineLen
+                    });
+                }
+                SetActiveSession(buf, new ActiveSnippetSession { Stops = entries, CurrentIndex = 0 });
+            }
+            else
+            {
+                EndSession(buf);
+            }
+        }
+
+        private sealed class SnippetStopEntry
+        {
+            public int Index;
+            public int Line;
+            public int StartCol;
+            public int EndCol;
+            public int InitialLineLength;
+        }
+
+        private sealed class ActiveSnippetSession
+        {
+            public List<SnippetStopEntry> Stops = new List<SnippetStopEntry>();
+            public int CurrentIndex;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<EditorTabBuffer, ActiveSnippetSession> sessions
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<EditorTabBuffer, ActiveSnippetSession>();
+
+        private static void SetActiveSession(EditorTabBuffer buf, ActiveSnippetSession s)
+        {
+            if (buf == null) return;
+            sessions.Remove(buf);
+            if (s != null) sessions.Add(buf, s);
+        }
+
+        public static bool HasActiveSession(EditorTabBuffer buf)
+        {
+            ActiveSnippetSession s;
+            return buf != null && sessions.TryGetValue(buf, out s) && s != null && s.Stops.Count > 1;
+        }
+
+        public static void EndSession(EditorTabBuffer buf)
+        {
+            if (buf == null) return;
+            sessions.Remove(buf);
+        }
+
+        public static void StartSessionFromBufferOffsets(EditorTabBuffer buf, int baseOffset, List<int[]> orderedStops)
+        {
+            if (buf == null || orderedStops == null || orderedStops.Count <= 1 || buf.Lines == null)
+            {
+                EndSession(buf);
+                return;
+            }
+            List<SnippetStopEntry> entries = new List<SnippetStopEntry>();
+            foreach (int[] st in orderedStops)
+            {
+                int sl, sc, el, ec;
+                BufferOffsetToLineCol(buf, baseOffset + st[0], out sl, out sc);
+                BufferOffsetToLineCol(buf, baseOffset + st[0] + st[1], out el, out ec);
+                int lineLen = (sl >= 0 && sl < buf.Lines.Count) ? buf.Lines[sl].Length : 0;
+                entries.Add(new SnippetStopEntry
+                {
+                    Index = st.Length > 2 ? st[2] : 0,
+                    Line = sl,
+                    StartCol = sc,
+                    EndCol = (el == sl) ? ec : sc,
+                    InitialLineLength = lineLen
+                });
+            }
+            SetActiveSession(buf, new ActiveSnippetSession { Stops = entries, CurrentIndex = 0 });
+        }
+
+        private static void BufferOffsetToLineCol(EditorTabBuffer buf, int offset, out int line, out int col)
+        {
+            int rem = Math.Max(0, offset);
+            for (int i = 0; i < buf.Lines.Count; i++)
+            {
+                int len = buf.Lines[i].Length;
+                if (rem <= len || i == buf.Lines.Count - 1)
+                {
+                    line = i;
+                    col = Math.Min(rem, len);
+                    return;
+                }
+                rem -= len + 1;
+            }
+            line = Math.Max(0, buf.Lines.Count - 1);
+            col = buf.Lines.Count > 0 ? buf.Lines[line].Length : 0;
+        }
+
+        /// <summary>
+        /// Advances (Tab) or retreats (Shift+Tab) across active snippet tab stops ($1 -> $2 -> $0).
+        /// Reaching $0 places the caret and ends the snippet session. Returns true when handled.
+        /// </summary>
+        public static bool TryJumpStop(EditorTabBuffer buf, bool backwards)
+        {
+            ActiveSnippetSession s;
+            if (buf == null || buf.Lines == null || !sessions.TryGetValue(buf, out s) || s == null || s.Stops.Count <= 1)
+                return false;
+
+            int curIdx = s.CurrentIndex;
+            if (curIdx >= 0 && curIdx < s.Stops.Count)
+            {
+                SnippetStopEntry cur = s.Stops[curIdx];
+                if (cur.Line >= 0 && cur.Line < buf.Lines.Count)
+                {
+                    int curLen = buf.Lines[cur.Line].Length;
+                    int delta = curLen - cur.InitialLineLength;
+                    if (delta != 0)
+                    {
+                        cur.EndCol = Math.Max(cur.StartCol, cur.EndCol + delta);
+                        cur.InitialLineLength = curLen;
+                        for (int k = 0; k < s.Stops.Count; k++)
+                        {
+                            if (k == curIdx) continue;
+                            SnippetStopEntry other = s.Stops[k];
+                            if (other.Line == cur.Line)
+                            {
+                                if (other.StartCol >= cur.StartCol)
+                                {
+                                    other.StartCol = Math.Max(0, other.StartCol + delta);
+                                    other.EndCol = Math.Max(other.StartCol, other.EndCol + delta);
+                                }
+                                other.InitialLineLength = curLen;
+                            }
+                        }
+                    }
+                }
+            }
+
+            int nextIdx = backwards ? curIdx - 1 : curIdx + 1;
+            if (nextIdx < 0 || nextIdx >= s.Stops.Count)
+            {
+                if (!backwards) EndSession(buf);
+                return false;
+            }
+
+            s.CurrentIndex = nextIdx;
+            SnippetStopEntry target = s.Stops[nextIdx];
+            int line = Math.Max(0, Math.Min(buf.Lines.Count - 1, target.Line));
+            int maxCol = buf.Lines[line].Length;
+            int sc = Math.Max(0, Math.Min(maxCol, target.StartCol));
+            int ec = Math.Max(sc, Math.Min(maxCol, target.EndCol));
+            target.InitialLineLength = maxCol;
+
+            if (ec > sc)
+            {
+                buf.SelectionAnchorLine = line;
+                buf.SelectionAnchorCol = sc;
+                buf.CursorLine = line;
+                buf.CursorCol = ec;
+            }
+            else
+            {
+                buf.ClearSelection();
+                buf.CursorLine = line;
+                buf.CursorCol = sc;
+            }
+
+            if (target.Index == 0 || nextIdx == s.Stops.Count - 1 && !backwards && target.Index == 0)
+            {
+                EndSession(buf);
+            }
+            return true;
         }
 
         private static void OffsetToLineCol(string[] parts, int offset, out int line, out int col)

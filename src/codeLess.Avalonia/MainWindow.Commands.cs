@@ -243,6 +243,11 @@ namespace codeLess.AvaloniaApp
                     PrimaryEditor.Canvas.FoldAll();
                     return true;
                 }
+                if (key >= Key.D1 && key <= Key.D7 && ctrlOrCmd)
+                {
+                    PrimaryEditor.Canvas.FoldLevel((int)(key - Key.D0));
+                    return true;
+                }
                 if (key == Key.J && ctrlOrCmd)
                 {
                     PrimaryEditor.Canvas.UnfoldAll();

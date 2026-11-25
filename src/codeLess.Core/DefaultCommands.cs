@@ -138,6 +138,9 @@ namespace codeLess.Core
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.zoomOut", "Zoom Out", "View", "cmd+-", "ctrl+-", "ctrl+-", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("workbench.action.zoomReset", "Reset Zoom", "View", "cmd+numpad0", "ctrl+numpad0", "ctrl+numpad0", ""));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.joinLines", "Join Lines", "Editor", "ctrl+j", "", "", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.sortLinesAscending", "Sort Lines Ascending", "Editor", "", "", "", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.sortLinesDescending", "Sort Lines Descending", "Editor", "", "", "", "editorTextFocus"));
+            CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transposeLetters", "Transpose Letters", "Editor", "ctrl+t", "", "", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transformToUppercase", "Transform to Uppercase", "Editor", "", "", "", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.transformToLowercase", "Transform to Lowercase", "Editor", "", "", "", "editorTextFocus"));
             CommandRegistry.RegisterCommand(new CommandDefinition("editor.action.insertCursorAbove", "Add Cursor Above", "Multi-cursor", "option+cmd+up", "ctrl+alt+up", "shift+alt+up", "editorTextFocus"));

@@ -590,6 +590,8 @@ namespace codeLess.AvaloniaApp
             Canvas.InvalidateVisual();
         }
 
+        public string FindQueryText => findInputBox?.Text ?? "";
+
         public void ShowFindBar(bool includeReplace)
         {
             if (IsShowingLargeFile) { LargeFileViewer.ShowFind(); return; }
@@ -601,6 +603,13 @@ namespace codeLess.AvaloniaApp
                 string sel = CurrentBuffer.GetSelectedText();
                 if (!string.IsNullOrEmpty(sel) && !sel.Contains("\n"))
                     findInputBox.Text = sel;
+            }
+            else if (CurrentBuffer != null && CurrentBuffer.Lines != null &&
+                     CurrentBuffer.CursorLine >= 0 && CurrentBuffer.CursorLine < CurrentBuffer.Lines.Count)
+            {
+                string word = EditorOccurrences.GetWordAt(CurrentBuffer.Lines[CurrentBuffer.CursorLine], CurrentBuffer.CursorCol, out _, out _);
+                if (!string.IsNullOrEmpty(word))
+                    findInputBox.Text = word;
             }
             RecomputeFindMatches();
             findInputBox.Focus();
@@ -838,7 +847,31 @@ namespace codeLess.AvaloniaApp
             // big documents: the debounced background analysis of BufferModified covers it (QA #35)
             if (CurrentBuffer.Lines.Count <= AvaloniaVirtualEditorCanvas.DeferAnalysisLineThreshold)
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(CurrentBuffer);
+            int repLine = m.Line;
+            int repEndCol = m.StartCol + expanded.Length;
             RecomputeFindMatches();
+            if (FindMatches.Count > 0)
+            {
+                int nextIdx = 0;
+                for (int i = 0; i < FindMatches.Count; i++)
+                {
+                    var fm = FindMatches[i];
+                    if (fm.Line > repLine || (fm.Line == repLine && fm.StartCol >= repEndCol))
+                    {
+                        nextIdx = i;
+                        break;
+                    }
+                }
+                activeFindMatchIndex = nextIdx;
+                var nextMatch = FindMatches[activeFindMatchIndex];
+                CurrentBuffer.SelectionStartLine = nextMatch.Line;
+                CurrentBuffer.SelectionStartCol = nextMatch.StartCol;
+                CurrentBuffer.CursorLine = nextMatch.Line;
+                CurrentBuffer.CursorCol = nextMatch.StartCol + nextMatch.Length;
+                SetFindCount(EditorFindEngine.CountLabel(activeFindMatchIndex, FindMatches.Count), false, null);
+                Canvas.EnsureCursorVisible();
+                CaretMoved?.Invoke(CurrentBuffer);
+            }
             BufferModified?.Invoke(CurrentBuffer);
             Canvas.InvalidateVisual();
         }
@@ -1528,6 +1561,7 @@ namespace codeLess.AvaloniaApp
         {
             if (CurrentBuffer != null)
             {
+                Canvas?.OnCaretMovedCheckState(CurrentBuffer);
                 RefreshBreadcrumbs(onlyIfChanged: true);
                 CaretMoved?.Invoke(CurrentBuffer);
             }
@@ -2126,6 +2160,61 @@ namespace codeLess.AvaloniaApp
             return true;
         }
 
+        private bool IsStrictlyInsideSelection(EditorTabBuffer buf, int line, int col)
+        {
+            if (buf == null || !buf.HasSelection()) return false;
+            buf.GetNormalizedSelection(out int sl, out int sc, out int el, out int ec);
+            if (line < sl || line > el) return false;
+            if (sl == el) return col >= sc && col < ec;
+            if (line == sl) return col >= sc;
+            if (line == el) return col < ec;
+            return true;
+        }
+
+        private int mouseSelectGranularity;
+        private int wordDragAnchorLine = -1, wordDragAnchorStart, wordDragAnchorEnd;
+        private bool isPendingSelectionDrag;
+        private bool isDraggingSelectionText;
+        private Point selectionDragStartPt;
+        private int dragDropLine = -1, dragDropCol = -1;
+        private readonly Stack<(CaretState Primary, List<ExtraCursorCaret> Extras)> cursorUndoStack = new Stack<(CaretState, List<ExtraCursorCaret>)>();
+        private readonly Stack<CaretState> expandSelectionHistory = new Stack<CaretState>();
+        private bool insideExpandShrink;
+        private CaretState lastKnownPrimaryCaret;
+
+        public void OnCaretMovedCheckState(EditorTabBuffer buf)
+        {
+            if (buf == null) return;
+            var cur = ReadPrimary(buf);
+            if (!insideExpandShrink && (cur.Line != lastKnownPrimaryCaret.Line || cur.Col != lastKnownPrimaryCaret.Col || cur.AnchorLine != lastKnownPrimaryCaret.AnchorLine || cur.AnchorCol != lastKnownPrimaryCaret.AnchorCol))
+            {
+                expandSelectionHistory.Clear();
+            }
+            if (ctrlDWholeWordNeedle != null && (!buf.HasSelection() || buf.GetSelectedText() != ctrlDWholeWordNeedle))
+            {
+                ctrlDWholeWordNeedle = null;
+            }
+            lastKnownPrimaryCaret = cur;
+        }
+
+        private void PushCursorUndoState(EditorTabBuffer buf)
+        {
+            if (buf == null) return;
+            var p = ReadPrimary(buf);
+            var ex = ExtraCursors.Select(c => new ExtraCursorCaret { Line = c.Line, Col = c.Col, AnchorLine = c.AnchorLine, AnchorCol = c.AnchorCol }).ToList();
+            if (cursorUndoStack.Count > 0)
+            {
+                var top = cursorUndoStack.Peek();
+                if (top.Primary.Line == p.Line && top.Primary.Col == p.Col &&
+                    top.Primary.AnchorLine == p.AnchorLine && top.Primary.AnchorCol == p.AnchorCol &&
+                    top.Extras.Count == ex.Count)
+                {
+                    return;
+                }
+            }
+            cursorUndoStack.Push((p, ex));
+        }
+
         private void SelectWholeLines(EditorTabBuffer buf, int anchorLine, int activeLine)
         {
             int last = buf.Lines.Count - 1;
@@ -2296,13 +2385,40 @@ namespace codeLess.AvaloniaApp
             // Alt+Click adds/removes multi-cursor
             if (e.KeyModifiers.HasFlag(KeyModifiers.Alt) && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
             {
+                PushCursorUndoState(buf);
                 int existingIdx = ExtraCursors.FindIndex(c => c.Line == docLine && c.Col == docCol);
                 if (existingIdx >= 0)
                     ExtraCursors.RemoveAt(existingIdx);
+                else if (docLine == buf.CursorLine && docCol == buf.CursorCol)
+                {
+                    if (ExtraCursors.Count > 0)
+                    {
+                        var promoted = ExtraCursors[0];
+                        ExtraCursors.RemoveAt(0);
+                        buf.CursorLine = promoted.Line;
+                        buf.CursorCol = promoted.Col;
+                        buf.SelectionStartLine = promoted.AnchorLine;
+                        buf.SelectionStartCol = promoted.AnchorCol;
+                    }
+                }
                 else
                     ExtraCursors.Add(new ExtraCursorCaret { Line = docLine, Col = docCol, AnchorLine = -1, AnchorCol = -1 });
+                owner.NotifyCaretMoved();
                 InvalidateVisual();
                 e.Handled = true;
+                return;
+            }
+
+            // Middle-button click pastes at the clicked position (Linux / X11 primary selection style)
+            if (props.IsMiddleButtonPressed)
+            {
+                PushCursorUndoState(buf);
+                ExtraCursors.Clear();
+                buf.CursorLine = docLine;
+                buf.CursorCol = docCol;
+                buf.ClearSelection();
+                e.Handled = true;
+                _ = PasteFromClipboardAtCaretAsync();
                 return;
             }
 
@@ -2310,6 +2426,7 @@ namespace codeLess.AvaloniaApp
             if ((e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.KeyModifiers.HasFlag(KeyModifiers.Alt)) ||
                 (ColumnSelectionMode && e.KeyModifiers.HasFlag(KeyModifiers.Shift)))
             {
+                PushCursorUndoState(buf);
                 if (boxAnchorLine < 0 || !buf.HasSelection() && ExtraCursors.Count == 0) { boxAnchorLine = buf.CursorLine; boxAnchorVcol = Vcol(buf.Lines[buf.CursorLine], buf.CursorCol); }
                 ApplyColumnBoxSelectionVisual(boxAnchorLine, boxAnchorVcol, docLine, VisualColumnAtX(buf, pt.X));
                 isMouseSelecting = true;
@@ -2319,6 +2436,22 @@ namespace codeLess.AvaloniaApp
                 return;
             }
 
+            // Clicking inside an existing selection with single left-click and no modifiers starts a drag-to-move/copy (or collapses on release)
+            if (props.IsLeftButtonPressed && e.ClickCount == 1 && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) &&
+                !e.KeyModifiers.HasFlag(KeyModifiers.Alt) && !MacKeymap.IsPrimary(e.KeyModifiers) &&
+                ExtraCursors.Count == 0 && IsStrictlyInsideSelection(buf, docLine, docCol))
+            {
+                isPendingSelectionDrag = true;
+                isDraggingSelectionText = false;
+                selectionDragStartPt = pt;
+                dragDropLine = docLine;
+                dragDropCol = docCol;
+                e.Pointer.Capture(this);
+                e.Handled = true;
+                return;
+            }
+
+            PushCursorUndoState(buf);
             ExtraCursors.Clear();
             boxAnchorLine = -1;
             buf.LastTypingUndoTick = 0;
@@ -2332,17 +2465,28 @@ namespace codeLess.AvaloniaApp
                 buf.CursorLine = docLine;
                 buf.CursorCol = docCol;
                 ApplyHitAffinity(buf);
+                mouseSelectGranularity = 0;
                 isMouseSelecting = true;
                 e.Pointer.Capture(this);
             }
             else if (e.ClickCount == 2)
             {
                 SelectWordAt(docLine, docCol);
+                wordDragAnchorLine = docLine;
+                wordDragAnchorStart = buf.HasSelection() ? buf.SelectionStartCol : docCol;
+                wordDragAnchorEnd = buf.CursorCol;
+                mouseSelectGranularity = 2;
+                isMouseSelecting = true;
+                e.Pointer.Capture(this);
             }
             else if (e.ClickCount >= 3)
             {
-                // Triple-click selects the whole line including its line break (VS Code).
+                // Triple-click selects the whole line including its line break (VS Code), and dragging selects line-by-line.
                 SelectWholeLines(buf, docLine, docLine);
+                gutterAnchorLine = docLine;
+                mouseSelectGranularity = 3;
+                isMouseSelecting = true;
+                e.Pointer.Capture(this);
             }
             else
             {
@@ -2350,6 +2494,7 @@ namespace codeLess.AvaloniaApp
                 buf.CursorCol = docCol;
                 ApplyHitAffinity(buf);
                 buf.ClearSelection();
+                mouseSelectGranularity = 0;
                 isMouseSelecting = true;
                 e.Pointer.Capture(this);
             }
@@ -2387,6 +2532,21 @@ namespace codeLess.AvaloniaApp
                 bool hasDiag = docLine >= 0 && buf.Diagnostics != null && buf.Diagnostics.Any(d => d.LineNumber - 1 == docLine);
                 if (hadDiag || hasDiag || hunkActionHitBoxes.Count > 0)
                     InvalidateVisual();
+            }
+
+            if (isPendingSelectionDrag)
+            {
+                double dx = pt.X - selectionDragStartPt.X;
+                double dy = pt.Y - selectionDragStartPt.Y;
+                if (dx * dx + dy * dy >= 16.0)
+                    isDraggingSelectionText = true;
+                if (isDraggingSelectionText)
+                {
+                    dragDropLine = ScreenYToDocLine(Math.Max(0, Math.Min(Bounds.Height - 1, pt.Y)));
+                    dragDropCol = ScreenXToDocCol(dragDropLine, pt.X);
+                    InvalidateVisual();
+                }
+                return;
             }
 
             if (isGutterSelecting || isMouseSelecting)
@@ -2429,9 +2589,29 @@ namespace codeLess.AvaloniaApp
             if (buf == null) return;
             lastDragMods = mods;
             int docLine = ScreenYToDocLine(Math.Max(0, Math.Min(Bounds.Height - 1, pt.Y)));
-            if (isGutterSelecting)
+            if (isGutterSelecting || mouseSelectGranularity == 3)
             {
                 SelectWholeLines(buf, gutterAnchorLine, docLine);
+            }
+            else if (mouseSelectGranularity == 2)
+            {
+                int docCol = ScreenXToDocCol(docLine, pt.X);
+                EditorWordNavigation.WordAt(buf.Lines[docLine] ?? "", docCol, out int wStart, out int wEnd);
+                int anchorL = Math.Max(0, Math.Min(buf.Lines.Count - 1, wordDragAnchorLine));
+                if (docLine > anchorL || (docLine == anchorL && wEnd >= wordDragAnchorEnd))
+                {
+                    buf.SelectionStartLine = anchorL;
+                    buf.SelectionStartCol = Math.Min(buf.Lines[anchorL].Length, wordDragAnchorStart);
+                    buf.CursorLine = docLine;
+                    buf.CursorCol = wEnd;
+                }
+                else
+                {
+                    buf.SelectionStartLine = anchorL;
+                    buf.SelectionStartCol = Math.Min(buf.Lines[anchorL].Length, wordDragAnchorEnd);
+                    buf.CursorLine = docLine;
+                    buf.CursorCol = wStart;
+                }
             }
             else
             {
@@ -2496,13 +2676,88 @@ namespace codeLess.AvaloniaApp
         {
             base.OnPointerReleased(e);
             if (EndScrollbarDrag()) e.Pointer.Capture(null);
+            if (isPendingSelectionDrag)
+            {
+                isPendingSelectionDrag = false;
+                var buf = Buffer;
+                e.Pointer.Capture(null);
+                if (isDraggingSelectionText)
+                {
+                    isDraggingSelectionText = false;
+                    var rpt = e.GetPosition(this);
+                    int dropLine = ScreenYToDocLine(Math.Max(0, Math.Min(Bounds.Height - 1, rpt.Y)));
+                    int dropCol = ScreenXToDocCol(dropLine, rpt.X);
+                    CompleteSelectionDragDrop(buf, dropLine, dropCol, copy: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+                }
+                else if (buf != null)
+                {
+                    PushCursorUndoState(buf);
+                    buf.CursorLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, dragDropLine));
+                    buf.CursorCol = Math.Max(0, Math.Min(buf.Lines[buf.CursorLine].Length, dragDropCol));
+                    buf.ClearSelection();
+                    owner.NotifyCaretMoved();
+                    InvalidateVisual();
+                }
+                dragDropLine = -1;
+                dragDropCol = -1;
+                return;
+            }
             isMouseSelecting = false;
+            mouseSelectGranularity = 0;
             isMinimapDragging = false;
             isGutterSelecting = false;
             dragScrollTimer?.Stop();
             var pt = e.GetPosition(this);
             lastHoverPt = pt;
             UpdateLinkHover(pt, e.KeyModifiers);
+        }
+
+        private void CompleteSelectionDragDrop(EditorTabBuffer buf, int targetLine, int targetCol, bool copy)
+        {
+            if (buf == null || !buf.HasSelection() || buf.IsReadOnly || buf.IsReadOnlyDiffPreview) return;
+            if (IsStrictlyInsideSelection(buf, targetLine, targetCol)) return;
+            buf.GetNormalizedSelection(out int sLine, out int sCol, out int eLine, out int eCol);
+            if (!copy && targetLine == sLine && targetCol == sCol) return;
+            if (!copy && targetLine == eLine && targetCol == eCol) return;
+
+            string movedText = buf.GetSelectedText();
+            if (string.IsNullOrEmpty(movedText)) return;
+
+            long srcStartOff = OffsetOf(buf, sLine, sCol);
+            long srcEndOff = OffsetOf(buf, eLine, eCol);
+            long dstOff = OffsetOf(buf, targetLine, targetCol);
+
+            buf.PushUndoSnapshot();
+            if (!copy)
+            {
+                buf.DeleteSelection();
+                if (dstOff > srcEndOff)
+                    dstOff -= (srcEndOff - srcStartOff);
+            }
+            else
+            {
+                buf.ClearSelection();
+            }
+
+            PositionOf(buf, dstOff, out int insLine, out int insCol);
+            buf.CursorLine = insLine;
+            buf.CursorCol = insCol;
+            buf.InsertTextAtCursor(movedText);
+            PositionOf(buf, dstOff, out int selStartLine, out int selStartCol);
+            buf.SelectionStartLine = selStartLine;
+            buf.SelectionStartCol = selStartCol;
+            FinalizeBufferEdit(buf);
+        }
+
+        private async System.Threading.Tasks.Task PasteFromClipboardAtCaretAsync()
+        {
+            var top = TopLevel.GetTopLevel(this);
+            if (top?.Clipboard != null)
+            {
+                string clip = await top.Clipboard.GetTextAsync();
+                if (!string.IsNullOrEmpty(clip))
+                    PasteText(clip);
+            }
         }
 
         protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
@@ -2626,10 +2881,7 @@ namespace codeLess.AvaloniaApp
             if (buf == null || line < 0 || line >= buf.Lines.Count) return;
             string text = buf.Lines[line];
             if (text.Length == 0) return;
-            int idx = Math.Max(0, Math.Min(text.Length - 1, col));
-            int start = idx, end = idx;
-            while (start > 0 && IsWordChar(text[start - 1])) start--;
-            while (end < text.Length && IsWordChar(text[end])) end++;
+            EditorWordNavigation.WordAt(text, col, out int start, out int end);
             buf.SelectionStartLine = line;
             buf.SelectionStartCol = start;
             buf.CursorLine = line;
@@ -2642,6 +2894,7 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            PushCursorUndoState(buf);
             int refLine = buf.CursorLine;
             int refCol = buf.CursorCol;
             if (ExtraCursors.Count > 0)
@@ -2680,11 +2933,13 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            PushCursorUndoState(buf);
             if (!buf.HasSelection())
             {
                 SelectWordAt(buf.CursorLine, buf.CursorCol);
-                ctrlDWholeWordNeedle = buf.HasSelection() ? buf.GetSelectedText() : null;
+                string sel = buf.HasSelection() ? buf.GetSelectedText() : null;
                 owner.NotifyCaretMoved();
+                ctrlDWholeWordNeedle = sel;
                 InvalidateVisual();
                 return;
             }
@@ -2739,9 +2994,9 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            PushCursorUndoState(buf);
             ExtraCursors.Clear();
-            int startLine = buf.HasSelection() ? Math.Min(buf.SelectionStartLine, buf.CursorLine) : 0;
-            int endLine = buf.HasSelection() ? Math.Max(buf.SelectionStartLine, buf.CursorLine) : buf.Lines.Count - 1;
+            SelectedLineRange(buf, out int startLine, out int endLine);
             buf.ClearSelection();
             buf.CursorLine = startLine;
             buf.CursorCol = buf.Lines[startLine].Length;
@@ -2761,6 +3016,29 @@ namespace codeLess.AvaloniaApp
 
         public void UndoLastCursor()
         {
+            var buf = Buffer;
+            if (buf != null && cursorUndoStack.Count > 0)
+            {
+                var prev = cursorUndoStack.Pop();
+                WritePrimary(buf, prev.Primary);
+                ExtraCursors.Clear();
+                foreach (var ec in prev.Extras)
+                {
+                    if (ec.Line >= 0 && ec.Line < buf.Lines.Count)
+                    {
+                        ExtraCursors.Add(new ExtraCursorCaret
+                        {
+                            Line = ec.Line,
+                            Col = Math.Min(buf.Lines[ec.Line].Length, ec.Col),
+                            AnchorLine = ec.AnchorLine >= 0 && ec.AnchorLine < buf.Lines.Count ? ec.AnchorLine : -1,
+                            AnchorCol = ec.AnchorLine >= 0 && ec.AnchorLine < buf.Lines.Count ? Math.Min(buf.Lines[ec.AnchorLine].Length, ec.AnchorCol) : -1
+                        });
+                    }
+                }
+                owner.NotifyCaretMoved();
+                InvalidateVisual();
+                return;
+            }
             if (ExtraCursors.Count > 0)
             {
                 ExtraCursors.RemoveAt(ExtraCursors.Count - 1);
@@ -2839,22 +3117,148 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
-            if (!buf.HasSelection())
+            var before = ReadPrimary(buf);
+            expandSelectionHistory.Push(before);
+            insideExpandShrink = true;
+            try
             {
-                SelectWordAt(buf.CursorLine, buf.CursorCol);
+                if (!buf.HasSelection())
+                {
+                    SelectWordAt(buf.CursorLine, buf.CursorCol);
+                    if (!buf.HasSelection())
+                        ExpandSelectionStep(buf);
+                }
+                else
+                {
+                    ExpandSelectionStep(buf);
+                }
+                owner.NotifyCaretMoved();
+                InvalidateVisual();
             }
-            else if (buf.SelectionStartLine == buf.CursorLine &&
-                     (buf.SelectionStartCol > 0 || buf.CursorCol < buf.Lines[buf.CursorLine].Length))
+            finally
             {
-                buf.SelectionStartCol = 0;
-                buf.CursorCol = buf.Lines[buf.CursorLine].Length;
+                insideExpandShrink = false;
             }
-            else
+        }
+
+        private void ExpandSelectionStep(EditorTabBuffer buf)
+        {
+            buf.GetNormalizedSelection(out int sl, out int sc, out int el, out int ec);
+            if (sl == el)
             {
-                buf.SelectAll();
+                string line = buf.Lines[sl] ?? "";
+                // 1. Inside enclosing quotes / brackets on this line, then including quotes / brackets
+                if (TryFindEnclosingDelimiterOnLine(line, sc, ec, out int inStart, out int inEnd, out int outStart, out int outEnd))
+                {
+                    if (sc > inStart || ec < inEnd)
+                    {
+                        buf.SelectionStartLine = sl; buf.SelectionStartCol = inStart;
+                        buf.CursorLine = sl; buf.CursorCol = inEnd;
+                        return;
+                    }
+                    if (sc > outStart || ec < outEnd)
+                    {
+                        buf.SelectionStartLine = sl; buf.SelectionStartCol = outStart;
+                        buf.CursorLine = sl; buf.CursorCol = outEnd;
+                        return;
+                    }
+                }
+                // 2. Non-whitespace line content
+                int firstNonWs = EditorIndentation.LeadingWhitespaceLength(line);
+                if (firstNonWs < line.Length && (sc > firstNonWs || ec < line.Length))
+                {
+                    buf.SelectionStartLine = sl; buf.SelectionStartCol = firstNonWs;
+                    buf.CursorLine = sl; buf.CursorCol = line.Length;
+                    return;
+                }
+                // 3. Full line
+                if (sc > 0 || ec < line.Length)
+                {
+                    buf.SelectionStartLine = sl; buf.SelectionStartCol = 0;
+                    buf.CursorLine = sl; buf.CursorCol = line.Length;
+                    return;
+                }
             }
-            owner.NotifyCaretMoved();
-            InvalidateVisual();
+            // 4. Enclosing foldable block range
+            var model = FoldModel(buf, 0);
+            if (model != null && model.Ranges != null)
+            {
+                int bestStart = -1, bestEnd = int.MaxValue;
+                foreach (var r in model.Ranges)
+                {
+                    int rEndCol = (buf.Lines[r.End] ?? "").Length;
+                    bool encloses = (r.Start < sl || (r.Start == sl && sc >= 0)) && (r.End > el || (r.End == el && ec <= rEndCol));
+                    bool strictlyLarger = r.Start < sl || r.End > el || (r.Start == sl && sc > 0) || (r.End == el && ec < rEndCol);
+                    if (encloses && strictlyLarger && (r.End - r.Start) < (bestEnd - Math.Max(0, bestStart)))
+                    {
+                        bestStart = r.Start;
+                        bestEnd = r.End;
+                    }
+                }
+                if (bestStart >= 0)
+                {
+                    buf.SelectionStartLine = bestStart; buf.SelectionStartCol = 0;
+                    buf.CursorLine = bestEnd; buf.CursorCol = (buf.Lines[bestEnd] ?? "").Length;
+                    return;
+                }
+            }
+            // 5. Full document
+            buf.SelectAll();
+        }
+
+        private static bool TryFindEnclosingDelimiterOnLine(string line, int sc, int ec, out int inStart, out int inEnd, out int outStart, out int outEnd)
+        {
+            inStart = inEnd = outStart = outEnd = -1;
+            if (string.IsNullOrEmpty(line)) return false;
+            int bestSpan = int.MaxValue;
+            // Check pairs (), [], {}, "", '', ``
+            string openers = "([{\"'`";
+            string closers = ")]}\"'`";
+            for (int p = 0; p < openers.Length; p++)
+            {
+                char open = openers[p], close = closers[p];
+                if (open == close)
+                {
+                    int l = sc - 1;
+                    while (l >= 0 && line[l] != open) l--;
+                    int r = ec;
+                    while (r < line.Length && line[r] != close) r++;
+                    if (l >= 0 && r < line.Length && (r - l) < bestSpan)
+                    {
+                        bestSpan = r - l;
+                        outStart = l; outEnd = r + 1;
+                        inStart = l + 1; inEnd = r;
+                    }
+                }
+                else
+                {
+                    int depth = 0, l = sc - 1;
+                    while (l >= 0)
+                    {
+                        if (line[l] == close) depth++;
+                        else if (line[l] == open) { if (depth == 0) break; depth--; }
+                        l--;
+                    }
+                    if (l >= 0)
+                    {
+                        depth = 0;
+                        int r = ec;
+                        while (r < line.Length)
+                        {
+                            if (line[r] == open) depth++;
+                            else if (line[r] == close) { if (depth == 0) break; depth--; }
+                            r++;
+                        }
+                        if (r < line.Length && (r - l) < bestSpan)
+                        {
+                            bestSpan = r - l;
+                            outStart = l; outEnd = r + 1;
+                            inStart = l + 1; inEnd = r;
+                        }
+                    }
+                }
+            }
+            return outStart >= 0;
         }
 
         public void ShrinkSelection()
@@ -2862,22 +3266,35 @@ namespace codeLess.AvaloniaApp
             var buf = Buffer;
             if (buf == null) return;
             if (!buf.HasSelection()) return;
-            if (buf.SelectionStartLine != buf.CursorLine)
+            insideExpandShrink = true;
+            try
             {
-                buf.SelectionStartLine = buf.CursorLine;
-                buf.SelectionStartCol = 0;
-                buf.CursorCol = buf.Lines[buf.CursorLine].Length;
+                if (expandSelectionHistory.Count > 0)
+                {
+                    var prev = expandSelectionHistory.Pop();
+                    WritePrimary(buf, prev);
+                }
+                else if (buf.SelectionStartLine != buf.CursorLine)
+                {
+                    buf.SelectionStartLine = buf.CursorLine;
+                    buf.SelectionStartCol = 0;
+                    buf.CursorCol = buf.Lines[buf.CursorLine].Length;
+                }
+                else if (buf.SelectionStartCol == 0 && buf.CursorCol == buf.Lines[buf.CursorLine].Length)
+                {
+                    SelectWordAt(buf.CursorLine, Math.Min(buf.Lines[buf.CursorLine].Length, EditorIndentation.LeadingWhitespaceLength(buf.Lines[buf.CursorLine])));
+                }
+                else
+                {
+                    buf.ClearSelection();
+                }
+                owner.NotifyCaretMoved();
+                InvalidateVisual();
             }
-            else if (buf.SelectionStartCol == 0 && buf.CursorCol == buf.Lines[buf.CursorLine].Length)
+            finally
             {
-                SelectWordAt(buf.CursorLine, Math.Min(buf.Lines[buf.CursorLine].Length, EditorIndentation.LeadingWhitespaceLength(buf.Lines[buf.CursorLine])));
+                insideExpandShrink = false;
             }
-            else
-            {
-                buf.ClearSelection();
-            }
-            owner.NotifyCaretMoved();
-            InvalidateVisual();
         }
 
         private void ClampExtraCursors(EditorTabBuffer buf)
@@ -2945,18 +3362,55 @@ namespace codeLess.AvaloniaApp
             if (left)
             {
                 if (c == 0) { b.PerformBackspace(); return; }
-                int start = c;
-                while (start > 0 && !IsWordChar(ln[start - 1])) start--;
-                while (start > 0 && IsWordChar(ln[start - 1])) start--;
+                int start = EditorWordNavigation.WordLeft(ln, c);
                 b.Lines[b.CursorLine] = ln.Remove(start, c - start);
                 b.CursorCol = start;
             }
             else
             {
                 if (c >= ln.Length) { b.PerformDelete(); return; }
-                int end = c;
-                while (end < ln.Length && IsWordChar(ln[end])) end++;
-                while (end < ln.Length && !IsWordChar(ln[end])) end++;
+                int end = EditorWordNavigation.WordRight(ln, c);
+                b.Lines[b.CursorLine] = ln.Remove(c, Math.Max(1, end - c));
+            }
+            b.SyncContentFromLines(false);
+        }
+
+        public void DeleteSubwordLeft()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => DeleteSubwordCore(b, left: true));
+            FinalizeBufferEdit(buf);
+        }
+
+        public void DeleteSubwordRight()
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) => DeleteSubwordCore(b, left: false));
+            FinalizeBufferEdit(buf);
+        }
+
+        private static void DeleteSubwordCore(EditorTabBuffer b, bool left)
+        {
+            if (b.HasSelection()) { b.DeleteSelection(); return; }
+            string ln = b.Lines[b.CursorLine];
+            int c = Math.Min(ln.Length, b.CursorCol);
+            if (left)
+            {
+                if (c == 0) { b.PerformBackspace(); return; }
+                int start = EditorWordNavigation.SubwordLeft(ln, c);
+                b.Lines[b.CursorLine] = ln.Remove(start, c - start);
+                b.CursorCol = start;
+            }
+            else
+            {
+                if (c >= ln.Length) { b.PerformDelete(); return; }
+                int end = EditorWordNavigation.SubwordRight(ln, c);
                 b.Lines[b.CursorLine] = ln.Remove(c, Math.Max(1, end - c));
             }
             b.SyncContentFromLines(false);
@@ -3087,6 +3541,11 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            if (!buf.HasSelection() && ExtraCursors.Count == 0)
+            {
+                EditorWordNavigation.WordAt(buf.Lines[buf.CursorLine] ?? "", buf.CursorCol, out int ws, out int we);
+                if (we > ws) { buf.SelectionStartLine = buf.CursorLine; buf.SelectionStartCol = ws; buf.CursorCol = we; }
+            }
             buf.PushUndoSnapshot();
             ClampExtraCursors(buf);
             ApplyEditToAllCarets(buf, (b, k) => {
@@ -3102,6 +3561,11 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            if (!buf.HasSelection() && ExtraCursors.Count == 0)
+            {
+                EditorWordNavigation.WordAt(buf.Lines[buf.CursorLine] ?? "", buf.CursorCol, out int ws, out int we);
+                if (we > ws) { buf.SelectionStartLine = buf.CursorLine; buf.SelectionStartCol = ws; buf.CursorCol = we; }
+            }
             buf.PushUndoSnapshot();
             ClampExtraCursors(buf);
             ApplyEditToAllCarets(buf, (b, k) => {
@@ -3111,6 +3575,78 @@ namespace codeLess.AvaloniaApp
                 b.InsertTextAtCursor(text.ToLowerInvariant());
             });
             FinalizeBufferEdit(buf);
+        }
+
+        public void TransposeLetters()
+        {
+            var buf = Buffer;
+            if (buf == null || buf.IsReadOnly || buf.IsReadOnlyDiffPreview) return;
+            buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            ApplyEditToAllCarets(buf, (b, k) =>
+            {
+                if (b.HasSelection()) return;
+                string ln = b.Lines[b.CursorLine] ?? "";
+                string updated = EditorWordNavigation.TransposeOnLine(ln, b.CursorCol, out int nextCol);
+                b.Lines[b.CursorLine] = updated;
+                b.CursorCol = nextCol;
+            });
+            FinalizeBufferEdit(buf);
+        }
+
+        public void SortLinesAscending() => SortLines(descending: false);
+        public void SortLinesDescending() => SortLines(descending: true);
+
+        public void SortLines(bool descending)
+        {
+            var buf = Buffer;
+            if (buf == null || buf.Lines == null || buf.Lines.Count < 2 || buf.IsReadOnly || buf.IsReadOnlyDiffPreview) return;
+            int first, last;
+            if (buf.HasSelection())
+                SelectedLineRange(buf, out first, out last);
+            else
+            {
+                first = 0;
+                last = buf.Lines.Count - 1;
+                if (last > first && string.IsNullOrEmpty(buf.Lines[last]))
+                    last--;
+            }
+            if (last <= first) return;
+            buf.PushUndoSnapshot();
+            if (!EditorWordNavigation.SortLinesInPlace(buf.Lines, first, last, descending))
+            {
+                buf.PopUndoSnapshotAndRestore();
+                return;
+            }
+            FinalizeBufferEdit(buf);
+        }
+
+        public void FoldLevel(int level)
+        {
+            var buf = Buffer;
+            if (buf == null || level < 1 || level > 7) return;
+            var model = FoldModel(buf, 0);
+            if (model == null || model.Ranges == null) return;
+            foreach (var r in model.Ranges)
+            {
+                int depth = 1;
+                foreach (var outer in model.Ranges)
+                {
+                    if (outer.Start < r.Start && outer.End >= r.End)
+                        depth++;
+                }
+                if (depth == level)
+                    buf.FoldedBlockRanges[r.Start] = r.End;
+            }
+            int h = EditorFoldState.HiddenBy(buf, buf.CursorLine);
+            if (h >= 0)
+            {
+                buf.CursorLine = h;
+                buf.CursorCol = Math.Min(buf.CursorCol, buf.Lines[h].Length);
+                buf.ClearSelection();
+            }
+            NormalizeScroll(buf);
+            InvalidateVisual();
         }
 
         public void TrimTrailingWhitespace()
@@ -3644,11 +4180,36 @@ namespace codeLess.AvaloniaApp
                     case Key.H: PerformBackspaceAcrossCursors(); break;
                     case Key.D: buf.PushUndoSnapshot(); buf.PerformDelete(); FinalizeBufferEdit(buf); break;
                     case Key.K: DeleteToLineBoundary(buf, toEnd: true); break;
+                    case Key.J: if (!shift) JoinLines(); else handledEmacs = false; break;
+                    case Key.T: if (!shift) TransposeLetters(); else handledEmacs = false; break;
                     default: handledEmacs = false; break;
                 }
                 if (handledEmacs)
                 {
                     EnsureCursorVisible();
+                    InvalidateVisual();
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            // Active multi-tabstop snippet navigation (Tab / Shift+Tab / Escape)
+            if (SnippetEngine.HasActiveSession(buf))
+            {
+                if (e.Key == Key.Tab && !ctrl && !meta && !alt)
+                {
+                    if (SnippetEngine.TryJumpStop(buf, backwards: shift))
+                    {
+                        EnsureCursorVisible();
+                        owner.NotifyCaretMoved();
+                        InvalidateVisual();
+                        e.Handled = true;
+                        return;
+                    }
+                }
+                else if (e.Key == Key.Escape && !ctrl && !meta && !alt && !shift)
+                {
+                    SnippetEngine.EndSession(buf);
                     InvalidateVisual();
                     e.Handled = true;
                     return;
@@ -3754,6 +4315,13 @@ namespace codeLess.AvaloniaApp
                     e.Handled = true;
                     return;
                 }
+                if (ctrl && alt && !meta && horizontal)
+                {
+                    // Ctrl+Option+Left/Right -> subword (camelCase / snake_case) move (+Shift selects)
+                    MoveCaretSubword(forward ? 1 : -1, shift);
+                    e.Handled = true;
+                    return;
+                }
                 if (ctrl && meta && shift && !alt && horizontal)
                 {
                     // Ctrl+Shift+Cmd+Left/Right -> shrink / expand selection on macOS
@@ -3815,6 +4383,18 @@ namespace codeLess.AvaloniaApp
             if (ctrlOrCmd && alt && !shift && e.Key == Key.Down)
             {
                 AddCursorVertical(1);
+                e.Handled = true;
+                return;
+            }
+            if (ctrl && alt && !meta && !shift && (e.Key == Key.Left || e.Key == Key.Right))
+            {
+                MoveCaretSubword(e.Key == Key.Right ? 1 : -1, false);
+                e.Handled = true;
+                return;
+            }
+            if (ctrl && alt && !meta && !shift && (e.Key == Key.Back || e.Key == Key.Delete))
+            {
+                if (e.Key == Key.Back) DeleteSubwordLeft(); else DeleteSubwordRight();
                 e.Handled = true;
                 return;
             }
@@ -4079,7 +4659,7 @@ namespace codeLess.AvaloniaApp
                     }
                     else if (!ctrlOrCmd)
                     {
-                        MoveCaretVertical(-Math.Max(5, (int)(Bounds.Height / LineHeight) - 2), shift);
+                        MoveCaretPage(-1, shift);
                         e.Handled = true;
                     }
                     break;
@@ -4091,7 +4671,7 @@ namespace codeLess.AvaloniaApp
                     }
                     else if (!ctrlOrCmd)
                     {
-                        MoveCaretVertical(Math.Max(5, (int)(Bounds.Height / LineHeight) - 2), shift);
+                        MoveCaretPage(1, shift);
                         e.Handled = true;
                     }
                     break;
@@ -4142,10 +4722,7 @@ namespace codeLess.AvaloniaApp
                 {
                     if (wordJump)
                     {
-                        int c = buf.CursorCol - 1;
-                        while (c > 0 && !IsWordChar(line[c - 1])) c--;
-                        while (c > 0 && IsWordChar(line[c - 1])) c--;
-                        buf.CursorCol = c;
+                        buf.CursorCol = EditorWordNavigation.WordLeft(line, buf.CursorCol);
                     }
                     else
                     {
@@ -4165,10 +4742,7 @@ namespace codeLess.AvaloniaApp
                 {
                     if (wordJump)
                     {
-                        int c = buf.CursorCol + 1;
-                        while (c < line.Length && IsWordChar(line[c])) c++;
-                        while (c < line.Length && !IsWordChar(line[c])) c++;
-                        buf.CursorCol = c;
+                        buf.CursorCol = EditorWordNavigation.WordRight(line, buf.CursorCol);
                     }
                     else
                     {
@@ -4246,6 +4820,50 @@ namespace codeLess.AvaloniaApp
             EnsureCursorVisible();
             owner.NotifyCaretMoved();
             InvalidateVisual();
+        }
+
+        public void MoveCaretSubword(int dir, bool shift) => ApplyMoveToAllCarets(() => MoveCaretSubwordCore(dir, shift));
+
+        private void MoveCaretSubwordCore(int dir, bool shift)
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            if (!movingExtraCaret) affinityLine = -1;
+            SetSelectionAnchorIfNeeded(shift);
+            string line = buf.Lines[buf.CursorLine] ?? "";
+            if (dir < 0)
+            {
+                if (buf.CursorCol > 0)
+                    buf.CursorCol = EditorWordNavigation.SubwordLeft(line, buf.CursorCol);
+                else if (buf.CursorLine > 0)
+                {
+                    buf.CursorLine--;
+                    buf.CursorCol = buf.Lines[buf.CursorLine].Length;
+                }
+            }
+            else
+            {
+                if (buf.CursorCol < line.Length)
+                    buf.CursorCol = EditorWordNavigation.SubwordRight(line, buf.CursorCol);
+                else if (buf.CursorLine < buf.Lines.Count - 1)
+                {
+                    buf.CursorLine++;
+                    buf.CursorCol = 0;
+                }
+            }
+            if (!movingExtraCaret) EnsureCursorVisible();
+            owner.NotifyCaretMoved();
+            InvalidateVisual();
+        }
+
+        public void MoveCaretPage(int direction, bool shift)
+        {
+            var buf = Buffer;
+            if (buf == null) return;
+            int visRows = Bounds.Height > 0 ? Math.Max(5, (int)(Bounds.Height / LineHeight) - 2) : 25;
+            int deltaRows = (direction < 0 ? -1 : 1) * visRows;
+            ScrollByRows(buf, deltaRows);
+            MoveCaretVertical(deltaRows, shift);
         }
 
         private void MoveCaretVertical(int deltaLines, bool shift) => ApplyMoveToAllCarets(() => MoveCaretVerticalCore(deltaLines, shift));
@@ -4467,6 +5085,7 @@ namespace codeLess.AvaloniaApp
 
             hunkActionHitBoxes.Clear();
             renderFrameNo++;
+            LastFrameRenderedWhitespaceCount = 0;
             deferredOverlays.Clear();
             annotationHitBoxes.Clear();
             if (buf.ScrollTopLine != lastNotifiedScrollTop)
@@ -4661,6 +5280,7 @@ namespace codeLess.AvaloniaApp
                     // shaped runs are cached per row (AvaloniaEditorCanvas.RenderCache.cs): scrolling shapes only new rows
                     var shaped = GetRowTextRuns(docLine, vr.Row, false, lineText, renderSliceStart, renderVcol, tokens, tabStop);
                     curX = DrawCachedRow(context, shaped, docLine, codeBaseX, y, codeAreaRight);
+                    DrawRenderWhitespaceOnRow(context, buf, vr, lineText, renderSliceStart, renderSliceEnd, y, codeBaseX, codeAreaRight);
                 }
 
                 // Folded block placeholder pill (after the header's last row)
@@ -4864,6 +5484,49 @@ namespace codeLess.AvaloniaApp
 
             hunkActionHitBoxes.Add((acceptRect, docLine, true));
             hunkActionHitBoxes.Add((rejectRect, docLine, false));
+        }
+
+        public int LastFrameRenderedWhitespaceCount { get; private set; }
+
+        private void DrawRenderWhitespaceOnRow(DrawingContext context, EditorTabBuffer buf, EditorVisualRow vr, string lineText, int sliceStart, int sliceEnd, double y, double codeBaseX, double codeAreaRight)
+        {
+            string mode = EditorNicetyOptions.RenderWhitespace ?? "selection";
+            if (string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase)) return;
+            bool all = string.Equals(mode, "all", StringComparison.OrdinalIgnoreCase);
+            bool selOnly = string.Equals(mode, "selection", StringComparison.OrdinalIgnoreCase);
+            if (selOnly && !buf.HasSelection() && ExtraCursors.All(c => !c.HasSelection)) return;
+
+            var wsBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(Theme.TextSecondary, 110));
+            for (int c = sliceStart; c < sliceEnd && c < lineText.Length; c++)
+            {
+                char ch = lineText[c];
+                if (ch != ' ' && ch != '\t') continue;
+                if (selOnly && !IsStrictlyInsideSelection(buf, vr.DocLine, c) && !IsInsideExtraCursorSelection(vr.DocLine, c))
+                    continue;
+                double cx = RowColX(buf, vr, c, codeBaseX);
+                if (cx < GutterWidth || cx > codeAreaRight) continue;
+                LastFrameRenderedWhitespaceCount++;
+                double dotX = Math.Round(cx + CharWidth * 0.5) - 1;
+                double dotY = Math.Round(y + LineHeight * 0.5) - 1;
+                context.FillRectangle(wsBrush, new Rect(dotX, dotY, ch == '\t' ? Math.Max(3, CharWidth * 0.6) : 2, 2));
+            }
+        }
+
+        private bool IsInsideExtraCursorSelection(int line, int col)
+        {
+            foreach (var ec in ExtraCursors)
+            {
+                if (!ec.HasSelection) continue;
+                bool fwd = ec.AnchorLine < ec.Line || (ec.AnchorLine == ec.Line && ec.AnchorCol <= ec.Col);
+                int sl = fwd ? ec.AnchorLine : ec.Line, sc = fwd ? ec.AnchorCol : ec.Col;
+                int el = fwd ? ec.Line : ec.AnchorLine, ecol = fwd ? ec.Col : ec.AnchorCol;
+                if (line < sl || line > el) continue;
+                if (sl == el) { if (col >= sc && col < ecol) return true; }
+                else if (line == sl) { if (col >= sc) return true; }
+                else if (line == el) { if (col < ecol) return true; }
+                else return true;
+            }
+            return false;
         }
 
         private void DrawRowSelectionHighlight(DrawingContext context, EditorTabBuffer buf, EditorVisualRow vr, double y, double codeBaseX, IBrush selBrush)

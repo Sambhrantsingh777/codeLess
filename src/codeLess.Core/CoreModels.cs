@@ -1175,6 +1175,7 @@ namespace codeLess.Studio
         public Stack<BufferSnapshot> RedoStack = new Stack<BufferSnapshot>();
         public long LastTypingUndoTick = 0;
         public int LastTypingUndoLine = -1;
+        public int LastTypingUndoCol = -1;
         public List<EditorDiffHunk> DiffHunks = new List<EditorDiffHunk>();
         public List<DiagnosticItem> Diagnostics = new List<DiagnosticItem>();
         public List<AstSymbolItem> Symbols = new List<AstSymbolItem>();
@@ -1478,9 +1479,27 @@ namespace codeLess.Studio
         public void PushUndoSnapshot(bool coalesceTyping = false)
         {
             long now = Environment.TickCount;
+            bool canCoalesce = false;
             if (coalesceTyping && UndoStack.Count > 0 && LastTypingUndoLine == CursorLine && Math.Abs(unchecked(now - LastTypingUndoTick)) < 1200)
             {
+                bool sameSpot = LastTypingUndoCol < 0 || (CursorCol >= LastTypingUndoCol && CursorCol - LastTypingUndoCol <= 2);
+                bool afterWordBoundary = false;
+                if (Lines != null && CursorLine >= 0 && CursorLine < Lines.Count)
+                {
+                    string curLn = Lines[CursorLine] ?? "";
+                    if (CursorCol >= 2 && CursorCol <= curLn.Length &&
+                        (curLn[CursorCol - 1] == ' ' || curLn[CursorCol - 1] == '\t') &&
+                        curLn[CursorCol - 2] != ' ' && curLn[CursorCol - 2] != '\t')
+                    {
+                        afterWordBoundary = true;
+                    }
+                }
+                canCoalesce = sameSpot && !afterWordBoundary;
+            }
+            if (canCoalesce)
+            {
                 LastTypingUndoTick = now;
+                LastTypingUndoCol = CursorCol;
                 RedoStack.Clear();
                 return;
             }
@@ -1495,11 +1514,13 @@ namespace codeLess.Studio
             {
                 LastTypingUndoTick = now;
                 LastTypingUndoLine = CursorLine;
+                LastTypingUndoCol = CursorCol;
             }
             else
             {
                 LastTypingUndoTick = 0;
                 LastTypingUndoLine = -1;
+                LastTypingUndoCol = -1;
             }
         }
 

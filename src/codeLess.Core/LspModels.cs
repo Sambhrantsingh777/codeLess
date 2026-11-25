@@ -469,6 +469,22 @@ namespace codeLess.Studio
             return list;
         }
 
+        private static readonly Dictionary<string, int> recentAccepted = new Dictionary<string, int>(StringComparer.Ordinal);
+        private static int recentAcceptedCounter = 0;
+
+        public static void RecordAccepted(string label)
+        {
+            if (string.IsNullOrEmpty(label)) return;
+            recentAcceptedCounter++;
+            recentAccepted[label] = recentAcceptedCounter;
+        }
+
+        public static void ClearRecentAccepted()
+        {
+            recentAccepted.Clear();
+            recentAcceptedCounter = 0;
+        }
+
         /// <summary>
         /// VS Code-like client filtering: keeps items whose filter text fuzzy-matches <paramref name="prefix"/>
         /// (in-order subsequence, case-insensitive), ranks prefix / camel-hump matches first, then sortText.
@@ -482,7 +498,11 @@ namespace codeLess.Studio
             {
                 int score = FuzzyScore(it.EffectiveFilterText, prefix);
                 if (score < 0) continue;
-                it.Score = score + (it.Preselect && prefix.Length == 0 ? 50 : 0);
+                int recencyBonus = 0;
+                int rec;
+                if (prefix.Length > 0 && !string.IsNullOrEmpty(it.Label) && recentAccepted.TryGetValue(it.Label, out rec))
+                    recencyBonus = 120 + Math.Min(40, rec);
+                it.Score = score + (it.Preselect && prefix.Length == 0 ? 50 : 0) + recencyBonus;
                 result.Add(it);
             }
             result.Sort(delegate (LspCompletionItem a, LspCompletionItem b)
@@ -498,6 +518,29 @@ namespace codeLess.Studio
             });
             if (max > 0 && result.Count > max) result.RemoveRange(max, result.Count - max);
             return result;
+        }
+
+        /// <summary>Returns the character indices in <paramref name="candidate"/> matched by <paramref name="pattern"/>.</summary>
+        public static List<int> MatchedIndices(string candidate, string pattern)
+        {
+            List<int> indices = new List<int>();
+            if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(pattern)) return indices;
+            int ci = 0;
+            for (int pi = 0; pi < pattern.Length; pi++)
+            {
+                char pc = char.ToLowerInvariant(pattern[pi]);
+                while (ci < candidate.Length)
+                {
+                    if (char.ToLowerInvariant(candidate[ci]) == pc)
+                    {
+                        indices.Add(ci);
+                        ci++;
+                        break;
+                    }
+                    ci++;
+                }
+            }
+            return indices;
         }
 
         /// <summary>-1 = no match. Higher is better.</summary>

@@ -404,17 +404,23 @@ namespace codeLess.AvaloniaApp
             }
             NormalizeScroll(b);
             int cRow = CaretRowOf(b, b.CursorLine, b.CursorCol, true);
+            int margin = Math.Max(0, Math.Min(Math.Max(0, (visRows - 1) / 2), EditorNicetyOptions.CursorSurroundingLines));
             int dist = RowDistance(b, b.ScrollTopLine, b.ScrollTopWrapRow, b.CursorLine, cRow, visRows + 1);
             if (dist == 0 && b.ScrollTopFraction > 0) b.ScrollTopFraction = 0; // the caret row was partly scrolled out at the top
             if (dist < 0)
             {
                 b.ScrollTopLine = b.CursorLine;
                 b.ScrollTopWrapRow = cRow;
+                if (margin > 0) ScrollByRows(b, -margin);
             }
-            else if (dist >= visRows)
+            else if (margin > 0 && dist < margin)
+            {
+                ScrollByRows(b, -(margin - dist));
+            }
+            else if (dist >= Math.Max(1, visRows - margin))
             {
                 int line = b.CursorLine, row = cRow;
-                StepRows(b, ref line, ref row, -(visRows - 1), includeZones: true);
+                StepRows(b, ref line, ref row, -(Math.Max(1, visRows - margin) - 1), includeZones: true);
                 b.ScrollTopLine = line;
                 b.ScrollTopWrapRow = row;
             }

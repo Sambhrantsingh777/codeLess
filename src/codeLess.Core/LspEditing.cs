@@ -172,13 +172,23 @@ namespace codeLess.Studio
             }
             int caretInInsert = insert.Length, selLen = 0;
             string text = insert;
-            if (item.IsSnippet) text = LspText.ExpandSnippet(insert, out caretInInsert, out selLen);
+            List<int[]> snippetStops = null;
+            if (item.IsSnippet) text = LspText.ExpandSnippetWithStops(insert, out caretInInsert, out selLen, out snippetStops);
             if (text.IndexOf('\n') >= 0)
             {
                 int ind = 0;
                 while (ind < lineText.Length && (lineText[ind] == ' ' || lineText[ind] == '\t')) ind++;
                 if (ind > 0)
                 {
+                    if (snippetStops != null)
+                    {
+                        for (int si = 0; si < snippetStops.Count; si++)
+                        {
+                            int nlb = 0;
+                            for (int k = 0; k < Math.Min(snippetStops[si][0], text.Length); k++) if (text[k] == '\n') nlb++;
+                            snippetStops[si][0] += nlb * ind;
+                        }
+                    }
                     int nlBefore = 0;
                     for (int k = 0; k < Math.Min(caretInInsert, text.Length); k++) if (text[k] == '\n') nlBefore++;
                     caretInInsert += nlBefore * ind;
@@ -225,6 +235,12 @@ namespace codeLess.Studio
                 SetCaretFromOffset(buf, caretOffset + selLen);
             }
             else SetCaretFromOffset(buf, caretOffset);
+            if (snippetStops != null && snippetStops.Count > 1)
+                SnippetEngine.StartSessionFromBufferOffsets(buf, mainStart + shiftBefore, snippetStops);
+            else
+                SnippetEngine.EndSession(buf);
+            if (!string.IsNullOrEmpty(item.Label))
+                LspCompletionList.RecordAccepted(item.Label);
             return true;
         }
 
