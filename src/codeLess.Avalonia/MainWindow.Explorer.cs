@@ -356,6 +356,14 @@ namespace codeLess.AvaloniaApp
         private void QueueFsChange(string fullPath, bool structural)
         {
             if (string.IsNullOrEmpty(fullPath)) return;
+            if (!structural)
+            {
+                lock (internalSaveTimestamps)
+                {
+                    if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
+                        return;
+                }
+            }
             string sep = Path.DirectorySeparatorChar.ToString();
             int gitIdx = fullPath.IndexOf(sep + ".git" + sep, StringComparison.Ordinal);
             bool insideGitDir = gitIdx >= 0 || fullPath.EndsWith(sep + ".git", StringComparison.Ordinal);
