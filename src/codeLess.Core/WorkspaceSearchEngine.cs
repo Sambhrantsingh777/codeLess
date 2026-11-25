@@ -752,11 +752,52 @@ namespace codeLess.Studio
             {
                 Match m = rx.Match(line, col);
                 while (m.Success && m.Index < col) m = m.NextMatch();
-                if (m.Success && m.Index == col && m.Length == len) return m.Result(rep);
+                if (m.Success && m.Index == col && m.Length == len)
+                {
+                    string normRep = NormalizeNumberedCaptures(rep, m.Groups.Count);
+                    return m.Result(normRep);
+                }
             }
             catch (RegexMatchTimeoutException) { }
             catch (ArgumentException) { }
             return rep;
+        }
+
+        /// <summary>
+        /// VS Code replacePattern parity: when a 2-digit capture $nn exceeds the regex's group count but the 1-digit
+        /// capture $n exists (e.g. "$20" with 2 groups -> group $2 followed by literal '0'), disambiguates to "${n}d".
+        /// </summary>
+        private static string NormalizeNumberedCaptures(string rep, int groupCount)
+        {
+            if (string.IsNullOrEmpty(rep) || rep.IndexOf('$') < 0) return rep;
+            StringBuilder sb = new StringBuilder(rep.Length + 4);
+            for (int i = 0; i < rep.Length; i++)
+            {
+                char c = rep[i];
+                if (c == '$' && i + 1 < rep.Length)
+                {
+                    char next = rep[i + 1];
+                    if (next == '$')
+                    {
+                        sb.Append("$$");
+                        i++;
+                        continue;
+                    }
+                    if (next >= '1' && next <= '9' && i + 2 < rep.Length && rep[i + 2] >= '0' && rep[i + 2] <= '9')
+                    {
+                        int twoDigit = (next - '0') * 10 + (rep[i + 2] - '0');
+                        int oneDigit = next - '0';
+                        if (twoDigit >= groupCount && oneDigit < groupCount)
+                        {
+                            sb.Append("${").Append(next).Append('}').Append(rep[i + 2]);
+                            i += 2;
+                            continue;
+                        }
+                    }
+                }
+                sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         /// <summary>Counts the matches <see cref="ReplaceInText"/> would replace (same per-line semantics as the search).</summary>

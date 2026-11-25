@@ -1738,7 +1738,7 @@ namespace codeLess.AvaloniaApp
         }
         public bool IsImeComposing => !string.IsNullOrEmpty(imePreedit);
 
-        internal void SetImePreedit(string text)
+        public void SetImePreedit(string text)
         {
             imePreedit = string.IsNullOrEmpty(text) ? null : text;
             InvalidateVisual();
@@ -3008,8 +3008,15 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrEmpty(needle) || needle.Contains("\n")) return;
             bool whole = ctrlDWholeWordNeedle != null && needle == ctrlDWholeWordNeedle;
 
-            int searchStartLine = ExtraCursors.Count > 0 ? ExtraCursors[ExtraCursors.Count - 1].Line : buf.CursorLine;
-            int searchStartCol = ExtraCursors.Count > 0 ? ExtraCursors[ExtraCursors.Count - 1].Col : buf.CursorCol;
+            buf.GetNormalizedSelection(out int pStartLine, out int pStartCol, out int pEndLine, out int pEndCol);
+            int searchStartLine = pEndLine;
+            int searchStartCol = pEndCol;
+            if (ExtraCursors.Count > 0)
+            {
+                var last = ExtraCursors[ExtraCursors.Count - 1];
+                searchStartLine = last.HasSelection ? Math.Max(last.AnchorLine, last.Line) : last.Line;
+                searchStartCol = last.HasSelection ? Math.Max(last.AnchorCol, last.Col) : last.Col;
+            }
 
             for (int pass = 0; pass < 2; pass++)
             {
@@ -3024,8 +3031,13 @@ namespace codeLess.AvaloniaApp
                     {
                         int endCol = idx + needle.Length;
                         bool boundary = !whole || ((idx == 0 || !IsWordChar(line[idx - 1])) && (endCol >= line.Length || !IsWordChar(line[endCol])));
-                        bool isPrimary = (l == buf.CursorLine && endCol == buf.CursorCol);
-                        bool inExtra = ExtraCursors.Any(c => c.Line == l && c.Col == endCol);
+                        bool isPrimary = (l == pStartLine && l == pEndLine && idx == pStartCol && endCol == pEndCol);
+                        bool inExtra = ExtraCursors.Any(c =>
+                        {
+                            int cs = c.HasSelection ? Math.Min(c.AnchorCol, c.Col) : c.Col;
+                            int ce = c.HasSelection ? Math.Max(c.AnchorCol, c.Col) : c.Col;
+                            return c.Line == l && cs == idx && ce == endCol;
+                        });
                         if (boundary && isPrimary && pass == 1) return; // wrapped around: every occurrence is selected
                         if (boundary && !isPrimary && !inExtra)
                         {
@@ -3142,7 +3154,9 @@ namespace codeLess.AvaloniaApp
         public void SelectCurrentLine()
         {
             var buf = Buffer;
-            if (buf == null) return;
+            if (buf == null || buf.Lines.Count == 0) return;
+            PushCursorUndoState(buf);
+            ExtraCursors.Clear();
             if (!buf.HasSelection())
             {
                 buf.SelectionStartLine = buf.CursorLine;
@@ -3159,14 +3173,21 @@ namespace codeLess.AvaloniaApp
             }
             else
             {
-                if (buf.CursorLine + 1 < buf.Lines.Count)
+                buf.GetNormalizedSelection(out int sL, out int sC, out int eL, out int eC);
+                int lastTouched = (eL > sL && eC == 0) ? eL - 1 : eL;
+                bool alreadyFullLines = sC == 0 && ((eL > sL && eC == 0) || (eL == buf.Lines.Count - 1 && eC == buf.Lines[eL].Length));
+                int targetLastLine = alreadyFullLines ? Math.Min(buf.Lines.Count - 1, lastTouched + 1) : lastTouched;
+                buf.SelectionStartLine = sL;
+                buf.SelectionStartCol = 0;
+                if (targetLastLine + 1 < buf.Lines.Count)
                 {
-                    buf.CursorLine++;
+                    buf.CursorLine = targetLastLine + 1;
                     buf.CursorCol = 0;
                 }
                 else
                 {
-                    buf.CursorCol = buf.Lines[buf.CursorLine].Length;
+                    buf.CursorLine = targetLastLine;
+                    buf.CursorCol = buf.Lines[targetLastLine].Length;
                 }
             }
             owner.NotifyCaretMoved();
@@ -3363,35 +3384,43 @@ namespace codeLess.AvaloniaApp
             ExtraCursors.RemoveAll(c => c.Line < 0 || c.Line >= buf.Lines.Count);
         }
 
-        /// <summary>Cmd+Backspace / Cmd+Delete / Ctrl+K on macOS: delete from the caret to line start or end.</summary>
+        /// <summary>Cmd+Backspace / Cmd+Delete / Ctrl+K on macOS: delete from every caret to line start or end.</summary>
         private void DeleteToLineBoundary(EditorTabBuffer buf, bool toEnd)
         {
             if (buf == null) return;
-            if (buf.HasSelection())
+            if (!toEnd && ExtraCursors.Count == 0 && !buf.HasSelection() && buf.CursorCol == 0)
             {
-                buf.PushUndoSnapshot();
-                buf.DeleteSelection();
-                FinalizeBufferEdit(buf);
+                PerformBackspaceAcrossCursors();
                 return;
             }
-            string line = buf.Lines[buf.CursorLine];
-            int col = Math.Max(0, Math.Min(line.Length, buf.CursorCol));
-            if (toEnd && col == line.Length) { buf.PushUndoSnapshot(); buf.PerformDelete(); FinalizeBufferEdit(buf); return; } // join next line
-            if (!toEnd && col == 0) { PerformBackspaceAcrossCursors(); return; }
             buf.PushUndoSnapshot();
+            ClampExtraCursors(buf);
+            int tabSize = TabSize;
+            ApplyEditToAllCarets(buf, (b, k) => DeleteToLineBoundaryCore(b, toEnd, tabSize));
+            FinalizeBufferEdit(buf);
+        }
+
+        private void DeleteToLineBoundaryCore(EditorTabBuffer b, bool toEnd, int tabSize)
+        {
+            if (b.HasSelection()) { b.DeleteSelection(); return; }
+            string line = b.Lines[b.CursorLine] ?? "";
+            int col = Math.Max(0, Math.Min(line.Length, b.CursorCol));
             if (toEnd)
-                buf.Lines[buf.CursorLine] = line.Substring(0, col);
+            {
+                if (col >= line.Length) b.PerformDelete();
+                else b.Lines[b.CursorLine] = line.Substring(0, col);
+            }
             else
             {
+                if (col == 0) { BackspaceAtCaret(b, tabSize); return; }
                 int indent = 0;
                 while (indent < line.Length && (line[indent] == ' ' || line[indent] == '\t')) indent++;
                 int stop = col > indent ? indent : 0; // like VS Code: first press keeps indentation
-                buf.Lines[buf.CursorLine] = line.Substring(0, stop) + line.Substring(col);
-                buf.CursorCol = stop;
+                b.Lines[b.CursorLine] = line.Substring(0, stop) + line.Substring(col);
+                b.CursorCol = stop;
             }
-            buf.ClearSelection();
-            buf.SyncContentFromLines();
-            FinalizeBufferEdit(buf);
+            b.ClearSelection();
+            b.SyncContentFromLines(false);
         }
 
         public void DeleteWordLeft()
@@ -3516,8 +3545,9 @@ namespace codeLess.AvaloniaApp
                 buf.Lines.RemoveAt(last + 1);
                 buf.Lines.Insert(first, below);
             }
+            bool hadSel = buf.HasSelection();
             buf.CursorLine += direction;
-            if (buf.HasSelection()) buf.SelectionStartLine += direction;
+            if (hadSel) buf.SelectionStartLine += direction;
             FinalizeBufferEdit(buf);
         }
 
@@ -3534,34 +3564,94 @@ namespace codeLess.AvaloniaApp
             buf.Lines.InsertRange(direction < 0 ? first : last + 1, block);
             if (direction > 0)
             {
+                bool hadSel = buf.HasSelection();
                 buf.CursorLine += count;
-                if (buf.HasSelection()) buf.SelectionStartLine += count;
+                if (hadSel) buf.SelectionStartLine += count;
             }
             FinalizeBufferEdit(buf);
         }
 
-        /// <summary>Cmd/Ctrl+Shift+K: delete every line touched by the selection; the caret keeps its column (VS Code).</summary>
+        /// <summary>Cmd/Ctrl+Shift+K: delete every line touched by any selection / caret; carets keep their columns (VS Code).</summary>
         public void DeleteActiveLine()
         {
             var buf = Buffer;
             if (buf == null) return;
-            ExtraCursors.Clear();
-            SelectedLineRange(buf, out int first, out int last);
-            int col = buf.CursorCol;
+            ClampExtraCursors(buf);
+            if (ExtraCursors.Count == 0)
+            {
+                SelectedLineRange(buf, out int first, out int last);
+                int col = buf.CursorCol;
+                buf.PushUndoSnapshot();
+                if (last - first + 1 >= buf.Lines.Count)
+                {
+                    buf.Lines.Clear();
+                    buf.Lines.Add("");
+                    buf.CursorLine = 0;
+                }
+                else
+                {
+                    buf.Lines.RemoveRange(first, last - first + 1);
+                    buf.CursorLine = Math.Min(first, buf.Lines.Count - 1);
+                }
+                buf.CursorCol = Math.Min(col, buf.Lines[buf.CursorLine].Length);
+                buf.ClearSelection();
+                FinalizeBufferEdit(buf);
+                return;
+            }
+
+            var caretEntries = new List<(bool IsPrimary, int First, int Last, int Col)>();
+            SelectedLineRange(buf, out int pFirst, out int pLast);
+            caretEntries.Add((true, pFirst, pLast, buf.CursorCol));
+            foreach (var ec in ExtraCursors)
+            {
+                int a = ec.HasSelection ? Math.Min(ec.AnchorLine, ec.Line) : ec.Line;
+                int b = ec.HasSelection ? Math.Max(ec.AnchorLine, ec.Line) : ec.Line;
+                if (ec.HasSelection && b > a)
+                {
+                    int endCol = (ec.Line > ec.AnchorLine || (ec.Line == ec.AnchorLine && ec.Col >= ec.AnchorCol)) ? ec.Col : ec.AnchorCol;
+                    if (endCol == 0) b--;
+                }
+                caretEntries.Add((false, Math.Max(0, Math.Min(buf.Lines.Count - 1, a)), Math.Max(0, Math.Min(buf.Lines.Count - 1, b)), ec.Col));
+            }
+            var linesToDelete = new SortedSet<int>();
+            foreach (var ce in caretEntries)
+                for (int l = ce.First; l <= ce.Last; l++)
+                    linesToDelete.Add(l);
+
             buf.PushUndoSnapshot();
-            if (last - first + 1 >= buf.Lines.Count)
+            if (linesToDelete.Count >= buf.Lines.Count)
             {
                 buf.Lines.Clear();
                 buf.Lines.Add("");
                 buf.CursorLine = 0;
+                buf.CursorCol = 0;
+                buf.ClearSelection();
+                ExtraCursors.Clear();
+                FinalizeBufferEdit(buf);
+                return;
             }
-            else
+            foreach (int l in linesToDelete.Reverse())
+                buf.Lines.RemoveAt(l);
+
+            ExtraCursors.Clear();
+            var seenLines = new HashSet<int>();
+            foreach (var ce in caretEntries)
             {
-                buf.Lines.RemoveRange(first, last - first + 1);
-                buf.CursorLine = Math.Min(first, buf.Lines.Count - 1);
+                int removedBefore = linesToDelete.Count(x => x < ce.First);
+                int newLine = Math.Max(0, Math.Min(buf.Lines.Count - 1, ce.First - removedBefore));
+                int newCol = Math.Min(ce.Col, buf.Lines[newLine].Length);
+                if (ce.IsPrimary)
+                {
+                    buf.CursorLine = newLine;
+                    buf.CursorCol = newCol;
+                    buf.ClearSelection();
+                    seenLines.Add(newLine);
+                }
+                else if (seenLines.Add(newLine))
+                {
+                    ExtraCursors.Add(new ExtraCursorCaret { Line = newLine, Col = newCol, AnchorLine = -1, AnchorCol = -1 });
+                }
             }
-            buf.CursorCol = Math.Min(col, buf.Lines[buf.CursorLine].Length);
-            buf.ClearSelection();
             FinalizeBufferEdit(buf);
         }
 
@@ -3730,6 +3820,8 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            var tok = EditorComments.For(buf.FilePath ?? buf.FileName ?? ("x." + (buf.Language ?? "")));
+            if (tok.Line == null && tok.BlockStart == null) return;
             ClampExtraCursors(buf);
             var ranges = new List<int[]>();
             void AddRange(int al, int ac, int cl, int cc, bool hasSel)
@@ -3746,7 +3838,7 @@ namespace codeLess.AvaloniaApp
             foreach (var ec in ExtraCursors) AddRange(ec.AnchorLine, ec.AnchorCol, ec.Line, ec.Col, ec.HasSelection);
             buf.PushUndoSnapshot();
             var edits = EditorComments.ToggleLineComments(buf, ranges);
-            if (edits == null || edits.Count == 0) return;
+            if (edits == null || edits.Count == 0) { buf.PopUndoSnapshotAndRestore(); return; }
             for (int i = 0; i < ExtraCursors.Count; i++)
             {
                 var ec = ExtraCursors[i];
@@ -3762,8 +3854,10 @@ namespace codeLess.AvaloniaApp
         {
             var buf = Buffer;
             if (buf == null) return;
+            var tok = EditorComments.For(buf.FilePath ?? buf.FileName ?? ("x." + (buf.Language ?? "")));
+            if (tok.Line == null && tok.BlockStart == null) return;
             buf.PushUndoSnapshot();
-            if (!EditorComments.ToggleBlockComment(buf)) return;
+            if (!EditorComments.ToggleBlockComment(buf)) { buf.PopUndoSnapshotAndRestore(); return; }
             ExtraCursors.Clear();
             FinalizeBufferEdit(buf);
         }
@@ -4209,9 +4303,9 @@ namespace codeLess.AvaloniaApp
             }
             // VS Code: pasting N lines with N carets puts one line at each caret (in document order).
             string norm = text.Replace("\r\n", "\n").Replace("\r", "\n");
-            string[] pieces = norm.TrimEnd('\n').Split('\n');
             int caretCount = ExtraCursors.Count + 1;
-            bool distribute = pieces.Length == caretCount && pieces.Length > 1;
+            string[] pieces = EditorMultiCaret.TrySplitPasteForCarets(norm, caretCount);
+            bool distribute = pieces != null;
             int total = caretCount;
             ApplyEditToAllCarets(buf, (b, k) =>
             {
