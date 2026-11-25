@@ -421,9 +421,10 @@ namespace codeLess.Avalonia.Tests
                 window.OpenFileAtLocation(fileB, 2, 1);
                 Assert.Equal(fileB, window.ActiveTab.FilePath);
 
-                // Dispatch Ctrl+K Ctrl+Q chord to jump back to last edit location in fileA!
-                window.SimulateShortcut(Key.K, KeyModifiers.Control);
-                window.SimulateShortcut(Key.Q, KeyModifiers.Control);
+                // Dispatch Ctrl+K Ctrl+Q (or Cmd+K Cmd+Q) chord to jump back to last edit location in fileA!
+                var primaryMod = MacKeymap.PrimaryModifier;
+                window.SimulateShortcut(Key.K, primaryMod);
+                window.SimulateShortcut(Key.Q, primaryMod);
                 Assert.Equal(fileA, window.ActiveTab.FilePath);
                 Assert.Equal(editedLine1 - 1, window.ActiveTab.CursorLine);
                 Assert.Equal(editedCol1 - 1, window.ActiveTab.CursorCol);

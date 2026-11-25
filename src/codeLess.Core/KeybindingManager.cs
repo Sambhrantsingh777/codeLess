@@ -508,6 +508,31 @@ namespace codeLess.Core
             }
         }
 
+        public bool HasPendingChord
+        {
+            get { return chordPrefix != null; }
+        }
+
+        public void CancelPendingChord()
+        {
+            chordPrefix = null;
+        }
+
+        public bool HasBoundChordMatch(string secondKeyGesture, IContextKeyService ctx)
+        {
+            if (chordPrefix == null) return false;
+            string fullGesture = chordPrefix + " " + secondKeyGesture;
+            string canonGesture = CanonicalizeGesture(fullGesture);
+            for (int i = activeBindings.Count - 1; i >= 0; i--)
+            {
+                var entry = activeBindings[i];
+                bool keyMatches = entry.Key == fullGesture || CanonicalizeGesture(entry.Key) == canonGesture;
+                if (keyMatches && WhenParser.Evaluate(entry.WhenParsed, ctx) && HasCommand(entry.Command))
+                    return true;
+            }
+            return false;
+        }
+
         public bool HasChordPrefix(string keyGesture)
         {
             string canonPrefix = CanonicalizeGesture(keyGesture) + " ";
