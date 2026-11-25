@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("Savatarr")]
 [assembly: AssemblyProduct("codeLess")]
 [assembly: AssemblyCopyright("Copyright © 2026 Savatarr. All rights reserved.")]
-[assembly: AssemblyVersion("3.4.0.0")]
-[assembly: AssemblyFileVersion("3.4.0.0")]
+[assembly: AssemblyVersion("3.4.1.0")]
+[assembly: AssemblyFileVersion("3.4.1.0")]
 
 namespace codeLess.Studio
 {
@@ -823,6 +823,7 @@ namespace codeLess.Studio
         {
             if (activeTab == null || string.IsNullOrWhiteSpace(langCode)) return;
             activeTab.Language = langCode.Trim().ToLowerInvariant();
+            activeTab.LanguageModeOverridden = true;
             LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(activeTab);
             editorControl.LoadBuffer(activeTab);
             if (splitEditorControl != null && splitEditorControl.CurrentBuffer == activeTab)

@@ -25,6 +25,11 @@ namespace codeLess.Studio
         public bool BacktickTemplates;  // JS/TS `${ ... }` expressions are code
         public bool TripleQuotes;       // Python """ / ''', C# raw """
         public bool CSharpVerbatim;     // @"..." with "" escapes, multi-line
+        public bool InterpolatedStrings; // Python f"..." / C# $"..." with nested quotes inside {...}
+        public bool RegexLiterals;      // JS/TS /pattern/flags
+        public bool JsxMode;            // JSX/TSX text apostrophes and prose parens
+        public bool ShellMode;          // POSIX shell / bash / zsh case pattern) and heredocs
+        public bool MarkupText;         // HTML/XML: track <!-- --> comments, ignore prose brackets
         public bool IndentBased;        // Python / YAML / CoffeeScript: sticky scroll by indentation
         public bool Markdown;
         public bool Enabled = true;
@@ -54,9 +59,12 @@ namespace codeLess.Studio
                 case ".js": case ".mjs": case ".cjs": case ".jsx": case ".ts": case ".mts": case ".cts": case ".tsx":
                 case ".vue": case ".svelte":
                     p.LineComment = "//"; p.BlockStart = "/*"; p.BlockEnd = "*/"; p.Backtick = true; p.BacktickTemplates = true;
+                    p.RegexLiterals = true;
+                    p.JsxMode = (ext == ".jsx" || ext == ".tsx" || ext == ".vue" || ext == ".svelte");
                     break;
                 case ".cs": case ".csx":
                     p.LineComment = "//"; p.BlockStart = "/*"; p.BlockEnd = "*/"; p.SingleQuoteIsChar = true; p.CSharpVerbatim = true; p.TripleQuotes = true;
+                    p.InterpolatedStrings = true;
                     break;
                 case ".c": case ".h": case ".cpp": case ".cc": case ".cxx": case ".hpp": case ".hh": case ".hxx": case ".m": case ".mm":
                 case ".java": case ".scala": case ".dart": case ".php": case ".groovy": case ".gradle": case ".proto": case ".hlsl": case ".glsl":
@@ -76,7 +84,7 @@ namespace codeLess.Studio
                     p.LineComment = "//"; p.BlockStart = "/*"; p.BlockEnd = "*/"; p.SingleQuote = false;
                     break;
                 case ".py": case ".pyw": case ".pyi":
-                    p.LineComment = "#"; p.TripleQuotes = true; p.IndentBased = true;
+                    p.LineComment = "#"; p.TripleQuotes = true; p.IndentBased = true; p.InterpolatedStrings = true;
                     break;
                 case ".rb": case ".rake": case ".gemspec":
                     p.LineComment = "#";
@@ -84,6 +92,7 @@ namespace codeLess.Studio
                 case ".sh": case ".bash": case ".zsh": case ".ksh": case ".fish": case ".ps1": case ".psm1":
                     p.LineComment = "#"; p.HashCommentNeedsSpace = true;
                     if (ext == ".ps1" || ext == ".psm1") { p.BlockStart = "<#"; p.BlockEnd = "#>"; }
+                    else { p.ShellMode = true; }
                     break;
                 case ".yaml": case ".yml":
                     p.LineComment = "#"; p.HashCommentNeedsSpace = true; p.IndentBased = true;
@@ -109,7 +118,7 @@ namespace codeLess.Studio
                     break;
                 case ".html": case ".htm": case ".xhtml": case ".xml": case ".xaml": case ".axaml": case ".svg": case ".csproj":
                 case ".props": case ".targets": case ".config": case ".plist": case ".razor": case ".cshtml":
-                    p.BlockStart = "<!--"; p.BlockEnd = "-->"; p.DoubleQuote = false; p.SingleQuote = false;
+                    p.BlockStart = "<!--"; p.BlockEnd = "-->"; p.DoubleQuote = false; p.SingleQuote = false; p.MarkupText = true;
                     break;
                 case ".md": case ".markdown": case ".mdx":
                     p.Markdown = true; p.DoubleQuote = false; p.SingleQuote = false; p.Enabled = false;
@@ -317,6 +326,7 @@ namespace codeLess.Studio
             char quote = start.Quote;
             int cdepth = start.CommentDepth;
             BracketFrame stack = start.Stack;
+            int interpDepth = 0;
             int n = s.Length;
             int i = 0;
             while (i < n)
@@ -339,7 +349,7 @@ namespace codeLess.Studio
                 }
                 if (mode == BracketLexState.ModeString)
                 {
-                    if (c == '\\') { i += 2; continue; }
+                    if (c == '\\' && (quote != '`' || p.BacktickTemplates)) { i += 2; continue; }
                     if (quote == '`' && p.BacktickTemplates && c == '$' && i + 1 < n && s[i + 1] == '{')
                     {
                         stack = new BracketFrame(stack, '$', lineIndex, i);
@@ -348,23 +358,84 @@ namespace codeLess.Studio
                         i += 2;
                         continue;
                     }
-                    if (c == quote) { mode = BracketLexState.ModeCode; quote = '\0'; }
+                    if (p.InterpolatedStrings && quote != '`')
+                    {
+                        if (c == '{')
+                        {
+                            if (i + 1 < n && s[i + 1] == '{' && interpDepth == 0) { i += 2; continue; }
+                            interpDepth++;
+                            i++;
+                            continue;
+                        }
+                        if (c == '}')
+                        {
+                            if (interpDepth > 0) { interpDepth--; i++; continue; }
+                            if (i + 1 < n && s[i + 1] == '}') { i += 2; continue; }
+                        }
+                        if (interpDepth > 0 && (c == '"' || c == '\''))
+                        {
+                            char innerQ = c;
+                            i++;
+                            while (i < n)
+                            {
+                                if (s[i] == '\\') { i += 2; continue; }
+                                if (s[i] == innerQ) { i++; break; }
+                                i++;
+                            }
+                            continue;
+                        }
+                    }
+                    if (c == quote) { mode = BracketLexState.ModeCode; quote = '\0'; interpDepth = 0; }
                     i++;
                     continue;
                 }
                 if (mode == BracketLexState.ModeTriple)
                 {
-                    if (c == '\\' && quote != '"') { i += 2; continue; }
-                    if (c == quote && i + 2 < n && s[i + 1] == quote && s[i + 2] == quote) { mode = BracketLexState.ModeCode; quote = '\0'; i += 3; continue; }
+                    if (c == '\\' && (!p.CSharpVerbatim || quote != '"')) { i += 2; continue; }
+                    if (c == quote && i + 2 < n && s[i + 1] == quote && s[i + 2] == quote)
+                    {
+                        i += 3;
+                        while (p.CSharpVerbatim && i < n && s[i] == quote) i++;
+                        mode = BracketLexState.ModeCode;
+                        quote = '\0';
+                        continue;
+                    }
                     i++;
                     continue;
                 }
                 if (mode == BracketLexState.ModeVerbatim)
                 {
+                    if (p.InterpolatedStrings)
+                    {
+                        if (c == '{')
+                        {
+                            if (i + 1 < n && s[i + 1] == '{' && interpDepth == 0) { i += 2; continue; }
+                            interpDepth++;
+                            i++;
+                            continue;
+                        }
+                        if (c == '}')
+                        {
+                            if (interpDepth > 0) { interpDepth--; i++; continue; }
+                            if (i + 1 < n && s[i + 1] == '}') { i += 2; continue; }
+                        }
+                        if (interpDepth > 0 && c == '"' && !(i + 1 < n && s[i + 1] == '"'))
+                        {
+                            i++;
+                            while (i < n)
+                            {
+                                if (s[i] == '\\') { i += 2; continue; }
+                                if (s[i] == '"') { i++; break; }
+                                i++;
+                            }
+                            continue;
+                        }
+                    }
                     if (c == '"')
                     {
                         if (i + 1 < n && s[i + 1] == '"') { i += 2; continue; }
                         mode = BracketLexState.ModeCode;
+                        interpDepth = 0;
                         i++;
                         continue;
                     }
@@ -393,11 +464,17 @@ namespace codeLess.Studio
                     if (stopCol >= 0) { ctxAtStop = ContextComment; data = BracketLineData.Empty; return start; }
                     break;
                 }
+                if (p.MarkupText)
+                {
+                    i++;
+                    continue;
+                }
                 if (p.TripleQuotes && (c == '"' || c == '\'') && i + 2 < n && s[i + 1] == c && s[i + 2] == c)
                 {
                     mode = BracketLexState.ModeTriple;
                     quote = c;
                     i += 3;
+                    while (p.CSharpVerbatim && i < n && s[i] == c) i++;
                     continue;
                 }
                 if (p.CSharpVerbatim && c == '@' && i + 1 < n && s[i + 1] == '"')
@@ -406,16 +483,52 @@ namespace codeLess.Studio
                     i += 2;
                     continue;
                 }
-                if (p.CSharpVerbatim && c == '$' && i + 2 < n && s[i + 1] == '@' && s[i + 2] == '"')
+                if (p.CSharpVerbatim && ((c == '$' && i + 2 < n && s[i + 1] == '@' && s[i + 2] == '"') ||
+                                         (c == '@' && i + 2 < n && s[i + 1] == '$' && s[i + 2] == '"')))
                 {
                     mode = BracketLexState.ModeVerbatim;
                     i += 3;
                     continue;
                 }
+                if (p.RustLifetimes && c == 'r' && (i == 0 || (!char.IsLetterOrDigit(s[i - 1]) && s[i - 1] != '_')))
+                {
+                    int hashes = 0;
+                    int k = i + 1;
+                    while (k < n && s[k] == '#') { hashes++; k++; }
+                    if (k < n && s[k] == '"' && hashes > 0)
+                    {
+                        k++;
+                        while (k < n)
+                        {
+                            if (s[k] == '"')
+                            {
+                                int h2 = 0;
+                                int m = k + 1;
+                                while (m < n && h2 < hashes && s[m] == '#') { h2++; m++; }
+                                if (h2 == hashes) { k = m; break; }
+                            }
+                            k++;
+                        }
+                        if (stopCol >= 0 && k > stopCol) { ctxAtStop = ContextString; data = BracketLineData.Empty; return start; }
+                        i = k;
+                        continue;
+                    }
+                }
+                if (p.RegexLiterals && c == '/')
+                {
+                    int rxEnd = TryScanRegexLiteral(s, i, n);
+                    if (rxEnd > i)
+                    {
+                        if (stopCol >= 0 && rxEnd > stopCol) { ctxAtStop = ContextString; data = BracketLineData.Empty; return start; }
+                        i = rxEnd;
+                        continue;
+                    }
+                }
                 if ((c == '"' && p.DoubleQuote) || (c == '`' && p.Backtick))
                 {
                     mode = BracketLexState.ModeString;
                     quote = c;
+                    interpDepth = 0;
                     i++;
                     continue;
                 }
@@ -436,8 +549,14 @@ namespace codeLess.Studio
                         i++; // lifetime / stray quote
                         continue;
                     }
+                    if (p.JsxMode && ((i > 0 && (char.IsLetterOrDigit(s[i - 1]) || s[i - 1] == '_')) || !HasUnescapedQuoteOnLine(s, i + 1, n, '\'')))
+                    {
+                        i++;
+                        continue;
+                    }
                     mode = BracketLexState.ModeString;
                     quote = '\'';
+                    interpDepth = 0;
                     i++;
                     continue;
                 }
@@ -460,6 +579,11 @@ namespace codeLess.Studio
                         i++;
                         continue;
                     }
+                    if (p.JsxMode && c == ')' && IsJsxProseParen(s, i, n))
+                    {
+                        i++;
+                        continue;
+                    }
                     char want = c == ')' ? '(' : (c == ']' ? '[' : '{');
                     if (d == null) d = new BracketLineData();
                     BracketFrame match = null;
@@ -474,7 +598,10 @@ namespace codeLess.Studio
                         d.Add(i, c, match.Level - 1, match);
                         stack = match.Parent;
                     }
-                    else d.Add(i, c, -1, null);
+                    else if (!p.ShellMode)
+                    {
+                        d.Add(i, c, -1, null);
+                    }
                     i++;
                     continue;
                 }
@@ -485,6 +612,82 @@ namespace codeLess.Studio
             data = d ?? BracketLineData.Empty;
             if (mode == start.Mode && quote == start.Quote && cdepth == start.CommentDepth && ReferenceEquals(stack, start.Stack)) return start;
             return new BracketLexState(mode, quote, cdepth, stack);
+        }
+
+        private static bool HasUnescapedQuoteOnLine(string s, int from, int n, char q)
+        {
+            for (int k = from; k < n; k++)
+            {
+                if (s[k] == '\\') { k++; continue; }
+                if (s[k] == q) return true;
+            }
+            return false;
+        }
+
+        private static bool IsJsxProseParen(string s, int idx, int n)
+        {
+            int closeTag = s.IndexOf("</", idx + 1, StringComparison.Ordinal);
+            if (closeTag < 0) return false;
+            for (int k = idx + 1; k < closeTag; k++)
+            {
+                if (s[k] == '<' || s[k] == '{' || s[k] == '}') return false;
+            }
+            for (int k = idx - 1; k >= 0; k--)
+            {
+                char ch = s[k];
+                if (ch == '>' || ch == '}') return true;
+                if (ch == '(' || ch == '<' || ch == '{') return false;
+            }
+            return false;
+        }
+
+        private static int TryScanRegexLiteral(string s, int slashIdx, int n)
+        {
+            if (slashIdx + 1 >= n) return -1;
+            char next = s[slashIdx + 1];
+            if (next == '/' || next == '*' || next == ' ' || next == '\t' || next == '=') return -1;
+
+            int p = slashIdx - 1;
+            while (p >= 0 && (s[p] == ' ' || s[p] == '\t')) p--;
+            bool prefixOk = false;
+            if (p < 0)
+            {
+                prefixOk = true;
+            }
+            else
+            {
+                char prev = s[p];
+                if ("=([{,;:!&|?+-*%~^<>".IndexOf(prev) >= 0)
+                {
+                    prefixOk = true;
+                }
+                else if (char.IsLetter(prev))
+                {
+                    int wEnd = p + 1;
+                    while (p >= 0 && (char.IsLetterOrDigit(s[p]) || s[p] == '_' || s[p] == '$')) p--;
+                    string word = s.Substring(p + 1, wEnd - (p + 1));
+                    prefixOk = (word == "return" || word == "case" || word == "throw" || word == "typeof" ||
+                                word == "void" || word == "delete" || word == "in" || word == "of" ||
+                                word == "instanceof" || word == "yield" || word == "await");
+                }
+            }
+            if (!prefixOk) return -1;
+
+            bool inClass = false;
+            for (int k = slashIdx + 1; k < n; k++)
+            {
+                char c = s[k];
+                if (c == '\\') { k++; continue; }
+                if (c == '[') { inClass = true; continue; }
+                if (c == ']' && inClass) { inClass = false; continue; }
+                if (c == '/' && !inClass)
+                {
+                    int end = k + 1;
+                    while (end < n && char.IsLetter(s[end])) end++;
+                    return end;
+                }
+            }
+            return -1;
         }
 
         /// <summary>Brackets of a line (null when the line is beyond <paramref name="deadlineTicks"/>' reach).</summary>

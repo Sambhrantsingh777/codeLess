@@ -2876,28 +2876,33 @@ namespace codeLess.AvaloniaApp
             CommandPalette.Open(">", entries, currentTheme?.Id);
         }
 
+        public void SetActiveBufferLanguage(string langExt)
+        {
+            if (activeTab == null || string.IsNullOrWhiteSpace(langExt)) return;
+            activeTab.Language = langExt.Trim().TrimStart('.').ToLowerInvariant();
+            activeTab.LanguageModeOverridden = true;
+            AnalyzeBufferSoon(activeTab, OnBufferAnalyzed);
+            UpdateStatusBar();
+            PrimaryEditor?.Canvas?.InvalidateVisual();
+            if (isEditorSplit) SplitEditor?.Canvas?.InvalidateVisual();
+        }
+
         public void OpenLanguageModePicker()
         {
             var langs = new (string Ext, string Name)[]
             {
-                ("cs", "C#"), ("py", "Python"), ("ts", "TypeScript"), ("js", "JavaScript"),
-                ("rs", "Rust"), ("json", "JSON"), ("md", "Markdown"), ("ps1", "PowerShell"), ("sh", "Shell Script")
+                ("cs", "C#"), ("py", "Python"), ("ts", "TypeScript"), ("tsx", "TypeScript React"),
+                ("js", "JavaScript"), ("jsx", "JavaScript React"), ("go", "Go"), ("rs", "Rust"),
+                ("json", "JSON"), ("jsonc", "JSON with Comments"), ("yaml", "YAML"),
+                ("html", "HTML"), ("css", "CSS"), ("scss", "SCSS"),
+                ("md", "Markdown"), ("ps1", "PowerShell"), ("sh", "Shell Script"), ("txt", "Plain Text")
             };
             var entries = langs.Select(l => new PaletteEntryItem
             {
                 Category = "Language Mode",
                 Title = l.Name,
                 stringSubtitleOrPath = "." + l.Ext,
-                Execute = () =>
-                {
-                    if (activeTab != null)
-                    {
-                        activeTab.Language = l.Ext;
-                        AnalyzeBufferSoon(activeTab, OnBufferAnalyzed);
-                        UpdateStatusBar();
-                        PrimaryEditor.Canvas.InvalidateVisual();
-                    }
-                }
+                Execute = () => SetActiveBufferLanguage(l.Ext)
             }).ToList();
             CommandPalette.Open(">", entries, currentTheme?.Id);
         }
@@ -3129,7 +3134,7 @@ namespace codeLess.AvaloniaApp
             var stack = new StackPanel { Spacing = 8 };
             stack.Children.Add(new TextBlock
             {
-                Text = "codeLess v3.4.0",
+                Text = "codeLess v3.4.1",
                 FontSize = 18,
                 FontWeight = FontWeight.Bold,
                 Foreground = new SolidColorBrush(textPrimary)

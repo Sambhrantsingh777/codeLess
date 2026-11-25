@@ -3,7 +3,7 @@
 ## 1. Why Windows Shows "Unknown Publisher" on Unsigned Builds
 
 In `codeLess`, we have implemented every legitimate binary hygiene and metadata best practice to prevent false-positive heuristic detections:
-- **Complete PE `VERSIONINFO` resources** in both `codeLess.exe` and `codeLess-Setup.exe` (`CompanyName=Savatarr`, `ProductName=codeLess`, `FileDescription`, `FileVersion=3.4.0.0`, `LegalCopyright`, `OriginalFilename`).
+- **Complete PE `VERSIONINFO` resources** in both `codeLess.exe` and `codeLess-Setup.exe` (`CompanyName=Savatarr`, `ProductName=codeLess`, `FileDescription`, `FileVersion=3.4.1.0`, `LegalCopyright`, `OriginalFilename`).
 - **Embedded Application Manifest (`app.manifest`)** declaring `requestedExecutionLevel level="asInvoker" uiAccess="false"` and explicit Windows 10/11 compatibility GUIDs.
 - **Least-Privilege Installer (`Installer.iss`)** with `PrivilegesRequired=lowest`, stable `AppId`, `AppPublisher=Savatarr`, and clean uninstall registration.
 - **Zero packers, obfuscators, or heuristic triggers** (no `EmptyWorkingSet` / `SetProcessWorkingSetSize` memory-trimming calls and no hidden `taskkill.exe` process-tree spawning).
