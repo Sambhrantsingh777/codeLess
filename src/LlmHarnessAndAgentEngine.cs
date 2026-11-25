@@ -3060,9 +3060,27 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ctx.AppendLine("<terminal_output>\n" + tail + "\n</terminal_output>");
             }
 
-            if (contextPills != null && contextPills.Count > 0)
+            List<string> effectivePills = new List<string>();
+            if (contextPills != null)
             {
-                foreach (string rawPill in contextPills)
+                foreach (string cp in contextPills)
+                {
+                    if (!string.IsNullOrWhiteSpace(cp) && !effectivePills.Contains(cp, StringComparer.OrdinalIgnoreCase))
+                        effectivePills.Add(cp);
+                }
+            }
+            foreach (string mentioned in ChatAtMentionCompleter.ExtractMentionedFilePills(userInstruction))
+            {
+                if (!effectivePills.Contains(mentioned, StringComparer.OrdinalIgnoreCase) &&
+                    !effectivePills.Contains("@" + mentioned, StringComparer.OrdinalIgnoreCase))
+                {
+                    effectivePills.Add(mentioned);
+                }
+            }
+
+            if (effectivePills.Count > 0)
+            {
+                foreach (string rawPill in effectivePills)
                 {
                     if (string.IsNullOrWhiteSpace(rawPill)) continue;
                     string pill = rawPill.Trim();
@@ -3152,29 +3170,32 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     {
                         try
                         {
-                            rawSourceContent = File.ReadAllText(resolvedPath);
                             relName = (!string.IsNullOrEmpty(workspaceRoot) && resolvedPath.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase))
                                 ? resolvedPath.Substring(workspaceRoot.Length).TrimStart('\\', '/')
                                 : Path.GetFileName(resolvedPath);
+                            if (BinaryDetector.IsBinaryFile(resolvedPath))
+                            {
+                                rawSourceContent = "[Cannot read binary file: " + relName + "]";
+                            }
+                            else
+                            {
+                                rawSourceContent = File.ReadAllText(resolvedPath);
+                            }
                         }
                         catch { }
                     }
 
                     if (rawSourceContent != null)
                     {
-                        string fileText = rawSourceContent;
+                        string cappedText = ChatAtMentionCompleter.FormatFileAttachmentWithReadCaps(
+                            rawSourceContent, resolvedPath, rangeStartLine, rangeEndLine);
                         if (rangeStartLine > 0 && rangeEndLine >= rangeStartLine)
                         {
-                            string[] allLines = fileText.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
-                            int sIdx = Math.Max(0, Math.Min(allLines.Length - 1, rangeStartLine - 1));
-                            int eIdx = Math.Max(sIdx, Math.Min(allLines.Length - 1, rangeEndLine - 1));
-                            fileText = string.Join("\n", allLines.Skip(sIdx).Take(eIdx - sIdx + 1));
-                            ctx.AppendLine(string.Format("<pinned_context_file file=\"{0}\" lines=\"{1}-{2}\">\n{3}\n</pinned_context_file>", relName, sIdx + 1, eIdx + 1, fileText));
+                            ctx.AppendLine(string.Format("<pinned_context_file file=\"{0}\" lines=\"{1}-{2}\">\n{3}\n</pinned_context_file>", relName, rangeStartLine, rangeEndLine, cappedText));
                         }
                         else
                         {
-                            if (fileText.Length > 8000) fileText = fileText.Substring(0, 8000) + "\n// ... [truncated]";
-                            ctx.AppendLine(string.Format("<pinned_context_file file=\"{0}\">\n{1}\n</pinned_context_file>", relName, fileText));
+                            ctx.AppendLine(string.Format("<pinned_context_file file=\"{0}\">\n{1}\n</pinned_context_file>", relName, cappedText));
                         }
                     }
                 }

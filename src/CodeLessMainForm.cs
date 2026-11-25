@@ -7065,31 +7065,18 @@ if __name__ == '__main__':
             promptInputBox.TextChanged += (s, e) =>
             {
                 string txt = promptInputBox.Text ?? "";
-                int atPos = txt.LastIndexOf('@');
-                if (atPos >= 0 && atPos >= txt.Length - 28 && !txt.Substring(atPos).Contains(" "))
+                int atPos;
+                string filter;
+                if (ChatAtMentionCompleter.TryExtractActiveAtQuery(txt, promptInputBox.SelectionStart > 0 ? promptInputBox.SelectionStart : txt.Length, out atPos, out filter))
                 {
-                    string filter = txt.Substring(atPos + 1).Trim();
                     atMentionCandidates.Clear();
                     atMentionList.Items.Clear();
 
-                    string[] builtIns = new string[] { "@ActiveFile", "@Codebase:BM25", "@Terminal", "@Problems", "@Git", "@.codelessrules" };
-                    foreach (string bi in builtIns)
+                    List<ChatAtMentionItem> suggestions = ChatAtMentionCompleter.GetSuggestions(filter, workspaceRoot, workspaceFiles, 16);
+                    for (int i = 0; i < suggestions.Count; i++)
                     {
-                        if (string.IsNullOrEmpty(filter) || bi.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            atMentionCandidates.Add(bi);
-                            atMentionList.Items.Add(bi + "  (Context Provider)");
-                        }
-                    }
-                    foreach (string fp in workspaceFiles)
-                    {
-                        string rel = "@" + LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, fp);
-                        if (string.IsNullOrEmpty(filter) || rel.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            atMentionCandidates.Add(rel);
-                            atMentionList.Items.Add(rel);
-                            if (atMentionCandidates.Count >= 16) break;
-                        }
+                        atMentionCandidates.Add(suggestions[i].InsertToken);
+                        atMentionList.Items.Add(suggestions[i].DisplayText);
                     }
 
                     if (atMentionCandidates.Count > 0)
