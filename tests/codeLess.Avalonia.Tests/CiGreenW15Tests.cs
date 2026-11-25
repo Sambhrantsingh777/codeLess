@@ -78,7 +78,7 @@ namespace codeLess.Avalonia.Tests
         }
 
         [AvaloniaFact]
-        public void MenuModel_ShortcutsMatchPaletteAndRegistry_AndCmdKDispatches_WhenForcedNonMac()
+        public void MenuModel_ShortcutsMatchPaletteAndRegistry_AndCtrlKDispatches_WhenForcedNonMac()
         {
             bool? prevMac = MacKeymap.ForceMacKeymapOverride;
             bool? prevLinux = KeybindingManager.ForceLinuxKeymapOverride;
@@ -109,10 +109,16 @@ namespace codeLess.Avalonia.Tests
                         Assert.Equal("Ctrl+K Ctrl+O", AvaloniaCommandPaletteOverlay.FormatShortcutForPlatform(palOpenFolder.Shortcut));
 
                         string statusMsg = "";
-                        bool handledInTerminal = w.KeybindingManager.Dispatch("cmd+k", new FakeContextKeyService("terminalFocus"), m => statusMsg = m, isTerminalFocus: true);
+                        // On non-mac, cmd+k must NOT start a chord
+                        bool cmdKHandled = w.KeybindingManager.Dispatch("cmd+k", new FakeContextKeyService("editorTextFocus"), m => statusMsg = m, isTerminalFocus: false);
+                        Assert.False(cmdKHandled);
+                        Assert.Equal("", statusMsg);
+
+                        // On non-mac, ctrl+k in terminal does not start a chord, whereas ctrl+k in editor starts the chord
+                        bool handledInTerminal = w.KeybindingManager.Dispatch("ctrl+k", new FakeContextKeyService("terminalFocus"), m => statusMsg = m, isTerminalFocus: true);
                         Assert.False(handledInTerminal);
 
-                        bool handledInEditor = w.KeybindingManager.Dispatch("cmd+k", new FakeContextKeyService("editorTextFocus"), m => statusMsg = m, isTerminalFocus: false);
+                        bool handledInEditor = w.KeybindingManager.Dispatch("ctrl+k", new FakeContextKeyService("editorTextFocus"), m => statusMsg = m, isTerminalFocus: false);
                         Assert.True(handledInEditor);
                         Assert.Contains("Waiting for second key of chord", statusMsg);
 
@@ -161,18 +167,19 @@ namespace codeLess.Avalonia.Tests
         }
 
         [Fact]
-        public void NativeToolCall_GetArguments_ParsesWindowsBackslashPaths()
+        public void NativeToolCall_GetArguments_RoundTripsEscapesAndWindowsPathsExactly()
         {
             var call = new NativeToolCall
             {
-                Id = "call_win_1",
-                Name = "read_file",
-                ArgumentsJson = "{\"path\":\"C:\\Users\\runneradmin\\AppData\\Local\\Temp\\codeless_ntc\\fake.txt\"}"
+                Id = "call_rt_1",
+                Name = "write_file",
+                ArgumentsJson = "{\"content\":\"a\\nb\\\\d \\\"q\\\"\",\"path\":\"C:\\\\Users\\\\runneradmin\\\\fake.txt\"}"
             };
 
             Dictionary<string, object> args = call.GetArguments();
-            Assert.False(args.ContainsKey("error"), "GetArguments should recover bare Windows backslashes in JSON strings.");
-            Assert.Equal("C:\\Users\\runneradmin\\AppData\\Local\\Temp\\codeless_ntc\\fake.txt", args["path"]);
+            Assert.False(args.ContainsKey("error"));
+            Assert.Equal("a\nb\\d \"q\"", args["content"]);
+            Assert.Equal("C:\\Users\\runneradmin\\fake.txt", args["path"]);
         }
 
         [Fact]

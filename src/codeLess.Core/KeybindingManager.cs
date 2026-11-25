@@ -452,28 +452,11 @@ namespace codeLess.Core
             }
         }
 
-        private string NormalizeKeyGesture(string keyGesture)
-        {
-            if (string.IsNullOrEmpty(keyGesture) || _isMac) return keyGesture;
-            if (keyGesture.IndexOf("cmd+", StringComparison.OrdinalIgnoreCase) < 0) return keyGesture;
-            for (int i = 0; i < activeBindings.Count; i++)
-            {
-                string k = activeBindings[i].Key;
-                if (k != null && (string.Equals(k, keyGesture, StringComparison.OrdinalIgnoreCase) ||
-                    k.StartsWith(keyGesture + " ", StringComparison.OrdinalIgnoreCase)))
-                {
-                    return keyGesture;
-                }
-            }
-            return keyGesture.Replace("cmd+", "ctrl+").Replace("Cmd+", "ctrl+").Replace("CMD+", "ctrl+");
-        }
-
         public bool HasChordPrefix(string keyGesture)
         {
-            string norm = NormalizeKeyGesture(keyGesture);
             foreach (var b in activeBindings)
             {
-                if (b.Key != null && b.Key.StartsWith(norm + " ", StringComparison.OrdinalIgnoreCase))
+                if (b.Key != null && b.Key.StartsWith(keyGesture + " ", StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
@@ -488,7 +471,6 @@ namespace codeLess.Core
                 return true;
             }
 
-            keyGesture = NormalizeKeyGesture(keyGesture);
             string fullGesture = chordPrefix != null ? (chordPrefix + " " + keyGesture) : keyGesture;
 
             KeybindingEntry fallbackUnboundEntry = null;

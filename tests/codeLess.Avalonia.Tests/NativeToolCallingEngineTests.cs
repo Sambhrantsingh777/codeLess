@@ -45,7 +45,7 @@ namespace codeLess.Avalonia.Tests
 
             string fakeFile = Path.Combine(_testDir, "fake.txt");
             File.WriteAllText(fakeFile, "file content");
-            string escapedPath = fakeFile.Replace("\\", "\\\\");
+            string escapedPath = fakeFile.Replace("\\", "\\\\\\\\");
 
             var payloads = new List<string>();
             harness.NativeTransportOverride = (payload, vendor) =>
@@ -105,7 +105,7 @@ namespace codeLess.Avalonia.Tests
             
             string fakeFile = Path.Combine(_testDir, "fake.txt");
             File.WriteAllText(fakeFile, "file content");
-            string escapedPath = fakeFile.Replace("\\", "\\\\");
+            string escapedPath = fakeFile.Replace("\\", "\\\\\\\\");
 
             var payloads = new List<string>();
             harness.NativeTransportOverride = (payload, vendor) =>
