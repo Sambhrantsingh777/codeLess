@@ -850,6 +850,9 @@ namespace codeLess.AvaloniaApp
 
     public class LiteralTextBlock : TextBlock
     {
+        public string SetiFileName { get; set; }
+        public bool SetiIsLight { get; set; }
+
         public LiteralTextBlock()
         {
         }

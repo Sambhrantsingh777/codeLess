@@ -961,10 +961,36 @@ namespace codeLess.Studio
             else if (text.StartsWith("[interface] ")) { badge = "I"; badgeColor = theme != null ? theme.TokenKeyword : Color.FromArgb(192, 132, 252); text = text.Substring(12); }
             else if (text.StartsWith("[enum] ")) { badge = "E"; badgeColor = theme != null ? theme.TokenNumber : Color.FromArgb(250, 204, 21); text = text.Substring(7); }
             else if (text.StartsWith("[fn] ")) { badge = "fn"; badgeColor = theme != null ? theme.TokenFunction : Color.FromArgb(96, 165, 250); text = text.Substring(5); }
-            else if (text.StartsWith("≡ "))
+            else if (text.StartsWith("≡ ") || text.StartsWith("● ≡ "))
             {
-                text = text.Substring(2);
-                SetiIconInfo icon = SetiIconTheme.Resolve(text, theme != null && theme.IsLight, null);
+                bool hasDirtyDot = text.StartsWith("● ≡ ");
+                text = text.Substring(hasDirtyDot ? 4 : 2);
+                string fn = text;
+                int sep = fn.IndexOf("  ", StringComparison.Ordinal);
+                if (sep > 0) fn = fn.Substring(0, sep);
+                SetiIconInfo icon = SetiIconTheme.Resolve(fn, theme != null && theme.IsLight, null);
+                badge = icon.Glyph;
+                badgeColor = icon.Color;
+                isFileBadge = true;
+                if (hasDirtyDot) text = "● " + text;
+            }
+            else if (text.Length > 4 && text[0] == '[' && text[2] == ']' && text[3] == ' ')
+            {
+                string rest = text.Substring(4);
+                int sep = rest.IndexOf("  ", StringComparison.Ordinal);
+                string fn = sep > 0 ? rest.Substring(0, sep) : rest;
+                SetiIconInfo icon = SetiIconTheme.Resolve(Path.GetFileName(fn), theme != null && theme.IsLight, null);
+                badge = icon.Glyph;
+                badgeColor = icon.Color;
+                isFileBadge = true;
+            }
+            else if (text.StartsWith("[ERROR] ") || text.StartsWith("[WARNING] ") || text.StartsWith("[INFO] "))
+            {
+                int closeBracket = text.IndexOf("] ", StringComparison.Ordinal);
+                string rest = closeBracket >= 0 ? text.Substring(closeBracket + 2) : text;
+                int colon = rest.IndexOf(":Ln ", StringComparison.Ordinal);
+                string fn = colon > 0 ? rest.Substring(0, colon) : rest;
+                SetiIconInfo icon = SetiIconTheme.Resolve(Path.GetFileName(fn), theme != null && theme.IsLight, null);
                 badge = icon.Glyph;
                 badgeColor = icon.Color;
                 isFileBadge = true;

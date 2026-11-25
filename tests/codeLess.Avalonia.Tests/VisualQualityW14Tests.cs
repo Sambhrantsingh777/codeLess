@@ -429,6 +429,53 @@ export class EventDispatcher<T extends TelemetryEvent> {
                 Assert.Equal("\uE00B", csPainted.Glyph);
                 Assert.Equal(Color.FromRgb(0x51, 0x9a, 0xba), csPainted.Color);
 
+                // W14b (1): OPEN EDITORS list has Seti file icons for each open tab
+                Assert.NotNull(window.OpenEditorsList);
+                Assert.Equal(3, window.OpenEditorsList.Children.Count);
+                var openEditorGlyphs = window.OpenEditorsList.GetVisualDescendants().OfType<TextBlock>()
+                    .Where(tb => tb.Width == 16 && tb.Height == 16)
+                    .Select(tb => tb.Text)
+                    .ToList();
+                Assert.Contains("\uE00B", openEditorGlyphs); // OrderProcessor.cs
+                Assert.Contains("\uE07B", openEditorGlyphs); // metrics.py
+                Assert.Contains("\uE099", openEditorGlyphs); // dispatcher.ts
+
+                // W14b (2): Restricted Mode banner & buttons use real VS Code Dark Modern and Light Modern colours
+                var banner = window.RestrictedModeBannerControl;
+                Assert.NotNull(banner);
+                var manageBtn = banner.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "RestrictedBannerManageBtn");
+                var learnBtn = banner.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "RestrictedBannerLearnMoreBtn");
+                Assert.NotNull(manageBtn);
+                Assert.NotNull(learnBtn);
+
+                Assert.Equal(Color.FromRgb(0x35, 0x2A, 0x05), ((ISolidColorBrush)banner.Background).Color);
+                Assert.Equal(Color.FromRgb(0x00, 0x78, 0xD4), ((ISolidColorBrush)manageBtn.Background).Color);
+                Assert.Equal(Colors.White, ((ISolidColorBrush)manageBtn.Foreground).Color);
+                Assert.Equal(Color.FromRgb(0x31, 0x31, 0x31), ((ISolidColorBrush)learnBtn.Background).Color);
+                Assert.Equal(Color.FromRgb(0xCC, 0xCC, 0xCC), ((ISolidColorBrush)learnBtn.Foreground).Color);
+
+                window.ApplyTheme(StudioTheme.LightModern, persistSetting: false);
+                Assert.Equal(Color.FromRgb(0xFF, 0xF4, 0xCE), ((ISolidColorBrush)banner.Background).Color);
+                Assert.Equal(Color.FromRgb(0x00, 0x5F, 0xB8), ((ISolidColorBrush)manageBtn.Background).Color);
+                Assert.Equal(Colors.White, ((ISolidColorBrush)manageBtn.Foreground).Color);
+                Assert.Equal(Color.FromRgb(0xE5, 0xE5, 0xE5), ((ISolidColorBrush)learnBtn.Background).Color);
+                Assert.Equal(Color.FromRgb(0x3B, 0x3B, 0x3B), ((ISolidColorBrush)learnBtn.Foreground).Color);
+                window.ApplyTheme(StudioTheme.DarkModern, persistSetting: false);
+
+                // W14b (3): Problems panel rows carry SetiFileName for file icon rendering
+                var activeBuf = window.PrimaryEditor.CurrentBuffer;
+                activeBuf.Diagnostics.Add(new DiagnosticItem { Severity = "Warning", Line = 10, Column = 5, Message = "Sample diagnostic", FilePath = csPath });
+                window.RefreshOutlineAndProblems(activeBuf);
+                var probRows = ((System.Collections.IEnumerable)window.ProblemsListItemsForTest()).OfType<LiteralTextBlock>().ToList();
+                Assert.Single(probRows);
+                Assert.Equal("OrderProcessor.cs", probRows[0].SetiFileName);
+                var rawProbControls = window.ProblemsListBoxControl.ItemsSource.Cast<Control>().ToList();
+                Assert.Single(rawProbControls);
+                var probPanel = Assert.IsType<StackPanel>(rawProbControls[0]);
+                Assert.Equal("\uE00B", Assert.IsType<TextBlock>(probPanel.Children[0]).Text);
+                activeBuf.Diagnostics.Clear();
+                window.RefreshOutlineAndProblems(activeBuf);
+
                 if (Environment.GetEnvironmentVariable("CODELESS_HEADLESS_SKIA") == "1")
                 {
                     Assert.NotEqual((ushort)0, glyphTypeface.GetGlyph('\uE00B'));

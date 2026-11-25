@@ -30,6 +30,7 @@ namespace codeLess.AvaloniaApp
         public bool IsWorkspaceRestricted => !string.IsNullOrEmpty(workspaceRoot) && WorkspaceTrust.IsRestricted(workspaceRoot);
         public bool IsRestrictedModeStatusVisible => statusRestrictedBtn != null && statusRestrictedBtn.IsVisible;
         public bool IsRestrictedModeBannerVisible => restrictedBanner != null && restrictedBanner.IsVisible;
+        public Border RestrictedModeBannerControl => restrictedBanner;
 
         private void InitializeWorkspaceTrust()
         {
@@ -104,11 +105,11 @@ namespace codeLess.AvaloniaApp
                 FontSize = UiTokens.FontUi,
                 Margin = new Thickness(8, 0, 8, 0)
             };
-            var manage = new Button { Content = "Manage", Padding = new Thickness(10, 2), VerticalAlignment = VerticalAlignment.Center };
+            var manage = new Button { Name = "RestrictedBannerManageBtn", Content = "Manage", Padding = new Thickness(10, 2), VerticalAlignment = VerticalAlignment.Center };
             manage.Click += (s, e) => ShowManageWorkspaceTrust();
-            var learn = new Button { Content = "Learn More", Padding = new Thickness(10, 2), VerticalAlignment = VerticalAlignment.Center };
+            var learn = new Button { Name = "RestrictedBannerLearnMoreBtn", Content = "Learn More", Padding = new Thickness(10, 2), VerticalAlignment = VerticalAlignment.Center };
             learn.Click += (s, e) => EditorLinkResolver.OpenExternalUrl(WorkspaceTrust.LearnMoreUrl);
-            var close = new Button { Content = "✕", Padding = new Thickness(8, 2), VerticalAlignment = VerticalAlignment.Center, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+            var close = new Button { Name = "RestrictedBannerCloseBtn", Content = "✕", Padding = new Thickness(8, 2), VerticalAlignment = VerticalAlignment.Center, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
             ToolTip.SetTip(close, "Hide (Restricted Mode stays on)");
             close.Click += (s, e) => { restrictedBannerDismissedFor = workspaceRoot; ApplyWorkspaceTrustState(); };
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"), Margin = new Thickness(8, 4) };
@@ -129,16 +130,47 @@ namespace codeLess.AvaloniaApp
 
         private void ThemeRestrictedBanner(StudioTheme theme)
         {
-            if (restrictedBanner == null) return;
-            restrictedBanner.Background = new SolidColorBrush(theme.IsLight ? Color.FromRgb(0xFF, 0xF4, 0xCE) : Color.FromRgb(0x4A, 0x3A, 0x10));
+            if (restrictedBanner == null || theme == null) return;
+            bool isLight = theme.IsLight;
+            // VS Code warning banner & button tokens (dark_modern.json / light_modern.json):
+            restrictedBanner.Background = new SolidColorBrush(isLight ? Color.FromRgb(0xFF, 0xF4, 0xCE) : Color.FromRgb(0x35, 0x2A, 0x05));
             restrictedBanner.BorderBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(theme.BorderSubtle));
             var fg = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(theme.TextPrimary));
+            Color iconCol = isLight ? Color.FromRgb(0x89, 0x55, 0x03) : Color.FromRgb(0xE2, 0xC0, 0x8D);
+            if (statusRestrictedBtn != null)
+            {
+                statusRestrictedBtn.Background = new SolidColorBrush(Color.FromRgb(0x89, 0x55, 0x03));
+                statusRestrictedBtn.Foreground = Brushes.White;
+            }
             if (restrictedBanner.Child is Grid g)
                 foreach (var c in g.Children)
                 {
                     if (c is TextBlock tb) tb.Foreground = fg;
-                    if (c is VectorIconControl ic) ic.IconColor = AvaloniaColorHelper.ToAvColor(theme.TextPrimary);
-                    if (c is Button b && b.Content is string) b.Foreground = fg;
+                    if (c is VectorIconControl ic) { ic.IconColor = iconCol; ic.InvalidateVisual(); }
+                    if (c is Button b)
+                    {
+                        if (b.Name == "RestrictedBannerManageBtn")
+                        {
+                            WorkbenchStyles.StylePrimaryButton(b, theme);
+                            b.BorderThickness = new Thickness(1);
+                            b.BorderBrush = new SolidColorBrush(isLight ? Color.FromArgb(0x1A, 0x00, 0x00, 0x00) : Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF));
+                        }
+                        else if (b.Name == "RestrictedBannerLearnMoreBtn")
+                        {
+                            if (b.Classes.Contains("primary")) b.Classes.Remove("primary");
+                            b.Background = new SolidColorBrush(isLight ? Color.FromRgb(0xE5, 0xE5, 0xE5) : Color.FromRgb(0x31, 0x31, 0x31));
+                            b.Foreground = fg;
+                            b.BorderThickness = new Thickness(1);
+                            b.BorderBrush = new SolidColorBrush(isLight ? Color.FromRgb(0xCE, 0xCE, 0xCE) : Color.FromRgb(0x3C, 0x3C, 0x3C));
+                            b.CornerRadius = new CornerRadius(UiTokens.ControlRadius);
+                        }
+                        else
+                        {
+                            b.Background = Brushes.Transparent;
+                            b.Foreground = fg;
+                            b.BorderThickness = new Thickness(0);
+                        }
+                    }
                 }
         }
 

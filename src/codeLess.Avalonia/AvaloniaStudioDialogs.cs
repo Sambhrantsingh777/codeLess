@@ -344,8 +344,28 @@ namespace codeLess.AvaloniaApp
 
                 if (!string.IsNullOrEmpty(entry.FilePath))
                 {
-                    var fileIcon = AvaloniaExplorerTree.CreateSetiFileIconControl(entry.Title, currentTheme, new Thickness(0, 0, 6, 0));
-                    row.Children.Add(fileIcon);
+                    string iconFileName = System.IO.Path.GetFileName(entry.FilePath);
+                    if (string.IsNullOrEmpty(iconFileName)) iconFileName = entry.Title;
+                    var fileIcon = AvaloniaExplorerTree.CreateSetiFileIconControl(iconFileName, currentTheme, new Thickness(0, 0, 6, 0));
+                    if (!string.IsNullOrEmpty(entry.Category) && !string.Equals(entry.Category, "File", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var prefixRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                        prefixRow.Children.Add(fileIcon);
+                        prefixRow.Children.Add(new TextBlock
+                        {
+                            Text = entry.Category + ":",
+                            FontWeight = FontWeight.Normal,
+                            FontSize = UiTokens.FontUi,
+                            Foreground = new SolidColorBrush(textSecondary),
+                            Margin = new Thickness(0, 0, 5, 0),
+                            VerticalAlignment = VerticalAlignment.Center
+                        });
+                        row.Children.Add(prefixRow);
+                    }
+                    else
+                    {
+                        row.Children.Add(fileIcon);
+                    }
                 }
                 else if (!string.IsNullOrEmpty(entry.Category))
                 {

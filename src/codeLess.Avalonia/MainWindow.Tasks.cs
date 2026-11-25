@@ -355,12 +355,19 @@ namespace codeLess.AvaloniaApp
                 if (!string.IsNullOrEmpty(filter) && rowText.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
                     continue;
                 problemsPanelExtra.Add(d);
-                items.Add(new LiteralTextBlock(rowText)
+                string pFileName = Path.GetFileName(d.FilePath ?? rel);
+                var probRow = new StackPanel { Orientation = global::Avalonia.Layout.Orientation.Horizontal, Spacing = 5, VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Center };
+                probRow.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(pFileName, currentTheme));
+                probRow.Children.Add(new LiteralTextBlock(rowText)
                 {
+                    SetiFileName = pFileName,
+                    SetiIsLight = currentTheme != null && currentTheme.IsLight,
                     FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
                     FontSize = 11.5,
-                    Foreground = new SolidColorBrush(isErr ? Color.FromRgb(248, 113, 113) : Color.FromRgb(250, 204, 21))
+                    Foreground = new SolidColorBrush(isErr ? Color.FromRgb(248, 113, 113) : Color.FromRgb(250, 204, 21)),
+                    VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Center
                 });
+                items.Add(probRow);
             }
         }
 

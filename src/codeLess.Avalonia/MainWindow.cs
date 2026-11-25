@@ -509,7 +509,10 @@ namespace codeLess.AvaloniaApp
         public bool IsStatusBarEolVisible => statusEolBtn?.IsVisible ?? false;
         public bool IsStatusBarLanguageVisible => statusLanguageBtn?.IsVisible ?? false;
         public ListBox OutlineListBoxControl => outlineListBox;
-        public System.Collections.IEnumerable ProblemsListItemsForTest() => problemsListBox?.ItemsSource;
+        public StackPanel OpenEditorsList => openEditorsStack;
+        public ListBox ProblemsListBoxControl => problemsListBox;
+        public System.Collections.IEnumerable ProblemsListItemsForTest() =>
+            problemsListBox?.ItemsSource?.Cast<Control>().Select(c => c is Panel p ? (p.Children.OfType<LiteralTextBlock>().FirstOrDefault() ?? (Control)p) : c).ToList();
         public Button WorkspaceFolderHeaderButton => workspaceFolderHeaderBtn;
         public string StatusBarChordText => statusChordLabel?.Text ?? "";
 
@@ -2333,21 +2336,36 @@ namespace codeLess.AvaloniaApp
             contextPillsWrap.Children.Add(addCtxBtn);
 
             string activePillText = activeTab != null ? $"@{activeTab.FileName}" : "@Workspace";
+            Control activePillChild;
+            if (activeTab != null && !string.IsNullOrEmpty(activeTab.FileName))
+            {
+                var pillRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+                pillRow.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(activeTab.FileName, pillTheme));
+                pillRow.Children.Add(new TextBlock { Text = activePillText, FontSize = UiTokens.FontSmall - 0.5, Foreground = WorkbenchStyles.B(pillTheme.FgPrimary), VerticalAlignment = VerticalAlignment.Center });
+                activePillChild = pillRow;
+            }
+            else
+            {
+                activePillChild = new TextBlock { Text = activePillText, FontSize = UiTokens.FontSmall - 0.5, Foreground = WorkbenchStyles.B(pillTheme.FgPrimary) };
+            }
             contextPillsWrap.Children.Add(new Border
             {
                 CornerRadius = new CornerRadius(UiTokens.ControlRadius),
                 Padding = new Thickness(6, 2),
                 Margin = new Thickness(0, 0, 4, 3),
                 Background = WorkbenchStyles.B(UiTokens.ButtonSecondaryBackground(pillTheme)),
-                Child = new TextBlock { Text = activePillText, FontSize = UiTokens.FontSmall - 0.5, Foreground = WorkbenchStyles.B(pillTheme.FgPrimary) }
+                Child = activePillChild
             });
 
             foreach (string pill in attachedContextPills.ToList())
             {
                 string captured = pill;
+                var pillRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+                pillRow.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(Path.GetFileName(captured), pillTheme));
+                pillRow.Children.Add(new LiteralTextBlock($"@{captured}  ✕") { FontSize = UiTokens.FontSmall - 0.5, VerticalAlignment = VerticalAlignment.Center });
                 var pBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"@{captured}  ✕") { FontSize = UiTokens.FontSmall - 0.5 },
+                    Content = pillRow,
                     FontSize = UiTokens.FontSmall - 0.5,
                     Padding = new Thickness(6, 1),
                     MinHeight = 20,
@@ -2585,6 +2603,7 @@ namespace codeLess.AvaloniaApp
             SetAgentMode(currentAgentMode);
             UpdateAgentTrustComposer();
             RefreshAgentTrustBanner();
+            ThemeRestrictedBanner(theme);
 
             // Status Bar
             statusBarBorder.Background = AvaloniaColorHelper.ToBrush(UiTokens.StatusBarBackground(theme));
@@ -3775,7 +3794,7 @@ namespace codeLess.AvaloniaApp
                 bool isActive = ReferenceEquals(captured, activeTab);
                 var rowGrid = new Grid
                 {
-                    ColumnDefinitions = new ColumnDefinitions("18,*,Auto"),
+                    ColumnDefinitions = new ColumnDefinitions("18,Auto,*,Auto"),
                     Height = 22,
                     Margin = new Thickness(8, 0, 6, 0)
                 };
@@ -3786,6 +3805,9 @@ namespace codeLess.AvaloniaApp
                     Foreground = new SolidColorBrush(captured.IsDirty ? accent : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
                 });
+                var iconCtrl = AvaloniaExplorerTree.CreateSetiFileIconControl(captured.FileName, currentTheme, new Thickness(0, 0, 5, 0));
+                Grid.SetColumn(iconCtrl, 1);
+                rowGrid.Children.Add(iconCtrl);
                 string disambig = (!string.IsNullOrEmpty(captured.FilePath) && disambiguatedFolders.TryGetValue(captured.FilePath, out string df) && !string.IsNullOrEmpty(df))
                     ? $" — {df}"
                     : "";
@@ -3799,7 +3821,7 @@ namespace codeLess.AvaloniaApp
                     Foreground = new SolidColorBrush(isActive ? textPrimary : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
                 };
-                Grid.SetColumn(nameTb, 1);
+                Grid.SetColumn(nameTb, 2);
                 rowGrid.Children.Add(nameTb);
 
                 var btn = new Button
@@ -3865,12 +3887,18 @@ namespace codeLess.AvaloniaApp
                     string rowText = $"{(isErr ? "⊗" : "△")} [{d.Severity}] {tab.FileName}:{d.LineNumber} — {d.Message}";
                     if (!string.IsNullOrEmpty(filter) && rowText.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
                         continue;
-                    probItems.Add(new LiteralTextBlock(rowText)
+                    var probRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+                    probRow.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(tab.FileName, currentTheme));
+                    probRow.Children.Add(new LiteralTextBlock(rowText)
                     {
+                        SetiFileName = tab.FileName,
+                        SetiIsLight = currentTheme != null && currentTheme.IsLight,
                         FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
                         FontSize = 11.5,
-                        Foreground = new SolidColorBrush(isErr ? Color.FromRgb(248, 113, 113) : Color.FromRgb(250, 204, 21))
+                        Foreground = new SolidColorBrush(isErr ? Color.FromRgb(248, 113, 113) : Color.FromRgb(250, 204, 21)),
+                        VerticalAlignment = VerticalAlignment.Center
                     });
+                    probItems.Add(probRow);
                 }
             }
             AppendTaskProblemsForOtherFiles(probItems, tab, ref errCount, ref warnCount);

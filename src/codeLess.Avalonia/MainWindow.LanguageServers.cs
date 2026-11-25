@@ -433,6 +433,7 @@ namespace codeLess.AvaloniaApp
                     Category = rel + ":" + (loc.Range.StartLine + 1),
                     Title = LocationPreview(loc),
                     stringSubtitleOrPath = loc.FilePath,
+                    FilePath = loc.FilePath,
                     Execute = () => NavigateToLspLocation(source, loc)
                 });
             }

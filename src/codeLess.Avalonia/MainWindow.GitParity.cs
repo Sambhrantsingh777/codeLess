@@ -952,9 +952,14 @@ namespace codeLess.AvaloniaApp
             text.Inlines.Add(new Avalonia.Controls.Documents.Run(label) { Foreground = new SolidColorBrush(color) });
             if (dir.Length > 0) text.Inlines.Add(new Avalonia.Controls.Documents.Run("  " + dir) { Foreground = new SolidColorBrush(muted), FontSize = UiTokens.FontSmall });
             if (conflicts > 0) text.Inlines.Add(new Avalonia.Controls.Documents.Run("  " + conflicts + " conflict" + (conflicts == 1 ? "" : "s")) { Foreground = new SolidColorBrush(color), FontSize = UiTokens.FontSmall });
+            var contentGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), VerticalAlignment = VerticalAlignment.Center };
+            var fileIcon = AvaloniaExplorerTree.CreateSetiFileIconControl(Path.GetFileName(e.FullPath ?? label), currentTheme, new Thickness(0, 0, 6, 0));
+            contentGrid.Children.Add(fileIcon);
+            Grid.SetColumn(text, 1);
+            contentGrid.Children.Add(text);
             var open = new Button
             {
-                Content = text,
+                Content = contentGrid,
                 Background = Brushes.Transparent,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Left,

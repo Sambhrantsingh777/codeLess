@@ -1702,13 +1702,17 @@ namespace codeLess.AvaloniaApp
             {
                 var captured = item;
                 var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Height = 24 };
+                var contentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+                contentRow.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(Path.GetFileName(captured.FullPath ?? ""), currentTheme));
+                contentRow.Children.Add(new LiteralTextBlock($"{ScmLabel(captured)}   ({captured.IndexStatus})")
+                {
+                    FontSize = 11.5,
+                    Foreground = new SolidColorBrush(stagedGreen),
+                    VerticalAlignment = VerticalAlignment.Center
+                });
                 var openBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"{ScmLabel(captured)}   ({captured.IndexStatus})")
-                    {
-                        FontSize = 11.5,
-                        Foreground = new SolidColorBrush(stagedGreen)
-                    },
+                    Content = contentRow,
                     FontSize = 11.5,
                     Background = Brushes.Transparent,
                     Foreground = new SolidColorBrush(stagedGreen),
@@ -1728,13 +1732,17 @@ namespace codeLess.AvaloniaApp
             {
                 var captured = item;
                 var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Height = 24 };
+                var contentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+                contentRow.Children.Add(AvaloniaExplorerTree.CreateSetiFileIconControl(Path.GetFileName(captured.FullPath ?? ""), currentTheme));
+                contentRow.Children.Add(new LiteralTextBlock($"{ScmLabel(captured)}   ({(captured.IndexStatus == '?' ? 'U' : captured.DisplayBadge)})")
+                {
+                    FontSize = 11.5,
+                    Foreground = new SolidColorBrush(modAmber),
+                    VerticalAlignment = VerticalAlignment.Center
+                });
                 var openBtn = new Button
                 {
-                    Content = new LiteralTextBlock($"{ScmLabel(captured)}   ({(captured.IndexStatus == '?' ? 'U' : captured.DisplayBadge)})")
-                    {
-                        FontSize = 11.5,
-                        Foreground = new SolidColorBrush(modAmber)
-                    },
+                    Content = contentRow,
                     FontSize = 11.5,
                     Background = Brushes.Transparent,
                     Foreground = new SolidColorBrush(modAmber),

@@ -3658,7 +3658,7 @@ if __name__ == '__main__':
                 string dirty = t.IsDirty ? "● " : "  ";
                 string relDir = !string.IsNullOrEmpty(t.RelativePath) ? Path.GetDirectoryName(t.RelativePath) : "";
                 string suffix = !string.IsNullOrEmpty(relDir) && relDir != "." ? ("  " + relDir.Replace('\\', '/')) : "";
-                openEditorsListBox.Items.Add(dirty + t.FileName + suffix);
+                openEditorsListBox.Items.Add(dirty + "≡ " + t.FileName + suffix);
             }
             int desiredH = openTabs.Count == 0 ? 22 : Math.Min(126, 26 + openTabs.Count * 20);
             openEditorsSectionPanel.Height = openEditorsListBox.Visible ? desiredH : 22;

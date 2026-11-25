@@ -134,8 +134,30 @@ namespace codeLess.Studio
                 restrictedBannerWin.Visible = restricted && !string.Equals(restrictedBannerDismissedForWin, workspaceRoot, StringComparison.Ordinal);
                 if (activeTheme != null)
                 {
-                    restrictedBannerWin.BackColor = activeTheme.IsLight ? Color.FromArgb(0xFF, 0xF4, 0xCE) : Color.FromArgb(0x4A, 0x3A, 0x10);
-                    foreach (Control c in restrictedBannerWin.Controls) c.ForeColor = activeTheme.FgPrimary;
+                    bool isLight = activeTheme.IsLight;
+                    restrictedBannerWin.BackColor = isLight ? Color.FromArgb(0xFF, 0xF4, 0xCE) : Color.FromArgb(0x35, 0x2A, 0x05);
+                    foreach (Control c in restrictedBannerWin.Controls)
+                    {
+                        Button b = c as Button;
+                        if (b != null && b.Text == "Manage")
+                        {
+                            b.BackColor = activeTheme.AccentPrimary;
+                            b.ForeColor = Color.White;
+                            b.FlatAppearance.BorderSize = 1;
+                            b.FlatAppearance.BorderColor = activeTheme.AccentPrimary;
+                        }
+                        else if (b != null && b.Text == "Learn More")
+                        {
+                            b.BackColor = isLight ? Color.FromArgb(0xE5, 0xE5, 0xE5) : Color.FromArgb(0x31, 0x31, 0x31);
+                            b.ForeColor = activeTheme.FgPrimary;
+                            b.FlatAppearance.BorderSize = 1;
+                            b.FlatAppearance.BorderColor = isLight ? Color.FromArgb(0xCE, 0xCE, 0xCE) : Color.FromArgb(0x3C, 0x3C, 0x3C);
+                        }
+                        else
+                        {
+                            c.ForeColor = activeTheme.FgPrimary;
+                        }
+                    }
                 }
             }
             LayoutStatusBarItems();
