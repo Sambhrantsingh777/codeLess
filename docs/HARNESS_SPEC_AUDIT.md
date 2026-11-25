@@ -1,4 +1,4 @@
-# Harness Spec Audit (M1-M6)
+# Harness Spec Audit (M1-M8)
 
 | Feature | Status | File:Line | Test Name |
 |---------|--------|-----------|-----------|
@@ -56,3 +56,4 @@
 | M7d: webfetch tool (NetworkLedger, 5MB cap, HTML conversion, permissions) | Done | src/codeLess.Core/WebFetchTool.cs:21 | `WebFetchM7dTests.WebFetch_OfflineMode_BlockedWithStandardMessage_AndRecordedInLedger`, `WebFetchM7dTests.WebFetch_CapEnforced_RejectsOver5MB`, `WebFetchM7dTests.WebFetch_HtmlToText_And_HtmlToMarkdown_And_RecordsLedgerEntry`, `WebFetchM7dTests.WebFetch_PermissionAskByDefault_DeniedDoesNotFetch_AndAllowedInPlanModeWithApproval`, `WebFetchM7dTests.WebFetch_RefusesCrossHostRedirect_AndNonHttpScheme` |
 | M7e: task subagent tool (read-only tools, depth 1, cancellation, no staging) | Done | src/LlmHarnessAndAgentEngine.cs:3619 | `TaskSubagentM7eTests.Task_ChildDeniedWriteFile_AndNothingIsStaged`, `TaskSubagentM7eTests.Task_NestedTask_IsRefused`, `TaskSubagentM7eTests.Task_StopDuringChild_CancelsPromptly`, `TaskSubagentM7eTests.Task_OutputComesBackToParent_AndReadOnlyToolsWork` |
 | M7f: WinForms parity (Build/Plan toggle, Tab cycle, Todo list rendering) | Done | src/codeLess.Core/AgentUiParity.cs:18 | `WinFormsParityM7fTests.WinForms_BuildPlanMode_CyclesAndNormalizesCorrectly`, `WinFormsParityM7fTests.WinForms_TodoListFormatting_IconsAndStrikethrough_AndOnTodosChanged`, `WinFormsParityM7fTests.WinForms_MainFormAndFeedControl_WiredToBuildPlanToggleAndTodoRenderer` |
+| M8: HARNESS_OPENCODE.md documentation and complete M1-M8 spec audit | Done | docs/HARNESS_OPENCODE.md:3 | `HarnessDocsAuditM8Tests.M8_OpencodeDoc_And_SpecAudit_AreCompleteAndValid` |
