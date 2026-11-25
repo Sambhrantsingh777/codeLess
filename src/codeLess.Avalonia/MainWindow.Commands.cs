@@ -112,6 +112,7 @@ namespace codeLess.AvaloniaApp
         private bool SimulateShortcutCore(Key key, KeyModifiers modifiers)
         {
             if (editorSwitcher.IsOpen && HandleEditorSwitcherKey(key, modifiers)) return true;
+            if (DispatchKeybinding(key, modifiers, false)) return true;
             if (HandleWorkbenchKeyEvent(key, modifiers))
                 return true;
 
