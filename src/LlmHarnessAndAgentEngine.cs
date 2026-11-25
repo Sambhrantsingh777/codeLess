@@ -3155,8 +3155,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                                 Dictionary<string, object> dict = (Dictionary<string, object>)item;
                                 string status = (dict.ContainsKey("status") ? dict["status"].ToString() : "pending").ToLowerInvariant();
                                 string prio = (dict.ContainsKey("priority") ? dict["priority"].ToString() : "medium").ToLowerInvariant();
-                                if (status != "pending" && status != "in_progress" && status != "completed" && status != "cancelled") status = "pending";
-                                if (prio != "high" && prio != "medium" && prio != "low") prio = "medium";
+                                if (status != "pending" && status != "in_progress" && status != "completed" && status != "cancelled") {
+                                    return new AgentToolCallResult { ToolName = "todowrite", Success = false, Summary = "Validation Error", Output = "Invalid status field '" + status + "'. Allowed values are: pending, in_progress, completed, cancelled." };
+                                }
+                                if (prio != "high" && prio != "medium" && prio != "low") {
+                                    return new AgentToolCallResult { ToolName = "todowrite", Success = false, Summary = "Validation Error", Output = "Invalid priority field '" + prio + "'. Allowed values are: high, medium, low." };
+                                }
                                 dict["status"] = status;
                                 dict["priority"] = prio;
                                 newTodos.Add(dict);
@@ -3720,7 +3724,8 @@ else if (toolName == "write_file")
             if (string.Equals(agentMode, "Plan", StringComparison.OrdinalIgnoreCase))
             {
                 // In Plan mode, SEARCH/REPLACE is denied entirely (acting as an edit_file).
-                string perm = AgentPermissions.EvaluateTool(agentMode, "edit_file", "{}", false, null);
+                bool isRestricted = codeLess.Studio.WorkspaceTrust.IsRestricted(workspaceRoot);
+                string perm = AgentPermissions.EvaluateTool(agentMode, "edit_file", "{}", isRestricted, settings);
                 if (perm == "deny") {
                     errorDetails = "SEARCH/REPLACE blocks are not allowed in Plan mode. Use todowrite.";
                     return false;
