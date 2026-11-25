@@ -771,6 +771,7 @@ namespace codeLess.AvaloniaApp
             }
             openTabs.Clear();
             editorMru.Clear();
+            closedTabStates.Clear();
             activeTab = null;
 
             App.WindowManager?.UnregisterWindow(this);
