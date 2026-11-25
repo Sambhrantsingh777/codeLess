@@ -897,14 +897,17 @@ namespace codeLess.AvaloniaApp
             PrimaryEditor.GoToLine(target.LineNumber);
         }
 
-        private void CreateNewWindowInstance()
+        public MainWindow CreateNewWindowInstance()
         {
             try
             {
-                var w = new MainWindow(workspaceRoot);
+                if (App.WindowManager != null)
+                    return App.WindowManager.CreateNewWindow(null) as MainWindow;
+                var w = new MainWindow(null);
                 w.Show();
+                return w;
             }
-            catch { }
+            catch { return null; }
         }
 
         public void CloseAllTabs()

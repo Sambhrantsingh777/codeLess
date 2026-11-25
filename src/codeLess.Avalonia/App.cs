@@ -15,8 +15,7 @@ namespace codeLess.AvaloniaApp
 {
     public class App : Application
     {
-        public static AvaloniaWindowManager WindowManager { get; private set; }
-        public static System.Collections.Generic.IEnumerable<codeLess.Studio.IWorkbenchWindow> TestOpenWindows { get; set; }
+        public static AvaloniaWindowManager WindowManager { get; } = new AvaloniaWindowManager();
         public static string StartupWorkspacePath { get; set; }
 
         private static readonly System.Diagnostics.Stopwatch launchClock = System.Diagnostics.Stopwatch.StartNew();
@@ -79,18 +78,13 @@ namespace codeLess.AvaloniaApp
             // Quit closes via the window so the unsaved-changes prompt in MainWindow.OnClosing can run.
             NativeMenu.SetMenu(this, AppNativeMenu.Build(
                 ActiveWorkbenchWindow,
-                () => {
-                    var lifetime = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
-                    if (lifetime != null) {
-                        var wm = new AvaloniaWindowManager(lifetime);
-                        wm.QuitApplication();
-                    }
-                }));
+                () => WindowManager.QuitApplication()));
         }
 
         /// <summary>The focused workbench window (New Window opens more), else the main one.</summary>
         private MainWindow ActiveWorkbenchWindow()
         {
+            if (WindowManager.GetLastActiveWindow() is MainWindow active) return active;
             if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime dt) return null;
             foreach (var w in dt.Windows)
                 if (w is MainWindow m && m.IsActive) return m;
@@ -120,16 +114,23 @@ namespace codeLess.AvaloniaApp
                 // in the background so tasks, language servers and debug adapters find the user's tools (VS Code parity).
                 UserShellEnvironment.StartResolve();
                 
-                WindowManager = new AvaloniaWindowManager(desktop);
+                WindowManager.AttachDesktopLifetime(desktop);
                 var wm = WindowManager;
-                
+
                 codeLess.Studio.ApplicationSession.OnMessageReceived = (msg, ack) => {
                     Dispatcher.UIThread.Post(() => {
                         codeLess.Studio.ApplicationSession.ProcessArgs(msg.Args, msg.Cwd, wm, ack);
                     });
                 };
-                
-                codeLess.Studio.ApplicationSession.ProcessArgs(desktop.Args, Environment.CurrentDirectory, wm);
+
+                if (IsAutomationRun && !string.IsNullOrEmpty(StartupWorkspacePath))
+                {
+                    wm.CreateNewWindow(StartupWorkspacePath);
+                }
+                else
+                {
+                    codeLess.Studio.ApplicationSession.ProcessArgs(desktop.Args, Environment.CurrentDirectory, wm);
+                }
                 
                 var mainWindow = desktop.MainWindow as MainWindow;
                 if (mainWindow == null && desktop.Windows.Count > 0) {

@@ -62,7 +62,7 @@ namespace codeLess.AvaloniaApp
                 ["file.newTextFile"] = () => CreateNewUntitledTab(),
                 ["file.newFile"] = PromptCreateNewFileInWorkspace,
                 ["file.newFolder"] = PromptCreateNewFolderInWorkspace,
-                ["file.newWindow"] = CreateNewWindowInstance,
+                ["file.newWindow"] = () => CreateNewWindowInstance(),
                 ["file.open"] = () => _ = PromptOpenFileDialogAsync(),
                 ["file.openFolder"] = () => _ = PromptOpenFolderDialogAsync(),
                 [WorkbenchMenuModel.OpenRecentId] = () => { var r = RecentFolders().FirstOrDefault(); if (r != null) LoadWorkspace(r); },
@@ -381,16 +381,14 @@ namespace codeLess.AvaloniaApp
                 if (menu.Title == "Window") {
                     top.SubmenuOpened += (s, e) => {
                         var items = BuildMenuItems(menu.Items, mac);
-                        
-                        var openWindows = App.TestOpenWindows ?? App.WindowManager?.GetOpenWindows();
-                        if (openWindows != null) {
+                        var openWindows = App.WindowManager?.GetOpenWindows()?.OfType<MainWindow>()?.ToList();
+                        if (openWindows != null && openWindows.Count > 0) {
                             items.Add(new Separator());
-                            foreach (var w in openWindows) {
-                                if (w is MainWindow mw) {
-                                    var item = new MenuItem { Header = new LiteralTextBlock(mw.Title) };
-                                    item.Click += (s2, e2) => mw.Activate();
-                                    items.Add(item);
-                                }
+                            foreach (var mw in openWindows) {
+                                var captured = mw;
+                                var item = new MenuItem { Header = new LiteralTextBlock(captured.Title) };
+                                item.Click += (s2, e2) => ((IWorkbenchWindow)captured).FocusWindow();
+                                items.Add(item);
                             }
                         }
                         top.ItemsSource = items;
@@ -483,6 +481,21 @@ namespace codeLess.AvaloniaApp
 
         // ------------------------------------------------------------------ macOS native menu
         private readonly List<(NativeMenuItem Item, string Id)> nativeCheckItems = new List<(NativeMenuItem, string)>();
+        private Action refreshWindowNativeMenu;
+
+        public void RefreshWindowMenu()
+        {
+            refreshWindowNativeMenu?.Invoke();
+        }
+
+        private sealed class DelegateMenuCommand : System.Windows.Input.ICommand
+        {
+            private readonly Action _execute;
+            public DelegateMenuCommand(Action execute) { _execute = execute; }
+            public event EventHandler CanExecuteChanged { add { } remove { } }
+            public bool CanExecute(object parameter) => true;
+            public void Execute(object parameter) => _execute?.Invoke();
+        }
 
         /// <summary>Builds the native menu bar (app menu, File ... Help) from the shared model.</summary>
         private void BuildModelNativeMenu(NativeMenu rootMenu, bool includeAppMenu)
@@ -497,25 +510,35 @@ namespace codeLess.AvaloniaApp
                 // The live macOS app menu is built once in App.Initialize (AppNativeMenu): a later
                 // NativeMenu.SetMenu(Application) is never exported by Avalonia 11.1 (v3.3.3: Quit-only app menu).
                 if (menu.Title == "codeLess" && !includeAppMenu) continue;
-                
-            if (menu.Title == "Window") {
-                EventHandler<EventArgs> populator = null;
-                populator = (s, e) => {
-                    sub.Items.Clear();
-                    FillNativeMenu(sub, menu.Items);
-                    if (App.WindowManager != null) {
-                        sub.Items.Add(new NativeMenuItemSeparator());
-                        foreach (var w in App.WindowManager.GetOpenWindows()) {
-                            if (w is MainWindow mw) {
-                                var item = new NativeMenuItem(mw.Title);
-                                item.Click += (s2, e2) => mw.Activate();
+
+                if (menu.Title == "Window")
+                {
+                    var windowMenuItems = menu.Items;
+                    Action populate = () =>
+                    {
+                        sub.Items.Clear();
+                        FillNativeMenu(sub, windowMenuItems);
+                        var openWindows = App.WindowManager?.GetOpenWindows()?.OfType<MainWindow>()?.ToList();
+                        if (openWindows != null && openWindows.Count > 0)
+                        {
+                            sub.Items.Add(new NativeMenuItemSeparator());
+                            foreach (var mw in openWindows)
+                            {
+                                var captured = mw;
+                                Action focusAction = () => ((IWorkbenchWindow)captured).FocusWindow();
+                                var item = new NativeMenuItem(captured.Title)
+                                {
+                                    Command = new DelegateMenuCommand(focusAction)
+                                };
+                                item.Click += (s2, e2) => focusAction();
                                 sub.Items.Add(item);
                             }
                         }
-                    }
-                };
-                sub.NeedsUpdate += populator;
-            }
+                    };
+                    populate();
+                    sub.NeedsUpdate += (s, e) => populate();
+                    refreshWindowNativeMenu = populate;
+                }
 
                 rootMenu.Add(new NativeMenuItem(menu.Title) { Menu = sub });
             }

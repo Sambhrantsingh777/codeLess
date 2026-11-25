@@ -134,29 +134,62 @@ namespace codeLess.AvaloniaApp
         private StackPanel tabStripStack;
         private Grid editorSplitGrid;
         public AvaloniaEditorControl PrimaryEditor { get; private set; }
-        private void OnSettingsFileChanged(codeLess.Studio.IdePersistentSettings newSettings)
+        public KeybindingManager KeybindingManager { get; private set; }
+        public bool IsClosed => windowClosed;
+        private bool _isApplyingReloadedSettings;
+
+        private void ApplyReloadedSettings()
         {
-            Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+            if (windowClosed || _isApplyingReloadedSettings) return;
+            _isApplyingReloadedSettings = true;
+            try
+            {
                 this.settings = codeLess.Studio.StudioSettings.Load();
                 codeLess.Studio.EditorNicetyOptions.ApplyFrom(this.settings);
                 codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.DisplayTabSize = System.Math.Max(1, System.Math.Min(16, settings.TabSize <= 0 ? 4 : settings.TabSize));
                 codeLess.AvaloniaApp.AvaloniaVirtualEditorCanvas.InsertSpacesSetting = settings.InsertSpaces;
-                if (!string.IsNullOrWhiteSpace(settings.ThemeId)) {
+                if (!string.IsNullOrWhiteSpace(settings.ThemeId))
+                {
                     var newTheme = codeLess.Studio.StudioTheme.GetById(settings.ThemeId);
-                    if (newTheme != currentTheme) {
+                    if (newTheme != null && !string.Equals(newTheme.Id, currentTheme?.Id, StringComparison.OrdinalIgnoreCase))
+                    {
                         currentTheme = newTheme;
-                        ApplyTheme(currentTheme);
+                        ApplyTheme(currentTheme, persistSetting: false);
                     }
                 }
-                if (PrimaryEditor != null && PrimaryEditor.Canvas != null) {
+                if (PrimaryEditor != null && PrimaryEditor.Canvas != null)
+                {
+                    PrimaryEditor.ShowMinimap = settings.ShowMinimap;
+                    PrimaryEditor.ShowBreadcrumbs = settings.ShowBreadcrumbs;
                     PrimaryEditor.Canvas.FontSizePx = settings.EditorFontSize;
                     PrimaryEditor.Canvas.InvalidateVisual();
                 }
-                if (SplitEditor != null && SplitEditor.Canvas != null) {
+                if (SplitEditor != null && SplitEditor.Canvas != null)
+                {
+                    SplitEditor.ShowMinimap = settings.ShowMinimap;
+                    SplitEditor.ShowBreadcrumbs = settings.ShowBreadcrumbs;
                     SplitEditor.Canvas.FontSizePx = settings.EditorFontSize;
                     SplitEditor.Canvas.InvalidateVisual();
                 }
-            });
+                ApplyEditorIndentAndWrapSettings(this.settings);
+            }
+            finally
+            {
+                _isApplyingReloadedSettings = false;
+            }
+        }
+
+        private void OnSettingsFileChanged(codeLess.Studio.IdePersistentSettings newSettings)
+        {
+            if (windowClosed) return;
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+            {
+                ApplyReloadedSettings();
+            }
+            else
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(ApplyReloadedSettings);
+            }
         }
 
         public float GetEditorFontSizeForTests() { return (float)PrimaryEditor.Canvas.FontSizePx; }
@@ -292,6 +325,8 @@ namespace codeLess.AvaloniaApp
             
             codeLess.Studio.IdeSettingsWatcher.Start();
             codeLess.Studio.IdeSettingsWatcher.OnSettingsFileChanged += OnSettingsFileChanged;
+            codeLess.Studio.IdePersistentSettings.OnSettingsSavedInProcess += OnSettingsFileChanged;
+            Activated += (s, e) => App.WindowManager?.NotifyWindowActivated(this);
 
             // When the user switches away, give back memory freed by editing / terminal bursts (throttled: 1/min).
             Deactivated += (s, e) => ProcessMemoryTrimmer.Trim(compactManagedHeap: true); // user is elsewhere: no visible cost
@@ -340,6 +375,9 @@ namespace codeLess.AvaloniaApp
             }
 
             EnsureInitialTerminalSession();
+            KeybindingManager = new KeybindingManager(RuntimeInformation.IsOSPlatform(OSPlatform.OSX));
+            KeybindingManager.RegisterCommands(MenuCommands);
+            App.WindowManager?.RegisterWindow(this);
             UpdateWindowTitle();
             UpdateStatusBar();
         }
@@ -409,6 +447,19 @@ namespace codeLess.AvaloniaApp
         protected override void OnClosed(EventArgs e)
         {
             windowClosed = true; // late background results (analysis) must not touch this window any more
+            codeLess.Studio.IdeSettingsWatcher.OnSettingsFileChanged -= OnSettingsFileChanged;
+            codeLess.Studio.IdePersistentSettings.OnSettingsSavedInProcess -= OnSettingsFileChanged;
+            SaveWorkspaceSession();
+            foreach (var tab in openTabs.ToList())
+            {
+                if (tab?.OnClosed != null)
+                {
+                    var cb = tab.OnClosed;
+                    tab.OnClosed = null;
+                    try { cb(); } catch { }
+                }
+            }
+            App.WindowManager?.UnregisterWindow(this);
             StopWorkspaceWatcher();
             ShutdownLanguageServers();
             try { workspaceLoadCts?.Cancel(); } catch { }
@@ -2542,7 +2593,13 @@ namespace codeLess.AvaloniaApp
 
             int idx = openTabs.IndexOf(tab);
             openTabs.Remove(tab);
-            if (tab.OnClosed != null) { try { tab.OnClosed(); } catch { } }
+            if (tab.OnClosed != null)
+            {
+                var cb = tab.OnClosed;
+                tab.OnClosed = null;
+                try { cb(); } catch { }
+            }
+            SaveWorkspaceSession();
             SweepClosedLargeFileTabs();
 
             if (ReferenceEquals(activeTab, tab))
@@ -3007,6 +3064,7 @@ namespace codeLess.AvaloniaApp
             {
                 Title = "codeLess";
             }
+            App.WindowManager?.RefreshAllWindowMenus();
         }
 
         public void UpdateStatusBar()

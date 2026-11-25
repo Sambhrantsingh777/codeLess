@@ -17,6 +17,14 @@ namespace codeLess.Studio
             this.Activate();
         }
 
+        void IWorkbenchWindow.OpenFolder(string folderPath)
+        {
+            if (!string.IsNullOrEmpty(folderPath) && Directory.Exists(folderPath))
+            {
+                this.LoadWorkspace(folderPath, false);
+            }
+        }
+
         void IWorkbenchWindow.OpenFileInTab(string filePath, Action onClosed)
         {
             var tab = this.OpenFileInTab(filePath);
@@ -59,7 +67,32 @@ namespace codeLess.Studio
             if (t1 != null && onClosed != null) t1.OnClosed += onClosed;
         }
 
-        event EventHandler IWorkbenchWindow.WindowClosed {
+        RestoreWindowInfo IWorkbenchWindow.GetWindowBounds()
+        {
+            return new RestoreWindowInfo
+            {
+                WorkspacePath = this.workspaceRoot ?? "",
+                X = this.Left,
+                Y = this.Top,
+                Width = this.Width > 0 ? this.Width : 1440,
+                Height = this.Height > 0 ? this.Height : 900,
+                IsMaximized = this.WindowState == FormWindowState.Maximized
+            };
+        }
+
+        void IWorkbenchWindow.SetWindowBounds(RestoreWindowInfo bounds)
+        {
+            if (bounds == null) return;
+            this.StartPosition = FormStartPosition.Manual;
+            this.Left = bounds.X;
+            this.Top = bounds.Y;
+            if (bounds.Width > 0) this.Width = bounds.Width;
+            if (bounds.Height > 0) this.Height = bounds.Height;
+            if (bounds.IsMaximized) this.WindowState = FormWindowState.Maximized;
+        }
+
+        event EventHandler IWorkbenchWindow.WindowClosed
+        {
             add { this.FormClosed += (s, e) => value(s, e); }
             remove { this.FormClosed -= (s, e) => value(s, e); }
         }

@@ -516,16 +516,30 @@ namespace codeLess.Studio
                     e.Effect = DragDropEffects.Copy;
             };
             IdeSettingsWatcher.Start();
-            IdeSettingsWatcher.OnSettingsFileChanged += (newSettings) =>
+            Action<IdePersistentSettings> onSettingsChanged = null;
+            onSettingsChanged = (newSettings) =>
             {
-                if (this.IsDisposed) return;
-                this.BeginInvoke(new Action(() => {
-                    this.settings = newSettings;
-                    EditorNicetyOptions.ApplyFrom(this.settings);
-                    this.activeTheme = StudioTheme.ResolveTheme(this.themes, this.settings.ActiveThemeId);
-                    this.ApplySettingsToEditors();
-                    this.ApplyThemeToWorkbench(this.activeTheme);
-                }));
+                if (this.IsDisposed || !this.IsHandleCreated) return;
+                try
+                {
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        if (this.IsDisposed) return;
+                        this.settings = newSettings;
+                        EditorNicetyOptions.ApplyFrom(this.settings);
+                        this.activeTheme = StudioTheme.ResolveTheme(this.themes, this.settings.ActiveThemeId);
+                        this.ApplySettingsToEditors();
+                        this.ApplyThemeToWorkbench(this.activeTheme);
+                    }));
+                }
+                catch { }
+            };
+            IdeSettingsWatcher.OnSettingsFileChanged += onSettingsChanged;
+            IdePersistentSettings.OnSettingsSavedInProcess += onSettingsChanged;
+            this.FormClosed += (s, e) =>
+            {
+                IdeSettingsWatcher.OnSettingsFileChanged -= onSettingsChanged;
+                IdePersistentSettings.OnSettingsSavedInProcess -= onSettingsChanged;
             };
 
             this.DragDrop += (s, e) =>
@@ -9060,8 +9074,16 @@ if __name__ == '__main__':
 
         private void PersistOpenTabPaths()
         {
-            settings.OpenTabPaths = openTabs.Where(t => !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath).ToList();
+            List<string> paths = openTabs.Where(t => !t.IsUntitled && !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath).ToList();
+            settings.OpenTabPaths = paths;
             settings.Save();
+            if (!string.IsNullOrEmpty(workspaceRoot))
+            {
+                WorkspaceSessionState state = new WorkspaceSessionState();
+                state.OpenTabPaths = paths;
+                state.ActiveTabPath = (activeTab != null && !activeTab.IsUntitled) ? activeTab.FilePath : null;
+                WorkspaceSessionStore.Save(workspaceRoot, state);
+            }
         }
 
         private static void ResolveTabBadge(string fileName, StudioTheme theme, out string badge, out Color color)

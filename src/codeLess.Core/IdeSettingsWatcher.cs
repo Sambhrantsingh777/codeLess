@@ -6,64 +6,124 @@ namespace codeLess.Studio
 {
     public static class IdeSettingsWatcher
     {
+        private static readonly object _sync = new object();
         private static FileSystemWatcher _watcher;
         private static Timer _debounceTimer;
+        private static string _watchedPath;
+        private static bool _pendingDebounce;
         public static event Action<IdePersistentSettings> OnSettingsFileChanged;
-        private static DateTime _lastKnownWriteTime = DateTime.MinValue;
+        public static Action<int> DebounceTimerChangeSeam;
 
         public static void Start()
         {
-            if (_watcher != null) return;
             string path = IdePersistentSettings.GetSettingsFilePath();
             string dir = Path.GetDirectoryName(path);
             if (string.IsNullOrEmpty(dir)) return;
-            try { Directory.CreateDirectory(dir); } catch { }
-            try { if (File.Exists(path)) _lastKnownWriteTime = File.GetLastWriteTimeUtc(path); } catch { }
 
-            _watcher = new FileSystemWatcher(dir, Path.GetFileName(path));
-            _watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime;
-            _watcher.Changed += OnFileEvent;
-            _watcher.Created += OnFileEvent;
-            _watcher.EnableRaisingEvents = true;
+            lock (_sync)
+            {
+                if (_watcher != null && string.Equals(_watchedPath, path, StringComparison.Ordinal))
+                    return;
 
-            _debounceTimer = new Timer(OnDebounceTick, null, Timeout.Infinite, Timeout.Infinite);
+                StopInternal();
+                try { Directory.CreateDirectory(dir); } catch { }
+
+                _watchedPath = path;
+                _debounceTimer = new Timer(OnDebounceTick, null, Timeout.Infinite, Timeout.Infinite);
+                try
+                {
+                    _watcher = new FileSystemWatcher(dir, Path.GetFileName(path));
+                    _watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime;
+                    _watcher.Changed += OnFileEvent;
+                    _watcher.Created += OnFileEvent;
+                    _watcher.Renamed += OnRenamedEvent;
+                    _watcher.EnableRaisingEvents = true;
+                }
+                catch { }
+            }
         }
-
-        public static Action<int> DebounceTimerChangeSeam;
 
         private static void OnFileEvent(object sender, FileSystemEventArgs e)
         {
-            try { 
-                if (DebounceTimerChangeSeam != null) DebounceTimerChangeSeam(300);
-                else _debounceTimer.Change(300, Timeout.Infinite); 
-            } catch { }
+            ScheduleDebounce(300);
         }
 
-        public static void StopForTests()
+        private static void OnRenamedEvent(object sender, RenamedEventArgs e)
         {
+            ScheduleDebounce(300);
+        }
+
+        public static void ScheduleDebounce(int delayMs = 300)
+        {
+            lock (_sync)
+            {
+                _pendingDebounce = true;
+                try
+                {
+                    Action<int> seam = DebounceTimerChangeSeam;
+                    if (seam != null)
+                        seam(delayMs);
+                    else if (_debounceTimer != null)
+                        _debounceTimer.Change(delayMs, Timeout.Infinite);
+                }
+                catch { }
+            }
+        }
+
+        private static void StopInternal()
+        {
+            _pendingDebounce = false;
+            _watchedPath = null;
             if (_watcher != null)
             {
-                _watcher.EnableRaisingEvents = false;
-                _watcher.Dispose();
+                try
+                {
+                    _watcher.EnableRaisingEvents = false;
+                    _watcher.Changed -= OnFileEvent;
+                    _watcher.Created -= OnFileEvent;
+                    _watcher.Renamed -= OnRenamedEvent;
+                    _watcher.Dispose();
+                }
+                catch { }
                 _watcher = null;
             }
             if (_debounceTimer != null)
             {
-                _debounceTimer.Dispose();
+                try { _debounceTimer.Dispose(); } catch { }
                 _debounceTimer = null;
             }
         }
 
-        public static void ForceDebounceTickForTests() { OnDebounceTick(null); }
+        public static void StopForTests()
+        {
+            lock (_sync)
+            {
+                StopInternal();
+            }
+        }
+
+        public static void ForceDebounceTickForTests()
+        {
+            OnDebounceTick(null);
+        }
 
         private static void OnDebounceTick(object state)
         {
+            lock (_sync)
+            {
+                if (_debounceTimer != null)
+                {
+                    try { _debounceTimer.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+                }
+                _pendingDebounce = false;
+            }
             try
             {
-                var settings = IdePersistentSettings.Load();
-                if (OnSettingsFileChanged != null)
+                IdePersistentSettings settings = IdePersistentSettings.Load();
+                Action<IdePersistentSettings> handler = OnSettingsFileChanged;
+                if (handler != null)
                 {
-                    OnSettingsFileChanged(settings);
+                    handler(settings);
                 }
             }
             catch { }

@@ -16,18 +16,19 @@ namespace codeLess.Studio
         public string[] Args { get; set; }
     }
 
-    
     public interface IIpcTransport
     {
         Stream ConnectClient(string pipeName, int timeout);
         IIpcServer CreateServer(string pipeName);
     }
+
     public interface IIpcServer : IDisposable
     {
         Stream Stream { get; }
         void WaitForConnection();
         void Disconnect();
     }
+
     public class NamedPipeIpcTransport : IIpcTransport
     {
         public Stream ConnectClient(string pipeName, int timeout)
@@ -36,27 +37,36 @@ namespace codeLess.Studio
             client.Connect(timeout);
             return client;
         }
+
         public IIpcServer CreateServer(string pipeName)
         {
-            try {
+            try
+            {
                 var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
                 return new NamedPipeServer(server);
-            } catch (IOException) {
-                if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
-                    try {
+            }
+            catch (IOException)
+            {
+                if (Environment.OSVersion.Platform != PlatformID.Win32NT)
+                {
+                    try
+                    {
                         string tmp = Path.Combine(Path.GetTempPath(), ".dotnet", "corefx", "pipe", pipeName);
                         if (File.Exists(tmp)) File.Delete(tmp);
-                        else {
+                        else
+                        {
                             tmp = Path.Combine(Path.GetTempPath(), pipeName);
                             if (File.Exists(tmp)) File.Delete(tmp);
                         }
-                    } catch { }
+                    }
+                    catch { }
                 }
                 var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None);
                 return new NamedPipeServer(server);
             }
         }
     }
+
     public class NamedPipeServer : IIpcServer
     {
         private NamedPipeServerStream _server;
@@ -70,7 +80,6 @@ namespace codeLess.Studio
     public static partial class ApplicationSession
     {
         public static Action<ApplicationIpcMessage, Action> OnMessageReceived;
-        
 
         public static bool ShouldBypassForwarding(string[] args)
         {
@@ -83,7 +92,8 @@ namespace codeLess.Studio
                     a == "--bench-ready" || a == "--bench-open-file" || a == "--bench-open-report" ||
                     a == "--bench-open-delay-ms" || a == "--native-self-test" || a == "--smoke-quit")
                     return true;
-                if (a == "--user-data-dir" && i + 1 < args.Length) {
+                if (a == "--user-data-dir" && i + 1 < args.Length)
+                {
                     Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", args[i + 1]);
                 }
             }
@@ -103,13 +113,14 @@ namespace codeLess.Studio
             {
                 baseName += "-" + Environment.UserName;
             }
-            
+
             string settingsDir = Environment.GetEnvironmentVariable("CODELESS_SETTINGS_DIR");
-            if (string.IsNullOrEmpty(settingsDir)) {
+            if (string.IsNullOrEmpty(settingsDir))
+            {
                 settingsDir = IdePersistentSettings.GetSettingsFilePath();
-                settingsDir = System.IO.Path.GetDirectoryName(settingsDir) ?? "";
+                settingsDir = Path.GetDirectoryName(settingsDir) ?? "";
             }
-            
+
             using (var md5 = System.Security.Cryptography.MD5.Create())
             {
                 byte[] data = md5.ComputeHash(Encoding.UTF8.GetBytes(settingsDir.ToLowerInvariant()));
@@ -118,18 +129,18 @@ namespace codeLess.Studio
                 return baseName + "-" + sb.ToString();
             }
         }
-        
+
         public static string OverrideIpcPipeName = null;
         public static IIpcTransport Transport = new NamedPipeIpcTransport();
 
         public static bool TryForwardToPrimaryInstance(string[] args)
         {
             if (ShouldBypassForwarding(args)) return false;
-            
+
             // Check if CODELESS_SETTINGS_DIR points to a test directory (xrunner uses .settings-XXXXXX)
             string sd = Environment.GetEnvironmentVariable("CODELESS_SETTINGS_DIR") ?? "";
             if (sd.IndexOf(".settings-", StringComparison.OrdinalIgnoreCase) >= 0 && OverrideIpcPipeName == null) return false;
-            
+
             string pipeName = OverrideIpcPipeName ?? GetIpcPipeName();
             try
             {
@@ -142,12 +153,14 @@ namespace codeLess.Studio
                     client.Write(len, 0, 4);
                     client.Write(data, 0, data.Length);
                     client.Flush();
-                    
+
                     bool wait = false;
-                    if (args != null) {
-                        foreach(var a in args) if (a == "-w" || a == "--wait") wait = true;
+                    if (args != null)
+                    {
+                        foreach (var a in args) if (a == "-w" || a == "--wait") wait = true;
                     }
-                    if (wait) {
+                    if (wait)
+                    {
                         client.ReadByte();
                     }
                     return true;
@@ -172,11 +185,12 @@ namespace codeLess.Studio
                     {
                         server = Transport.CreateServer(pipeName);
                     }
-                    catch { 
+                    catch
+                    {
                         exceptionCount++;
                         if (exceptionCount > 10) return;
                         Thread.Sleep(500);
-                        continue; 
+                        continue;
                     }
                     exceptionCount = 0;
 
@@ -184,7 +198,7 @@ namespace codeLess.Studio
                     {
                         while (true)
                         {
-                            if (server == null) break; // Re-create server if it was taken by wait
+                            if (server == null) break;
                             server.WaitForConnection();
                             byte[] lenBuf = new byte[4];
                             int read = 0;
@@ -212,22 +226,31 @@ namespace codeLess.Studio
                                         string json = Encoding.UTF8.GetString(data);
                                         var msg = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<ApplicationIpcMessage>(json);
                                         bool wait = false;
-                                        if (msg != null && msg.Args != null) {
+                                        if (msg != null && msg.Args != null)
+                                        {
                                             foreach (var a in msg.Args) if (a == "-w" || a == "--wait") wait = true;
                                         }
-                                        if (wait) {
-                                            if (OnMessageReceived != null) {
+                                        if (wait)
+                                        {
+                                            if (OnMessageReceived != null)
+                                            {
                                                 IIpcServer waitServer = server;
-                                                server = null; // Don't let outer loop dispose it
-                                                OnMessageReceived(msg, () => {
+                                                server = null;
+                                                OnMessageReceived(msg, () =>
+                                                {
                                                     try { waitServer.Stream.WriteByte(1); waitServer.Stream.Flush(); waitServer.Disconnect(); waitServer.Dispose(); } catch { }
                                                 });
-                                                continue; // loop without disconnect
-                                            } else {
+                                                continue;
+                                            }
+                                            else
+                                            {
                                                 try { server.Stream.WriteByte(1); server.Stream.Flush(); } catch { }
                                             }
-                                        } else {
-                                            if (msg != null && OnMessageReceived != null) {
+                                        }
+                                        else
+                                        {
+                                            if (msg != null && OnMessageReceived != null)
+                                            {
                                                 OnMessageReceived(msg, null);
                                             }
                                         }
@@ -249,12 +272,9 @@ namespace codeLess.Studio
             };
             t.Start();
         }
-    }
-}
 
-namespace codeLess.Studio {
-    public static partial class ApplicationSession {
-        public static bool IsSpecialArg(string a) {
+        public static bool IsSpecialArg(string a)
+        {
             return a == "--new-instance" || a == "--user-data-dir" || a == "--screenshot" || a == "-s" ||
                    a == "--screenshot-suite" || a == "-ss" || a == "--bench" || a == "--idle-probe" ||
                    a == "--bench-ready" || a == "--bench-open-file" || a == "--bench-open-report" ||
@@ -262,20 +282,56 @@ namespace codeLess.Studio {
                    a == "--workspace" || a == "-w" || a == "--wait";
         }
 
-
-
-        public static void ProcessArgs(string[] args, string cwd, IWindowManager wm, Action onClosed = null) {
-            if (args == null || args.Length == 0) {
+        public static void ProcessArgs(string[] args, string cwd, IWindowManager wm, Action onClosed = null)
+        {
+            if (args == null || args.Length == 0)
+            {
                 var last = wm.GetLastActiveWindow();
-                if (last != null) last.FocusWindow();
-                else {
-                    var settings = codeLess.Studio.IdePersistentSettings.Load();
-                    if (settings.WindowRestoreWindows != "none" && settings.RestoreWindowPaths != null && settings.RestoreWindowPaths.Count > 0) {
-                        int count = settings.WindowRestoreWindows == "one" ? 1 : settings.RestoreWindowPaths.Count;
-                        for (int i = 0; i < count; i++) {
-                            wm.CreateNewWindow(settings.RestoreWindowPaths[i]);
+                if (last != null)
+                {
+                    if (onClosed != null) last.WindowClosed += (s, e) => onClosed();
+                    last.FocusWindow();
+                }
+                else
+                {
+                    var settings = IdePersistentSettings.Load();
+                    bool hasRestorePaths = settings.RestoreWindowPaths != null && settings.RestoreWindowPaths.Count > 0;
+                    bool hasRestoreBounds = settings.RestoreWindows != null && settings.RestoreWindows.Count > 0;
+                    if (settings.WindowRestoreWindows != "none" && (hasRestorePaths || hasRestoreBounds))
+                    {
+                        if (hasRestorePaths)
+                        {
+                            int count = settings.WindowRestoreWindows == "one" ? 1 : settings.RestoreWindowPaths.Count;
+                            for (int i = 0; i < count; i++)
+                            {
+                                string rPath = settings.RestoreWindowPaths[i];
+                                var win = wm.CreateNewWindow(rPath);
+                                if (win != null && hasRestoreBounds)
+                                {
+                                    RestoreWindowInfo match = settings.RestoreWindows.FirstOrDefault(r =>
+                                        r != null && string.Equals((r.WorkspacePath ?? "").TrimEnd('\\', '/'), (rPath ?? "").TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
+                                    if (match == null && i < settings.RestoreWindows.Count)
+                                        match = settings.RestoreWindows[i];
+                                    if (match != null)
+                                        win.SetWindowBounds(match);
+                                }
+                            }
                         }
-                    } else {
+                        else
+                        {
+                            int count = settings.WindowRestoreWindows == "one" ? 1 : settings.RestoreWindows.Count;
+                            for (int i = 0; i < count; i++)
+                            {
+                                RestoreWindowInfo info = settings.RestoreWindows[i];
+                                string rPath = info != null && !string.IsNullOrEmpty(info.WorkspacePath) ? info.WorkspacePath : null;
+                                var win = wm.CreateNewWindow(rPath);
+                                if (win != null && info != null)
+                                    win.SetWindowBounds(info);
+                            }
+                        }
+                    }
+                    else
+                    {
                         wm.CreateNewWindow(null);
                     }
                 }
@@ -292,7 +348,8 @@ namespace codeLess.Studio {
 
             List<string> paths = new List<string>();
 
-            for (int i = 0; i < args.Length; i++) {
+            for (int i = 0; i < args.Length; i++)
+            {
                 string a = args[i];
                 if (a == "-r" || a == "--reuse-window") reuseWindow = true;
                 else if (a == "-n" || a == "--new-window") newWindow = true;
@@ -300,44 +357,58 @@ namespace codeLess.Studio {
                 else if ((a == "-g" || a == "--goto") && i + 1 < args.Length) gotoFile = args[++i];
                 else if ((a == "-a" || a == "--add") && i + 1 < args.Length) addFolder = args[++i];
                 else if ((a == "-d" || a == "--diff") && i + 2 < args.Length) { diffA = args[++i]; diffB = args[++i]; }
-                else if (a == "--user-data-dir" || a == "--workspace") i++;
+                else if (a == "--workspace" && i + 1 < args.Length) paths.Add(args[++i]);
+                else if ((a == "--user-data-dir" || a == "--screenshot" || a == "-s" ||
+                          a == "--screenshot-suite" || a == "-ss" || a == "--bench" || a == "--idle-probe" ||
+                          a == "--bench-ready" || a == "--bench-open-file" || a == "--bench-open-report" ||
+                          a == "--bench-open-delay-ms" || a == "--native-self-test" || a == "--smoke-quit") && i + 1 < args.Length)
+                {
+                    i++;
+                }
                 else if (!a.StartsWith("-") && !IsSpecialArg(a)) paths.Add(a);
             }
 
-            if (diffA != null && diffB != null) {
-                var w = wm.GetLastActiveWindow() ?? wm.CreateNewWindow(null);
+            if (diffA != null && diffB != null)
+            {
+                var w = (newWindow ? wm.CreateNewWindow(null) : wm.GetLastActiveWindow()) ?? wm.CreateNewWindow(null);
                 w.DiffFiles(GetFullPath(diffA, cwd), GetFullPath(diffB, cwd), onClosed);
                 w.FocusWindow();
                 return;
             }
-            if (addFolder != null) {
+            if (addFolder != null)
+            {
                 var w = wm.GetLastActiveWindow() ?? wm.CreateNewWindow(null);
                 w.AddFolderToWorkspace(GetFullPath(addFolder, cwd));
                 w.FocusWindow();
                 return;
             }
-            if (gotoFile != null) {
+            if (gotoFile != null)
+            {
                 string p = gotoFile;
                 int line = 1, col = 1;
-                int parsed; int parsedLine;
+                int parsed;
+                int parsedLine;
                 int idx = p.LastIndexOf(':');
-                if (idx > 0 && idx < p.Length - 1 && int.TryParse(p.Substring(idx + 1), out parsed)) {
+                if (idx > 0 && idx < p.Length - 1 && int.TryParse(p.Substring(idx + 1), out parsed))
+                {
                     line = parsed;
                     p = p.Substring(0, idx);
                     int idx2 = p.LastIndexOf(':');
-                    if (idx2 > 0 && idx2 < p.Length - 1 && int.TryParse(p.Substring(idx2 + 1), out parsedLine)) {
+                    if (idx2 > 0 && idx2 < p.Length - 1 && int.TryParse(p.Substring(idx2 + 1), out parsedLine))
+                    {
                         col = parsed;
                         line = parsedLine;
                         p = p.Substring(0, idx2);
                     }
                 }
-                var w = wm.GetLastActiveWindow() ?? wm.CreateNewWindow(null);
+                var w = (newWindow ? wm.CreateNewWindow(null) : wm.GetLastActiveWindow()) ?? wm.CreateNewWindow(null);
                 w.OpenFileAtLine(GetFullPath(p, cwd), line, col, onClosed);
                 w.FocusWindow();
                 return;
             }
 
-            if (paths.Count == 0) {
+            if (paths.Count == 0)
+            {
                 var w = wm.GetLastActiveWindow();
                 if (w != null && newWindow) w = wm.CreateNewWindow(null);
                 else if (w == null) w = wm.CreateNewWindow(null);
@@ -346,39 +417,96 @@ namespace codeLess.Studio {
                 return;
             }
 
-            IWorkbenchWindow lastW = null;
-            foreach (var path in paths) {
-                string fullPath = GetFullPath(path, cwd);
-                if (System.IO.Directory.Exists(fullPath)) {
-                    var existing = wm.GetOpenWindows().FirstOrDefault(x => string.Equals(x.WorkspaceRoot, fullPath, StringComparison.OrdinalIgnoreCase) || (x.WorkspaceRoot != null && string.Equals(x.WorkspaceRoot.TrimEnd('\\', '/'), fullPath.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)));
-                    if (existing != null && !newWindow) {
-                        if (onClosed != null) existing.WindowClosed += (s, e) => onClosed();
-                        existing.FocusWindow();
-                        lastW = existing;
-                    } else {
-                        var w = wm.CreateNewWindow(fullPath);
-                        if (onClosed != null) w.WindowClosed += (s, e) => onClosed();
-                        w.FocusWindow();
-                        lastW = w;
+            int remainingCallbacks = paths.Count;
+            Action itemClosed = null;
+            if (onClosed != null)
+            {
+                itemClosed = () =>
+                {
+                    if (Interlocked.Decrement(ref remainingCallbacks) == 0)
+                    {
+                        onClosed();
                     }
-                } else {
-                    var w = wm.GetLastActiveWindow();
-                    if (w == null || newWindow) w = wm.CreateNewWindow(null);
-                    w.OpenFileInTab(fullPath, onClosed);
+                };
+            }
+
+            IWorkbenchWindow newWindowForFiles = null;
+            foreach (var path in paths)
+            {
+                string fullPath = GetFullPath(path, cwd);
+                string normFull = (fullPath ?? "").TrimEnd('\\', '/');
+                var existing = wm.GetOpenWindows().FirstOrDefault(x =>
+                    x != null && !string.IsNullOrEmpty(x.WorkspaceRoot) &&
+                    string.Equals(x.WorkspaceRoot.TrimEnd('\\', '/'), normFull, StringComparison.OrdinalIgnoreCase));
+
+                bool isFolder = existing != null || Directory.Exists(fullPath) ||
+                                (!File.Exists(fullPath) && string.IsNullOrEmpty(Path.GetExtension(fullPath)));
+
+                if (isFolder)
+                {
+                    if (newWindow)
+                    {
+                        var w = wm.CreateNewWindow(fullPath);
+                        if (itemClosed != null) w.WindowClosed += (s, e) => itemClosed();
+                        w.FocusWindow();
+                    }
+                    else if (existing != null)
+                    {
+                        if (itemClosed != null) existing.WindowClosed += (s, e) => itemClosed();
+                        existing.FocusWindow();
+                    }
+                    else if (reuseWindow)
+                    {
+                        var active = wm.GetLastActiveWindow();
+                        if (active != null)
+                        {
+                            active.OpenFolder(fullPath);
+                            if (itemClosed != null) active.WindowClosed += (s, e) => itemClosed();
+                            active.FocusWindow();
+                        }
+                        else
+                        {
+                            var w = wm.CreateNewWindow(fullPath);
+                            if (itemClosed != null) w.WindowClosed += (s, e) => itemClosed();
+                            w.FocusWindow();
+                        }
+                    }
+                    else
+                    {
+                        var w = wm.CreateNewWindow(fullPath);
+                        if (itemClosed != null) w.WindowClosed += (s, e) => itemClosed();
+                        w.FocusWindow();
+                    }
+                }
+                else
+                {
+                    IWorkbenchWindow w;
+                    if (newWindow)
+                    {
+                        if (newWindowForFiles == null)
+                            newWindowForFiles = wm.CreateNewWindow(null);
+                        w = newWindowForFiles;
+                    }
+                    else
+                    {
+                        w = wm.GetLastActiveWindow() ?? wm.CreateNewWindow(null);
+                    }
+                    w.OpenFileInTab(fullPath, itemClosed);
                     w.FocusWindow();
-                    lastW = w;
                 }
             }
-            return;
         }
 
-        private static string GetFullPath(string path, string cwd) {
+        private static string GetFullPath(string path, string cwd)
+        {
             if (string.IsNullOrEmpty(path)) return path;
-            try {
+            try
+            {
                 if (Path.IsPathRooted(path)) return Path.GetFullPath(path);
                 if (!string.IsNullOrEmpty(cwd)) return Path.GetFullPath(Path.Combine(cwd, path));
                 return Path.GetFullPath(path);
-            } catch { return path; }
+            }
+            catch { return path; }
         }
     }
 }

@@ -140,7 +140,7 @@ namespace codeLess.Avalonia.Tests
         }
 
         [AvaloniaFact]
-        public void TitleAndMenus_TopMenuAndNativeMenu_HaveAllNineTopLevelMenus()
+        public void TitleAndMenus_TopMenuAndNativeMenu_HaveAllEightTopLevelMenus()
         {
             string csFile, pyFile, subFile;
             string ws = CreateRichTempWorkspace(out csFile, out pyFile, out subFile);
@@ -154,23 +154,13 @@ namespace codeLess.Avalonia.Tests
                     .Select(m => (m.Header?.ToString() ?? "").Replace("_", ""))
                     .ToList();
 
-                var expectedMenus = OperatingSystem.IsMacOS()
-                    ? new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }
-                    : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" };
-
-                Assert.Equal(expectedMenus, headers);
+                Assert.Equal(new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }, headers);
 
                 // Verify macOS NativeMenu also has codeLess + all 8 standard menus
                 var nativeMenu = NativeMenu.GetMenu(window);
                 Assert.NotNull(nativeMenu);
                 var nativeHeaders = nativeMenu.Items.OfType<NativeMenuItem>().Select(i => i.Header).ToList();
-                var expectedNativeMenus = OperatingSystem.IsMacOS()
-                    ? new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }
-                    : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }; // assuming codeLess is only on mac, but let's check
-                // Actually, let's just make sure it matches what Avalonia produces.
-                Assert.Equal(OperatingSystem.IsMacOS() 
-                    ? new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }
-                    : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }, nativeHeaders);
+                Assert.Equal(new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }, nativeHeaders);
 
                 window.SuppressUnsavedPrompts = true; // dirty test buffers must not cancel Close() and leak the window
                 window.Close();

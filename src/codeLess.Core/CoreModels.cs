@@ -1857,7 +1857,11 @@ namespace codeLess.Studio
         public List<string> OpenTabPaths { get; set; }
         public string WindowRestoreWindows { get; set; }
         public List<string> RestoreWindowPaths { get; set; }
+        public List<RestoreWindowInfo> RestoreWindows { get; set; }
         public List<SavedVendorEntry> Vendors { get; set; }
+        private bool _recentCleared;
+
+        public static event Action<IdePersistentSettings> OnSettingsSavedInProcess;
 
         public const string DefaultExcludedFoldersList = ".git, node_modules, bin, obj, dist, build, out, .venv, __pycache__, .next, target, packages";
 
@@ -1865,6 +1869,7 @@ namespace codeLess.Studio
         {
             WindowRestoreWindows = "all";
             RestoreWindowPaths = new List<string>();
+            RestoreWindows = new List<RestoreWindowInfo>();
             ActiveThemeId = StudioTheme.DefaultThemeId;
             // NOTE: ThemeDefaultMigrated is intentionally left false here. The JSON deserializer runs this constructor
             // and only overwrites fields present in the file, so defaulting it to true would skip the migration for
@@ -1926,6 +1931,9 @@ namespace codeLess.Studio
                         if (IsInstallerProgramDirectory(loaded.LastWorkspacePath))
                             loaded.LastWorkspacePath = loaded.RecentWorkspaces.FirstOrDefault() ?? "";
                         if (loaded.OpenTabPaths == null) loaded.OpenTabPaths = new List<string>();
+                        if (string.IsNullOrEmpty(loaded.WindowRestoreWindows)) loaded.WindowRestoreWindows = "all";
+                        if (loaded.RestoreWindowPaths == null) loaded.RestoreWindowPaths = new List<string>();
+                        if (loaded.RestoreWindows == null) loaded.RestoreWindows = new List<RestoreWindowInfo>();
                         loaded.Vendors = loaded.Vendors ?? new List<SavedVendorEntry>();
                         if (string.IsNullOrWhiteSpace(loaded.EditorFontFamily)) loaded.EditorFontFamily = "Consolas";
                         if (loaded.EditorFontSize < 7f || loaded.EditorFontSize > 28f) loaded.EditorFontSize = 10.5f;
@@ -1987,22 +1995,61 @@ namespace codeLess.Studio
                 // back the lists it loaded at startup over newer history.
                 FindHistoryStore.CopyInto(this);
                 string path = GetSettingsFilePath();
-                JavaScriptSerializer ser = new JavaScriptSerializer();
-                string json = ser.Serialize(this);
-                // Atomic write (temp file + replace) so a crash or full disk mid-write cannot truncate settings.
-                string tmp = path + ".tmp";
-                File.WriteAllText(tmp, json, new UTF8Encoding(false));
-                RestrictToOwner(tmp);
-                if (File.Exists(path))
+                CrossProcessFile.ReadModifyWrite(path, delegate(string targetPath)
                 {
-                    try { File.Replace(tmp, path, null); }
-                    catch { File.Copy(tmp, path, true); File.Delete(tmp); }
-                }
-                else
+                    if (!_recentCleared && File.Exists(targetPath))
+                    {
+                        try
+                        {
+                            string existingJson = File.ReadAllText(targetPath);
+                            JavaScriptSerializer diskSer = new JavaScriptSerializer();
+                            IdePersistentSettings onDisk = diskSer.Deserialize<IdePersistentSettings>(existingJson);
+                            if (onDisk != null)
+                            {
+                                if (onDisk.RecentWorkspaces != null)
+                                {
+                                    if (RecentWorkspaces == null) RecentWorkspaces = new List<string>();
+                                    for (int i = 0; i < onDisk.RecentWorkspaces.Count; i++)
+                                    {
+                                        string rw = onDisk.RecentWorkspaces[i];
+                                        if (!string.IsNullOrWhiteSpace(rw) && !IsInstallerProgramDirectory(rw) &&
+                                            !RecentWorkspaces.Any(p => string.Equals(p, rw, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            RecentWorkspaces.Add(rw);
+                                        }
+                                    }
+                                    if (RecentWorkspaces.Count > 12)
+                                        RecentWorkspaces = RecentWorkspaces.Take(12).ToList();
+                                }
+                                if (onDisk.RecentFiles != null)
+                                {
+                                    if (RecentFiles == null) RecentFiles = new List<string>();
+                                    for (int i = 0; i < onDisk.RecentFiles.Count; i++)
+                                    {
+                                        string rf = onDisk.RecentFiles[i];
+                                        if (!string.IsNullOrWhiteSpace(rf) &&
+                                            !RecentFiles.Any(p => string.Equals(p, rf, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            RecentFiles.Add(rf);
+                                        }
+                                    }
+                                    if (RecentFiles.Count > 15)
+                                        RecentFiles = RecentFiles.Take(15).ToList();
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                    _recentCleared = false;
+                    JavaScriptSerializer ser = new JavaScriptSerializer();
+                    string json = ser.Serialize(this);
+                    CrossProcessFile.AtomicWrite(targetPath, json, true);
+                });
+                Action<IdePersistentSettings> savedHandler = OnSettingsSavedInProcess;
+                if (savedHandler != null)
                 {
-                    File.Move(tmp, path);
+                    try { savedHandler(this); } catch { }
                 }
-                RestrictToOwner(path);
             }
             catch { }
         }
@@ -2047,6 +2094,7 @@ namespace codeLess.Studio
 
         public void ClearRecentlyOpened()
         {
+            _recentCleared = true;
             if (RecentWorkspaces != null) RecentWorkspaces.Clear();
             if (RecentFiles != null) RecentFiles.Clear();
             Save();
