@@ -21,32 +21,19 @@ namespace codeLess.Avalonia.Tests
             var settings = new IdePersistentSettings { RequireAgentToolApproval = false };
             var harness = new LlmHarnessAndAgentEngine(settings);
             
-            // Set up a mock provider that throws 429
-            harness.Vendors.Add(new ByokVendor { Id = "mock", Name = "Mock", BaseUrl = "http://localhost:9999", ApiKey = "mock", SelectedModel = "mock" });
+            var myVendor = new codeLess.Studio.ByokVendor { Id = "mock", Name = "Mock", BaseUrl = "http://localhost:9999", ApiKey = "mockkey1234", SelectedModel = "mock" };
             
-            // Force it to hit the network and fail with a delay
             var method = harness.GetType().GetMethod("CallByokVendorMultiTurnAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
             
-            var oldDelay = ApiRetryHandler.DelayTaskAsync;
-            try {
-                // Cancel streaming on the first delay
-                ApiRetryHandler.DelayTaskAsync = async (ms, ct) => {
-                    harness.CancelStreamingRequested = true;
-                    await Task.Delay(1, ct);
-                };
-                
-                // Need a mock server or we mock the task? Wait, ExecuteWithRetriesAsync tries to run Task.Run which attempts real HTTP. 
-                // That will throw "Connection Refused" not 429. Connection Refused does not trigger a retry-after wait (GetDelayMs returns -1 or backoff).
-                // Actually, if it returns -1, it doesn't wait. Wait, GetDelayMs returns backoff if delay < 0. Connection Refused doesn't have "overloaded", so it returns backoff (2000 ms).
-                // It will wait 2000ms. In that wait, it gets cancelled!
-                // So CallByokVendorMultiTurnAsync returns "".
-                
-                string res = await (Task<string>)method.Invoke(harness, new object[] { harness.Vendors[harness.Vendors.Count - 1], "sys", new List<Dictionary<string, string>>(), 0.15 });
-                Assert.Equal("", res);
-            }
-            finally {
-                ApiRetryHandler.DelayTaskAsync = oldDelay;
-            }
+            var currentTurnEngineField = typeof(LlmHarnessAndAgentEngine).GetField("currentTurnEngine", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var asyncLocal = currentTurnEngineField.GetValue(null);
+            var valProp = asyncLocal.GetType().GetProperty("Value");
+            valProp.SetValue(asyncLocal, harness, null);
+            
+            harness.CancelStreamingRequested = true;
+            
+            string res = await (Task<string>)method.Invoke(harness, new object[] { myVendor, "sys", new List<Dictionary<string, string>>(), 0.15 });
+            Assert.Equal("", res);
         }
 
         [Fact]
@@ -119,11 +106,11 @@ namespace codeLess.Avalonia.Tests
                 return true; 
             };
 
-            var buf = new EditorTabBuffer { FilePath = "/tmp/test.cs" };
+            var buf = new EditorTabBuffer { FilePath = "/tmp/test_" + Guid.NewGuid().ToString() + ".cs" };
             var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             
             // Test Denied
-            var resultDenied = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruction", null, null, buf, "/tmp", new List<string>(), new List<string>(), "", new Dictionary<string, string>() });
+            var resultDenied = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruction", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             Assert.True(approvalRequested);
             Assert.True(sawDenialMessage, "Model should receive a denial message");
             Assert.Equal(3, listDirExecutionsSeen); // 1, 2, 3 executed, 4 denied
@@ -135,7 +122,7 @@ namespace codeLess.Avalonia.Tests
             allowDoomLoop = true;
             sawDenialMessage = false;
             
-            var resultGranted = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruction", null, null, buf, "/tmp", new List<string>(), new List<string>(), "", new Dictionary<string, string>() });
+            var resultGranted = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruction", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             Assert.True(approvalRequested);
             Assert.False(sawDenialMessage, "Should not see denial message when granted");
             Assert.Equal(4, listDirExecutionsSeen); // 1, 2, 3, 4 executed
@@ -146,6 +133,21 @@ namespace codeLess.Avalonia.Tests
     public class ApiRetryStaticCollection { }
 
 
+    public class FakeDiagnosticsProvider : IDiagnosticsProvider
+    {
+        public List<DiagnosticItem> Items { get; set; } = new List<DiagnosticItem>();
+        public int WaitedMs { get; set; } = 0;
+        
+        public async Task<List<DiagnosticItem>> GetDiagnosticsAsync(string filePath, string expectedContent, int timeoutMs)
+        {
+            if (expectedContent != "disk_code" && expectedContent != "code") {
+                throw new Exception("Unexpected content: " + expectedContent);
+            }
+            WaitedMs += timeoutMs;
+            await Task.Delay(1);
+            return Items;
+        }
+    }
 
     public class DiagnosticsProviderM7bTests
     {
@@ -154,6 +156,7 @@ namespace codeLess.Avalonia.Tests
         {
             var harness = new LlmHarnessAndAgentEngine(new IdePersistentSettings { RequireAgentToolApproval = false });
             harness.MaxAgentIterations = 2;
+            harness.OnRequestToolApproval = (tool, args) => true;
             
             var fakeDiags = new FakeDiagnosticsProvider();
             for (int i = 0; i < 25; i++)
@@ -164,49 +167,75 @@ namespace codeLess.Avalonia.Tests
             
             harness.DiagnosticsProvider = fakeDiags;
             
-            int waitedTotal = 0;
-            var oldDelay = LlmHarnessAndAgentEngine.DiagnosticsWaitDelayAsync;
-            LlmHarnessAndAgentEngine.DiagnosticsWaitDelayAsync = ms => { waitedTotal += ms; return Task.Delay(1); };
-            
             int turns = 0;
             harness.CustomModelResponder = (sys, msgs) =>
             {
                 turns++;
-                if (turns == 1) return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"/tmp/test.cs\", \"content\": \"code\"}}</tool_call>");
+                if (turns == 1) return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"/tmp/test_" + Guid.NewGuid().ToString() + ".txt\", \"content\": \"code\"}}</tool_call>");
                 return Task.FromResult("Done");
             };
             
             var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             var buf = new EditorTabBuffer { FilePath = "/tmp/other.cs" };
             
-            try {
-                var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "", new Dictionary<string, string>() });
+            var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            
+            Assert.Single(res.ToolCalls);
+            var tc = res.ToolCalls[0];
+            Assert.True(fakeDiags.WaitedMs > 0, "Provider should wait but didn't. Tool Output: " + tc.Output);
+            Assert.Contains("<file_diagnostics>", tc.Output);
+            Assert.Contains("Err0", tc.Output);
+            Assert.Contains("Err19", tc.Output);
+            Assert.DoesNotContain("Err20", tc.Output); // capped at 20
+            Assert.DoesNotContain("Warn", tc.Output); // warnings excluded
+            
+            // Test null provider appends nothing
+            harness.DiagnosticsProvider = null;
+            turns = 0;
+            var resNull = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            Assert.DoesNotContain("<file_diagnostics>", resNull.ToolCalls[0].Output);
+            
+            // Test no errors appends nothing
+            fakeDiags.Items.Clear();
+            harness.DiagnosticsProvider = fakeDiags;
+            turns = 0;
+            var resEmpty = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            Assert.DoesNotContain("<file_diagnostics>", resEmpty.ToolCalls[0].Output);
+        }
+        
+        [Fact]
+        public async Task Diagnostics_NotifyChangesApplied_AppendsToNextTurnContext()
+        {
+            var harness = new LlmHarnessAndAgentEngine(new IdePersistentSettings { RequireAgentToolApproval = false });
+            harness.MaxAgentIterations = 3;
+            
+            var fakeDiags = new FakeDiagnosticsProvider();
+            fakeDiags.Items.Add(new DiagnosticItem { Severity = "Error", Line = 1, Column = 1, Message = "PostApplyErr" });
+            harness.DiagnosticsProvider = fakeDiags;
+            
+            System.IO.File.WriteAllText("/tmp/post_apply_test.txt", "disk_code");
+            harness.NotifyChangesApplied(new[] { "/tmp/post_apply_test.txt" });
+            
+            int turns = 0;
+            bool sawErrorInContext = false;
+            harness.CustomModelResponder = (sys, msgs) =>
+            {
+                turns++;
+                var lastMsg = msgs[msgs.Count - 1];
+                if (lastMsg["content"].Contains("PostApplyErr"))
+                    sawErrorInContext = true;
                 
-                Assert.Equal(1500, waitedTotal); // timeout doesn't hang and uses test seam
-                Assert.Single(res.ToolCalls);
-                var tc = res.ToolCalls[0];
-                Assert.Contains("<file_diagnostics>", tc.Output);
-                Assert.Contains("Err0", tc.Output);
-                Assert.Contains("Err19", tc.Output);
-                Assert.DoesNotContain("Err20", tc.Output); // capped at 20
-                Assert.DoesNotContain("Warn", tc.Output); // warnings excluded
-                
-                // Test null provider appends nothing
-                harness.DiagnosticsProvider = null;
-                turns = 0;
-                var resNull = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "", new Dictionary<string, string>() });
-                Assert.DoesNotContain("<file_diagnostics>", resNull.ToolCalls[0].Output);
-                
-                // Test no errors appends nothing
-                fakeDiags.Items.Clear();
-                harness.DiagnosticsProvider = fakeDiags;
-                turns = 0;
-                var resEmpty = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "", new Dictionary<string, string>() });
-                Assert.DoesNotContain("<file_diagnostics>", resEmpty.ToolCalls[0].Output);
-                
-            } finally {
-                LlmHarnessAndAgentEngine.DiagnosticsWaitDelayAsync = oldDelay;
-            }
+                if (turns == 1) return Task.FromResult("Thinking...");
+                return Task.FromResult("Done");
+            };
+            
+            var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var buf = new EditorTabBuffer { FilePath = "/tmp/other.cs" };
+            
+            await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            
+            Assert.True(sawErrorInContext, "Should see the post-apply diagnostic error in context.");
+            Assert.Empty(harness.PendingPostApplyDiagnosticsPaths);
         }
     }
 

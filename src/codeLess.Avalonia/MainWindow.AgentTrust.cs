@@ -593,6 +593,8 @@ namespace codeLess.AvaloniaApp
         {
             if (summary.Written.Count > 0)
             {
+                aiEngine?.NotifyChangesApplied(summary.Written);
+                aiEngine?.NotifyChangesApplied(summary.Written);
                 try { RefreshExplorerTree(); } catch { }
                 try { RefreshGitStatusInBackground(); } catch { }
             }

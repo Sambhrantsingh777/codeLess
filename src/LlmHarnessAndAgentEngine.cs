@@ -100,9 +100,11 @@ namespace codeLess.Studio
         public Func<string, string, bool> OnRequestToolApproval;
         public Func<string, string> OnExecuteTerminalCommandInConPty;
         public Func<string, List<Dictionary<string, string>>, Task<string>> CustomModelResponder;
-                public int MaxAgentIterations = 8;
-        
-        public int AgentLoopTimeoutMs = 60000;
+        public int MaxAgentIterations = 8;
+        public IDiagnosticsProvider DiagnosticsProvider { get; set; }
+        public HashSet<string> PendingPostApplyDiagnosticsPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public void NotifyChangesApplied(IEnumerable<string> paths) { foreach(var p in paths) PendingPostApplyDiagnosticsPaths.Add(p); }
+                public int AgentLoopTimeoutMs = 60000;
         public int HttpTimeoutMs = 60000;
 
         public IdePersistentSettings _settings;
@@ -2737,6 +2739,31 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             try
             {
+                if (DiagnosticsProvider != null && PendingPostApplyDiagnosticsPaths.Count > 0)
+                {
+                    foreach (var path in PendingPostApplyDiagnosticsPaths.ToList())
+                    {
+                        var content = System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : "";
+                        var diags = await DiagnosticsProvider.GetDiagnosticsAsync(path, content, 1500);
+                        if (diags != null)
+                        {
+                            var errors = diags.Where(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase)).Take(20).ToList();
+                            if (errors.Count > 0)
+                            {
+                                var sb = new StringBuilder();
+                                sb.AppendLine(string.Format("<file_diagnostics path=\"{0}\">", path));
+                                foreach (var e in errors)
+                                {
+                                    sb.AppendLine(string.Format("ERROR [{0}:{1}] {2}", e.Line, e.Column, e.Message));
+                                }
+                                sb.AppendLine("</file_diagnostics>");
+                                messages.Add(new Dictionary<string, string> { { "role", "user" }, { "content", sb.ToString() } });
+                            }
+                        }
+                    }
+                    PendingPostApplyDiagnosticsPaths.Clear();
+                }
+
                 string finalReply = "";
                 var doomLoopHistory = new List<Tuple<string, string>>();
                 int maxSteps = Math.Max(1, MaxAgentIterations);
@@ -2840,6 +2867,27 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                         AgentToolCallResult tr = ExecuteWorkspaceTool(toolName, args, workspaceRoot, workspaceFiles, activeTab, result.StagedFileContents, mode, _settings);
                         doomLoopHistory.Add(new Tuple<string, string>(signature, tr.Output));
+
+                        if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath) && DiagnosticsProvider != null)
+                        {
+                            var diags = await DiagnosticsProvider.GetDiagnosticsAsync(tr.ModifiedFilePath, result.StagedFileContents[tr.ModifiedFilePath], 1500);
+                            if (diags != null)
+                            {
+                                var errors = diags.Where(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase)).Take(20).ToList();
+                                if (errors.Count > 0)
+                                {
+                                    var sb = new StringBuilder();
+                                    sb.AppendLine();
+                                    sb.AppendLine("<file_diagnostics>");
+                                    foreach (var e in errors)
+                                    {
+                                        sb.AppendLine(string.Format("Line {0}: {1}", e.Line, e.Message));
+                                    }
+                                    sb.AppendLine("</file_diagnostics>");
+                                    tr.Output += sb.ToString();
+                                }
+                            }
+                        }
 
                         result.ToolCalls.Add(tr);
                         if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath)) stagedThisTurn = true;
