@@ -189,6 +189,81 @@ namespace codeLess.Avalonia.Tests
             Assert.True(lp.IsLight);
         }
 
+        [Fact]
+        public void CSharpNumericLiterals_AndBundledGrammarSamples_TokenizeWithoutInvalidScopes()
+        {
+            var reg = TextMateGrammarRegistry.Shared;
+            var csGrammar = reg.GetCompiled("source.cs", true);
+            Assert.NotNull(csGrammar);
+
+            string csNumbersLine = "var a = 128; decimal b = 0m; decimal c = 0.92m; int d = 0x1F; int e = 1_000;";
+            var csRes = csGrammar.TokenizeLine(csNumbersLine, null);
+            string[] literals = { "128", "0m", "0.92m", "0x1F", "1_000" };
+            var dmTheme = TextMateTheme.For(StudioTheme.DarkModern);
+            var lmTheme = TextMateTheme.For(StudioTheme.LightModern);
+
+            foreach (string lit in literals)
+            {
+                int start = csNumbersLine.IndexOf(lit, StringComparison.Ordinal);
+                Assert.True(start >= 0, "Missing literal in sample: " + lit);
+                int end = start + lit.Length;
+                for (int pos = start; pos < end; pos++)
+                {
+                    int tokIdx = 0;
+                    for (int i = 0; i < csRes.Tokens.Count; i++)
+                    {
+                        if (csRes.Tokens.Starts[i] <= pos && pos < csRes.Tokens.EndOf(i))
+                        {
+                            tokIdx = i;
+                            break;
+                        }
+                    }
+                    string scopeStr = csRes.Tokens.Scopes[tokIdx].ToString();
+                    Assert.Contains("constant.numeric", scopeStr);
+                    Assert.DoesNotContain("invalid", scopeStr);
+                    Assert.Equal(TextMateTheme.ParseColor("#B5CEA8"), dmTheme.Resolve(csRes.Tokens.Scopes[tokIdx]).Foreground);
+                    Assert.Equal(TextMateTheme.ParseColor("#098658"), lmTheme.Resolve(csRes.Tokens.Scopes[tokIdx]).Foreground);
+                }
+            }
+
+            // Scan bundled grammars with captures-with-patterns and sample files to ensure zero invalid.* scopes
+            var samplesByScope = new Dictionary<string, string>
+            {
+                { "source.cs", "using System;\nnamespace Demo {\n    public class Calc {\n        public int MaxBatchSize { get; set; } = 128;\n        public decimal Compute(decimal price) => price <= 0m ? 0m : price * 0.92m - 15.50m + 1_000 + 0x1F;\n    }\n}" },
+                { "source.python", "import math\nclass Aggregator:\n    def __init__(self, n: int = 256, scale: float = 1.0):\n        self.n = n\n        self.scale = scale\n    def run(self, x: float) -> float:\n        return round(x * 0.95, 3)\n" },
+                { "source.ts", "export interface Item { readonly id: string; readonly count: number; }\nexport class Store<T extends Item> {\n    private readonly max: number = 3;\n    public add(item: T): number { return item.count > 0 ? this.max : 0; }\n}" },
+                { "source.go", "package main\nimport \"fmt\"\nfunc main() {\n\tx := 128\n\ty := 0.92\n\tz := 0x1F\n\tw := 1_000\n\tfmt.Println(x, y, z, w)\n}" },
+                { "source.rust", "fn calc(x: i32) -> f64 {\n    let base: i32 = 128;\n    let factor: f64 = 0.92;\n    (x + base) as f64 * factor\n}" },
+                { "source.css", ".panel {\n  color: #519aba;\n  padding: 12px 16px;\n  opacity: 0.95;\n}" },
+                { "source.css.scss", "$primary: #519aba;\n.card[data-kind=\"main\"] {\n  color: $primary;\n  margin: 8px;\n}" },
+                { "source.shell", "#!/usr/bin/env bash\ncount=128\nif [ $count -gt 0 ]; then\n  echo \"count is $count\"\nfi" },
+                { "source.makefile", ".PHONY: build test\nbuild:\n\t@echo building 128\ntest: build\n\t@echo testing" },
+                { "text.html.markdown", "# Heading 1\n###### Heading 6\nSome **bold** and `inline` with ~~strike~~ and numbers 128." },
+                { "source.yaml", "version: 2\nservices:\n  app:\n    retries: 3\n    timeout: 1.5" },
+                { "source.json", "{\n  \"name\": \"codeless\",\n  \"count\": 128,\n  \"ratio\": 0.92,\n  \"active\": true\n}" },
+                { "source.sql", "SELECT id, total * 0.92 AS discounted FROM orders WHERE batch_size <= 128;" }
+            };
+
+            foreach (var kv in samplesByScope)
+            {
+                var g = reg.GetCompiled(kv.Key, true);
+                Assert.NotNull(g);
+                TmStateStack state = null;
+                string[] lines = kv.Value.Split('\n');
+                for (int lineIdx = 0; lineIdx < lines.Length; lineIdx++)
+                {
+                    var lineRes = g.TokenizeLine(lines[lineIdx], lineIdx == 0 ? null : state);
+                    state = lineRes.EndState;
+                    for (int t = 0; t < lineRes.Tokens.Count; t++)
+                    {
+                        string sc = lineRes.Tokens.Scopes[t].ToString();
+                        Assert.False(sc.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0,
+                            $"Unexpected invalid scope '{sc}' in {kv.Key} line {lineIdx}: {lines[lineIdx]}");
+                    }
+                }
+            }
+        }
+
         [AvaloniaFact]
         public void ExplorerPaintsSetiGlyphForCsFile_AndRendersVisualQualityScreenshots()
         {
@@ -283,6 +358,25 @@ export class EventDispatcher<T extends TelemetryEvent> {
             File.WriteAllText(csPath, csSample);
             File.WriteAllText(pyPath, pySample);
             File.WriteAllText(tsPath, tsSample);
+
+            // Assert the exact screenshot sample files tokenize with zero invalid.* scopes
+            foreach (var pair in new[] { ("source.cs", csSample), ("source.python", pySample), ("source.ts", tsSample) })
+            {
+                var g = TextMateGrammarRegistry.Shared.GetCompiled(pair.Item1, true);
+                Assert.NotNull(g);
+                TmStateStack st = null;
+                string[] sampleLines = pair.Item2.Replace("\r\n", "\n").Split('\n');
+                for (int li = 0; li < sampleLines.Length; li++)
+                {
+                    var lr = g.TokenizeLine(sampleLines[li], li == 0 ? null : st);
+                    st = lr.EndState;
+                    for (int ti = 0; ti < lr.Tokens.Count; ti++)
+                    {
+                        string sc = lr.Tokens.Scopes[ti].ToString();
+                        Assert.DoesNotContain("invalid", sc);
+                    }
+                }
+            }
 
             // ~20 mixed file types in workspace for Explorer icon verification
             string[] extraFiles =

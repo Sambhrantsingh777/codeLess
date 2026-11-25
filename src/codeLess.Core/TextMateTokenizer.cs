@@ -792,7 +792,25 @@ namespace codeLess.Studio
                     string contentName = cap.GetContentName(text, m);
                     TmScopeStack contentScopes = nameScopes.Push(contentName);
                     TmStateStack sub = stack.Push(cap, g.Index, -1, false, null, nameScopes, contentScopes);
-                    TokenizeString(ctx, g.Index, sub, isFirstLine && g.Index == 0, false, gEnd);
+                    string prevText = ctx.Text;
+                    int prevLen = ctx.Length;
+                    SearchCache prevCache = ctx.Cache;
+                    if (gEnd < prevLen)
+                    {
+                        ctx.Text = prevText.Substring(0, gEnd);
+                        ctx.Length = gEnd;
+                        ctx.Cache = new SearchCache();
+                    }
+                    try
+                    {
+                        TokenizeString(ctx, g.Index, sub, isFirstLine && g.Index == 0, false, gEnd);
+                    }
+                    finally
+                    {
+                        ctx.Text = prevText;
+                        ctx.Length = prevLen;
+                        ctx.Cache = prevCache;
+                    }
                     continue;
                 }
                 string capName = cap.GetName(text, m);
