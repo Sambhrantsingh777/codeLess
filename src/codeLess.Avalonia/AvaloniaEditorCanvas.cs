@@ -4293,8 +4293,10 @@ namespace codeLess.AvaloniaApp
             {
                 if (owner.IsFindOverlayVisible) { owner.HideFindBar(); e.Handled = true; return; }
                 if (owner.IsInlineAiBarVisible) { owner.HideInlineAiBar(); e.Handled = true; return; }
-                if (ExtraCursors.Count > 0) { ExtraCursors.Clear(); InvalidateVisual(); e.Handled = true; return; }
+                if (ExtraCursors.Count > 0 || buf.ExtraCarets.Count > 0) { ExtraCursors.Clear(); buf.ExtraCarets.Clear(); InvalidateVisual(); e.Handled = true; return; }
                 if (buf.HasSelection()) { buf.ClearSelection(); InvalidateVisual(); e.Handled = true; return; }
+                var mw = TopLevel.GetTopLevel(this) as MainWindow;
+                if (mw != null && mw.IsBottomPanelVisible) { mw.ToggleBottomPanel(); e.Handled = true; return; }
             }
 
             // Find & Replace

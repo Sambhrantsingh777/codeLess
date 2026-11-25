@@ -1028,6 +1028,7 @@ namespace codeLess.Studio
         {
             if (HandleEditorSwitcherCmdKey(keyData)) return true; // Ctrl+Tab from any control (before focus navigation)
             if (debugController != null && HandleDebugKey(keyData)) return true;
+            if (DispatchKeybindingWin(keyData)) return true;
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
