@@ -531,6 +531,23 @@ namespace codeLess.AvaloniaApp
             var studioSettings = target;
             if (studioSettings != null)
             {
+                if (!ReferenceEquals(studioSettings, settings))
+                {
+                    settings.FormatOnSave = studioSettings.FormatOnSave;
+                    settings.TrimTrailingWhitespaceOnSave = studioSettings.TrimTrailingWhitespaceOnSave;
+                    settings.InsertFinalNewlineOnSave = studioSettings.InsertFinalNewlineOnSave;
+                    settings.TrimFinalNewlinesOnSave = studioSettings.TrimFinalNewlinesOnSave;
+                    settings.AutoSaveMode = studioSettings.AutoSaveMode;
+                    settings.AutoSaveDelayMs = studioSettings.AutoSaveDelayMs;
+                    settings.HotExit = studioSettings.HotExit;
+                    settings.FilesEol = studioSettings.FilesEol;
+                    settings.AutoGuessEncoding = studioSettings.AutoGuessEncoding;
+                    settings.LargeFileThresholdMB = studioSettings.LargeFileThresholdMB;
+                    settings.ExcludedFolders = studioSettings.ExcludedFolders;
+                    settings.GitAutoFetch = studioSettings.GitAutoFetch;
+                    settings.GitRebaseWhenSync = studioSettings.GitRebaseWhenSync;
+                    settings.NativeToolCalling = studioSettings.NativeToolCalling;
+                }
                 ApplyTheme(StudioTheme.GetById(studioSettings.ActiveThemeId), persistSetting: false);
                 PrimaryEditor.ShowMinimap = studioSettings.ShowMinimap;
                 PrimaryEditor.ShowBreadcrumbs = studioSettings.ShowBreadcrumbs;

@@ -1144,10 +1144,22 @@ namespace codeLess.Studio
         private void ApplySaveParticipantsWin(EditorTabBuffer buf, bool backgroundSave)
         {
             if (buf == null || buf.IsLargeFileViewer) return;
+            bool changed = false;
+            if (settings != null && settings.FormatOnSave && !backgroundSave && autoSaveDepthWin == 0)
+            {
+                if (lspController == null || !lspController.IsActiveFor(buf))
+                {
+                    int tabSize = EditorIndentation.EffectiveTabSize(buf, settings.TabSize);
+                    bool spaces = EditorIndentation.EffectiveInsertSpaces(buf, settings.InsertSpaces);
+                    if (SaveActions.FormatBufferFallback(buf, tabSize, spaces))
+                        changed = true;
+                }
+            }
             SaveActionOptions opts = SaveActionOptions.FromSettings(settings, backgroundSave || autoSaveDepthWin > 0);
             EditorConfigResolver.ApplyBeforeSave(buf, opts); // end_of_line, charset, final newline / trailing whitespace (QA #12)
-            if (!opts.Any) return;
-            if (SaveActions.ApplyToBuffer(buf, opts))
+            if (opts.Any && SaveActions.ApplyToBuffer(buf, opts))
+                changed = true;
+            if (changed)
             {
                 if (editorControl != null && ReferenceEquals(editorControl.CurrentBuffer, buf)) editorControl.Canvas.Invalidate();
             }

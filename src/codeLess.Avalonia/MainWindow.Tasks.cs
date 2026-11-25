@@ -343,15 +343,19 @@ namespace codeLess.AvaloniaApp
         private void AppendTaskProblemsForOtherFiles(List<Control> items, EditorTabBuffer tab, ref int errCount, ref int warnCount)
         {
             problemsPanelExtra.Clear();
+            string filter = (ProblemsFilterText ?? "").Trim();
             string activeKey = tab != null && !string.IsNullOrEmpty(tab.FilePath) ? LspText.PathKey(tab.FilePath) : null;
             foreach (var d in TaskProblemStore.All())
             {
                 if (activeKey != null && LspText.PathKey(d.FilePath) == activeKey) continue;
                 bool isErr = string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase);
                 if (isErr) errCount++; else warnCount++;
-                problemsPanelExtra.Add(d);
                 string rel = !string.IsNullOrEmpty(d.RelativePath) ? d.RelativePath : Path.GetFileName(d.FilePath);
-                items.Add(new LiteralTextBlock((isErr ? "⊗" : "△") + " [" + d.Severity + "] " + rel + ":" + d.Line + ":" + d.Column + " — " + d.Message + "  (" + d.Source + ")")
+                string rowText = (isErr ? "⊗" : "△") + " [" + d.Severity + "] " + rel + ":" + d.Line + ":" + d.Column + " — " + d.Message + "  (" + d.Source + ")";
+                if (!string.IsNullOrEmpty(filter) && rowText.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                problemsPanelExtra.Add(d);
+                items.Add(new LiteralTextBlock(rowText)
                 {
                     FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
                     FontSize = 11.5,
@@ -377,10 +381,23 @@ namespace codeLess.AvaloniaApp
         private void ApplySaveParticipants(EditorTabBuffer tab)
         {
             if (tab == null || tab.IsLargeFileViewer) return;
+            bool changed = false;
+            if (settings != null && settings.FormatOnSave && autoSaveDepth == 0)
+            {
+                string path = LspPathFor(tab);
+                if (path == null || lsp == null || !lsp.IsActive(path))
+                {
+                    int tabSize = EditorIndentation.EffectiveTabSize(tab, settings.TabSize);
+                    bool spaces = EditorIndentation.EffectiveInsertSpaces(tab, settings.InsertSpaces);
+                    if (SaveActions.FormatBufferFallback(tab, tabSize, spaces))
+                        changed = true;
+                }
+            }
             var opts = SaveActionOptions.FromSettings(settings, autoSaveDepth > 0);
             EditorConfigResolver.ApplyBeforeSave(tab, opts); // end_of_line, charset, final newline / trailing whitespace
-            if (!opts.Any) return;
-            if (SaveActions.ApplyToBuffer(tab, opts))
+            if (opts.Any && SaveActions.ApplyToBuffer(tab, opts))
+                changed = true;
+            if (changed)
             {
                 if (ReferenceEquals(PrimaryEditor?.CurrentBuffer, tab)) PrimaryEditor.Canvas.InvalidateVisual();
                 if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, tab)) SplitEditor.Canvas.InvalidateVisual();
