@@ -24,7 +24,7 @@ namespace codeLess.Studio
             
             if (toolName == "webfetch")
             {
-                string userPerm = settings != null && !string.IsNullOrEmpty(settings.AgentPermissionWebfetch) ? settings.AgentPermissionWebfetch.ToLowerInvariant() : "allow";
+                string userPerm = settings != null && !string.IsNullOrEmpty(settings.AgentPermissionWebfetch) ? settings.AgentPermissionWebfetch.ToLowerInvariant() : "ask";
                 return MergeStricter(baseLevel, userPerm);
             }
 

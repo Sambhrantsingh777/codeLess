@@ -71,7 +71,8 @@ namespace codeLess.Studio
             new AgentToolDefinition { Name = "get_diagnostics", Aliases = new string[] { }, Description = "Get language server diagnostics (errors/warnings) for a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
             new AgentToolDefinition { Name = "ast_outline", Aliases = new string[] { }, Description = "Get an AST outline of a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
             new AgentToolDefinition { Name = "todowrite", Aliases = new string[] { }, Description = "Write the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\"}},\"required\":[\"todos\"]}", IsReadOnly = false },
-            new AgentToolDefinition { Name = "todoread", Aliases = new string[] { }, Description = "Read the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}", IsReadOnly = true }
+            new AgentToolDefinition { Name = "todoread", Aliases = new string[] { }, Description = "Read the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "webfetch", Aliases = new string[] { }, Description = "Fetch content from a URL (http/https) as markdown, text, or html.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\",\"enum\":[\"text\",\"markdown\",\"html\"]},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}", IsReadOnly = true }
         };
 
         public List<ByokVendor> Vendors = new List<ByokVendor>();
@@ -3540,6 +3541,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 {
                     string json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(AgentTodos);
                     return new AgentToolCallResult { ToolName = "todoread", Success = true, Summary = "Read plan", Output = "{\"todos\":" + json + "}" };
+                }
+                else if (toolName == "webfetch")
+                {
+                    return WebFetchTool.Execute(args);
                 }
 else if (toolName == "glob")
                 {

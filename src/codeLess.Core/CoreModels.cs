@@ -1915,7 +1915,7 @@ namespace codeLess.Studio
             RequireAgentToolApproval = true;
             NativeToolCalling = true;
             AgentPermissionEdit = "allow";
-            AgentPermissionWebfetch = "allow";
+            AgentPermissionWebfetch = "ask";
             AgentPermissionBash = new Dictionary<string, string>();
 
             AutoCheckForUpdates = true;

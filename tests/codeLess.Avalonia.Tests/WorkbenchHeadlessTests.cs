@@ -55,6 +55,10 @@ namespace codeLess.Avalonia.Tests
 
                 Assert.Equal("build", window.CurrentAgentMode);
                 Assert.True(tabEvent2.Handled);
+
+                window.SuppressUnsavedPrompts = true;
+                window.Close();
+                global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
             }
             finally
             {
