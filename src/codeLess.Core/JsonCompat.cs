@@ -247,11 +247,6 @@ namespace System.Web.Script.Serialization
                 char c = s[idx++];
                 if (c == '"')
                     return sb.ToString();
-                if (c == '\n' || c == '\r')
-                {
-                    // Unterminated string literal before end of line: stop at the newline so subsequent properties remain parsable.
-                    return sb.ToString();
-                }
                 if (c == '\\' && idx < s.Length)
                 {
                     char esc = s[idx++];
