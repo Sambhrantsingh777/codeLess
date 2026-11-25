@@ -154,7 +154,7 @@ namespace codeLess.Avalonia.Tests
                     .Select(m => (m.Header?.ToString() ?? "").Replace("_", ""))
                     .ToList();
 
-                var expectedMenus = global::Avalonia.Compatibility.OperatingSystem.IsMacOS()
+                var expectedMenus = OperatingSystem.IsMacOS()
                     ? new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }
                     : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" };
 
@@ -164,11 +164,11 @@ namespace codeLess.Avalonia.Tests
                 var nativeMenu = NativeMenu.GetMenu(window);
                 Assert.NotNull(nativeMenu);
                 var nativeHeaders = nativeMenu.Items.OfType<NativeMenuItem>().Select(i => i.Header).ToList();
-                var expectedNativeMenus = global::Avalonia.Compatibility.OperatingSystem.IsMacOS()
+                var expectedNativeMenus = OperatingSystem.IsMacOS()
                     ? new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }
                     : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }; // assuming codeLess is only on mac, but let's check
                 // Actually, let's just make sure it matches what Avalonia produces.
-                Assert.Equal(global::Avalonia.Compatibility.OperatingSystem.IsMacOS() 
+                Assert.Equal(OperatingSystem.IsMacOS() 
                     ? new[] { "codeLess", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help" }
                     : new[] { "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help" }, nativeHeaders);
 

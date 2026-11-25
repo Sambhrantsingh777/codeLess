@@ -135,7 +135,7 @@ namespace codeLess.AvaloniaApp.Tests
         [AvaloniaFact]
         public void WindowMenu_ItemsMatchOpenWindows()
         {
-            if (!global::Avalonia.Compatibility.OperatingSystem.IsMacOS()) return;
+            if (!OperatingSystem.IsMacOS()) return;
 
             string tmpDir1 = Path.Combine(Path.GetTempPath(), "mw-test1-" + Guid.NewGuid().ToString("N"));
             string tmpDir2 = Path.Combine(Path.GetTempPath(), "mw-test2-" + Guid.NewGuid().ToString("N"));
