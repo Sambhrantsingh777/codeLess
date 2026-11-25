@@ -104,7 +104,7 @@ namespace codeLess.Studio
         public IDiagnosticsProvider DiagnosticsProvider { get; set; }
         public HashSet<string> PendingPostApplyDiagnosticsPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public void NotifyChangesApplied(IEnumerable<string> paths) { foreach(var p in paths) PendingPostApplyDiagnosticsPaths.Add(p); }
-                public int AgentLoopTimeoutMs = 60000;
+        public int AgentLoopTimeoutMs = 60000;
         public int HttpTimeoutMs = 60000;
 
         public IdePersistentSettings _settings;
@@ -2870,21 +2870,25 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                         if (tr.Success && !string.IsNullOrEmpty(tr.ModifiedFilePath) && DiagnosticsProvider != null)
                         {
-                            var diags = await DiagnosticsProvider.GetDiagnosticsAsync(tr.ModifiedFilePath, result.StagedFileContents[tr.ModifiedFilePath], 1500);
-                            if (diags != null)
+                            string expectedContent;
+                            if (result.StagedFileContents.TryGetValue(tr.ModifiedFilePath, out expectedContent))
                             {
-                                var errors = diags.Where(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase)).Take(20).ToList();
-                                if (errors.Count > 0)
+                                var diags = await DiagnosticsProvider.GetDiagnosticsAsync(tr.ModifiedFilePath, expectedContent, 1500);
+                                if (diags != null)
                                 {
-                                    var sb = new StringBuilder();
-                                    sb.AppendLine();
-                                    sb.AppendLine("<file_diagnostics>");
-                                    foreach (var e in errors)
+                                    var errors = diags.Where(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase)).Take(20).ToList();
+                                    if (errors.Count > 0)
                                     {
-                                        sb.AppendLine(string.Format("Line {0}: {1}", e.Line, e.Message));
+                                        var sb = new StringBuilder();
+                                        sb.AppendLine();
+                                        sb.AppendLine(string.Format("<file_diagnostics path=\"{0}\">", tr.ModifiedFilePath));
+                                        foreach (var e in errors)
+                                        {
+                                            sb.AppendLine(string.Format("ERROR [{0}:{1}] {2}", e.Line, e.Column, e.Message));
+                                        }
+                                        sb.AppendLine("</file_diagnostics>");
+                                        tr.Output += sb.ToString();
                                     }
-                                    sb.AppendLine("</file_diagnostics>");
-                                    tr.Output += sb.ToString();
                                 }
                             }
                         }

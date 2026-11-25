@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using codeLess.Studio;
@@ -6,16 +7,26 @@ namespace codeLess.AvaloniaApp
 {
     public class LspDiagnosticsProvider : IDiagnosticsProvider
     {
-        public Task<List<DiagnosticItem>> GetDiagnosticsAsync(string filePath, string expectedContent, int timeoutMs)
-        {
-            
-            var currentContent = System.IO.File.Exists(filePath) ? System.IO.File.ReadAllText(filePath) : "";
-            // We just do a dumb sync for Avalonia because we don't have access to the open buffer contents here easily.
-            // Wait, we can get the buffer via Workspace. 
-            // The prompt says: "The provider owns the waiting... return null immediately when the document content the server knows about (open buffer or disk) != expectedContent."
-            if (currentContent != expectedContent) return Task.FromResult<List<DiagnosticItem>>(null);
-            return Task.FromResult(LspDiagnosticsStore.Get(filePath));
+        public static Func<int, Task> DelayAsync = Task.Delay;
 
+        public async Task<List<DiagnosticItem>> GetDiagnosticsAsync(string filePath, string expectedContent, int timeoutMs)
+        {
+            var currentContent = System.IO.File.Exists(filePath) ? System.IO.File.ReadAllText(filePath) : "";
+            if (currentContent != expectedContent) return null;
+            
+            var diags = LspDiagnosticsStore.Get(filePath);
+            if (diags.Count > 0) return diags;
+            
+            int slept = 0;
+            while (slept < timeoutMs)
+            {
+                await DelayAsync(50);
+                slept += 50;
+                diags = LspDiagnosticsStore.Get(filePath);
+                if (diags.Count > 0) return diags;
+            }
+            
+            return diags;
         }
     }
 }

@@ -152,6 +152,59 @@ namespace codeLess.Avalonia.Tests
     public class DiagnosticsProviderM7bTests
     {
         [Fact]
+        public async Task Diagnostics_NullProvider_IsFastAndAddsNoBlock()
+        {
+            var harness = new LlmHarnessAndAgentEngine(new IdePersistentSettings { RequireAgentToolApproval = false });
+            harness.MaxAgentIterations = 2;
+            harness.DiagnosticsProvider = null;
+            
+            harness.OnRequestToolApproval = (tool, args) => true;
+            int turns = 0;
+            harness.CustomModelResponder = (sys, msgs) =>
+            {
+                turns++;
+                if (turns == 1) return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"/tmp/test_fast.txt\", \"content\": \"code\"}}</tool_call>");
+                return Task.FromResult("Done");
+            };
+            
+            var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var buf = new EditorTabBuffer { FilePath = "/tmp/other.cs" };
+            
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+            sw.Stop();
+            
+            Assert.True(sw.ElapsedMilliseconds < 1000, "Turn should be fast without provider");
+            Assert.DoesNotContain("<file_diagnostics", res.ToolCalls[0].Output);
+        }
+
+        [Fact]
+        public async Task LspDiagnosticsProvider_ContentMismatch_ReturnsNull()
+        {
+            var p = new codeLess.AvaloniaApp.LspDiagnosticsProvider();
+            System.IO.File.WriteAllText("/tmp/test_mismatch.txt", "disk_code");
+            var res = await p.GetDiagnosticsAsync("/tmp/test_mismatch.txt", "staged_code", 100);
+            Assert.Null(res);
+        }
+
+        [Fact]
+        public async Task LspDiagnosticsProvider_ContentMatch_ReturnsErrors()
+        {
+            var p = new codeLess.AvaloniaApp.LspDiagnosticsProvider();
+            System.IO.File.WriteAllText("/tmp/test_match.txt", "disk_code");
+            
+            try {
+                LspDiagnosticsStore.Set("/tmp/test_match.txt", new List<DiagnosticItem> { new DiagnosticItem { Severity = "Error", Line = 1, Message = "Test" } });
+                var res = await p.GetDiagnosticsAsync("/tmp/test_match.txt", "disk_code", 100);
+                Assert.NotNull(res);
+                Assert.Single(res);
+                Assert.Equal("Test", res[0].Message);
+            } finally {
+                LspDiagnosticsStore.Set("/tmp/test_match.txt", null);
+            }
+        }
+
+        [Fact]
         public async Task Diagnostics_AppendsErrors_CapsAt20_IgnoresWarnings_AndDoesNotHang()
         {
             var harness = new LlmHarnessAndAgentEngine(new IdePersistentSettings { RequireAgentToolApproval = false });
@@ -183,7 +236,7 @@ namespace codeLess.Avalonia.Tests
             Assert.Single(res.ToolCalls);
             var tc = res.ToolCalls[0];
             Assert.True(fakeDiags.WaitedMs > 0, "Provider should wait but didn't. Tool Output: " + tc.Output);
-            Assert.Contains("<file_diagnostics>", tc.Output);
+            Assert.Contains("<file_diagnostics path", tc.Output);
             Assert.Contains("Err0", tc.Output);
             Assert.Contains("Err19", tc.Output);
             Assert.DoesNotContain("Err20", tc.Output); // capped at 20
@@ -193,14 +246,14 @@ namespace codeLess.Avalonia.Tests
             harness.DiagnosticsProvider = null;
             turns = 0;
             var resNull = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
-            Assert.DoesNotContain("<file_diagnostics>", resNull.ToolCalls[0].Output);
+            Assert.DoesNotContain("<file_diagnostics path", resNull.ToolCalls[0].Output);
             
             // Test no errors appends nothing
             fakeDiags.Items.Clear();
             harness.DiagnosticsProvider = fakeDiags;
             turns = 0;
             var resEmpty = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, "/tmp", new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
-            Assert.DoesNotContain("<file_diagnostics>", resEmpty.ToolCalls[0].Output);
+            Assert.DoesNotContain("<file_diagnostics path", resEmpty.ToolCalls[0].Output);
         }
         
         [Fact]
