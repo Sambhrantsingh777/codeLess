@@ -368,6 +368,18 @@ namespace codeLess.Avalonia.Tests
             Assert.True(w.SaveBufferToDisk(tab));
             Assert.False(w.IsHotExitTimerRunning);
 
+            // Exercise M9b custom agents mtime cache (repeated discovery must not re-parse unchanged .md files)
+            CustomAgentAndCommandRegistry.ClearCache();
+            var agents1 = CustomAgentAndCommandRegistry.DiscoverAgents(wsRoot);
+            Assert.True(agents1.ContainsKey("reviewer"));
+            int parseCount1 = CustomAgentAndCommandRegistry.TotalFileParseCount;
+            var agents2 = CustomAgentAndCommandRegistry.DiscoverAgents(wsRoot);
+            Assert.Equal(parseCount1, CustomAgentAndCommandRegistry.TotalFileParseCount);
+
+            // Exercise M9c @file completer
+            var atItems = ChatAtMentionCompleter.GetSuggestions("app", wsRoot, new[] { filePath }, 10);
+            Assert.NotEmpty(atItems);
+
             // Exercise W7 Command Palette Tab cycling & Escape cascade + W10 binary placeholder
             w.OpenCommandPalette();
             w.CommandPalette.CycleSelection(1);
@@ -390,6 +402,7 @@ namespace codeLess.Avalonia.Tests
             w.CloseAllTabs();
             w.CloseWorkspaceFolder();
             w.Close();
+            CustomAgentAndCommandRegistry.ClearCache();
             return (winWeak, tabWeak, allTimersStopped, hotExitStopped, lazyAiAtIdle);
         }
 

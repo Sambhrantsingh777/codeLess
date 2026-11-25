@@ -802,6 +802,8 @@ namespace codeLess.AvaloniaApp
             internalSaveTimestamps.Clear();
             tabTitleBlocks.Clear();
             lastConflictNotificationChoices.Clear();
+            chatAtMentionSuggestions.Clear();
+            if (chatAtMentionListBox != null) chatAtMentionListBox.ItemsSource = null;
             ExternalConflictDecisionOverride = null;
             SaveConflictDecisionOverride = null;
             UnsavedPromptOverride = null;
