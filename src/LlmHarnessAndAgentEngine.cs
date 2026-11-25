@@ -72,7 +72,8 @@ namespace codeLess.Studio
             new AgentToolDefinition { Name = "ast_outline", Aliases = new string[] { }, Description = "Get an AST outline of a file.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}", IsReadOnly = true },
             new AgentToolDefinition { Name = "todowrite", Aliases = new string[] { }, Description = "Write the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"array\"}},\"required\":[\"todos\"]}", IsReadOnly = false },
             new AgentToolDefinition { Name = "todoread", Aliases = new string[] { }, Description = "Read the plan todos.", JsonSchema = "{\"type\":\"object\",\"properties\":{},\"required\":[]}", IsReadOnly = true },
-            new AgentToolDefinition { Name = "webfetch", Aliases = new string[] { }, Description = "Fetch content from a URL (http/https) as markdown, text, or html.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\",\"enum\":[\"text\",\"markdown\",\"html\"]},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}", IsReadOnly = true }
+            new AgentToolDefinition { Name = "webfetch", Aliases = new string[] { }, Description = "Fetch content from a URL (http/https) as markdown, text, or html.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"format\":{\"type\":\"string\",\"enum\":[\"text\",\"markdown\",\"html\"]},\"timeout\":{\"type\":\"integer\"}},\"required\":[\"url\"]}", IsReadOnly = true },
+            new AgentToolDefinition { Name = "task", Aliases = new string[] { }, Description = "Launch a read-only subagent to research or answer a complex question.", JsonSchema = "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"description\",\"prompt\"]}", IsReadOnly = true }
         };
 
         public List<ByokVendor> Vendors = new List<ByokVendor>();
@@ -120,6 +121,27 @@ namespace codeLess.Studio
         public Func<string, List<Dictionary<string, string>>, Task<string>> CustomModelResponder;
         public Func<string, ByokVendor, IEnumerable<string>> NativeTransportOverride;
         public int MaxAgentIterations = 8;
+        public int MaxSubagentIterations = 6;
+        public int SubagentDepth = 0;
+        public LlmHarnessAndAgentEngine ParentEngine;
+        private ByokVendor _currentTurnVendor;
+
+        public bool IsCancellationRequested
+        {
+            get
+            {
+                if (CancelStreamingRequested) return true;
+                if (ParentEngine != null && ParentEngine.IsCancellationRequested) return true;
+                return false;
+            }
+        }
+
+        public IEnumerable<AgentToolDefinition> GetAvailableToolsForCurrentDepth()
+        {
+            if (SubagentDepth >= 1)
+                return Tools.Where(t => t.IsReadOnly && t.Name != "task");
+            return Tools;
+        }
         public IDiagnosticsProvider DiagnosticsProvider { get; set; }
         public HashSet<string> PendingPostApplyDiagnosticsPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public void NotifyChangesApplied(IEnumerable<string> paths) { foreach(var p in paths) PendingPostApplyDiagnosticsPaths.Add(p); }
@@ -1853,7 +1875,7 @@ namespace codeLess.Studio
             return Path.GetFileName(fullPath);
         }
 
-        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab, bool useNative = false)
+        public static string BuildSystemHarnessPrompt(string mode, LlmHarnessProfile harness, ByokVendor vendor, string workspaceRoot, EditorTabBuffer activeTab, bool useNative = false, bool isSubagent = false)
         {
             string hName = harness != null ? harness.Name : "codeLess Adaptive Harness";
             string hDirective = harness != null ? harness.SystemPromptDirective : "";
@@ -1883,7 +1905,7 @@ updated replacement lines
                 envBlock, providerRules, instructions, hName, hDirective);
 
             string normMode = (mode ?? "").Trim().ToLowerInvariant();
-                        if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan")
+            if (normMode == "agent" || normMode == "autofix" || normMode == "build" || normMode == "plan")
             {
                 var sb = new StringBuilder();
                 sb.AppendLine("[AUTONOMOUS TOOL EXECUTION PROTOCOL]");
@@ -1896,10 +1918,16 @@ updated replacement lines
                     sb.AppendLine("You can invoke native workspace tools by emitting one or more <tool_call> JSON blocks:");
                     foreach (var t in Tools)
                     {
+                        if (isSubagent && (!t.IsReadOnly || t.Name == "task"))
+                            continue;
                         sb.AppendLine("<tool_call>");
                         sb.AppendLine("{\"tool\": \"" + t.Name + "\", \"args\": { ... }}");
                         sb.AppendLine("</tool_call>");
                     }
+                }
+                if (isSubagent)
+                {
+                    sb.AppendLine("You are running as a read-only research subagent (depth 1). Only read-only tools are permitted; do not attempt to modify files or spawn nested subagents.");
                 }
                 return basePrompt + "\n\n" + sb.ToString();
             }
@@ -2252,7 +2280,17 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         )
         {
             if (CustomModelResponder != null)
-                return await CustomModelResponder(systemPrompt, conversationMessages);
+            {
+                if (IsCancellationRequested) return "";
+                Task<string> respTask = Task.Run(() => CustomModelResponder(systemPrompt, conversationMessages));
+                while (!respTask.IsCompleted)
+                {
+                    if (IsCancellationRequested) return "";
+                    await Task.WhenAny(respTask, Task.Delay(15)).ConfigureAwait(false);
+                }
+                if (IsCancellationRequested) return "";
+                return await respTask.ConfigureAwait(false);
+            }
 
             if (vendor == null)
                 throw new Exception("NO_API_KEY");
@@ -2270,7 +2308,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             LastStreamingChunkCount = 0;
             // Only the running agent turn streams to OnStreamingChunk and honours its Stop (LlmAgentEngine.Turns.cs).
-            bool partOfTurn = InTurnOfThisEngine;
+            bool partOfTurn = InTurnOfThisEngine || SubagentDepth > 0;
 
                         string ret = null;
             bool retryTextMode = false;
@@ -2339,7 +2377,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         { "messages", useNative ? nativeMessages : conversationMessages.Select(m => (object)new Dictionary<string, string> { { "role", m["role"] }, { "content", m["content"] } }).ToList() },
                         { "stream", EnableSseStreaming }
                     };
-                    if (useNative) reqObj["tools"] = NativeToolCalling.BuildAnthropicTools(Tools);
+                    if (useNative) reqObj["tools"] = NativeToolCalling.BuildAnthropicTools(GetAvailableToolsForCurrentDepth());
                     if (!IsReasoningModelWithoutTemperature(vendor.SelectedModel)) reqObj["temperature"] = temperature;
                 }
                 else
@@ -2361,7 +2399,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         fullMsgs.Add(new Dictionary<string, string> { { "role", "system" }, { "content", systemPrompt } });
                         fullMsgs.AddRange(nativeMessages);
                         reqObj["messages"] = fullMsgs;
-                        reqObj["tools"] = NativeToolCalling.BuildOpenAiTools(Tools);
+                        reqObj["tools"] = NativeToolCalling.BuildOpenAiTools(GetAvailableToolsForCurrentDepth());
                         reqObj["tool_choice"] = "auto";
                     }
 
@@ -2384,7 +2422,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         
                         foreach (var l in lines)
                         {
-                            if (partOfTurn && CancelStreamingRequested) throw new OperationCanceledException();
+                            if (partOfTurn && IsCancellationRequested) throw new OperationCanceledException();
                             
                             if (l.StartsWith("data:"))
                             {
@@ -2472,7 +2510,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         string line;
                         while ((line = sr.ReadLine()) != null)
                         {
-                            if (partOfTurn && CancelStreamingRequested) { ledger.Note = "Cancelled by user"; break; }
+                            if (partOfTurn && IsCancellationRequested) { ledger.Note = "Cancelled by user"; break; }
                             rawBuilder.AppendLine(line);
                             string trimmed = line.Trim();
                             if (trimmed.StartsWith("data:"))
@@ -2664,7 +2702,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     ledger.Complete();
                 }
                 });
-            }, () => partOfTurn && CancelStreamingRequested);
+            }, () => partOfTurn && IsCancellationRequested);
                 } catch (Exception ex) {
                     if (ex.Message == "NATIVE_FALLBACK") {
                         retryTextMode = true;
@@ -2774,6 +2812,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
             LlmHarnessProfile harness = ResolveHarnessForVendor(activeVendor, preferredHarnessId);
             result.HarnessUsed = harness.Name;
+            _currentTurnVendor = activeVendor;
 
             // Assemble Engineered Context
             List<Bm25CodeChunk> topChunks = RetrieveTopChunks(userInstruction, 5);
@@ -2942,7 +2981,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 ));
             }
 
-            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, IsNativeToolCallingEnabledFor(activeVendor));
+            string sysPrompt = BuildSystemHarnessPrompt(mode, harness, activeVendor, workspaceRoot, activeTab, IsNativeToolCallingEnabledFor(activeVendor), SubagentDepth >= 1);
             string fullUserPayload = ctx.ToString() + "\n<user_instruction mode=\"" + mode + "\">\n" + userInstruction + "\n</user_instruction>";
             result.EstimatedInputTokens = EstimateTokens(sysPrompt + fullUserPayload);
 
@@ -2989,7 +3028,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 int maxSteps = Math.Max(1, MaxAgentIterations);
                 for (int step = 0; step < maxSteps; step++)
                 {
-                    if (CancelStreamingRequested || (AgentLoopTimeoutMs > 0 && sw.ElapsedMilliseconds > AgentLoopTimeoutMs))
+                    if (IsCancellationRequested || (AgentLoopTimeoutMs > 0 && sw.ElapsedMilliseconds > AgentLoopTimeoutMs))
                         break;
 
                     result.Iterations++;
@@ -3068,7 +3107,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                     if (toolCalls.Count == 0)
                     {
-                        if (assistantContent != null && assistantContent.Contains("<<<<<<< SEARCH"))
+                        if (SubagentDepth == 0 && assistantContent != null && assistantContent.Contains("<<<<<<< SEARCH"))
                         {
                             string blockError;
                             bool blocksOk = TryExtractAndStageSearchReplaceBlocks(assistantContent, activeTab, workspaceRoot, result, out blockError, mode);
@@ -3098,6 +3137,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
 
                     foreach (var tc in toolCalls)
                     {
+                        if (IsCancellationRequested) break;
                         string toolName = Convert.ToString(tc["tool"]);
                         var args = tc.ContainsKey("args") ? tc["args"] as Dictionary<string, object> : new Dictionary<string, object>();
 
@@ -3202,18 +3242,23 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     messages.Add(userMsg);
                 }
 
-                if (!stagedThisTurn && result.StagedFileContents.Count == baseStagedCount)
+                if (SubagentDepth == 0 && !stagedThisTurn && result.StagedFileContents.Count == baseStagedCount)
                 {
                     ExtractAndStageSearchReplaceBlocks(finalReply, activeTab, workspaceRoot, result, workspaceFiles);
                 }
 
-                if (mode == "ctrl_k" && activeTab != null && result.StagedFileContents.Count == 0)
+                if (SubagentDepth == 0 && mode == "ctrl_k" && activeTab != null && result.StagedFileContents.Count == 0)
                 {
                     Match fence = Regex.Match(finalReply, @"```[a-zA-Z0-9_-]*\r?\n([\s\S]*?)```");
                     if (fence.Success)
                     {
                         result.StagedFileContents[activeTab.FilePath] = fence.Groups[1].Value.TrimEnd();
                     }
+                }
+
+                if (SubagentDepth >= 1)
+                {
+                    result.StagedFileContents.Clear();
                 }
 
                 sw.Stop();
@@ -3404,6 +3449,31 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 return new AgentToolCallResult { ToolName = toolName, Success = false, Summary = "Malformed JSON arguments", Output = "Malformed JSON arguments" };
             }
 
+            if (SubagentDepth >= 1)
+            {
+                if (toolName == "task")
+                {
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "task",
+                        Success = false,
+                        Summary = "Nested task refused",
+                        Output = "Nested task subagents are not allowed (maximum depth is 1)."
+                    };
+                }
+                AgentToolDefinition matchedDef = Tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+                if (matchedDef == null || !matchedDef.IsReadOnly)
+                {
+                    return new AgentToolCallResult
+                    {
+                        ToolName = toolName,
+                        Success = false,
+                        Summary = "Permission Denied",
+                        Output = "Tool '" + toolName + "' is not allowed inside a read-only task subagent."
+                    };
+                }
+            }
+
             string argsJson = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(args);
 
             bool isRestricted = codeLess.Studio.WorkspaceTrust.IsRestricted(workspaceRoot);
@@ -3545,6 +3615,84 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 else if (toolName == "webfetch")
                 {
                     return WebFetchTool.Execute(args);
+                }
+                else if (toolName == "task")
+                {
+                    string description = args.ContainsKey("description") && args["description"] != null ? Convert.ToString(args["description"]).Trim() : "";
+                    string prompt = args.ContainsKey("prompt") && args["prompt"] != null ? Convert.ToString(args["prompt"]).Trim() : "";
+                    if (string.IsNullOrEmpty(prompt))
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "task",
+                            Success = false,
+                            Summary = "Missing prompt",
+                            Output = "Missing required 'prompt' argument for task."
+                        };
+                    }
+
+                    if (SubagentDepth >= 1)
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "task",
+                            Success = false,
+                            Summary = "Nested task refused",
+                            Output = "Nested task subagents are not allowed (maximum depth is 1)."
+                        };
+                    }
+
+                    LlmHarnessAndAgentEngine child = new LlmHarnessAndAgentEngine(_settings);
+                    child.ParentEngine = this;
+                    child.SubagentDepth = this.SubagentDepth + 1;
+                    child.MaxAgentIterations = Math.Max(1, this.MaxSubagentIterations);
+                    child.AgentLoopTimeoutMs = this.AgentLoopTimeoutMs;
+                    child.HttpTimeoutMs = this.HttpTimeoutMs;
+                    child.EnableSseStreaming = this.EnableSseStreaming;
+                    child.Vendors = this.Vendors;
+                    child.Harnesses = this.Harnesses;
+                    child.CustomModelResponder = this.CustomModelResponder;
+                    child.NativeTransportOverride = this.NativeTransportOverride;
+                    child.OnRequestToolApproval = this.OnRequestToolApproval;
+                    child.DiagnosticsProvider = this.DiagnosticsProvider;
+                    child.AgentTodos = this.AgentTodos;
+                    child.FileTimeTracker = this.FileTimeTracker;
+
+                    Dictionary<string, string> childStaged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    AgentExecutionTurnResult childResult = child.RunAutonomousAgentLoopCoreAsync(
+                        "plan",
+                        prompt,
+                        _currentTurnVendor,
+                        "auto",
+                        activeTab,
+                        workspaceRoot,
+                        workspaceFiles,
+                        null,
+                        "",
+                        childStaged
+                    ).GetAwaiter().GetResult();
+
+                    childStaged.Clear();
+                    if (childResult != null) childResult.StagedFileContents.Clear();
+
+                    if (IsCancellationRequested)
+                    {
+                        return new AgentToolCallResult
+                        {
+                            ToolName = "task",
+                            Success = false,
+                            Summary = "Task cancelled",
+                            Output = "Subagent task was cancelled."
+                        };
+                    }
+
+                    return new AgentToolCallResult
+                    {
+                        ToolName = "task",
+                        Success = true,
+                        Summary = string.IsNullOrEmpty(description) ? "Completed subagent task" : ("Task: " + description),
+                        Output = childResult != null ? (childResult.AssistantReply ?? "") : ""
+                    };
                 }
 else if (toolName == "glob")
                 {
