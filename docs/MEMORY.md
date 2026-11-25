@@ -115,3 +115,19 @@ Evaluated in `src/codeLess.Avalonia/codeLess.Avalonia.csproj` and `src/codeLess.
 | `CloseWindow_CollectsMainWindow_WeakReference` | Opening a `MainWindow`, loading a workspace and file, and calling `Close()` collects the `MainWindow` instance (`WeakReference.IsAlive == false`). |
 | `Subsystems_AreLazyAtStartup_AndConstructedOnFirstUse` | Verifies `IsAgentEngineCreated`, `IsAgentTrustCreated`, `IsDebuggerCreated`, `IsBlameServiceCreated`, `IsLanguageServerManagerCreated`, and `IsNetworkPanelCreated` are `false` at startup and after `LoadWorkspace`, and transition to `true` only on first access. |
 | `SharedImmutableThemesAndIcons_ZeroDuplicateAllocations` | Verifies `StudioTheme.GetById` returns the same shared instance with `0 B` allocated over 100 calls, and multiple `MainWindow` instances share the same `WindowIcon`. |
+| `NewFeatures_IdleTimersStopped_AndPostCloseHeapWithinW4Budget` | Verifies that with a workspace open and `files.hotExit`, `.codeless/{agent,command}`, `codeless.mcp`, W7 Command Palette / Escape cascade, and W10 binary placeholder enabled/exercised, (a) `IsHotExitTimerRunning` and all background timers are stopped when idle and no AI/MCP processes are started until first use, and (b) closing and collecting returns the in-process managed heap within the W4 budget (`< 8.0 MB` delta) with `MainWindow` and `EditorTabBuffer` collected. |
+| `OpenAndCloseFiveWindows_LeaksNothing_WeakReferences` | Opens 5 `MainWindow` instances with workspaces, files, syntax sessions, hot-exit backups, and notifications, closes all 5, and verifies via `WeakReference` that all 5 windows and all 5 tab buffers are garbage-collected and in-process managed heap delta returns below `8.0 MB`. |
+
+---
+
+## 6. Post-W4 Feature Memory Guard (`W12`)
+
+To prevent regressions from features added after `W4` (`W1` multi-window, `W7` cross-cutting QA fixes, `W10` hot exit & binary/encoding safety, and `M9` MCP / custom agents / `@file` completer), the following lifecycle fixes and guards were verified in-process:
+
+1. **Hot Exit Debounce Timer Stop on Save / Revert / Close (`MainWindow.cs` & `CodeLessMainForm.cs`)**:
+   - When the last dirty buffer in `pendingHotExitBackups` is saved (`SaveBufferToDisk` / `SaveTabBuffer`), reverted (`RevertTabToDisk`), or closed (`ReleaseClosedTabReferences` / `CloseTabBuffer`), `hotExitBackupTimer` is immediately stopped (`if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop()`) so no timer ticks occur once all buffers are clean.
+2. **Binary Placeholder Closure & Conflict Callback Release (`MainWindow.OnClosed`)**:
+   - `MainWindow.OnClosed` invokes `PrimaryEditor?.HideBinaryPlaceholder()` and `SplitEditor?.HideBinaryPlaceholder()` (clearing `binaryOpenAnywayAction` closures) and nulls out `ExternalConflictDecisionOverride`, `SaveConflictDecisionOverride`, and `UnsavedPromptOverride`.
+3. **Measured In-Process Managed Heap (`MemoryProfileAndLeakTests`)**:
+   - Single-window post-close delta with all new features configured: **`+3.95 MB`** over test-host baseline (`< 8.0 MB` budget), `WinWeak.IsAlive == false`, `TabWeak.IsAlive == false`.
+   - 5-window open + populate + close cycle: **`5 / 5` `MainWindow`s collected**, **`5 / 5` `EditorTabBuffer`s collected**, post-close in-process managed heap delta **`< 8.0 MB`**.

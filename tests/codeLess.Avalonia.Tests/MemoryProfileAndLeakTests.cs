@@ -344,5 +344,145 @@ namespace codeLess.Avalonia.Tests
                 w2.Close();
             }
         }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static (WeakReference WinWeak, WeakReference TabWeak, bool IdleTimersStopped, bool HotExitTimerStopped, bool LazyAiAtIdle)
+            ExerciseNewFeaturesAndCloseWindow(string wsRoot)
+        {
+            var w = new MainWindow(wsRoot) { SuppressUnsavedPrompts = true, Width = 1280, Height = 800 };
+            w.Measure(new Size(1280, 800));
+            w.Arrange(new Rect(0, 0, 1280, 800));
+            Dispatcher.UIThread.RunJobs();
+
+            // Enable hotExit, open a file, make a dirty edit (arming hotExitBackupTimer), then save (returning to idle)
+            w.Settings.SetHotExitMode(IdePersistentSettings.HotExitOnExitAndWindowClose);
+            string filePath = Path.Combine(wsRoot, "app.cs");
+            var tab = w.OpenFileInTab(filePath, preview: false);
+            Assert.NotNull(tab);
+            tab.Lines[0] = "// modified for hot exit check";
+            tab.SyncContentFromLines();
+            w.ScheduleHotExitBackup(tab);
+            Assert.True(w.IsHotExitTimerRunning);
+
+            // Save clears dirty state and stops/cleans hot-exit backup timer automatically
+            Assert.True(w.SaveBufferToDisk(tab));
+            Assert.False(w.IsHotExitTimerRunning);
+
+            // Exercise W7 Command Palette Tab cycling & Escape cascade + W10 binary placeholder
+            w.OpenCommandPalette();
+            w.CommandPalette.CycleSelection(1);
+            w.CommandPalette.Close();
+            string binPath = Path.Combine(wsRoot, "blob.bin");
+            Assert.Null(w.OpenFileInTab(binPath));
+            Assert.True(w.PrimaryEditor.IsBinaryPlaceholderVisible);
+            w.PrimaryEditor.HideBinaryPlaceholder();
+            w.ActivateTab(tab);
+            Dispatcher.UIThread.RunJobs();
+            w.DrainOneShotDebounceTimers();
+            Dispatcher.UIThread.RunJobs();
+
+            bool hotExitStopped = !w.IsHotExitTimerRunning;
+            bool allTimersStopped = w.AreAllBackgroundTimersStopped;
+            bool lazyAiAtIdle = !w.IsAgentEngineCreated;
+
+            var winWeak = new WeakReference(w);
+            var tabWeak = new WeakReference(tab);
+            w.CloseAllTabs();
+            w.CloseWorkspaceFolder();
+            w.Close();
+            return (winWeak, tabWeak, allTimersStopped, hotExitStopped, lazyAiAtIdle);
+        }
+
+        [AvaloniaFact]
+        public void NewFeatures_IdleTimersStopped_AndPostCloseHeapWithinW4Budget()
+        {
+            string wsRoot = Path.Combine(_tempDir, "ws_w12");
+            Directory.CreateDirectory(wsRoot);
+            Directory.CreateDirectory(Path.Combine(wsRoot, ".vscode"));
+            Directory.CreateDirectory(Path.Combine(wsRoot, ".codeless", "agent"));
+            Directory.CreateDirectory(Path.Combine(wsRoot, ".codeless", "command"));
+            File.WriteAllText(Path.Combine(wsRoot, "app.cs"), "class App {\n    static void Main() {}\n}\n");
+            File.WriteAllBytes(Path.Combine(wsRoot, "blob.bin"), new byte[] { 0x7F, 0x45, 0x4C, 0x46, 0x00, 0x01 });
+            File.WriteAllText(Path.Combine(wsRoot, ".codeless", "agent", "reviewer.md"), "---\ndescription: Reviewer\nmode: subagent\n---\nReview code.");
+            File.WriteAllText(Path.Combine(wsRoot, ".codeless", "command", "check.md"), "---\ndescription: Check\n---\nRun check $ARGUMENTS");
+            File.WriteAllText(Path.Combine(wsRoot, ".vscode", "settings.json"), "{\n  \"files.hotExit\": \"onExitAndWindowClose\",\n  \"codeless.mcp\": {\n    \"echo\": { \"command\": \"/bin/echo\", \"args\": [\"hi\"] }\n  }\n}");
+
+            long baseBytes = CollectAndMeasure(out _, out _);
+            var res = ExerciseNewFeaturesAndCloseWindow(wsRoot);
+            long afterCloseBytes = CollectAndMeasure(out _, out _);
+
+            // (a) No timers or MCP/agent processes running when idle
+            Assert.True(res.HotExitTimerStopped, "Hot exit backup timer must be stopped when no buffer is dirty.");
+            Assert.True(res.IdleTimersStopped, "All background window timers must be stopped when idle.");
+            Assert.True(res.LazyAiAtIdle, "AI engine and MCP servers must remain unconstructed until first use.");
+
+            // (b) Managed heap after close/GC returns within the W4 budget and collects window/tab
+            Assert.False(res.TabWeak.IsAlive, "EditorTabBuffer must be collected after close.");
+            Assert.False(res.WinWeak.IsAlive, "MainWindow must be collected after close.");
+            double deltaMb = (afterCloseBytes - baseBytes) / 1048576.0;
+            Assert.True(deltaMb < 8.0, $"Expected post-close managed heap delta < 8.0 MB, got {deltaMb:F2} MB");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static (List<WeakReference> WinWeaks, List<WeakReference> TabWeaks) OpenAndCloseFiveWindowsCore(string baseTempDir)
+        {
+            var winWeaks = new List<WeakReference>();
+            var tabWeaks = new List<WeakReference>();
+            var windows = new List<MainWindow>();
+
+            for (int i = 0; i < 5; i++)
+            {
+                string ws = Path.Combine(baseTempDir, "win5_ws_" + i);
+                Directory.CreateDirectory(ws);
+                string fp = Path.Combine(ws, $"file_{i}.cs");
+                File.WriteAllText(fp, $"namespace N{i} {{ public class C{i} {{ }} }}\n");
+
+                var w = new MainWindow(ws) { SuppressUnsavedPrompts = true, Width = 1024, Height = 768 };
+                App.WindowManager.RegisterWindow(w);
+                w.Measure(new Size(1024, 768));
+                w.Arrange(new Rect(0, 0, 1024, 768));
+                var tab = w.OpenFileInTab(fp, preview: false);
+                var session = EditorSyntaxSession.For(tab);
+                session?.Prepare(tab);
+                tab.Lines[0] = $"// dirty edit in window {i}";
+                tab.SyncContentFromLines();
+                w.ScheduleHotExitBackup(tab);
+                w.FlushPendingHotExitBackups();
+                w.ShowWorkbenchNotification($"notif-{i}", "info", $"Notification {i}", "OK", () => { });
+
+                winWeaks.Add(new WeakReference(w));
+                tabWeaks.Add(new WeakReference(tab));
+                windows.Add(w);
+            }
+
+            Dispatcher.UIThread.RunJobs();
+
+            foreach (var w in windows)
+            {
+                w.CloseAllTabs();
+                w.Close();
+            }
+            windows.Clear();
+            return (winWeaks, tabWeaks);
+        }
+
+        [AvaloniaFact]
+        public void OpenAndCloseFiveWindows_LeaksNothing_WeakReferences()
+        {
+            long baseBytes = CollectAndMeasure(out _, out _);
+            var (winWeaks, tabWeaks) = OpenAndCloseFiveWindowsCore(_tempDir);
+            long afterCloseBytes = CollectAndMeasure(out _, out _);
+
+            Assert.Equal(5, winWeaks.Count);
+            Assert.Equal(5, tabWeaks.Count);
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.False(winWeaks[i].IsAlive, $"Window {i} was retained after Close().");
+                Assert.False(tabWeaks[i].IsAlive, $"Tab {i} was retained after Close().");
+            }
+
+            double deltaMb = (afterCloseBytes - baseBytes) / 1048576.0;
+            Assert.True(deltaMb < 8.0, $"Expected post-close managed heap delta after 5 windows < 8.0 MB, got {deltaMb:F2} MB");
+        }
     }
 }

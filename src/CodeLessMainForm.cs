@@ -9211,6 +9211,9 @@ if __name__ == '__main__':
                 }
             }
             editorMruWin.Remove(captured);
+            pendingHotExitBackupsWin.Remove(captured);
+            if (pendingHotExitBackupsWin.Count == 0 && hotExitBackupTimer != null)
+                hotExitBackupTimer.Stop();
             if (editorControl != null && editorControl.Canvas != null)
                 editorControl.Canvas.ReleaseBufferReferencesWF(captured);
             if (splitEditorControl != null && splitEditorControl.Canvas != null)
@@ -9808,6 +9811,8 @@ if __name__ == '__main__':
                 buf.HasExternalDiskConflict = false;
                 buf.IsPreview = false;
                 pendingHotExitBackupsWin.Remove(buf);
+                if (pendingHotExitBackupsWin.Count == 0 && hotExitBackupTimer != null)
+                    hotExitBackupTimer.Stop();
                 HotExitService.DeleteBackup(workspaceRoot, buf);
                 if (!buf.IsLargeFile && buf.GitHeadContent == null && !string.IsNullOrEmpty(workspaceRoot))
                     buf.GitHeadContent = LlmHarnessAndAgentEngine.GetGitQuickDiffBaseline(workspaceRoot, buf.FilePath);
