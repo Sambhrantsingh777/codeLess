@@ -76,9 +76,10 @@ namespace codeLess.Studio
             t.Add("string, string.quoted, string.template, string.interpolated, punctuation.definition.string, string.unquoted.heredoc", th.TokenString, -1, ref order);
             t.Add("string.regexp", th.TokenNumber, -1, ref order);
             t.Add("constant.character.escape, constant.other.placeholder", th.TokenNumber, -1, ref order);
+            t.Add("constant.character, constant.character.format.placeholder", th.TokenKeyword, -1, ref order);
             t.Add("constant.numeric, keyword.other.unit, constant.other.color", th.TokenNumber, -1, ref order);
             t.Add("constant.language, variable.language, support.constant.language", th.TokenKeyword, -1, ref order);
-            t.Add("keyword, storage, storage.type, storage.modifier, keyword.type, support.type.primitive, keyword.other", th.TokenKeyword, 2, ref order);
+            t.Add("keyword, storage, storage.type, storage.type.format, storage.modifier, keyword.type, support.type.primitive, keyword.other", th.TokenKeyword, 2, ref order);
             t.Add("keyword.control, keyword.operator.new, keyword.operator.expression, keyword.operator.logical.python, keyword.operator.wordlike, keyword.other.using, keyword.other.import, keyword.control.import", th.TokenControl, 2, ref order);
             t.Add("keyword.operator, punctuation.separator.key-value, punctuation.accessor", th.TokenOperator, 0, ref order);
             t.Add("entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.interface, entity.name.namespace, entity.other.inherited-class, support.class, support.type, entity.name.type.class, storage.type.class.jsdoc", th.TokenType, 0, ref order);

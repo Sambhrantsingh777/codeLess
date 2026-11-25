@@ -40,12 +40,25 @@ namespace codeLess.Avalonia.Tests
             try { if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, true); } catch { }
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ClearJitStackFrame()
+        {
+            Span<long> zero = stackalloc long[64];
+            zero.Clear();
+        }
+
         private static long CollectAndMeasure(out long heapSizeBytes, out long fragmentedBytes)
         {
-            Dispatcher.UIThread.RunJobs();
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
+            for (int i = 0; i < 6; i++)
+            {
+                try { global::Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(); } catch { }
+                Dispatcher.UIThread.RunJobs();
+                ClearJitStackFrame();
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+            }
+            try { global::Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(); } catch { }
             Dispatcher.UIThread.RunJobs();
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
             long total = GC.GetTotalMemory(true);

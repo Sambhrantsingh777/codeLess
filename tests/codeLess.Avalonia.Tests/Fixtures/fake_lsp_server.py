@@ -131,7 +131,7 @@ def path_to_uri(path):
     p = path.replace("\\", "/")
     if not p.startswith("/"):
         p = "/" + p
-    return "file://" + quote(p)
+    return "file://" + quote(p, safe="/:")
 
 
 def all_texts():
@@ -141,7 +141,8 @@ def all_texts():
             if name.endswith(".py"):
                 full = os.path.join(root_path, name)
                 u = path_to_uri(full)
-                if not any(uri_to_path(k) == full for k in texts):
+                norm_full = os.path.normcase(os.path.normpath(full))
+                if not any(os.path.normcase(os.path.normpath(uri_to_path(k))) == norm_full for k in texts):
                     with open(full, "r", encoding="utf-8") as f:
                         texts[u] = f.read().replace("\r\n", "\n")
     return texts

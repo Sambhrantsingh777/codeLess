@@ -2330,6 +2330,8 @@ namespace codeLess.Studio
         private bool _recentCleared;
 
         public static event Action<IdePersistentSettings> OnSettingsSavedInProcess;
+        private static int _inProcessSaveVersion;
+        public static int InProcessSaveVersion { get { return System.Threading.Interlocked.CompareExchange(ref _inProcessSaveVersion, 0, 0); } }
 
         public const string DefaultExcludedFoldersList = ".git, node_modules, bin, obj, dist, build, out, .venv, __pycache__, .next, target, packages";
 
@@ -2495,6 +2497,7 @@ namespace codeLess.Studio
                 FindHistoryStore.CopyInto(this);
                 string path = GetSettingsFilePath();
                 IdeSettingsWatcher.NotifyInProcessWrite();
+                System.Threading.Interlocked.Increment(ref _inProcessSaveVersion);
                 CrossProcessFile.ReadModifyWrite(path, delegate(string targetPath)
                 {
                     if (!_recentCleared && File.Exists(targetPath))

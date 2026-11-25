@@ -3203,22 +3203,22 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     }
 
                     string rawSourceContent = null;
-                    string relName = filePill;
+                    string relName = (filePill ?? "").Replace('\\', '/');
                     if (activeTab != null && (
                         string.Equals(activeTab.FileName, filePill, StringComparison.OrdinalIgnoreCase) ||
                         string.Equals((activeTab.RelativePath ?? "").Replace('\\', '/'), filePill.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
                         (!string.IsNullOrEmpty(resolvedPath) && string.Equals(activeTab.FilePath, resolvedPath, StringComparison.OrdinalIgnoreCase))))
                     {
                         rawSourceContent = activeTab.Content ?? "";
-                        relName = activeTab.RelativePath ?? activeTab.FileName;
+                        relName = (activeTab.RelativePath ?? activeTab.FileName ?? "").Replace('\\', '/');
                     }
                     else if (!string.IsNullOrEmpty(resolvedPath) && File.Exists(resolvedPath))
                     {
                         try
                         {
-                            relName = (!string.IsNullOrEmpty(workspaceRoot) && resolvedPath.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase))
+                            relName = ((!string.IsNullOrEmpty(workspaceRoot) && resolvedPath.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase))
                                 ? resolvedPath.Substring(workspaceRoot.Length).TrimStart('\\', '/')
-                                : Path.GetFileName(resolvedPath);
+                                : Path.GetFileName(resolvedPath)).Replace('\\', '/');
                             if (BinaryDetector.IsBinaryFile(resolvedPath))
                             {
                                 rawSourceContent = "[Cannot read binary file: " + relName + "]";
@@ -3498,6 +3498,8 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                             nativeResults.Add(ntr);
                         }
                     }
+
+                    if (IsCancellationRequested) break;
 
                     var userMsg = new Dictionary<string, string>
                     {

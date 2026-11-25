@@ -99,7 +99,25 @@ namespace codeLess.Studio
                     Dictionary<string, string> env = overlay != null ? VerificationRunner.VerificationEnvironment() : null;
                     if (env != null) env.Remove("CODELESS_VERIFY");
                     if (ConPtyNative.IsWindowsPlatform())
-                        output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command " + QuoteProcessArgument(cmd), runDir, timeoutMs, env, out exitCode, out timedOut);
+                    {
+                        if (cmd != null && cmd.Length > 8000)
+                        {
+                            string tempScript = Path.Combine(Path.GetTempPath(), "codeless-cmd-" + Guid.NewGuid().ToString("N") + ".ps1");
+                            try
+                            {
+                                File.WriteAllText(tempScript, cmd, new UTF8Encoding(false));
+                                output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + QuoteProcessArgument(tempScript), runDir, timeoutMs, env, out exitCode, out timedOut);
+                            }
+                            finally
+                            {
+                                try { if (File.Exists(tempScript)) File.Delete(tempScript); } catch { }
+                            }
+                        }
+                        else
+                        {
+                            output = RunProcessCaptureWithExitCode("powershell.exe", "-NoProfile -NonInteractive -Command " + QuoteProcessArgument(cmd), runDir, timeoutMs, env, out exitCode, out timedOut);
+                        }
+                    }
                     else
                         output = RunProcessCaptureWithExitCode(ConPtyTerminalSession.GetUserUnixShell(), "-c " + QuoteProcessArgument(cmd), runDir, timeoutMs, env, out exitCode, out timedOut);
                 }

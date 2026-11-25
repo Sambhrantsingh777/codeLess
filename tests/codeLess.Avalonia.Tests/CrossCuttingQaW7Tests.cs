@@ -243,11 +243,12 @@ namespace codeLess.Avalonia.Tests
 
                 // 4. Cmd/Ctrl+K in terminal does NOT start a workbench chord, whereas Cmd/Ctrl+K in editor starts the chord prefix
                 string statusMsg = "";
-                bool handledInTerminal = window.KeybindingManager.Dispatch("cmd+k", new FakeContextKeyService("terminalFocus"), m => statusMsg = m, isTerminalFocus: true);
+                string chordPrefixKey = MacKeymap.IsMacOS ? "cmd+k" : "ctrl+k";
+                bool handledInTerminal = window.KeybindingManager.Dispatch(chordPrefixKey, new FakeContextKeyService("terminalFocus"), m => statusMsg = m, isTerminalFocus: true);
                 Assert.False(handledInTerminal);
                 Assert.Equal("", statusMsg);
 
-                bool handledInEditor = window.KeybindingManager.Dispatch("cmd+k", new FakeContextKeyService("editorTextFocus"), m => statusMsg = m, isTerminalFocus: false);
+                bool handledInEditor = window.KeybindingManager.Dispatch(chordPrefixKey, new FakeContextKeyService("editorTextFocus"), m => statusMsg = m, isTerminalFocus: false);
                 Assert.True(handledInEditor);
                 Assert.Contains("Waiting for second key of chord", statusMsg);
                 // Clear chord state

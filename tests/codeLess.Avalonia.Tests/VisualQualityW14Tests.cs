@@ -264,6 +264,189 @@ namespace codeLess.Avalonia.Tests
             }
         }
 
+        [Fact]
+        public void PythonFStrings_AndFormatStrings_MatchVsCodeScopesAndThemeColors()
+        {
+            var reg = TextMateGrammarRegistry.Shared;
+            var py = reg.GetCompiled("source.python", true);
+            Assert.NotNull(py);
+
+            var dm = TextMateTheme.For(StudioTheme.DarkModern);
+            var lm = TextMateTheme.For(StudioTheme.LightModern);
+
+            var darkBlue = TextMateTheme.ParseColor("#569CD6");
+            var lightBlue = TextMateTheme.ParseColor("#0000FF");
+            var darkStr = TextMateTheme.ParseColor("#CE9178");
+            var lightStr = TextMateTheme.ParseColor("#A31515");
+            var darkFg = TextMateTheme.ParseColor("#CCCCCC");
+            var lightFg = TextMateTheme.ParseColor("#3B3B3B");
+            var darkEsc = TextMateTheme.ParseColor("#D7BA7D");
+            var lightEsc = TextMateTheme.ParseColor("#EE0000");
+            var darkOp = TextMateTheme.ParseColor("#D4D4D4");
+            var lightOp = TextMateTheme.ParseColor("#000000");
+            var darkNum = TextMateTheme.ParseColor("#B5CEA8");
+            var lightNum = TextMateTheme.ParseColor("#098658");
+            var darkFn = TextMateTheme.ParseColor("#DCDCAA");
+            var lightFn = TextMateTheme.ParseColor("#795E26");
+
+            void AssertSpan(TmLineTokens tokens, string line, int start, int length, string requiredScope, string forbiddenScope, System.Drawing.Color expectedDark, System.Drawing.Color expectedLight)
+            {
+                for (int pos = start; pos < start + length; pos++)
+                {
+                    int tokIdx = -1;
+                    for (int i = 0; i < tokens.Count; i++)
+                    {
+                        if (tokens.Starts[i] <= pos && pos < tokens.EndOf(i))
+                        {
+                            tokIdx = i;
+                            break;
+                        }
+                    }
+                    Assert.True(tokIdx >= 0, $"No token covering pos {pos} in '{line}'");
+                    var sc = tokens.Scopes[tokIdx];
+                    string scStr = sc.ToString();
+                    Assert.DoesNotContain("invalid", scStr);
+                    if (!string.IsNullOrEmpty(requiredScope))
+                        Assert.True(scStr.Contains(requiredScope), $"Expected '{requiredScope}' at [{start}..{start + length}) ('{line.Substring(start, length)}') in '{line}', but got '{scStr}'");
+                    if (!string.IsNullOrEmpty(forbiddenScope))
+                        Assert.False(scStr.Contains(forbiddenScope), $"Forbidden '{forbiddenScope}' at [{start}..{start + length}) ('{line.Substring(start, length)}') in '{line}', got '{scStr}'");
+                    Assert.Equal(expectedDark, dm.Resolve(sc).Foreground);
+                    Assert.Equal(expectedLight, lm.Resolve(sc).Foreground);
+                }
+            }
+
+            // 1) f"Hello {name}!"
+            string s1 = "f\"Hello {name}!\"";
+            var r1 = py.TokenizeLine(s1, null).Tokens;
+            AssertSpan(r1, s1, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r1, s1, 1, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r1, s1, 2, 6, "string.interpolated.python string.quoted.single.python", null, darkStr, lightStr);
+            AssertSpan(r1, s1, 8, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r1, s1, 9, 4, "meta.fstring.python", " string.", darkFg, lightFg);
+            AssertSpan(r1, s1, 13, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r1, s1, 14, 1, "string.interpolated.python string.quoted.single.python", null, darkStr, lightStr);
+            AssertSpan(r1, s1, 15, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 2) f'{value:>10.2f}'
+            string s2 = "f'{value:>10.2f}'";
+            var r2 = py.TokenizeLine(s2, null).Tokens;
+            AssertSpan(r2, s2, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r2, s2, 1, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r2, s2, 2, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r2, s2, 3, 5, "meta.fstring.python", " string.", darkFg, lightFg);
+            AssertSpan(r2, s2, 8, 7, "storage.type.format.python", " string.", darkBlue, lightBlue);
+            AssertSpan(r2, s2, 15, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r2, s2, 16, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 3) f"{obj.attr!r}"
+            string s3 = "f\"{obj.attr!r}\"";
+            var r3 = py.TokenizeLine(s3, null).Tokens;
+            AssertSpan(r3, s3, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r3, s3, 1, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r3, s3, 2, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r3, s3, 3, 3, "meta.fstring.python", " string.", darkFg, lightFg);
+            AssertSpan(r3, s3, 6, 1, "punctuation.separator.period.python", " string.", darkFg, lightFg);
+            AssertSpan(r3, s3, 7, 4, "meta.member.access.python", " string.", darkFg, lightFg);
+            AssertSpan(r3, s3, 11, 2, "storage.type.format.python", " string.", darkBlue, lightBlue);
+            AssertSpan(r3, s3, 13, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r3, s3, 14, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 4) f"{{literal}}"
+            string s4 = "f\"{{literal}}\"";
+            var r4 = py.TokenizeLine(s4, null).Tokens;
+            AssertSpan(r4, s4, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r4, s4, 1, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r4, s4, 2, 2, "constant.character.escape.python", null, darkEsc, lightEsc);
+            AssertSpan(r4, s4, 4, 7, "string.interpolated.python string.quoted.single.python", null, darkStr, lightStr);
+            AssertSpan(r4, s4, 11, 2, "constant.character.escape.python", null, darkEsc, lightEsc);
+            AssertSpan(r4, s4, 13, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 5) rf"\d{n}"
+            string s5 = "rf\"\\d{n}\"";
+            var r5 = py.TokenizeLine(s5, null).Tokens;
+            AssertSpan(r5, s5, 0, 2, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r5, s5, 2, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r5, s5, 3, 2, "string.interpolated.python string.quoted.raw.single.python", null, darkStr, lightStr);
+            AssertSpan(r5, s5, 5, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r5, s5, 6, 1, "meta.fstring.python", " string.", darkFg, lightFg);
+            AssertSpan(r5, s5, 7, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r5, s5, 8, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 6) F"""multi\n{x}\nline"""
+            string s6a = "F\"\"\"multi";
+            string s6b = "{x}";
+            string s6c = "line\"\"\"";
+            var res6a = py.TokenizeLine(s6a, null);
+            var res6b = py.TokenizeLine(s6b, res6a.EndState);
+            var res6c = py.TokenizeLine(s6c, res6b.EndState);
+            AssertSpan(res6a.Tokens, s6a, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(res6a.Tokens, s6a, 1, 3, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(res6a.Tokens, s6a, 4, 5, "string.interpolated.python string.quoted.multi.python", null, darkStr, lightStr);
+            AssertSpan(res6b.Tokens, s6b, 0, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(res6b.Tokens, s6b, 1, 1, "meta.fstring.python", " string.", darkFg, lightFg);
+            AssertSpan(res6b.Tokens, s6b, 2, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(res6c.Tokens, s6c, 0, 4, "string.interpolated.python string.quoted.multi.python", null, darkStr, lightStr);
+            AssertSpan(res6c.Tokens, s6c, 4, 3, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 7) nested quotes f"{d['k']}"
+            string s7 = "f\"{d['k']}\"";
+            var r7 = py.TokenizeLine(s7, null).Tokens;
+            AssertSpan(r7, s7, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r7, s7, 1, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r7, s7, 2, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r7, s7, 3, 1, "meta.item-access.python", " string.", darkFg, lightFg);
+            AssertSpan(r7, s7, 4, 1, "punctuation.definition.arguments.begin.python", " string.", darkFg, lightFg);
+            AssertSpan(r7, s7, 5, 3, "string.quoted.single.python", null, darkStr, lightStr);
+            AssertSpan(r7, s7, 8, 1, "punctuation.definition.arguments.end.python", " string.", darkFg, lightFg);
+            AssertSpan(r7, s7, 9, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r7, s7, 10, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 8) f"{a + b * 2}"
+            string s8 = "f\"{a + b * 2}\"";
+            var r8 = py.TokenizeLine(s8, null).Tokens;
+            AssertSpan(r8, s8, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r8, s8, 1, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r8, s8, 2, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r8, s8, 3, 1, "meta.fstring.python", " string.", darkFg, lightFg);
+            AssertSpan(r8, s8, 5, 1, "keyword.operator.arithmetic.python", " string.", darkOp, lightOp);
+            AssertSpan(r8, s8, 7, 1, "meta.fstring.python", " string.", darkFg, lightFg);
+            AssertSpan(r8, s8, 9, 1, "keyword.operator.arithmetic.python", " string.", darkOp, lightOp);
+            AssertSpan(r8, s8, 11, 1, "constant.numeric.dec.python", " string.", darkNum, lightNum);
+            AssertSpan(r8, s8, 12, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r8, s8, 13, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 9) f"{len(xs)}"
+            string s9 = "f\"{len(xs)}\"";
+            var r9 = py.TokenizeLine(s9, null).Tokens;
+            AssertSpan(r9, s9, 0, 1, "storage.type.string.python", null, darkBlue, lightBlue);
+            AssertSpan(r9, s9, 1, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r9, s9, 2, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r9, s9, 3, 3, "support.function.builtin.python", " string.", darkFn, lightFn);
+            AssertSpan(r9, s9, 6, 1, "punctuation.definition.arguments.begin.python", " string.", darkFg, lightFg);
+            AssertSpan(r9, s9, 7, 2, "meta.function-call.arguments.python", " string.", darkFg, lightFg);
+            AssertSpan(r9, s9, 9, 1, "punctuation.definition.arguments.end.python", " string.", darkFg, lightFg);
+            AssertSpan(r9, s9, 10, 1, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r9, s9, 11, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 10) "{0} {name}".format(...)
+            string s10 = "x = \"{0} {name}\".format(a, name=b)";
+            var r10 = py.TokenizeLine(s10, null).Tokens;
+            AssertSpan(r10, s10, 4, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r10, s10, 5, 3, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r10, s10, 8, 1, "string.quoted.single.python", "placeholder", darkStr, lightStr);
+            AssertSpan(r10, s10, 9, 6, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r10, s10, 15, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+
+            // 11) "%s %d"
+            string s11 = "y = \"%s %d\"";
+            var r11 = py.TokenizeLine(s11, null).Tokens;
+            AssertSpan(r11, s11, 4, 1, "punctuation.definition.string.begin.python", null, darkStr, lightStr);
+            AssertSpan(r11, s11, 5, 2, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r11, s11, 7, 1, "string.quoted.single.python", "placeholder", darkStr, lightStr);
+            AssertSpan(r11, s11, 8, 2, "constant.character.format.placeholder.other.python", null, darkBlue, lightBlue);
+            AssertSpan(r11, s11, 10, 1, "punctuation.definition.string.end.python", null, darkStr, lightStr);
+        }
+
         [AvaloniaFact]
         public void ExplorerPaintsSetiGlyphForCsFile_AndRendersVisualQualityScreenshots()
         {
@@ -313,6 +496,12 @@ class MetricsAggregator:
         self.window_size = window_size
         self.label = label
         self.samples: List[float] = []
+
+    def format_summary(self, stats: Dict[str, float], unit: str = ""ms"") -> str:
+        header = f""Hello {self.label!r} ({{literal}}): {len(self.samples)} items""
+        detail = f'{stats[""p95_ms""]:>10.2f} {unit} (total={len(self.samples) + 2 * 10})'
+        pattern = rf""\d+{self.window_size + 2 * 10}""
+        return f""{header} | {detail} | {pattern}""
 
     # Record a batch of elapsed durations in milliseconds
     def record_batch(self, values: List[float], scale: float = 1.0) -> Dict[str, float]:

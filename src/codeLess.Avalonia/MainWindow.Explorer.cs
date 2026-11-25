@@ -306,26 +306,34 @@ namespace codeLess.AvaloniaApp
             if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return;
             try
             {
+                var weakSelf = new WeakReference<MainWindow>(this);
+                FileSystemEventHandler onFs = (s, e) =>
+                {
+                    if (weakSelf.TryGetTarget(out var self) && !self.windowClosed)
+                        self.OnWorkspaceFsEvent(s, e);
+                };
                 var w = new FileSystemWatcher(root)
                 {
                     IncludeSubdirectories = true,
                     NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
                     InternalBufferSize = 64 * 1024
                 };
-                w.Created += OnWorkspaceFsEvent;
-                w.Deleted += OnWorkspaceFsEvent;
-                w.Changed += OnWorkspaceFsEvent;
+                w.Created += onFs;
+                w.Deleted += onFs;
+                w.Changed += onFs;
                 w.Renamed += (s, e) =>
                 {
-                    OnWorkspaceFsEvent(s, e);
-                    QueueFsChange(e.OldFullPath, structural: true);
-                    lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
+                    if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
+                    self.OnWorkspaceFsEvent(s, e);
+                    self.QueueFsChange(e.OldFullPath, structural: true);
+                    self.lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
                 };
                 w.Error += (s, e) =>
                 {
+                    if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
                     // Buffer overflow or inotify watch limit: fall back to one full refresh.
-                    lock (fsChangeLock) { fsTreeDirty = true; fsGitDirty = true; }
-                    MainUi.Post(RestartFsDebounce);
+                    lock (self.fsChangeLock) { self.fsTreeDirty = true; self.fsGitDirty = true; }
+                    self.MainUi.Post(() => { if (weakSelf.TryGetTarget(out var s2) && !s2.windowClosed) s2.RestartFsDebounce(); });
                 };
                 w.EnableRaisingEvents = true;
                 workspaceWatcher = w;
@@ -392,11 +400,13 @@ namespace codeLess.AvaloniaApp
                     if (!structural && fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
                 }
             }
-            MainUi.Post(RestartFsDebounce);
+            var weakSelf = new WeakReference<MainWindow>(this);
+            MainUi.Post(() => { if (weakSelf.TryGetTarget(out var self) && !self.windowClosed) self.RestartFsDebounce(); });
         }
 
         private void RestartFsDebounce()
         {
+            if (windowClosed || string.IsNullOrEmpty(workspaceRoot)) return;
             if (fsChangeDebounceTimer == null)
             {
                 fsChangeDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };

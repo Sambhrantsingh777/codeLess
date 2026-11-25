@@ -44,9 +44,9 @@ This file is generated from the default keybindings registry (`DefaultCommands` 
 | editor.action.goToReferences | Go to References | Editor | shift+f12 | shift+f12 | shift+f12 | editorTextFocus |
 | editor.action.indentLines | Indent Line | Editor | cmd+] | ctrl+] | ctrl+] | editorTextFocus |
 | editor.action.inlineAiBar | Inline AI Edit | AI | cmd+i | ctrl+i | ctrl+i |  |
-| editor.action.insertCursorAbove | Add Cursor Above | Multi-cursor | option+cmd+up | ctrl+alt+up | shift+alt+up | editorTextFocus |
+| editor.action.insertCursorAbove | Add Cursor Above | Multi-cursor | option+cmd+up | ctrl+alt+up | ctrl+alt+up | editorTextFocus |
 | editor.action.insertCursorAtEndOfEachLineSelected | Add Cursors to Line Ends | Multi-cursor | shift+option+i | shift+alt+i | shift+alt+i | editorTextFocus |
-| editor.action.insertCursorBelow | Add Cursor Below | Multi-cursor | option+cmd+down | ctrl+alt+down | shift+alt+down | editorTextFocus |
+| editor.action.insertCursorBelow | Add Cursor Below | Multi-cursor | option+cmd+down | ctrl+alt+down | ctrl+alt+down | editorTextFocus |
 | editor.action.insertLineAfter | Insert Line Below | Editor | cmd+enter | ctrl+enter | ctrl+enter | editorTextFocus |
 | editor.action.insertLineBefore | Insert Line Above | Editor | cmd+shift+enter | ctrl+shift+enter | ctrl+shift+enter | editorTextFocus |
 | editor.action.joinLines | Join Lines | Editor | ctrl+j |  |  | editorTextFocus |
@@ -66,7 +66,7 @@ This file is generated from the default keybindings registry (`DefaultCommands` 
 | editor.action.revealDefinition | Go to Definition | Editor | f12 | f12 | f12 | editorTextFocus |
 | editor.action.revealDefinitionAside | Open Definition to Side | Editor | cmd+k f12 | ctrl+k f12 | ctrl+k f12 | editorTextFocus |
 | editor.action.selectAllMatches | Select All Find Matches | Editor | alt+enter | alt+enter | alt+enter | editorTextFocus |
-| editor.action.selectHighlights | Select All Occurrences of Find Match | Multi-cursor | option+enter | alt+enter | alt+enter | editorTextFocus |
+| editor.action.selectHighlights | Select All Occurrences of Find Match | Multi-cursor | cmd+shift+l | ctrl+shift+l | ctrl+shift+l | editorTextFocus |
 | editor.action.smartSelect.expand | Expand Selection | Editor | ctrl+shift+cmd+right | shift+alt+right | shift+alt+right | editorTextFocus |
 | editor.action.smartSelect.shrink | Shrink Selection | Editor | ctrl+shift+cmd+left | shift+alt+left | shift+alt+left | editorTextFocus |
 | editor.action.sortLinesAscending | Sort Lines Ascending | Editor |  |  |  | editorTextFocus |
@@ -106,7 +106,7 @@ This file is generated from the default keybindings registry (`DefaultCommands` 
 | workbench.action.files.copyPathOfActiveFile | Copy Path of Active File | File | cmd+k p | ctrl+k p | ctrl+k p |  |
 | workbench.action.files.newUntitledFile | New Untitled File | File | cmd+n | ctrl+n | ctrl+n |  |
 | workbench.action.files.openFile | Open File... | File | cmd+o | ctrl+o | ctrl+o |  |
-| workbench.action.files.openFolder | Open Folder... | File | cmd+k o | ctrl+k o | ctrl+k o |  |
+| workbench.action.files.openFolder | Open Folder... | File | cmd+k o | ctrl+k ctrl+o | ctrl+k ctrl+o |  |
 | workbench.action.files.revealActiveFileInWindows | Reveal in File Explorer | File |  |  |  |  |
 | workbench.action.files.save | Save | File | cmd+s | ctrl+s | ctrl+s |  |
 | workbench.action.files.saveAll | Save All | File | option+cmd+s | ctrl+k s | ctrl+k s |  |
