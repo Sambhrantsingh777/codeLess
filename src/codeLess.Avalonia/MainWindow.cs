@@ -279,6 +279,154 @@ namespace codeLess.AvaloniaApp
         private Button statusEolBtn;
         private Button statusLanguageBtn;
         private Button statusAiModelBtn;
+        private Button statusNotificationsBellBtn;
+        private readonly Dictionary<EditorTabBuffer, TextBlock> tabDirtyDots = new Dictionary<EditorTabBuffer, TextBlock>();
+        private readonly Dictionary<EditorTabBuffer, Button> tabCloseButtons = new Dictionary<EditorTabBuffer, Button>();
+        public string ProblemsFilterText { get; private set; } = "";
+        public List<WorkbenchNotificationEntry> NotificationsHistory { get; } = new List<WorkbenchNotificationEntry>();
+        public HashSet<string> SuppressedNotificationIds { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public Border ActiveNotificationToast { get; private set; }
+        public bool IsNotificationCenterOpen { get; private set; }
+        private string explorerClipboardPath = "";
+        private bool explorerClipboardIsCut = false;
+        public string ExplorerClipboardPath => explorerClipboardPath;
+        public bool ExplorerClipboardIsCut => explorerClipboardIsCut;
+
+        public void SetTabHoverState(EditorTabBuffer tab, bool hovered)
+        {
+            if (tab == null) return;
+            bool isActive = ReferenceEquals(tab, activeTab);
+            if (tabDirtyDots.TryGetValue(tab, out var dot) && dot != null)
+            {
+                dot.IsVisible = !hovered;
+            }
+            if (tabCloseButtons.TryGetValue(tab, out var closeBtn) && closeBtn != null)
+            {
+                if (tab.IsDirty)
+                {
+                    closeBtn.IsVisible = hovered;
+                    closeBtn.Opacity = hovered ? 1 : 0;
+                }
+                else
+                {
+                    closeBtn.IsVisible = true;
+                    closeBtn.Opacity = (hovered || isActive) ? 1 : 0;
+                }
+            }
+        }
+
+        public bool IsTabDirtyDotVisible(EditorTabBuffer tab) =>
+            tab != null && tabDirtyDots.TryGetValue(tab, out var dot) && dot != null && dot.IsVisible;
+
+        public bool IsTabCloseButtonVisible(EditorTabBuffer tab) =>
+            tab != null && tabCloseButtons.TryGetValue(tab, out var btn) && btn != null && btn.IsVisible && btn.Opacity > 0.5;
+
+        public void SetProblemsFilter(string filter)
+        {
+            ProblemsFilterText = filter ?? "";
+            RefreshOutlineAndProblems(activeTab);
+        }
+
+        public bool ShowWorkbenchNotification(
+            string id,
+            string severity,
+            string message,
+            string actionLabel = null,
+            Action onAction = null,
+            bool canDoNotShowAgain = false)
+        {
+            if (!string.IsNullOrEmpty(id) && SuppressedNotificationIds.Contains(id))
+                return false;
+
+            var entry = new WorkbenchNotificationEntry
+            {
+                Id = id ?? "",
+                Severity = severity ?? "info",
+                Message = message ?? "",
+                ActionLabel = actionLabel,
+                OnAction = onAction,
+                CanDoNotShowAgain = canDoNotShowAgain,
+                TimestampUtc = DateTime.UtcNow
+            };
+            NotificationsHistory.Add(entry);
+            DismissActiveNotificationToast();
+
+            var buttons = new List<Button>();
+            if (!string.IsNullOrEmpty(actionLabel))
+            {
+                var actBtn = new Button { Content = actionLabel, Name = "NotificationActionBtn" };
+                actBtn.Click += (s, e) =>
+                {
+                    DismissActiveNotificationToast();
+                    onAction?.Invoke();
+                };
+                buttons.Add(actBtn);
+            }
+            if (canDoNotShowAgain && !string.IsNullOrEmpty(id))
+            {
+                var dnsBtn = new Button { Content = "Do Not Show Again", Name = "NotificationDoNotShowAgainBtn" };
+                dnsBtn.Click += (s, e) =>
+                {
+                    SuppressedNotificationIds.Add(id);
+                    DismissActiveNotificationToast();
+                };
+                buttons.Add(dnsBtn);
+            }
+
+            var toast = WorkbenchStyles.BuildNotification(
+                currentTheme ?? StudioTheme.GetById(StudioTheme.DefaultThemeId),
+                severity ?? "info",
+                new TextBlock { Text = message ?? "" },
+                null,
+                buttons.ToArray(),
+                !string.IsNullOrEmpty(actionLabel),
+                DismissActiveNotificationToast);
+            toast.Margin = new Thickness(0, 0, 12, 12);
+            toast.ZIndex = 75;
+            Grid.SetColumnSpan(toast, 2);
+            editorSplitGrid.Children.Add(toast);
+            ActiveNotificationToast = toast;
+            return true;
+        }
+
+        public void DismissActiveNotificationToast()
+        {
+            if (ActiveNotificationToast != null)
+            {
+                editorSplitGrid?.Children.Remove(ActiveNotificationToast);
+                ActiveNotificationToast = null;
+            }
+        }
+
+        public void ToggleNotificationsCenter()
+        {
+            IsNotificationCenterOpen = !IsNotificationCenterOpen;
+            if (!IsNotificationCenterOpen)
+            {
+                if (ModalHost.IsVisible && ModalHost.ActiveDialogId == "notifications-center")
+                    ModalHost.CloseModal();
+                return;
+            }
+
+            var stack = new StackPanel { Spacing = 6 };
+            if (NotificationsHistory.Count == 0)
+            {
+                stack.Children.Add(new TextBlock { Text = "No new notifications.", FontSize = UiTokens.FontUi });
+            }
+            else
+            {
+                foreach (var n in NotificationsHistory.AsEnumerable().Reverse().Take(20))
+                {
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = $"[{n.Severity.ToUpperInvariant()}] {n.Message}",
+                        FontSize = UiTokens.FontUi,
+                        TextWrapping = TextWrapping.Wrap
+                    });
+                }
+            }
+            ModalHost.ShowModal("notifications-center", $"Notifications ({NotificationsHistory.Count})", stack, 460);
+        }
 
         // Overlays & Modals
         public AvaloniaCommandPaletteOverlay CommandPalette { get; private set; }
@@ -319,6 +467,7 @@ namespace codeLess.AvaloniaApp
         public bool IsStatusBarEolVisible => statusEolBtn?.IsVisible ?? false;
         public bool IsStatusBarLanguageVisible => statusLanguageBtn?.IsVisible ?? false;
         public ListBox OutlineListBoxControl => outlineListBox;
+        public System.Collections.IEnumerable ProblemsListItemsForTest() => problemsListBox?.ItemsSource;
         public Button WorkspaceFolderHeaderButton => workspaceFolderHeaderBtn;
         public string StatusBarChordText => statusChordLabel?.Text ?? "";
 
@@ -615,6 +764,12 @@ namespace codeLess.AvaloniaApp
             };
             CommandPalette.GoToLineRequested += lineNum => PrimaryEditor.GoToLine(lineNum);
             CommandPalette.FileOpenRequested += (path, line, col) => OpenFileAtLocation(path, line, Math.Max(1, col), 0, preview: false, focusEditor: true);
+            CommandPalette.FileOpenToSideRequested += (path, line, col) =>
+            {
+                var tab = OpenFileAtLocation(path, line, Math.Max(1, col), 0, preview: false, focusEditor: true);
+                if (!isEditorSplit) ToggleSplitEditor();
+                if (tab != null && SplitEditor != null) SplitEditor.LoadBuffer(tab);
+            };
             CommandPalette.Closed += () => PrimaryEditor.Canvas.Focus();
             rootOverlayGrid.Children.Add(CommandPalette);
 
@@ -1032,6 +1187,11 @@ namespace codeLess.AvaloniaApp
             ExplorerTree.NodeContextMenuRequested += OpenExplorerNodeContextMenu;
             ExplorerTree.RenameRequested += PromptRenameExplorerNode;
             ExplorerTree.DeleteRequested += DeleteExplorerNodeToTrash;
+            ExplorerTree.CopyRequested += CopyExplorerNode;
+            ExplorerTree.CutRequested += CutExplorerNode;
+            ExplorerTree.PasteRequested += node => PasteExplorerNode(node);
+            ExplorerTree.RevealRequested += node => { if (node != null && !string.IsNullOrEmpty(node.Tag)) RevealInOsFileManager(node.Tag); };
+            ExplorerTree.NodeMoveRequested += MoveExplorerNodeToDirectory;
             Grid.SetRow(ExplorerTree, 3);
             grid.Children.Add(ExplorerTree);
 
@@ -1952,6 +2112,8 @@ namespace codeLess.AvaloniaApp
             });
             statusLanguageBtn = MakeStatusBtn("Plain Text", OpenLanguageModePicker);
             statusAiModelBtn = MakeStatusBtn($"✦ {settings.ActiveModel}", ShowByokAndHarnessModal);
+            statusNotificationsBellBtn = MakeStatusBtn("🔔", ToggleNotificationsCenter);
+            ToolTip.SetTip(statusNotificationsBellBtn, "Notifications");
             statusLspBtn = MakeStatusBtn("", OpenLanguageServerStatusMenu);
             statusLspBtn.IsVisible = false;
 
@@ -1964,6 +2126,7 @@ namespace codeLess.AvaloniaApp
             rightRow.Children.Add(statusLanguageBtn);
             rightRow.Children.Add(BuildNetworkStatusButton());
             rightRow.Children.Add(statusAiModelBtn);
+            rightRow.Children.Add(statusNotificationsBellBtn);
             Grid.SetColumn(rightRow, 2);
             grid.Children.Add(rightRow);
 
@@ -2903,6 +3066,10 @@ namespace codeLess.AvaloniaApp
                 tabStripStack.Children.Add(wTabBorder);
             }
 
+            var disambiguatedFolders = WorkbenchParityHelper.ComputeDisambiguatedFolders(openTabs);
+            tabDirtyDots.Clear();
+            tabCloseButtons.Clear();
+
             foreach (var tab in openTabs)
             {
                 var captured = tab;
@@ -2931,23 +3098,43 @@ namespace codeLess.AvaloniaApp
                     VerticalAlignment = VerticalAlignment.Center
                 });
 
-                if (captured.IsDirty)
+                if (!string.IsNullOrEmpty(captured.FilePath) &&
+                    disambiguatedFolders.TryGetValue(captured.FilePath, out string disambigFolder) &&
+                    !string.IsNullOrEmpty(disambigFolder))
                 {
                     row.Children.Add(new TextBlock
+                    {
+                        Text = disambigFolder,
+                        FontSize = UiTokens.FontSmall,
+                        FontStyle = captured.IsPreviewTab ? FontStyle.Italic : FontStyle.Normal,
+                        Foreground = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(currentTheme.FgMuted)),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(2, 0, 0, 0)
+                    });
+                }
+
+                TextBlock dirtyDot = null;
+                if (captured.IsDirty)
+                {
+                    dirtyDot = new TextBlock
                     {
                         Text = "●",
                         FontSize = 11,
                         Foreground = new SolidColorBrush(accent),
                         VerticalAlignment = VerticalAlignment.Center,
                         Margin = new Thickness(2, 0, 0, 0)
-                    });
+                    };
+                    row.Children.Add(dirtyDot);
+                    tabDirtyDots[captured] = dirtyDot;
                 }
 
-                // VS Code: the close glyph shows on the active tab and on hover; a dirty tab shows its dot instead.
+                // VS Code: the close glyph shows on the active tab and on hover; a dirty tab shows its dot instead until hovered.
                 var closeBtn = WorkbenchStyles.IconButton("close", "Close (Ctrl+W)", () => CloseTab(captured), currentTheme, 20, 14);
                 WorkbenchStyles.ThemeIconButton(closeBtn, currentTheme, isActive);
-                closeBtn.Opacity = isActive ? 1 : 0;
+                closeBtn.IsVisible = !captured.IsDirty;
+                closeBtn.Opacity = (!captured.IsDirty && isActive) ? 1 : 0;
                 row.Children.Add(closeBtn);
+                tabCloseButtons[captured] = closeBtn;
 
                 var tabBorder = new Border
                 {
@@ -2959,8 +3146,16 @@ namespace codeLess.AvaloniaApp
                     BorderThickness = isActive ? new Thickness(0, UiTokens.TabIndicatorWidth, 0, 0) : new Thickness(0, 0, 1, 1)
                 };
                 var tabHoverBrush = new SolidColorBrush(AvaloniaColorHelper.ToAvColor(UiTokens.Hover(currentTheme, currentTheme.TabBarBg)));
-                tabBorder.PointerEntered += (s, e) => { closeBtn.Opacity = 1; if (!isActive) tabBorder.Background = tabHoverBrush; };
-                tabBorder.PointerExited += (s, e) => { closeBtn.Opacity = isActive ? 1 : 0; if (!isActive) tabBorder.Background = new SolidColorBrush(inactiveBg); };
+                tabBorder.PointerEntered += (s, e) =>
+                {
+                    SetTabHoverState(captured, true);
+                    if (!isActive) tabBorder.Background = tabHoverBrush;
+                };
+                tabBorder.PointerExited += (s, e) =>
+                {
+                    SetTabHoverState(captured, false);
+                    if (!isActive) tabBorder.Background = new SolidColorBrush(inactiveBg);
+                };
                 tabBorder.PointerPressed += (s, e) =>
                 {
                     var props = e.GetCurrentPoint(tabBorder).Properties;
@@ -2995,6 +3190,7 @@ namespace codeLess.AvaloniaApp
             Color textSecondary = AvaloniaColorHelper.ToAvColor(currentTheme.TextSecondary);
             Color accent = AvaloniaColorHelper.ToAvColor(currentTheme.AccentPrimary);
 
+            var disambiguatedFolders = WorkbenchParityHelper.ComputeDisambiguatedFolders(openTabs);
             foreach (var tab in openTabs)
             {
                 var captured = tab;
@@ -3012,9 +3208,12 @@ namespace codeLess.AvaloniaApp
                     Foreground = new SolidColorBrush(captured.IsDirty ? accent : textSecondary),
                     VerticalAlignment = VerticalAlignment.Center
                 });
+                string disambig = (!string.IsNullOrEmpty(captured.FilePath) && disambiguatedFolders.TryGetValue(captured.FilePath, out string df) && !string.IsNullOrEmpty(df))
+                    ? $" — {df}"
+                    : "";
                 var nameTb = new TextBlock
                 {
-                    Text = captured.FileName,
+                    Text = captured.FileName + disambig,
                     FontSize = 11.5,
                     FontStyle = captured.IsPreviewTab ? FontStyle.Italic : FontStyle.Normal,
                     FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
@@ -3072,13 +3271,22 @@ namespace codeLess.AvaloniaApp
             var probItems = new List<Control>();
             int errCount = 0;
             int warnCount = 0;
+            string filter = (ProblemsFilterText ?? "").Trim();
             if (tab?.Diagnostics != null)
             {
+                if (!string.IsNullOrEmpty(tab.FilePath))
+                {
+                    ExplorerTree.ProblemCountByFullPath[tab.FilePath] = tab.Diagnostics.Count;
+                    ExplorerTree.InvalidateVisual();
+                }
                 foreach (var d in tab.Diagnostics)
                 {
                     bool isErr = string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase);
                     if (isErr) errCount++; else warnCount++;
-                    probItems.Add(new LiteralTextBlock($"{(isErr ? "⊗" : "△")} [{d.Severity}] {tab.FileName}:{d.LineNumber} — {d.Message}")
+                    string rowText = $"{(isErr ? "⊗" : "△")} [{d.Severity}] {tab.FileName}:{d.LineNumber} — {d.Message}";
+                    if (!string.IsNullOrEmpty(filter) && rowText.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    probItems.Add(new LiteralTextBlock(rowText)
                     {
                         FontFamily = new FontFamily("Cascadia Code, Consolas, Menlo, monospace"),
                         FontSize = 11.5,
@@ -3138,8 +3346,8 @@ namespace codeLess.AvaloniaApp
                 statusLanguageBtn.IsVisible = true;
 
                 int carets = PrimaryEditor.Canvas.TotalCursorCount;
-                string caretSuffix = carets > 1 ? $" ({carets} cursors)" : "";
-                statusLnColBtn.Content = new LiteralTextBlock($"Ln {activeTab.CursorLine + 1}, Col {activeTab.CursorCol + 1}{caretSuffix}");
+                int selectedChars = activeTab.HasSelection() ? (activeTab.GetSelectedText() ?? "").Length : 0;
+                statusLnColBtn.Content = new LiteralTextBlock(WorkbenchParityHelper.FormatStatusLnCol(activeTab.CursorLine + 1, activeTab.CursorCol + 1, selectedChars, carets));
                 statusSpacesBtn.Content = new LiteralTextBlock(StatusIndentationText);
                 statusEncodingBtn.Content = new LiteralTextBlock(activeTab.HasBom ? "UTF-8 with BOM" : "UTF-8");
                 statusEolBtn.Content = new LiteralTextBlock(activeTab.EolLabel);

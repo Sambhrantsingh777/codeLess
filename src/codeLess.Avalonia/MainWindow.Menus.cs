@@ -95,6 +95,12 @@ namespace codeLess.AvaloniaApp
                 ["edit.toggleLineComment"] = () => ed().ToggleLineComment(),
                 ["edit.toggleBlockComment"] = () => ed().ToggleBlockComment(),
                 ["edit.emmetExpand"] = () => { if (!ed().ExpandEmmetAbbreviation()) SetStatusMessage("Emmet: no abbreviation at the cursor"); },
+                ["edit.emojiSymbols"] = () =>
+                {
+                    if (AvaloniaTerminalEmulatorControl.IsDesktopRuntime && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                        MacAppNative.Send("orderFrontCharacterPalette:");
+                    SetStatusMessage("Emoji & Symbols");
+                },
                 // selection
                 ["sel.selectAll"] = () => RouteNativeEditCommand("selectall"),
                 ["sel.expand"] = () => ed().ExpandSelection(),

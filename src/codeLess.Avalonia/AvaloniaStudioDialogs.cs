@@ -52,6 +52,8 @@ namespace codeLess.AvaloniaApp
         public event Action<int> GoToLineRequested;
         /// <summary>(path, 1-based line or 0, 1-based column or 0)</summary>
         public event Action<string, int, int> FileOpenRequested;
+        public event Action<string, int, int> FileOpenToSideRequested;
+        public List<string> RecentCommandTitles { get; } = new List<string>();
         private int pendingQuickOpenLine;
         private int pendingQuickOpenColumn;
         public event Action Closed;
@@ -185,6 +187,21 @@ namespace codeLess.AvaloniaApp
         public void RefreshFilter()
         {
             string raw = SearchInput.Text ?? "";
+            if (raw.StartsWith("?"))
+            {
+                ModeHintLabel.Text = "Quick Open Help — select a prefix to switch mode";
+                FilteredEntries = new List<PaletteEntryItem>
+                {
+                    new PaletteEntryItem { Category = "...", Title = "Go to File", stringSubtitleOrPath = "Search files by name", Execute = () => { SearchInput.Text = ""; SearchInput.CaretIndex = 0; } },
+                    new PaletteEntryItem { Category = ">", Title = "Show and Run Commands", stringSubtitleOrPath = "Execute workbench commands", Execute = () => { SearchInput.Text = ">"; SearchInput.CaretIndex = 1; } },
+                    new PaletteEntryItem { Category = "@", Title = "Go to Symbol in Editor", stringSubtitleOrPath = "Jump to outline symbol in active file", Execute = () => { SearchInput.Text = "@"; SearchInput.CaretIndex = 1; } },
+                    new PaletteEntryItem { Category = "#", Title = "Go to Symbol in Workspace", stringSubtitleOrPath = "Search symbols across workspace", Execute = () => { SearchInput.Text = "#"; SearchInput.CaretIndex = 1; } },
+                    new PaletteEntryItem { Category = ":", Title = "Go to Line/Column", stringSubtitleOrPath = "Jump to a line number in active editor", Execute = () => { SearchInput.Text = ":"; SearchInput.CaretIndex = 1; } }
+                };
+                RenderListItems();
+                ResultsListBox.SelectedIndex = 0;
+                return;
+            }
             string query = raw;
             if (query.StartsWith(">") || query.StartsWith("@") || query.StartsWith("#") || query.StartsWith(":"))
                 query = query.Substring(1).Trim();
@@ -259,9 +276,20 @@ namespace codeLess.AvaloniaApp
                 if (pendingQuickOpenLine > 0)
                     ModeHintLabel.Text = $"Open file and go to line {pendingQuickOpenLine}" + (pendingQuickOpenColumn > 0 ? $", column {pendingQuickOpenColumn}" : "");
             }
-            else if (raw.StartsWith(">") && AllEntries.Any(en => !string.IsNullOrEmpty(en.FilePath)) && string.IsNullOrEmpty(query))
+            else if (raw.StartsWith(">") && string.IsNullOrEmpty(query))
             {
-                FilteredEntries = AllEntries.Where(en => string.IsNullOrEmpty(en.FilePath)).Take(120).ToList();
+                var cmdItems = AllEntries.Where(en => string.IsNullOrEmpty(en.FilePath)).ToList();
+                var recentSet = new List<PaletteEntryItem>();
+                foreach (string rt in RecentCommandTitles)
+                {
+                    var found = cmdItems.FirstOrDefault(c => string.Equals(c.Title, rt, StringComparison.OrdinalIgnoreCase));
+                    if (found != null && !recentSet.Contains(found))
+                    {
+                        found.IsRecent = true;
+                        recentSet.Add(found);
+                    }
+                }
+                FilteredEntries = recentSet.Concat(cmdItems.Where(c => !recentSet.Contains(c))).Take(120).ToList();
             }
             else if (string.IsNullOrEmpty(query))
             {
@@ -382,11 +410,23 @@ namespace codeLess.AvaloniaApp
             return shortcut;
         }
 
+        public void CycleSelection(int delta = 1)
+        {
+            if (FilteredEntries.Count == 0) return;
+            int cur = ResultsListBox.SelectedIndex < 0 ? 0 : ResultsListBox.SelectedIndex;
+            ResultsListBox.SelectedIndex = ((cur + delta) % FilteredEntries.Count + FilteredEntries.Count) % FilteredEntries.Count;
+        }
+
         private void OnSearchKeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Escape)
             {
                 Close(restorePreviewTheme: true);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.P && (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta)) && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            {
+                CycleSelection(1);
                 e.Handled = true;
             }
             else if (e.Key == Key.Down)
@@ -407,12 +447,13 @@ namespace codeLess.AvaloniaApp
             }
             else if (e.Key == Key.Enter)
             {
-                ExecuteSelected();
+                bool toSide = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+                ExecuteSelected(openToSide: toSide);
                 e.Handled = true;
             }
         }
 
-        public void ExecuteSelected()
+        public void ExecuteSelected(bool openToSide = false)
         {
             string raw = (SearchInput.Text ?? "").Trim();
             if (raw.StartsWith(":"))
@@ -431,13 +472,30 @@ namespace codeLess.AvaloniaApp
             if (idx >= 0 && idx < FilteredEntries.Count)
             {
                 var chosen = FilteredEntries[idx];
+                if (raw.StartsWith("?"))
+                {
+                    chosen.Execute?.Invoke();
+                    return;
+                }
+                if (raw.StartsWith(">") && !string.IsNullOrEmpty(chosen.Title))
+                {
+                    RecentCommandTitles.RemoveAll(t => string.Equals(t, chosen.Title, StringComparison.OrdinalIgnoreCase));
+                    RecentCommandTitles.Insert(0, chosen.Title);
+                }
                 originalThemeIdBeforePreview = null; // keep chosen theme
                 int line = pendingQuickOpenLine, col = pendingQuickOpenColumn;
                 Close(restorePreviewTheme: false);
-                if (!string.IsNullOrEmpty(chosen.FilePath) && FileOpenRequested != null)
-                    FileOpenRequested(chosen.FilePath, line, col);
+                if (!string.IsNullOrEmpty(chosen.FilePath))
+                {
+                    if (openToSide && FileOpenToSideRequested != null)
+                        FileOpenToSideRequested(chosen.FilePath, line, col);
+                    else if (FileOpenRequested != null)
+                        FileOpenRequested(chosen.FilePath, line, col);
+                }
                 else
+                {
                     chosen.Execute?.Invoke();
+                }
             }
         }
     }
