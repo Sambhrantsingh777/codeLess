@@ -14,6 +14,8 @@ namespace codeLess.AvaloniaApp.Tests
         public void SettingsFileChanged_Debounced()
         {
             // Setup a fake settings file
+            
+
             Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-watch-test-" + Guid.NewGuid().ToString("N")));
             string path = IdePersistentSettings.GetSettingsFilePath();
             Directory.CreateDirectory(Path.GetDirectoryName(path));

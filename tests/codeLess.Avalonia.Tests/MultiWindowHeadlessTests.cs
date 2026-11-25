@@ -101,7 +101,8 @@ namespace codeLess.AvaloniaApp.Tests
         [AvaloniaFact]
         public void SettingsChange_Propagates()
         {
-            Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-scp1-" + Guid.NewGuid().ToString("N")));
+            
+
             string tmpDir1 = Path.Combine(Path.GetTempPath(), "mw-test1-" + Guid.NewGuid().ToString("N"));
             string tmpDir2 = Path.Combine(Path.GetTempPath(), "mw-test2-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tmpDir1);
@@ -119,7 +120,7 @@ namespace codeLess.AvaloniaApp.Tests
             settings.EditorFontSize = newSize;
             settings.Save();
             
-            System.Threading.Thread.Sleep(500);
+            codeLess.Studio.IdeSettingsWatcher.ForceDebounceTickForTests();
             Dispatcher.UIThread.RunJobs();
             
             Assert.Equal(newSize, w2.GetEditorFontSizeForTests());
@@ -187,6 +188,8 @@ namespace codeLess.AvaloniaApp.Tests
             Directory.CreateDirectory(tmpDir1);
             Directory.CreateDirectory(tmpDir2);
 
+            
+
             Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-rs1-" + Guid.NewGuid().ToString("N")));
             var settings = IdePersistentSettings.Load();
             settings.WindowRestoreWindows = "all";
@@ -222,6 +225,8 @@ namespace codeLess.AvaloniaApp.Tests
             string tmpDir2 = Path.Combine(Path.GetTempPath(), "mw-rs4-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tmpDir1);
             Directory.CreateDirectory(tmpDir2);
+
+            
 
             Environment.SetEnvironmentVariable("CODELESS_SETTINGS_DIR", Path.Combine(Path.GetTempPath(), "settings-rs2-" + Guid.NewGuid().ToString("N")));
             var settings = IdePersistentSettings.Load();

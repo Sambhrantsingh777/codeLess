@@ -39,6 +39,21 @@ namespace codeLess.Studio
             } catch { }
         }
 
+        public static void StopForTests()
+        {
+            if (_watcher != null)
+            {
+                _watcher.EnableRaisingEvents = false;
+                _watcher.Dispose();
+                _watcher = null;
+            }
+            if (_debounceTimer != null)
+            {
+                _debounceTimer.Dispose();
+                _debounceTimer = null;
+            }
+        }
+
         public static void ForceDebounceTickForTests() { OnDebounceTick(null); }
 
         private static void OnDebounceTick(object state)
