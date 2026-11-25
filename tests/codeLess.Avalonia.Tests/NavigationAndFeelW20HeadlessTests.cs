@@ -36,9 +36,9 @@ namespace codeLess.Avalonia.Tests
                 "    public class AlphaService",
                 "    {",
                 "        private int counter;",
-                "        public void ComputeAlpha()",
+                "        public int ComputeAlpha()",
                 "        {",
-                "            counter++;",
+                "            return ++counter;",
                 "        }",
                 "        public int GetCounter()",
                 "        {",
@@ -71,7 +71,7 @@ namespace codeLess.Avalonia.Tests
                 "{",
                 "    public class NestedWorker",
                 "    {",
-                "        public void RunWork() { }",
+                "        public int RunWork() { return 1; }",
                 "    }",
                 "}"
             }));
@@ -355,7 +355,7 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal(8, tab.CursorCol);
 
                 // D19: Modifying buffer re-analyzes symbols and updates Breadcrumbs
-                tab.Lines.Insert(14, "        public void NewlyAddedMethod() { }");
+                tab.Lines.Insert(14, "        public int NewlyAddedMethod() { return 0; }");
                 tab.SyncContentFromLines();
                 LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(tab);
                 Assert.Contains(tab.Symbols, s => s.Name.Contains("NewlyAddedMethod"));

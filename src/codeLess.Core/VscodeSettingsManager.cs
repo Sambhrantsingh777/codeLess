@@ -192,12 +192,15 @@ namespace codeLess.Core
             if (string.IsNullOrWhiteSpace(jsonContent)) return null;
             string err;
             var parsed = JsoncParser.Parse(jsonContent, out err);
-            if (err != null) return err;
-            if (parsed == null) return "Invalid JSON: null root object";
+            if (parsed == null) return err ?? "Invalid JSON: null root object";
             Dictionary<string, object> dict = parsed as Dictionary<string, object>;
-            if (dict == null) return "Invalid JSON: expected a JSON object";
-            if (dict.ContainsKey("invalid")) return "Invalid format: missing value";
-            if (err == null && dict != null)
+            if (dict == null) return err ?? "Invalid JSON: expected a JSON object";
+            if (dict.ContainsKey("invalid"))
+            {
+                if (err == null) err = "Invalid format: missing value";
+                dict.Remove("invalid");
+            }
+            if (dict != null && target != null)
             {
                 float fVal;
                 int iVal;
@@ -298,7 +301,7 @@ namespace codeLess.Core
                     McpConfigLoader.MergeFromRootDictionary(dict, target.McpServers);
                 }
             }
-            return null;
+            return err;
         }
 
         private static bool TryGetSingle(object val, out float result)

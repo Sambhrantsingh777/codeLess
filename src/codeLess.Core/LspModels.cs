@@ -443,6 +443,7 @@ namespace codeLess.Studio
             List<object> arr = result as List<object>;
             LspRange defRange = null, defReplace = null;
             int defFormat = 1;
+            List<string> defCommitChars = null;
             if (arr == null)
             {
                 list.IsIncomplete = LspJson.GetBool(result, "isIncomplete", false);
@@ -458,13 +459,24 @@ namespace codeLess.Studio
                         defReplace = LspRange.Parse(LspJson.Get(er, "replace"));
                     }
                     defFormat = LspJson.GetInt(defaults, "insertTextFormat", 1);
+                    List<object> dcc = LspJson.GetList(defaults, "commitCharacters");
+                    if (dcc != null)
+                    {
+                        defCommitChars = new List<string>();
+                        foreach (object c in dcc) { string s = c as string; if (s != null) defCommitChars.Add(s); }
+                    }
                 }
             }
             if (arr == null) return list;
             foreach (object o in arr)
             {
                 LspCompletionItem it = LspCompletionItem.Parse(o, defRange, defReplace, defFormat);
-                if (it != null) list.Items.Add(it);
+                if (it != null)
+                {
+                    if (it.CommitCharacters == null && defCommitChars != null)
+                        it.CommitCharacters = new List<string>(defCommitChars);
+                    list.Items.Add(it);
+                }
             }
             return list;
         }

@@ -521,12 +521,24 @@ namespace codeLess.Studio
         public async void FindReferences(EditorTabBuffer buf, Action fallback)
         {
             string path = PathFor(buf);
-            if (path == null || !mgr.IsActive(path)) { if (fallback != null) fallback(); return; }
+            if (path == null || !mgr.IsActive(path))
+            {
+                List<LspLocation> fallbackRefs = LspEditing.FindWordReferencesFallback(buf, GetOpenTabs != null ? GetOpenTabs() : null, Root, 500, 500);
+                if (fallbackRefs.Count > 0) { ShowLocations(fallbackRefs, "text matches (no language server)"); return; }
+                Status("No references found.");
+                return;
+            }
             Status("Finding references…");
             List<LspLocation> refs = null;
             try { refs = await mgr.RequestReferencesAsync(path, buf.CursorLine, buf.CursorCol, true, CancellationToken.None); }
             catch { refs = null; }
-            if (refs == null) { if (fallback != null) fallback(); return; }
+            if (refs == null)
+            {
+                List<LspLocation> fallbackRefs = LspEditing.FindWordReferencesFallback(buf, GetOpenTabs != null ? GetOpenTabs() : null, Root, 500, 500);
+                if (fallbackRefs.Count > 0) { ShowLocations(fallbackRefs, "text matches (no language server)"); return; }
+                Status("No references found.");
+                return;
+            }
             if (refs.Count == 0) { Status("No references found."); return; }
             ShowLocations(refs, "references");
         }
@@ -567,6 +579,12 @@ namespace codeLess.Studio
             ApplyWorkspaceEdit(edit, "Renamed to '" + newName + "':", guard);
         }
 
+        public bool SupportsFormattingFor(EditorTabBuffer buf)
+        {
+            string p = PathFor(buf);
+            return p != null && mgr.Supports(p, "documentFormattingProvider");
+        }
+
         public LspApplyResult ApplyWorkspaceEdit(LspWorkspaceEdit edit, string verb)
         {
             return ApplyWorkspaceEdit(edit, verb, null);
@@ -582,7 +600,26 @@ namespace codeLess.Studio
                 tab.FileName = Path.GetFileName(newPath);
                 string root = Root;
                 tab.RelativePath = root != null ? LlmHarnessAndAgentEngine.GetRelativePath(root, newPath) : tab.FileName;
-            }, guard);
+            }, guard, delegate (IList<EditorTabBuffer> touchedBuffers, IList<string> touchedDisk)
+            {
+                foreach (EditorTabBuffer b in touchedBuffers)
+                {
+                    bool shown = false;
+                    foreach (WinFormsLspEditorBinding eb in bindings)
+                    {
+                        if (!ReferenceEquals(eb.Editor.CurrentBuffer, b)) continue;
+                        eb.Editor.NotifyBufferContentChanged();
+                        eb.Editor.Canvas.Invalidate();
+                        shown = true;
+                    }
+                    if (!shown)
+                    {
+                        LlmHarnessAndAgentEngine.AnalyzeBufferAstAndDiagnostics(b);
+                        if (mgr != null && !string.IsNullOrEmpty(b.FilePath)) mgr.ChangeDocument(b.FilePath);
+                    }
+                }
+                if (RefreshTabs != null) RefreshTabs();
+            });
             if (result.Rejected)
             {
                 Status(verb + " not applied: " + result.Errors[0]);
@@ -613,8 +650,14 @@ namespace codeLess.Studio
         public async void Format(CodeLessEditorControl ctrl, bool selectionOnly)
         {
             EditorTabBuffer buf = ctrl != null ? ctrl.CurrentBuffer : null;
+            if (buf == null) return;
             string path = PathFor(buf);
-            if (path == null || !mgr.IsActive(path)) { if (ctrl != null) ctrl.FormatActiveDocument(); return; }
+            string lang = LanguageServerRegistry.LanguageIdForPath(path ?? buf.FileName ?? "") ?? (string.IsNullOrEmpty(buf.Language) ? "plaintext" : buf.Language);
+            if (path == null || !mgr.IsActive(path))
+            {
+                Status("There is no formatter for '" + lang + "' files installed.");
+                return;
+            }
             LspRange range = null;
             if (selectionOnly && buf.HasSelection())
             {
@@ -626,7 +669,11 @@ namespace codeLess.Studio
             bool spaces = buf.CustomInsertSpaces.HasValue ? buf.CustomInsertSpaces.Value : settings.InsertSpaces;
             string before = LspEditing.BufferText(buf);
             List<LspTextEdit> edits = await mgr.RequestFormattingAsync(path, range, tab, spaces, CancellationToken.None);
-            if (edits == null) { ctrl.FormatActiveDocument(); return; } // server cannot format this file: built-in formatter
+            if (edits == null)
+            {
+                Status("There is no formatter for '" + lang + "' files installed.");
+                return;
+            }
             if (!ReferenceEquals(ctrl.CurrentBuffer, buf) || LspEditing.BufferText(buf) != before) { Status("Format skipped: the document changed."); return; }
             if (edits.Count == 0) { Status("Already formatted."); return; }
             if (!LspEditing.ApplyEditsToBuffer(buf, edits, true)) { Status("Format failed: overlapping edits."); return; }
@@ -810,6 +857,7 @@ namespace codeLess.Studio
             symbolsTimer = new System.Windows.Forms.Timer { Interval = 700 };
             symbolsTimer.Tick += delegate { symbolsTimer.Stop(); RefreshSymbols(); };
             editor.Canvas.PreviewKeyHandler = OnPreviewKey;
+            editor.Canvas.PreviewCharHandler = OnPreviewChar;
             editor.Canvas.CharTyped += OnCharTyped;
             editor.Canvas.MouseMovedOverCanvas += OnMouseMoved;
             editor.Canvas.MouseLeftCanvas += OnMouseLeft;
@@ -839,6 +887,7 @@ namespace codeLess.Studio
             hoverTimer.Stop();
             symbolsTimer.Stop();
             Editor.Canvas.PreviewKeyHandler = null;
+            Editor.Canvas.PreviewCharHandler = null;
             Editor.Canvas.CharTyped -= OnCharTyped;
             Editor.Canvas.MouseMovedOverCanvas -= OnMouseMoved;
             Editor.Canvas.MouseLeftCanvas -= OnMouseLeft;
@@ -935,6 +984,34 @@ namespace codeLess.Studio
         }
 
         // ---------------------------------------------------------------- typing / caret
+
+        private bool OnPreviewChar(char ch)
+        {
+            if (Buf == null) return false;
+            if (session != null && completionFrame.Visible && !LspEditing.IsWordChar(ch))
+            {
+                LanguageServerManager lsp = Lsp;
+                string path = PathOrNull;
+                IList<string> serverCommits = lsp != null && path != null ? lsp.GetCompletionCommitCharacters(path) : null;
+                if (session.IsCommitCharacter(ch, serverCommits))
+                {
+                    LspCompletionSession s = session;
+                    LspCompletionItem item = s.Selected;
+                    EditorTabBuffer buf = Buf;
+                    CloseCompletion();
+                    if (item != null && buf != null)
+                    {
+                        PrepareImportAccept(s, item, buf);
+                        if (LspEditing.ApplyCompletion(buf, item))
+                        {
+                            Editor.NotifyBufferContentChanged();
+                            Editor.Canvas.Invalidate();
+                        }
+                    }
+                }
+            }
+            return false;
+        }
 
         private void OnCharTyped(char ch)
         {

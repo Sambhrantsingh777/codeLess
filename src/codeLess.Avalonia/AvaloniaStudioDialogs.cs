@@ -190,6 +190,7 @@ namespace codeLess.AvaloniaApp
         public void Open(string prefix, List<PaletteEntryItem> entries, string currentThemeId = null)
         {
             QuickOpenFileSearch = null;
+            CustomModeHint = null;
             InitialPrefix = prefix ?? "";
             AllEntries = entries ?? new List<PaletteEntryItem>();
             originalThemeIdBeforePreview = currentThemeId;
@@ -208,10 +209,13 @@ namespace codeLess.AvaloniaApp
 
         /// <summary>Optional fast file search used by Quick Open for big workspaces (set by the host, cleared on Close).</summary>
         public Func<string, int, List<(PaletteEntryItem Entry, int Score)>> QuickOpenFileSearch { get; set; }
+        /// <summary>Optional custom hint for non-Quick-Open pickers (References, Definitions, Code Actions).</summary>
+        public string CustomModeHint { get; set; }
 
         public void Close(bool restorePreviewTheme = false)
         {
             QuickOpenFileSearch = null;
+            CustomModeHint = null;
             AllEntries.Clear();
             FilteredEntries.Clear();
             ResultsListBox.ItemsSource = null;
@@ -255,7 +259,7 @@ namespace codeLess.AvaloniaApp
             bool isEdSymGrouped = raw.StartsWith("@:");
             bool isWsSymMode = raw.StartsWith("#");
             bool isLineMode = raw.StartsWith(":");
-            bool fileMode = !isCmdMode && !isEdSymMode && !isWsSymMode && !isLineMode;
+            bool fileMode = string.IsNullOrEmpty(CustomModeHint) && !isCmdMode && !isEdSymMode && !isWsSymMode && !isLineMode;
 
             string query;
             if (isEdSymGrouped)
@@ -264,6 +268,11 @@ namespace codeLess.AvaloniaApp
                 query = raw.Substring(1).Trim();
             else
                 query = raw.Trim();
+
+            if (!string.IsNullOrEmpty(CustomModeHint))
+            {
+                ModeHintLabel.Text = CustomModeHint;
+            }
 
             pendingQuickOpenLine = 0;
             pendingQuickOpenColumn = 0;
@@ -395,9 +404,10 @@ namespace codeLess.AvaloniaApp
 
             if (fileMode)
             {
-                ModeHintLabel.Text = "Quick Open Files by Name (type '>' for commands, '@' for symbols, ':' for line)";
+                if (string.IsNullOrEmpty(CustomModeHint))
+                    ModeHintLabel.Text = "Quick Open Files by Name (type '>' for commands, '@' for symbols, ':' for line)";
                 var files = AllEntries.Where(en => !string.IsNullOrEmpty(en.FilePath)).ToList();
-                if (files.Count == 0 && QuickOpenFileSearch == null && FileEntriesProvider != null)
+                if (files.Count == 0 && QuickOpenFileSearch == null && (!string.IsNullOrEmpty(InitialPrefix) || AllEntries.Count == 0) && FileEntriesProvider != null)
                 {
                     files = FileEntriesProvider() ?? new List<PaletteEntryItem>();
                 }
@@ -449,13 +459,19 @@ namespace codeLess.AvaloniaApp
                 }
             }
 
-            var cmdEntries = AllEntries.Where(en => string.IsNullOrEmpty(en.FilePath) && en.PreviewLine <= 0).ToList();
-            if (cmdEntries.Count == 0 && CommandEntriesProvider != null)
+            var cmdEntries = isCmdMode
+                ? AllEntries.Where(en => string.IsNullOrEmpty(en.FilePath) && en.PreviewLine <= 0).ToList()
+                : AllEntries.ToList();
+            if (isCmdMode && cmdEntries.Count == 0 && CommandEntriesProvider != null)
                 cmdEntries = CommandEntriesProvider() ?? new List<PaletteEntryItem>();
 
             if (isCmdMode)
             {
                 ModeHintLabel.Text = $"{cmdEntries.Count} Commands Available — ↑↓ Navigate • Enter Run • Esc Close";
+            }
+            else if (!string.IsNullOrEmpty(CustomModeHint))
+            {
+                ModeHintLabel.Text = CustomModeHint;
             }
 
             if (isCmdMode && string.IsNullOrEmpty(query))

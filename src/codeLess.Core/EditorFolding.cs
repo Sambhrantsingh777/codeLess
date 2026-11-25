@@ -65,7 +65,7 @@ namespace codeLess.Studio
         public bool IsUpToDate(EditorTabBuffer buf, int tabSize)
         {
             return buf != null && complete && version == buf.EditVersion && tab == tabSize &&
-                   string.Equals(path, buf.FilePath ?? buf.FileName ?? "", StringComparison.Ordinal);
+                   string.Equals(path, EditorSyntaxSession.EffectiveSyntaxPathFor(buf), StringComparison.Ordinal);
         }
 
         /// <summary>End line of the foldable range whose header is <paramref name="line"/>, or -1.</summary>
@@ -86,7 +86,7 @@ namespace codeLess.Studio
             if (buf == null || buf.Lines == null) return true;
             tabSize = Math.Max(1, tabSize);
             if (IsUpToDate(buf, tabSize)) return true;
-            string p = buf.FilePath ?? buf.FileName ?? "";
+            string p = EditorSyntaxSession.EffectiveSyntaxPathFor(buf);
             List<FoldRange> res = new List<FoldRange>();
             bool ok = Compute(buf, p, tabSize, budgetMs, res);
             if (!ok) { complete = false; return false; }
@@ -182,7 +182,7 @@ namespace codeLess.Studio
                     ComputeMarkdownRanges(lines, res);
                     break;
                 default:
-                    ComputeIndentRanges(lines, tabSize, res);
+                    ComputeIndentRanges(lines, tabSize, profile, res);
                     if (profile.LineComment != null) ComputeLineCommentGroups(lines, profile, res);
                     break;
             }
@@ -227,7 +227,7 @@ namespace codeLess.Studio
             else if (st == Strategy.Markdown) ComputeMarkdownRanges(lines, res);
             else
             {
-                ComputeIndentRanges(lines, Math.Max(1, tabSize), res);
+                ComputeIndentRanges(lines, Math.Max(1, tabSize), profile, res);
                 if (profile.LineComment != null) ComputeLineCommentGroups(lines, profile, res);
             }
             Normalize(res);
@@ -416,9 +416,16 @@ namespace codeLess.Studio
         }
 
         // ---- indentation ---------------------------------------------------------------------------------------
-        private static void ComputeIndentRanges(IList<string> lines, int tabSize, List<FoldRange> res)
+        private static void ComputeIndentRanges(IList<string> lines, int tabSize, BracketLexProfile profile, List<FoldRange> res)
         {
             int n = lines.Count;
+            EditorBracketCache lexCache = null;
+            if (profile != null && profile.Enabled && (profile.TripleQuotes || profile.BlockStart != null))
+            {
+                lexCache = new EditorBracketCache(profile);
+                lexCache.Sync(lines);
+                lexCache.EnsureValid(lines, n - 1, 0);
+            }
             List<int> stackIndent = new List<int>();
             List<int> stackLine = new List<int>();
             int lastNonBlank = -1;
@@ -427,6 +434,15 @@ namespace codeLess.Studio
                 string s = lines[l] ?? "";
                 int f = FirstNonWs(s);
                 if (f < 0) continue;
+                if (lexCache != null)
+                {
+                    BracketLexState st = lexCache.GetStartState(l);
+                    if (st != null && (st.Mode == BracketLexState.ModeTriple || st.Mode == BracketLexState.ModeBlockComment))
+                    {
+                        lastNonBlank = l;
+                        continue;
+                    }
+                }
                 int ind = EditorTextLayout.VisualColumn(s, f, tabSize);
                 while (stackIndent.Count > 0 && stackIndent[stackIndent.Count - 1] >= ind)
                 {

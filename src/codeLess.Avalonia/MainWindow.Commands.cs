@@ -349,7 +349,12 @@ namespace codeLess.AvaloniaApp
                 ToggleFullScreenMode();
                 return true;
             }
-            if (key == Key.F12 && !ctrlOrCmd && !shift)
+            if (key == Key.F12 && !ctrlOrCmd && !shift && !alt)
+            {
+                GoToDefinitionAtCursor();
+                return true;
+            }
+            if (key == Key.F12 && alt && !ctrlOrCmd && !shift)
             {
                 GoToDefinitionAtCursor();
                 return true;

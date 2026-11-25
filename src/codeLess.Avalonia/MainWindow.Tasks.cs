@@ -393,7 +393,7 @@ namespace codeLess.AvaloniaApp
             if (formatOnSave && autoSaveDepth == 0)
             {
                 string path = LspPathFor(tab);
-                if (path == null || lsp == null || !lsp.IsActive(path))
+                if (path == null || lsp == null || !lsp.Supports(path, "documentFormattingProvider"))
                 {
                     int baseTabSize = effectiveWorkspaceSettings != null ? effectiveWorkspaceSettings.TabSize : settings.TabSize;
                     bool baseSpaces = effectiveWorkspaceSettings != null ? effectiveWorkspaceSettings.InsertSpaces : settings.InsertSpaces;
@@ -429,7 +429,7 @@ namespace codeLess.AvaloniaApp
             bool formatOnSave = (settings != null && settings.FormatOnSave) || (effectiveWorkspaceSettings != null && effectiveWorkspaceSettings.FormatOnSave);
             if (tab == null || !formatOnSave || tab.IsLargeFileViewer || string.IsNullOrEmpty(tab.FilePath)) return false;
             string path = LspPathFor(tab);
-            if (path == null || lsp == null || !lsp.IsActive(path)) return false;
+            if (path == null || lsp == null || !lsp.Supports(path, "documentFormattingProvider")) return false;
             _ = FormatThenSaveAsync(tab, path);
             return true;
         }
