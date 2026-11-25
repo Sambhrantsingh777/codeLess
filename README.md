@@ -42,6 +42,7 @@ Measured deterministically in-process via `MemoryProfileAndLeakTests.MemoryProfi
 | Open a second window (step delta) | `+16.39 MB` (`131.31 MB` live) | **`+13.98 MB`** (`43.22 MB` live) | **`-14.7%`** |
 | Close all tabs, workspace, and both windows (live managed heap) | `126.43 MB` (windows/tabs leaked) | **`6.70 MB`** (windows/tabs collected) | **`-94.7%`** |
 | `StudioTheme.GetById` × 50 lookups (allocated bytes) | `1,994,000 B` | **`0 B`** | **`-100%`** |
+| Post-`W4` feature memory guard (`W12`, 5-window open/close + idle timer/MCP checks, `docs/MEMORY.md` §6) | — | **`+3.95 MB`** post-close delta (`< 8.0 MB` budget) | **5/5 windows & 5/5 tabs collected (`0` idle timers / `0` idle MCP processes)** |
 
 ---
 
@@ -191,7 +192,7 @@ dotnet test codeLess.sln -c Release
 ## Documentation
 
 - [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md) — Head-to-head VS Code benchmarks, large-file & monorepo numbers, and in-process memory profile
-- [`docs/MEMORY.md`](./docs/MEMORY.md) — Managed heap profile, top retainers fixed, lazy subsystems, and GC configuration (`W4`)
+- [`docs/MEMORY.md`](./docs/MEMORY.md) — Managed heap profile, top retainers fixed, lazy subsystems, GC configuration, and post-`W4` feature memory guard (`W4` / `W12`)
 - [`docs/HARNESS_OPENCODE.md`](./docs/HARNESS_OPENCODE.md) — `sst/opencode` attribution, architecture mapping (`M1–M9d`), tool reference, and settings
 - [`docs/HARNESS_SPEC_AUDIT.md`](./docs/HARNESS_SPEC_AUDIT.md) — 70-row `M1–M9d` agent harness specification audit matrix with `File:Line` and test citations
 - [`docs/KEYBINDINGS.md`](./docs/KEYBINDINGS.md) — Generated default keyboard shortcuts (`CommandRegistry`) and menu accelerators (`WorkbenchMenuModel`)
