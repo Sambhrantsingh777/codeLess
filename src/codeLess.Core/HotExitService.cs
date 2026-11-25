@@ -16,6 +16,14 @@ namespace codeLess.Studio
         SaveAs = 4
     }
 
+    public enum SaveFailureAction
+    {
+        None = 0,
+        Retry = 1,
+        SaveAs = 2,
+        Overwrite = 3
+    }
+
     public sealed class HotExitBackupEntry
     {
         public string BackupId { get; set; }

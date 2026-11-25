@@ -236,7 +236,10 @@ namespace codeLess.AvaloniaApp
             keybindings.BindAction("workbench.action.closeFolder", () => CloseWorkspaceFolder());
             keybindings.BindAction("workbench.action.selectTheme", () => OpenThemePickerPalette());
             keybindings.BindAction("workbench.action.closeUnmodifiedEditors", () => { var saved = openTabs.Where(t => !t.IsDirty && !t.IsPinned).ToList(); foreach (var t in saved) CloseTab(t, forceWithoutPrompt: true); });
-            keybindings.BindAction("workbench.action.keepEditor", () => { if (activeTab != null) { activeTab.IsPinned = true; activeTab.IsPreviewTab = false; RefreshTabStrip(); } });
+            keybindings.BindAction("workbench.action.keepEditor", () => { if (activeTab != null) { activeTab.IsPreviewTab = false; RefreshTabStrip(); } });
+            keybindings.BindAction("workbench.action.pinEditor", () => { if (activeTab != null) PinTab(activeTab, true); });
+            keybindings.BindAction("workbench.action.unpinEditor", () => { if (activeTab != null) PinTab(activeTab, false); });
+            keybindings.BindAction("workbench.action.files.revert", () => RevertActiveTab());
             keybindings.BindAction("copyFilePath", () => { if (activeTab != null) _ = CopyPathToClipboardAsync(activeTab.FilePath ?? activeTab.FileName); });
             keybindings.BindAction("revealFileInOS", () => { if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) RevealInOsFileManager(activeTab.FilePath); });
             keybindings.BindAction("workbench.action.editor.changeLanguageMode", () => OpenLanguageModePicker());
