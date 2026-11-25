@@ -176,11 +176,22 @@ namespace codeLess.Studio
             return name;
         }
 
+        private static string EffectiveSyntaxPathFor(EditorTabBuffer buf)
+        {
+            string p = SyntaxPathFor(buf);
+            if (buf != null && buf.LanguageModeOverridden && !string.IsNullOrEmpty(buf.Language))
+            {
+                string lang = UntitledFileDefaults.NormalizeLanguageExtension(buf.Language);
+                if (!string.IsNullOrEmpty(lang)) return p + "." + lang;
+            }
+            return p;
+        }
+
         /// <summary>Resolves the grammar / profile for the buffer's file and syncs the caches with its lines.</summary>
         public void Prepare(EditorTabBuffer buf)
         {
             if (buf == null) return;
-            string p = SyntaxPathFor(buf);
+            string p = EffectiveSyntaxPathFor(buf);
             if (!pathInitialized || !string.Equals(p, path, StringComparison.Ordinal))
             {
                 pathInitialized = true;

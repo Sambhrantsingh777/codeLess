@@ -639,47 +639,40 @@ namespace codeLess.Studio
             BufferAnalysisResult result = new BufferAnalysisResult();
             List<AstSymbolItem> symbols = result.Symbols;
             List<DiagnosticItem> diags = result.Diagnostics;
-            if (lines == null) return result;
+            if (lines == null || lines.Count == 0) return result;
 
-            Regex symRegex = SharedSymbolRegex;
+            string lang = (language ?? "").Trim().TrimStart('.').ToLowerInvariant();
+            if (lang.Length == 0 && !string.IsNullOrEmpty(filePath))
+            {
+                lang = (Path.GetExtension(filePath) ?? "").TrimStart('.').ToLowerInvariant();
+            }
 
-            int curlyBalance = 0;
-            int parenBalance = 0;
-            int bracketBalance = 0;
-            int lastOpenCurlyLine = 1;
-            int lastOpenParenLine = 1;
-            bool inBlockComment = false;
-            bool inCsVerbatimStr = false;
-            bool inPsHereString = false;
-            string activeTripleQuote = null;
-            string lang = (language ?? "").ToLowerInvariant();
-            bool isPowerShell = (lang == "ps1" || lang == "powershell");
-            bool checkBrackets = lines.Count <= 6000 &&
-                (lang == "cs" || lang == "py" || lang == "js" || lang == "mjs" || lang == "ts" || lang == "tsx" || lang == "rs" || lang == "go" || lang == "json" || lang == "java" || lang == "c" || lang == "cpp");
+            string ext = lang.Length > 0 ? "." + lang : (Path.GetExtension(filePath ?? "") ?? "");
+            BracketLexProfile profile = BracketLexProfile.ForExtension(ext.ToLowerInvariant(), Path.GetFileName(filePath ?? ""));
+            EditorBracketCache bracketCache = new EditorBracketCache(profile);
+            bracketCache.Sync(lines);
+            if (profile.Enabled && lines.Count <= 6000)
+            {
+                bracketCache.EnsureValid(lines, lines.Count - 1, 0);
+            }
+
+            bool isJson = (lang == "json" || lang == "jsonc" || lang == "json5");
 
             for (int i = 0; i < lines.Count; i++)
             {
                 string line = lines[i] ?? "";
-                if (line.Length > 2000) continue;
+                if (line.Length > 20000) continue;
                 string trimmed = line.Trim();
 
-                if (isPowerShell)
+                // 1. Symbol extraction (only when line starts in code mode, outside multi-line comments/strings)
+                bool lineStartsInCode = true;
+                if (profile.Enabled && i > 0 && lines.Count <= 6000)
                 {
-                    if (inPsHereString)
-                    {
-                        if (trimmed.StartsWith("\"@") || trimmed.StartsWith("'@"))
-                            inPsHereString = false;
-                        continue;
-                    }
-                    if (trimmed.EndsWith("@\"") || trimmed.EndsWith("@'"))
-                    {
-                        inPsHereString = true;
-                        continue;
-                    }
+                    BracketLexState prevEnd = bracketCache.GetEndState(i - 1);
+                    if (prevEnd != null && prevEnd.Mode != BracketLexState.ModeCode)
+                        lineStartsInCode = false;
                 }
-
-                // 1. Symbol extraction (classes, structs, interfaces, enums, functions, methods)
-                if (!inBlockComment && !inCsVerbatimStr && activeTripleQuote == null)
+                if (lineStartsInCode)
                 {
                     string kind, name;
                     if (HeuristicSymbolExtractor.TryMatch(line, lang.Length > 0 ? lang : Path.GetExtension(filePath ?? ""), out kind, out name))
@@ -693,182 +686,13 @@ namespace codeLess.Studio
                         });
                     }
                 }
+            }
 
-                // 2. Bracket balance & TODO / FIXME diagnostics (tracks multiline /* ... */, @" ... ", and """ ... """)
-                if (checkBrackets && (inCsVerbatimStr || inBlockComment || activeTripleQuote != null || (!trimmed.StartsWith("//") && !trimmed.StartsWith("#"))))
-                {
-                    bool inStr = false;
-                    char strChar = '\0';
-                    for (int c = 0; c < line.Length; c++)
-                    {
-                        char ch = line[c];
-
-                        if (inCsVerbatimStr)
-                        {
-                            if (ch == '"')
-                            {
-                                if (c + 1 < line.Length && line[c + 1] == '"')
-                                {
-                                    c++; // escaped "" inside verbatim string
-                                }
-                                else
-                                {
-                                    inCsVerbatimStr = false;
-                                }
-                            }
-                            continue;
-                        }
-
-                        if (inBlockComment)
-                        {
-                            if (ch == '*' && c + 1 < line.Length && line[c + 1] == '/')
-                            {
-                                inBlockComment = false;
-                                c++;
-                            }
-                            continue;
-                        }
-
-                        if (activeTripleQuote != null)
-                        {
-                            if (c + 2 < line.Length && line.Substring(c, 3) == activeTripleQuote)
-                            {
-                                activeTripleQuote = null;
-                                c += 2;
-                            }
-                            continue;
-                        }
-
-                        if (!inStr)
-                        {
-                            if (ch == '/' && c + 1 < line.Length && line[c + 1] == '/') break;
-                            if (ch == '#' && (lang == "py" || lang == "sh" || lang == "ps1" || lang == "yaml")) break;
-                            if (ch == '/' && c + 1 < line.Length && line[c + 1] == '*')
-                            {
-                                inBlockComment = true;
-                                c++;
-                                continue;
-                            }
-                            if (lang == "cs" && ch == '@' && c + 1 < line.Length && line[c + 1] == '"')
-                            {
-                                inCsVerbatimStr = true;
-                                c++;
-                                continue;
-                            }
-                            if ((ch == '"' || ch == '\'') && c + 2 < line.Length && line[c + 1] == ch && line[c + 2] == ch)
-                            {
-                                activeTripleQuote = new string(ch, 3);
-                                c += 2;
-                                continue;
-                            }
-                        }
-
-                        if (ch == '"' || ch == '\'')
-                        {
-                            int bs = 0;
-                            for (int k = c - 1; k >= 0 && line[k] == '\\'; k--) bs++;
-                            bool escaped = (bs % 2) == 1;
-                            if (!escaped)
-                            {
-                                if (!inStr) { inStr = true; strChar = ch; continue; }
-                                else if (ch == strChar) { inStr = false; continue; }
-                            }
-                        }
-                        if (inStr) continue;
-
-                        if (ch == '{') { curlyBalance++; lastOpenCurlyLine = i + 1; }
-                        else if (ch == '}')
-                        {
-                            curlyBalance--;
-                            if (curlyBalance < 0)
-                            {
-                                diags.Add(new DiagnosticItem
-                                {
-                                    Severity = "Error",
-                                    FilePath = filePath,
-                                    RelativePath = relPath,
-                                    Line = i + 1,
-                                    Column = c + 1,
-                                    Length = 1,
-                                    Message = "Unmatched closing brace '}'",
-                                    Source = "codeLess Syntax Verifier"
-                                });
-                                curlyBalance = 0;
-                            }
-                        }
-                        else if (ch == '(') { parenBalance++; lastOpenParenLine = i + 1; }
-                        else if (ch == ')')
-                        {
-                            parenBalance--;
-                            if (parenBalance < 0)
-                            {
-                                diags.Add(new DiagnosticItem
-                                {
-                                    Severity = "Error",
-                                    FilePath = filePath,
-                                    RelativePath = relPath,
-                                    Line = i + 1,
-                                    Column = c + 1,
-                                    Length = 1,
-                                    Message = "Unmatched closing parenthesis ')'",
-                                    Source = "codeLess Syntax Verifier"
-                                });
-                                parenBalance = 0;
-                            }
-                        }
-                        else if (ch == '[') bracketBalance++;
-                        else if (ch == ']') bracketBalance = Math.Max(0, bracketBalance - 1);
-                    }
-                }
-
-                Match todoMatch = Regex.Match(line, @"(?://|#)\s*(TODO\b.*)$", RegexOptions.IgnoreCase);
-                if (todoMatch.Success)
-                {
-                    diags.Add(new DiagnosticItem
-                    {
-                        Severity = "Info",
-                        FilePath = filePath,
-                        RelativePath = relPath,
-                        Line = i + 1,
-                        Column = todoMatch.Groups[1].Index + 1,
-                        Length = 4,
-                        Message = "Pending TODO annotation: " + todoMatch.Groups[1].Value.Trim(),
-                        Source = "codeLess Task Scanner"
-                    });
-                }
-
-                // 3. Real-Time Security & Secret Shield
-                if (!inBlockComment && !inCsVerbatimStr && !inPsHereString && activeTripleQuote == null && !trimmed.StartsWith("//") && !trimmed.StartsWith("#"))
-                {
-                    if (Regex.IsMatch(line, @"(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,})"))
-                    {
-                        diags.Add(new DiagnosticItem
-                        {
-                            Severity = "Error",
-                            FilePath = filePath,
-                            RelativePath = relPath,
-                            Line = i + 1,
-                            Column = 1,
-                            Length = Math.Max(8, trimmed.Length),
-                            Message = "SECURITY ALERT: Hardcoded API key or secret token detected. Move to environment variable.",
-                            Source = "codeLess Secret Shield"
-                        });
-                    }
-                    else if (Regex.IsMatch(line, @"\b(eval|exec)\s*\("))
-                    {
-                        diags.Add(new DiagnosticItem
-                        {
-                            Severity = "Warning",
-                            FilePath = filePath,
-                            RelativePath = relPath,
-                            Line = i + 1,
-                            Column = Math.Max(1, line.IndexOf('(') - 3),
-                            Length = 6,
-                            Message = "SECURITY WARNING: Dynamic code execution sink (eval/exec) poses injection risk.",
-                            Source = "codeLess Security Guard"
-                        });
-                    }
-                }
+            // 2. Live buffer diagnostics: match VS Code — without a language server, only built-in exact validators
+            // (JSON / JSONC) emit live Problems/squiggles. Unmatched brackets are highlighted via EditorBracketCache.
+            if (isJson && lines.Count <= 6000)
+            {
+                SyntaxVerifier.ValidateJsoncDiagnostics(lines, filePath, relPath, diags);
             }
 
             // Compute per-symbol LineSpan and Big-O Complexity Hint for Inline Code Lens
@@ -931,34 +755,6 @@ namespace codeLess.Studio
                 sym.ComplexityHint = loopLines >= 2 ? "O(n²)" : (loopLines == 1 ? "O(n)" : "O(1)");
             }
 
-            if (curlyBalance > 0)
-            {
-                diags.Add(new DiagnosticItem
-                {
-                    Severity = "Error",
-                    FilePath = filePath,
-                    RelativePath = relPath,
-                    Line = lastOpenCurlyLine,
-                    Column = 1,
-                    Length = 4,
-                    Message = string.Format("Unclosed code block: {0} missing closing brace(s) '}}'", curlyBalance),
-                    Source = "codeLess Syntax Verifier"
-                });
-            }
-            if (parenBalance > 0)
-            {
-                diags.Add(new DiagnosticItem
-                {
-                    Severity = "Warning",
-                    FilePath = filePath,
-                    RelativePath = relPath,
-                    Line = lastOpenParenLine,
-                    Column = 1,
-                    Length = 4,
-                    Message = string.Format("Unclosed parenthesis '(' opened near line {0}", lastOpenParenLine),
-                    Source = "codeLess Syntax Verifier"
-                });
-            }
             return result;
         }
 
