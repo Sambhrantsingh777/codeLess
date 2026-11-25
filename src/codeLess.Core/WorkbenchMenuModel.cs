@@ -168,7 +168,9 @@ namespace codeLess.Studio
                 Sep(),
                 C("edit.toggleLineComment", "Toggle Line Comment", "Ctrl+/", "Cmd+/"),
                 C("edit.toggleBlockComment", "Toggle Block Comment", "Shift+Alt+A"),
-                Display(C("edit.emmetExpand", "Emmet: Expand Abbreviation", "Tab"))));
+                Display(C("edit.emmetExpand", "Emmet: Expand Abbreviation", "Tab")),
+                Sep(),
+                Display(C("edit.emojiSymbols", "Emoji & Symbols", "Win+.", "Ctrl+Cmd+Space"))));
 
             r.Add(M("Selection", MenuPlatform.All,
                 C("sel.selectAll", "Select All", "Ctrl+A"),

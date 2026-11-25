@@ -62,6 +62,9 @@ namespace codeLess.AvaloniaApp
         public string ActiveEditorFilePath { get; set; } = "";
         public Dictionary<string, string> GitStatusByFullPath { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> ModifiedFolderPaths { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, int> ProblemCountByFullPath { get; set; } = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        public string FilterQuery { get; private set; } = "";
+        public bool CompactFoldersEnabled { get; set; } = false;
 
         public double ScrollOffsetY { get; set; } = 0;
         private int hoveredRowIndex = -1;
@@ -82,6 +85,11 @@ namespace codeLess.AvaloniaApp
         public event Action<ExplorerTreeNode, Point> NodeContextMenuRequested;
         public event Action<ExplorerTreeNode> RenameRequested;
         public event Action<ExplorerTreeNode> DeleteRequested;
+        public event Action<ExplorerTreeNode> CopyRequested;
+        public event Action<ExplorerTreeNode> CutRequested;
+        public event Action<ExplorerTreeNode> PasteRequested;
+        public event Action<ExplorerTreeNode> RevealRequested;
+        public event Action<ExplorerTreeNode, ExplorerTreeNode> NodeMoveRequested;
 
         public AvaloniaExplorerTree()
         {
@@ -149,6 +157,8 @@ namespace codeLess.AvaloniaApp
         private void AddVisibleRecursive(ExplorerTreeNode node)
         {
             if (node == null) return;
+            if (!string.IsNullOrEmpty(FilterQuery) && !NodeMatchesFilterOrHasMatchingDescendant(node, FilterQuery))
+                return;
             VisibleFlatRows.Add(node);
             if (node.IsExpanded && node.Nodes.Count > 0)
             {
@@ -159,6 +169,56 @@ namespace codeLess.AvaloniaApp
                     AddVisibleRecursive(child);
                 }
             }
+        }
+
+        private static bool NodeMatchesFilterOrHasMatchingDescendant(ExplorerTreeNode node, string filter)
+        {
+            if (node == null || string.IsNullOrEmpty(filter)) return true;
+            if ((node.Text ?? "").IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            foreach (var child in node.Nodes)
+            {
+                if ((child.Tag ?? "") == "__LAZY_DIR__") continue;
+                if (NodeMatchesFilterOrHasMatchingDescendant(child, filter))
+                    return true;
+            }
+            return false;
+        }
+
+        public void ApplyTypeFilter(string query)
+        {
+            FilterQuery = (query ?? "").Trim();
+            RebuildTreeLayout(preserveScroll: false);
+            if (!string.IsNullOrEmpty(FilterQuery))
+            {
+                var match = VisibleFlatRows.FirstOrDefault(n => (n.Text ?? "").IndexOf(FilterQuery, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (match != null)
+                {
+                    SelectedNode = match;
+                    ScrollNodeIntoView(match);
+                }
+            }
+            InvalidateVisual();
+        }
+
+        public string GetCompactDisplayText(ExplorerTreeNode node)
+        {
+            if (node == null) return "";
+            if (!CompactFoldersEnabled || !node.IsDirectory) return node.Text ?? "";
+            var parts = new List<string> { node.Text ?? "" };
+            var cur = node;
+            while (cur.IsDirectory && cur.Nodes.Count == 1 && cur.Nodes[0].IsDirectory && (cur.Nodes[0].Tag ?? "") != "__LAZY_DIR__")
+            {
+                cur = cur.Nodes[0];
+                parts.Add(cur.Text ?? "");
+            }
+            return string.Join("/", parts);
+        }
+
+        public void MoveNodeToDirectory(ExplorerTreeNode sourceNode, ExplorerTreeNode targetDirectoryNode)
+        {
+            if (sourceNode == null || targetDirectoryNode == null) return;
+            NodeMoveRequested?.Invoke(sourceNode, targetDirectoryNode);
         }
 
         public void CollapseAllFolders()
@@ -394,6 +454,49 @@ namespace codeLess.AvaloniaApp
                 DeleteRequested?.Invoke(SelectedNode);
                 e.Handled = true;
             }
+            else if (e.Key == Key.Escape && !string.IsNullOrEmpty(FilterQuery))
+            {
+                ApplyTypeFilter("");
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Back && !e.KeyModifiers.HasFlag(KeyModifiers.Meta) && !string.IsNullOrEmpty(FilterQuery))
+            {
+                ApplyTypeFilter(FilterQuery.Substring(0, FilterQuery.Length - 1));
+                e.Handled = true;
+            }
+            else if (SelectedNode != null && (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta)))
+            {
+                if (e.Key == Key.C && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+                {
+                    CopyRequested?.Invoke(SelectedNode);
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.X && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+                {
+                    CutRequested?.Invoke(SelectedNode);
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.V && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+                {
+                    PasteRequested?.Invoke(SelectedNode);
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.R && e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+                {
+                    RevealRequested?.Invoke(SelectedNode);
+                    e.Handled = true;
+                }
+            }
+        }
+
+        protected override void OnTextInput(TextInputEventArgs e)
+        {
+            base.OnTextInput(e);
+            if (!string.IsNullOrEmpty(e.Text) && e.Text.Length == 1 && !char.IsControl(e.Text[0]))
+            {
+                ApplyTypeFilter(FilterQuery + e.Text);
+                e.Handled = true;
+            }
         }
 
         public void ScrollNodeIntoView(ExplorerTreeNode node)
@@ -619,10 +722,18 @@ namespace codeLess.AvaloniaApp
                     gitBadgeColor = modAmber;
                 }
 
+                if (!isFolder && !string.IsNullOrEmpty(fullPath) && ProblemCountByFullPath != null &&
+                    ProblemCountByFullPath.TryGetValue(fullPath, out int probCnt) && probCnt > 0)
+                {
+                    gitBadge = probCnt > 9 ? "9+" : probCnt.ToString(CultureInfo.InvariantCulture);
+                    gitBadgeColor = delRed;
+                    labelColor = delRed;
+                }
+
                 double textX = indentX + 32;
                 double maxTextW = Math.Max(20, w - textX - (gitBadge != null ? 24 : 8));
                 var ft = new FormattedText(
-                    node.Text ?? "",
+                    GetCompactDisplayText(node),
                     CultureInfo.InvariantCulture,
                     FlowDirection.LeftToRight,
                     (isFolder && node.Parent == null) ? fontBold : fontRegular,
