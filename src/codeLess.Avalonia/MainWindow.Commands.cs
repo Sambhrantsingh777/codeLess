@@ -2854,7 +2854,11 @@ namespace codeLess.AvaloniaApp
                 }
                 else
                 {
-                    foreach (var d in dirty) d.IsDirty = false;
+                    foreach (var d in dirty)
+                    {
+                        d.IsDirty = false;
+                        HotExitService.DeleteBackup(workspaceRoot, d);
+                    }
                 }
                 return true;
             }
@@ -2880,6 +2884,7 @@ namespace codeLess.AvaloniaApp
                     foreach (var d in dirty)
                     {
                         d.IsDirty = false;
+                        HotExitService.DeleteBackup(workspaceRoot, d);
                         CloseTab(d, forceWithoutPrompt: true);
                     }
                 }

@@ -249,6 +249,22 @@ namespace codeLess.Core
                     string mode = dict["files.autoSave"] != null ? dict["files.autoSave"].ToString() : null;
                     target.SetAutoSaveMode(mode);
                 }
+                if (dict.ContainsKey("files.hotExit")) {
+                    string he = dict["files.hotExit"] != null ? dict["files.hotExit"].ToString() : null;
+                    target.SetHotExitMode(he);
+                }
+                if (dict.ContainsKey("files.eol")) {
+                    target.FilesEol = dict["files.eol"] != null ? dict["files.eol"].ToString() : "auto";
+                }
+                if (dict.ContainsKey("files.autoGuessEncoding")) {
+                    target.AutoGuessEncoding = Convert.ToBoolean(dict["files.autoGuessEncoding"]);
+                }
+                if (dict.ContainsKey("files.trimFinalNewlines")) {
+                    target.TrimFinalNewlinesOnSave = Convert.ToBoolean(dict["files.trimFinalNewlines"]);
+                }
+                if (dict.ContainsKey("files.maxMemoryForLargeFilesMB")) {
+                    target.LargeFileThresholdMB = Convert.ToInt32(dict["files.maxMemoryForLargeFilesMB"]);
+                }
                 if (dict.ContainsKey("files.trimTrailingWhitespace")) target.TrimTrailingWhitespaceOnSave = Convert.ToBoolean(dict["files.trimTrailingWhitespace"]);
                 if (dict.ContainsKey("files.insertFinalNewline")) target.InsertFinalNewlineOnSave = Convert.ToBoolean(dict["files.insertFinalNewline"]);
                 if (dict.ContainsKey("files.exclude")) {

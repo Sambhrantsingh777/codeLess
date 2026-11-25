@@ -28,6 +28,11 @@ namespace codeLess.Studio
             return dir;
         }
 
+        public static string GetWorkspaceHash(string input)
+        {
+            return GetHash(input);
+        }
+
         private static string GetHash(string input)
         {
             if (string.IsNullOrEmpty(input)) return "empty";
