@@ -84,6 +84,7 @@ namespace codeLess.Studio
         public List<HarnessTraceEntry> TraceHistory = new List<HarnessTraceEntry>();
         public FileTimeTracker FileTimeTracker = new FileTimeTracker();
         public McpServerManager McpManager = new McpServerManager();
+        public readonly StagedTurnHistory StagedHistory = new StagedTurnHistory();
         public CustomAgentDefinition ActiveCustomAgent;
         public string CustomSettingsDirOverride;
         public Func<string, string, string> CustomShellCommandRunner;
@@ -2958,6 +2959,51 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
         {
             Stopwatch sw = Stopwatch.StartNew();
             AgentExecutionTurnResult result = new AgentExecutionTurnResult();
+
+            if (SubagentDepth == 0 && !string.IsNullOrWhiteSpace(userInstruction))
+            {
+                string trimmedCmd = userInstruction.Trim();
+                if (string.Equals(trimmedCmd, "/undo", StringComparison.OrdinalIgnoreCase))
+                {
+                    StagedTurnSnapshot undone = StagedHistory.Undo();
+                    sw.Stop();
+                    result.ElapsedMs = sw.ElapsedMilliseconds;
+                    result.ProviderUsed = "HarnessSlashCommand";
+                    if (undone != null)
+                    {
+                        foreach (KeyValuePair<string, string> kv in StagedHistory.CurrentStagedFiles)
+                            result.StagedFileContents[kv.Key] = kv.Value;
+                        result.AssistantReply = "Reverted staged changes from turn " + undone.TurnId + ".";
+                    }
+                    else
+                    {
+                        result.AssistantReply = "Nothing to undo.";
+                    }
+                    return result;
+                }
+                if (string.Equals(trimmedCmd, "/redo", StringComparison.OrdinalIgnoreCase))
+                {
+                    StagedTurnSnapshot redone = StagedHistory.Redo();
+                    sw.Stop();
+                    result.ElapsedMs = sw.ElapsedMilliseconds;
+                    result.ProviderUsed = "HarnessSlashCommand";
+                    if (redone != null)
+                    {
+                        foreach (KeyValuePair<string, string> kv in StagedHistory.CurrentStagedFiles)
+                            result.StagedFileContents[kv.Key] = kv.Value;
+                        result.AssistantReply = "Re-applied staged changes from turn " + redone.TurnId + ".";
+                    }
+                    else
+                    {
+                        result.AssistantReply = "Nothing to redo.";
+                    }
+                    return result;
+                }
+            }
+
+            Dictionary<string, string> beforeTurnStaged = baseStagedFiles != null
+                ? new Dictionary<string, string>(baseStagedFiles, StringComparer.OrdinalIgnoreCase)
+                : StagedHistory.CurrentStagedFiles;
             // Repair turns patch on top of the previous proposal (staged, never written) instead of the disk text.
             if (baseStagedFiles != null)
                 foreach (KeyValuePair<string, string> kv in baseStagedFiles) result.StagedFileContents[kv.Key] = kv.Value;
@@ -3492,6 +3538,10 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 if (SubagentDepth >= 1)
                 {
                     result.StagedFileContents.Clear();
+                }
+                else if (result.StagedFileContents.Count > 0)
+                {
+                    StagedHistory.RecordTurn(null, userInstruction, beforeTurnStaged, result.StagedFileContents);
                 }
 
                 sw.Stop();

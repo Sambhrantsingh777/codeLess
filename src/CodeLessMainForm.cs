@@ -10289,6 +10289,32 @@ if __name__ == '__main__':
             atMentionPopupFrame.Visible = false;
             lastUserQuery = prompt;
 
+            if (string.Equals(prompt, "/undo", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(prompt, "/redo", StringComparison.OrdinalIgnoreCase))
+            {
+                bool isUndo = string.Equals(prompt, "/undo", StringComparison.OrdinalIgnoreCase);
+                if (agentFeedControl != null)
+                    agentFeedControl.AddMessage(true, "You", "", prompt);
+                if (isUndo && agentTrustWin != null && agentTrustWin.StagedHistory.CanUndo)
+                {
+                    StagedTurnSnapshot undone = agentTrustWin.StagedHistory.Undo();
+                    if (aiEngine != null) aiEngine.StagedHistory.Undo();
+                    if (agentFeedControl != null && undone != null)
+                        agentFeedControl.AddMessage(false, "System", "", "Reverted staged changes from turn " + undone.TurnId + ".");
+                    RefreshAgentReviewPanel();
+                    return;
+                }
+                if (!isUndo && agentTrustWin != null && agentTrustWin.StagedHistory.CanRedo)
+                {
+                    StagedTurnSnapshot redone = agentTrustWin.StagedHistory.Redo();
+                    if (aiEngine != null) aiEngine.StagedHistory.Redo();
+                    if (agentFeedControl != null && redone != null)
+                        agentFeedControl.AddMessage(false, "System", "", "Re-applied staged changes from turn " + redone.TurnId + ".");
+                    RefreshAgentReviewPanel();
+                    return;
+                }
+            }
+
             if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath))
                 TimeTravelCheckpointManager.CreateDiskCheckpoint(activeTab.FilePath, activeTab.Content, "Pre-Prompt: " + prompt);
 
