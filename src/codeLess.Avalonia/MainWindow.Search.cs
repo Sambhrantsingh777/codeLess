@@ -1086,11 +1086,11 @@ namespace codeLess.AvaloniaApp
             if (navHistoryIndex >= 0 && navHistoryIndex < navHistory.Count &&
                 string.Equals(navHistory[navHistoryIndex].FilePath, activeTab.FilePath, PathKeyComparison))
             {
-                navHistory[navHistoryIndex] = (activeTab.FilePath, activeTab.CursorLine + 1);
+                navHistory[navHistoryIndex] = (activeTab.FilePath, activeTab.CursorLine + 1, activeTab.CursorCol + 1);
             }
             else
             {
-                RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1);
+                RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1, activeTab.CursorCol + 1);
             }
         }
 
@@ -1112,7 +1112,7 @@ namespace codeLess.AvaloniaApp
             if (!ReferenceEquals(activeTab, tab)) ActivateTab(tab);
 
             if (line1 > 0) RevealRangeInEditor(tab, line1, col1, selectionLength);
-            if (recording) RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1);
+            if (recording) RecordNavigationHistory(tab.FilePath, tab.CursorLine + 1, tab.CursorCol + 1);
             if (focusEditor) PrimaryEditor.Canvas.Focus();
             return tab;
         }

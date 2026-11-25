@@ -197,6 +197,11 @@ namespace codeLess.AvaloniaApp
                     foreach (var t in saved) CloseTab(t, forceWithoutPrompt: true);
                     return true;
                 }
+                if (key == Key.Q && !shift)
+                {
+                    NavigateToLastEditLocation();
+                    return true;
+                }
                 if (key == Key.Enter)
                 {
                     if (activeTab != null)
@@ -619,23 +624,29 @@ namespace codeLess.AvaloniaApp
 
         public void TogglePrimarySidebar()
         {
+            bool hadFocus = sidebarBorder.IsKeyboardFocusWithin;
             sidebarBorder.IsVisible = !sidebarBorder.IsVisible;
             workbenchCenterGrid.ColumnDefinitions[1].Width = sidebarBorder.IsVisible
                 ? new GridLength(260)
                 : new GridLength(0);
             UpdateActivityBarSelectionVisuals();
+            if (!sidebarBorder.IsVisible && hadFocus)
+                PrimaryEditor?.Canvas?.Focus();
         }
 
         public void ToggleBottomPanel()
         {
             var centerGrid = bottomPanelBorder.Parent as Grid;
             if (centerGrid == null) return;
+            bool hadFocus = bottomPanelBorder.IsKeyboardFocusWithin;
             bottomPanelBorder.IsVisible = !bottomPanelBorder.IsVisible;
             centerGrid.RowDefinitions[3].Height = bottomPanelBorder.IsVisible
                 ? new GridLength(savedBottomDockHeight)
                 : new GridLength(0);
             if (bottomPanelBorder.IsVisible && activeBottomTab == "terminal")
                 activeTerminalSession?.Control?.FocusTerminalCanvas();
+            else if (!bottomPanelBorder.IsVisible && hadFocus)
+                PrimaryEditor?.Canvas?.Focus();
         }
 
         public void ToggleMaximizeBottomPanel()
@@ -697,12 +708,15 @@ namespace codeLess.AvaloniaApp
 
         public void ToggleRightChatDock()
         {
+            bool hadFocus = rightChatDockBorder.IsKeyboardFocusWithin;
             rightChatDockBorder.IsVisible = !rightChatDockBorder.IsVisible;
             workbenchCenterGrid.ColumnDefinitions[5].Width = rightChatDockBorder.IsVisible
                 ? new GridLength(385)
                 : new GridLength(0);
             if (rightChatDockBorder.IsVisible)
                 chatPromptInput.Focus();
+            else if (hadFocus)
+                PrimaryEditor?.Canvas?.Focus();
         }
 
         public void ToggleSplitEditor()
@@ -778,18 +792,20 @@ namespace codeLess.AvaloniaApp
             SplitEditor.Canvas.InvalidateVisual();
         }
 
-        private void RecordNavigationHistory(string filePath, int line)
+        private void RecordNavigationHistory(string filePath, int line, int col = 1)
         {
             if (suppressNavRecord || string.IsNullOrEmpty(filePath)) return;
+            int normLine = Math.Max(1, line);
+            int normCol = Math.Max(1, col);
             if (navHistoryIndex >= 0 && navHistoryIndex < navHistory.Count)
             {
                 var cur = navHistory[navHistoryIndex];
-                if (string.Equals(cur.FilePath, filePath, StringComparison.OrdinalIgnoreCase) && cur.Line == line)
+                if (string.Equals(cur.FilePath, filePath, StringComparison.OrdinalIgnoreCase) && cur.Line == normLine && cur.Column == normCol)
                     return;
             }
             if (navHistoryIndex < navHistory.Count - 1)
                 navHistory.RemoveRange(navHistoryIndex + 1, navHistory.Count - navHistoryIndex - 1);
-            navHistory.Add((filePath, line));
+            navHistory.Add((filePath, normLine, normCol));
             navHistoryIndex = navHistory.Count - 1;
         }
 
@@ -803,7 +819,8 @@ namespace codeLess.AvaloniaApp
             try
             {
                 OpenFileInTab(target.FilePath, preview: false);
-                PrimaryEditor.GoToLine(target.Line);
+                PrimaryEditor.GoToLine(target.Line, Math.Max(1, target.Column));
+                PrimaryEditor.Canvas.Focus();
             }
             finally { suppressNavRecord = false; }
         }
@@ -818,9 +835,34 @@ namespace codeLess.AvaloniaApp
             try
             {
                 OpenFileInTab(target.FilePath, preview: false);
-                PrimaryEditor.GoToLine(target.Line);
+                PrimaryEditor.GoToLine(target.Line, Math.Max(1, target.Column));
+                PrimaryEditor.Canvas.Focus();
             }
             finally { suppressNavRecord = false; }
+        }
+
+        public void JumpToLineAndColumnWithHistory(int line1, int col1 = 1)
+        {
+            if (activeTab == null) return;
+            bool recording = !suppressNavRecord && !string.IsNullOrEmpty(activeTab.FilePath);
+            if (recording) CaptureCurrentNavPosition();
+            PrimaryEditor.GoToLine(line1, Math.Max(1, col1));
+            if (recording) RecordNavigationHistory(activeTab.FilePath, activeTab.CursorLine + 1, activeTab.CursorCol + 1);
+            PrimaryEditor.Canvas.Focus();
+        }
+
+        public void NavigateToLastEditLocation()
+        {
+            if (string.IsNullOrEmpty(lastEditLocation.FilePath) || lastEditLocation.Line <= 0) return;
+            var untitledTab = openTabs.FirstOrDefault(t => string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FileName, lastEditLocation.FilePath, StringComparison.OrdinalIgnoreCase));
+            if (untitledTab != null)
+            {
+                if (!ReferenceEquals(activeTab, untitledTab)) ActivateTab(untitledTab);
+                PrimaryEditor.GoToLine(lastEditLocation.Line, Math.Max(1, lastEditLocation.Column));
+                PrimaryEditor.Canvas.Focus();
+                return;
+            }
+            OpenFileAtLocation(lastEditLocation.FilePath, lastEditLocation.Line, Math.Max(1, lastEditLocation.Column), 0, preview: false, focusEditor: true);
         }
 
         /// <summary>F12 / context menu "Go to Definition": same resolution as Cmd/Ctrl+Click at the caret.</summary>
@@ -2751,13 +2793,8 @@ namespace codeLess.AvaloniaApp
         }
 
         // Command Palette, Quick Open, Theme Picker & Modals
-        public void OpenQuickOpen()
+        private List<PaletteEntryItem> BuildQuickOpenFileEntries()
         {
-            if (CommandPalette.IsVisible && string.IsNullOrEmpty(CommandPalette.InitialPrefix))
-            {
-                CommandPalette.CycleSelection(1);
-                return;
-            }
             var entries = new List<PaletteEntryItem>();
             var seen = new HashSet<string>(PathKeyComparer);
             PaletteEntryItem makeFileEntry(string full, bool recent)
@@ -2776,10 +2813,10 @@ namespace codeLess.AvaloniaApp
                     Execute = () => OpenFileAtLocation(full, 0, 1, 0, preview: false, focusEditor: true)
                 };
             }
-            // Recently opened first (VS Code lists editor history when the query is empty): open tabs, then recent files.
+            // Recently opened first (VS Code lists editor history in MRU order when the query is empty): MRU open tabs, then recent files.
             var recent = new List<string>();
             if (activeTab != null && !string.IsNullOrEmpty(activeTab.FilePath)) recent.Add(activeTab.FilePath);
-            recent.AddRange(openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath));
+            recent.AddRange(EditorMruOrder.Concat(openTabs).Where(t => t != null && !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath));
             if (settings?.RecentFiles != null)
             {
                 bool hasRoots = !string.IsNullOrEmpty(workspaceRoot);
@@ -2790,76 +2827,104 @@ namespace codeLess.AvaloniaApp
             {
                 if (seen.Add(f)) entries.Add(makeFileEntry(f, true));
             }
-            // Every indexed workspace file (was capped at the first 250, so most files could not be found).
             if (workspaceFiles.Count > QuickOpenInlineFileLimit)
             {
-                // Big workspace: don't materialise 200k palette entries; search the lower-cased index per keystroke.
                 var qoIndex = GetQuickOpenIndex();
                 var skip = new HashSet<string>(seen, PathKeyComparer);
-                var commands = BuildAllPaletteCommands();
-                entries.AddRange(commands);
-                CommandPalette.Open("", entries, currentTheme?.Id);
                 CommandPalette.QuickOpenFileSearch = (q, max) => qoIndex.Search(q, max, skip)
                     .Select(h => (makeFileEntry(qoIndex.GetFullPath(h.Index), false), h.Score)).ToList();
-                CommandPalette.RefreshFilter();
-                return;
+                return entries;
             }
             foreach (string file in workspaceFiles)
             {
                 if (seen.Add(file)) entries.Add(makeFileEntry(file, false));
             }
+            return entries;
+        }
+
+        private List<PaletteEntryItem> BuildEditorSymbolPaletteEntries()
+        {
+            var symEntries = new List<PaletteEntryItem>();
+            if (activeTab?.Symbols != null)
+            {
+                foreach (var s in activeTab.Symbols)
+                {
+                    var captured = s;
+                    symEntries.Add(new PaletteEntryItem
+                    {
+                        Category = captured.Kind,
+                        Title = captured.Name,
+                        stringSubtitleOrPath = $"Line {captured.LineNumber}",
+                        PreviewLine = captured.LineNumber,
+                        Execute = () =>
+                        {
+                            if (savedSymbolPreviewState.Tab != null && ReferenceEquals(activeTab, savedSymbolPreviewState.Tab))
+                            {
+                                activeTab.CursorLine = Math.Max(0, Math.Min(activeTab.Lines.Count - 1, savedSymbolPreviewState.Line));
+                                activeTab.CursorCol = Math.Max(0, savedSymbolPreviewState.Col);
+                                activeTab.ScrollTopLine = Math.Max(0, savedSymbolPreviewState.ScrollTop);
+                            }
+                            if (!string.IsNullOrEmpty(activeTab?.FilePath))
+                                OpenFileAtLocation(activeTab.FilePath, captured.LineNumber, 1, 0, preview: false, focusEditor: true);
+                            else
+                                JumpToLineAndColumnWithHistory(captured.LineNumber, 1);
+                        }
+                    });
+                }
+            }
+            return symEntries;
+        }
+
+        private List<PaletteEntryItem> BuildWorkspaceSymbolPaletteEntries()
+        {
+            EnsureWorkspaceIndexed(); // lazy index: built on first workspace-symbol search
+            var wsSymEntries = new List<PaletteEntryItem>();
+            var eng = EnsureAiEngine();
+            if (eng?.WorkspaceSymbolMap != null)
+            {
+                foreach (var s in eng.WorkspaceSymbolMap.Take(200))
+                {
+                    var captured = s;
+                    wsSymEntries.Add(new PaletteEntryItem
+                    {
+                        Category = captured.Kind,
+                        Title = captured.Name,
+                        stringSubtitleOrPath = $"{Path.GetFileName(captured.FilePath)}:{captured.LineNumber}",
+                        Execute = () => OpenFileAtLocation(captured.FilePath, captured.LineNumber, 1, 0, preview: false, focusEditor: true)
+                    });
+                }
+            }
+            return wsSymEntries;
+        }
+
+        public void OpenQuickOpen()
+        {
+            if (CommandPalette.IsVisible && string.IsNullOrEmpty(CommandPalette.InitialPrefix))
+            {
+                CommandPalette.CycleSelection(1);
+                return;
+            }
+            var entries = BuildQuickOpenFileEntries();
+            var quickSearch = CommandPalette.QuickOpenFileSearch;
             entries.AddRange(BuildAllPaletteCommands());
             CommandPalette.Open("", entries, currentTheme?.Id);
+            if (quickSearch != null)
+            {
+                CommandPalette.QuickOpenFileSearch = quickSearch;
+                CommandPalette.RefreshFilter();
+            }
         }
 
         public void OpenCommandPalette(string prefix = ">")
         {
-            if (prefix == "@")
+            if (prefix != null && prefix.StartsWith("@"))
             {
-                var symEntries = new List<PaletteEntryItem>();
-                if (activeTab?.Symbols != null)
-                {
-                    foreach (var s in activeTab.Symbols)
-                    {
-                        var captured = s;
-                        symEntries.Add(new PaletteEntryItem
-                        {
-                            Category = captured.Kind,
-                            Title = captured.Name,
-                            stringSubtitleOrPath = $"Line {captured.LineNumber}",
-                            Execute = () =>
-                            {
-                                if (!string.IsNullOrEmpty(activeTab?.FilePath))
-                                    OpenFileAtLocation(activeTab.FilePath, captured.LineNumber, 1, 0, preview: false, focusEditor: true);
-                                else
-                                    PrimaryEditor.GoToLine(captured.LineNumber);
-                            }
-                        });
-                    }
-                }
-                CommandPalette.Open("@", symEntries, currentTheme?.Id);
+                CommandPalette.Open(prefix, BuildEditorSymbolPaletteEntries(), currentTheme?.Id);
                 return;
             }
             if (prefix == "#")
             {
-                EnsureWorkspaceIndexed(); // lazy index: built on first workspace-symbol search
-                var wsSymEntries = new List<PaletteEntryItem>();
-                var eng = EnsureAiEngine();
-                if (eng?.WorkspaceSymbolMap != null)
-                {
-                    foreach (var s in eng.WorkspaceSymbolMap.Take(200))
-                    {
-                        var captured = s;
-                        wsSymEntries.Add(new PaletteEntryItem
-                        {
-                            Category = captured.Kind,
-                            Title = captured.Name,
-                            stringSubtitleOrPath = $"{Path.GetFileName(captured.FilePath)}:{captured.LineNumber}",
-                            Execute = () => OpenFileAtLocation(captured.FilePath, captured.LineNumber, 1, 0, preview: false, focusEditor: true)
-                        });
-                    }
-                }
-                CommandPalette.Open("#", wsSymEntries, currentTheme?.Id);
+                CommandPalette.Open("#", BuildWorkspaceSymbolPaletteEntries(), currentTheme?.Id);
                 return;
             }
 
@@ -2963,6 +3028,9 @@ namespace codeLess.AvaloniaApp
                 new PaletteEntryItem { Category = "Go", Title = "Go to Line/Column...", Shortcut = "Ctrl+G", Execute = PromptGoToLineModal },
                 new PaletteEntryItem { Category = "Go", Title = "Go to Definition", Shortcut = "F12", Execute = GoToDefinitionAtCursor },
                 new PaletteEntryItem { Category = "Go", Title = "Go to Bracket", Shortcut = "Ctrl+Shift+\\", Execute = () => PrimaryEditor.Canvas.JumpToMatchingBracket() },
+                new PaletteEntryItem { Id = "workbench.action.navigateToLastEditLocation", Category = "Go", Title = "Go to Last Edit Location", Shortcut = "Ctrl+K Ctrl+Q", Execute = NavigateToLastEditLocation },
+                new PaletteEntryItem { Id = "workbench.action.navigateBack", Category = "Go", Title = "Go Back", Shortcut = "Alt+Left", Execute = NavigateBack },
+                new PaletteEntryItem { Id = "workbench.action.navigateForward", Category = "Go", Title = "Go Forward", Shortcut = "Alt+Right", Execute = NavigateForward },
                 new PaletteEntryItem { Category = "Terminal", Title = "Create New Terminal", Shortcut = "Ctrl+Shift+`", Execute = () => RequestNewTerminal() },
                 new PaletteEntryItem { Category = "Help", Title = "Check for Updates...", Execute = CheckForUpdatesInteractive },
                 new PaletteEntryItem { Category = "Terminal", Title = "Split Terminal", Shortcut = "Ctrl+Shift+5", Execute = ToggleSplitTerminal },
@@ -3163,8 +3231,14 @@ namespace codeLess.AvaloniaApp
                 val =>
                 {
                     ModalHost.CloseModal();
-                    if (int.TryParse((val ?? "").Split(':')[0].Trim(), out int lineNum))
-                        PrimaryEditor.GoToLine(lineNum);
+                    string[] parts = (val ?? "").Split(new[] { ':', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 1 && int.TryParse(parts[0].Trim(), out int lineNum))
+                    {
+                        int colNum = 1;
+                        if (parts.Length >= 2 && int.TryParse(parts[1].Trim(), out int cVal) && cVal >= 1)
+                            colNum = cVal;
+                        JumpToLineAndColumnWithHistory(lineNum, colNum);
+                    }
                 },
                 () => ModalHost.CloseModal(),
                 out var tb);
