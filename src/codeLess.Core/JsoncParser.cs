@@ -13,7 +13,7 @@ namespace codeLess.Core
             if (string.IsNullOrEmpty(jsonc)) return null;
 
             bool hadUnterminatedString;
-            string cleanJson = StripJsoncInternal(jsonc, out hadUnterminatedString);
+            string cleanJson = StripJsoncInternal(jsonc, true, out hadUnterminatedString);
             string syntaxErr = DetectJsonSyntaxError(cleanJson, hadUnterminatedString);
             if (syntaxErr != null)
                 errorMessage = syntaxErr;
@@ -133,10 +133,10 @@ namespace codeLess.Core
         public static string StripJsonc(string input)
         {
             bool unused;
-            return StripJsoncInternal(input, out unused);
+            return StripJsoncInternal(input, false, out unused);
         }
 
-        private static string StripJsoncInternal(string input, out bool hadUnterminatedString)
+        private static string StripJsoncInternal(string input, bool closeUnterminatedLineStrings, out bool hadUnterminatedString)
         {
             hadUnterminatedString = false;
             if (string.IsNullOrEmpty(input)) return input;
@@ -152,7 +152,7 @@ namespace codeLess.Core
                 
                 if (inString)
                 {
-                    if (c == '\n' || c == '\r')
+                    if (closeUnterminatedLineStrings && (c == '\n' || c == '\r'))
                     {
                         hadUnterminatedString = true;
                         inString = false;

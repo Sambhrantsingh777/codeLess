@@ -752,5 +752,30 @@ namespace codeLess.Avalonia.Tests
             // Post-replace edit on second.txt is preserved intact!
             Assert.Equal("bar = 2\nuser_post_replace_edit = 999\n", File.ReadAllText(fModifiedAfterReplace).Replace("\r\n", "\n"));
         }
+
+        [Fact]
+        public void B50_JsonCompatRawNewlinesPreserved_AndNativeToolCallRoundTrips()
+        {
+            // 1. JavaScriptSerializer deserializes raw LF inside string values without truncating
+            var ser = new System.Web.Script.Serialization.JavaScriptSerializer();
+            string rawJson = "{\"content\":\"line1\nline2\",\"x\":1}";
+            var dict = ser.DeserializeObject(rawJson) as Dictionary<string, object>;
+            Assert.NotNull(dict);
+            Assert.Equal("line1\nline2", dict["content"]);
+            Assert.Equal(1, Convert.ToInt32(dict["x"]));
+
+            // 2. NativeToolCalling / NativeToolCall argument with raw newlines round-trips intact
+            var call = new NativeToolCall
+            {
+                Id = "call_write_1",
+                Name = "write_file",
+                ArgumentsJson = "{\"path\":\"src/app.py\",\"content\":\"def greet():\n    print('hello')\n    return 42\n\",\"x\":1}"
+            };
+            var args = call.GetArguments();
+            Assert.False(args.ContainsKey("error"));
+            Assert.Equal("src/app.py", args["path"]);
+            Assert.Equal("def greet():\n    print('hello')\n    return 42\n", args["content"]);
+            Assert.Equal(1, Convert.ToInt32(args["x"]));
+        }
     }
 }
