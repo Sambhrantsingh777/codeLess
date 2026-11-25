@@ -728,11 +728,22 @@ namespace codeLess.AvaloniaApp
             string line = tab.Lines[m.LineNumber - 1] ?? "";
             int col0 = Math.Max(0, Math.Min(line.Length, m.Column - 1));
             int len = Math.Max(0, Math.Min(line.Length - col0, m.MatchLength));
+            string expandedRep = repText;
+            if (wsSearchRegex)
+            {
+                var opts = BuildWorkspaceSearchOptions();
+                var rx = WorkspaceSearchEngine.BuildReplaceRegex(workspaceSearchInput?.Text ?? "", opts, out _);
+                expandedRep = WorkspaceSearchEngine.ExpandReplacementAt(line, rx, col0, len, repText, true);
+            }
+            bool wasDirty = tab.IsDirty;
             tab.PushUndoSnapshot();
-            tab.Lines[m.LineNumber - 1] = line.Substring(0, col0) + repText + line.Substring(col0 + len);
+            tab.Lines[m.LineNumber - 1] = line.Substring(0, col0) + expandedRep + line.Substring(col0 + len);
             tab.SyncContentFromLines();
             tab.IsDirty = true;
-            SaveBufferToDisk(tab);
+            if (!wasDirty)
+                SaveBufferToDisk(tab);
+            else
+                OnEditorBufferModified(tab);
             DismissSearchRow(row);
             return true;
         }
@@ -849,6 +860,88 @@ namespace codeLess.AvaloniaApp
                 () => ExecuteWorkspaceReplaceAll());
         }
 
+        private sealed class WorkspaceReplaceUndoEntry
+        {
+            public string FilePath;
+            public bool TouchedDisk;
+            public string PreDiskRaw;
+            public Encoding PreEncoding;
+            public bool PreHasBom;
+            public string PreEol;
+            public bool PreHasFinalNewline;
+            public bool WasOpen;
+            public bool WasDirty;
+            public string PreOpenContent;
+            public string PreOpenSavedContent;
+        }
+
+        private readonly List<WorkspaceReplaceUndoEntry> lastWorkspaceReplaceUndo = new List<WorkspaceReplaceUndoEntry>();
+
+        /// <summary>
+        /// Undoes the most recent ExecuteWorkspaceReplaceAll operation across both closed disk files and open editor buffers.
+        /// Returns the number of files restored.
+        /// </summary>
+        public int UndoLastWorkspaceReplace()
+        {
+            if (lastWorkspaceReplaceUndo.Count == 0) return 0;
+            var snapshot = lastWorkspaceReplaceUndo.ToList();
+            lastWorkspaceReplaceUndo.Clear();
+            int restored = 0;
+            foreach (var entry in snapshot)
+            {
+                try
+                {
+                    if (entry.TouchedDisk && !string.IsNullOrEmpty(entry.FilePath))
+                    {
+                        lock (internalSaveTimestamps) { internalSaveTimestamps[entry.FilePath] = DateTime.UtcNow; }
+                        EditorTabBuffer.WriteFilePreservingMetadata(
+                            entry.FilePath,
+                            entry.PreDiskRaw,
+                            entry.PreEncoding,
+                            entry.PreHasBom,
+                            entry.PreEol,
+                            entry.PreHasFinalNewline);
+                    }
+                    var open = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FilePath, PathKeyComparison));
+                    if (open != null && entry.WasOpen)
+                    {
+                        open.PushUndoSnapshot();
+                        open.Content = entry.PreOpenContent;
+                        open.SavedContent = entry.PreOpenSavedContent;
+                        open.SyncLinesFromContent();
+                        open.IsDirty = entry.WasDirty;
+                        if (entry.TouchedDisk && File.Exists(entry.FilePath))
+                            open.RecordDiskBaseline(entry.FilePath);
+                        if (!open.IsDirty)
+                        {
+                            pendingHotExitBackups.Remove(open);
+                            HotExitService.DeleteBackup(workspaceRoot, open);
+                        }
+                        if (!open.IsLargeFile) open.RefreshGutterDiff();
+                    }
+                    restored++;
+                }
+                catch { }
+            }
+            if (activeTab != null)
+            {
+                activeTab.CursorLine = Math.Max(0, Math.Min(activeTab.CursorLine, activeTab.Lines.Count - 1));
+                activeTab.CursorCol = Math.Max(0, Math.Min(activeTab.CursorCol, activeTab.Lines[activeTab.CursorLine].Length));
+                activeTab.ClearSelection();
+                PrimaryEditor.LoadBuffer(activeTab);
+            }
+            if (isEditorSplit && SplitEditor?.CurrentBuffer != null)
+            {
+                SplitEditor.LoadBuffer(SplitEditor.CurrentBuffer);
+            }
+            RefreshTabStrip();
+            RefreshOpenEditorsSection();
+            RefreshGitStatus();
+            UpdateWindowTitle();
+            UpdateStatusBar();
+            return restored;
+        }
+
         /// <summary>
         /// Replaces in the files of the current results (re-searching if the query / flags changed). Unsaved open editors
         /// are edited in memory (undoable, left dirty) instead of overwriting their file on disk.
@@ -887,6 +980,7 @@ namespace codeLess.AvaloniaApp
                     .Matches.Select(m => m.FilePath).Distinct(PathKeyComparer).ToList();
             }
 
+            var undoEntries = new List<WorkspaceReplaceUndoEntry>();
             int modifiedFiles = 0;
             int replacedTotal = 0;
             foreach (string file in targets)
@@ -896,8 +990,18 @@ namespace codeLess.AvaloniaApp
                 {
                     if (open != null && open.IsDirty)
                     {
-                        string next = WorkspaceSearchEngine.ReplaceInText(open.Content ?? "", rx, rep, out int n);
+                        string preContent = open.Content ?? "";
+                        string next = WorkspaceSearchEngine.ReplaceInText(preContent, rx, rep, out int n);
                         if (n == 0) continue;
+                        undoEntries.Add(new WorkspaceReplaceUndoEntry
+                        {
+                            FilePath = file,
+                            TouchedDisk = false,
+                            WasOpen = true,
+                            WasDirty = true,
+                            PreOpenContent = preContent,
+                            PreOpenSavedContent = open.SavedContent
+                        });
                         open.PushUndoSnapshot();
                         open.Content = next;
                         open.SyncLinesFromContent();
@@ -911,7 +1015,22 @@ namespace codeLess.AvaloniaApp
                     if (raw.IndexOf('\0') >= 0) continue;
                     string updated = WorkspaceSearchEngine.ReplaceInText(raw, rx, rep, out int count);
                     if (count == 0) continue;
+                    lock (internalSaveTimestamps) { internalSaveTimestamps[file] = DateTime.UtcNow; }
                     EditorTabBuffer.WriteFilePreservingMetadata(file, updated, enc, bom, eol, finalNl);
+                    undoEntries.Add(new WorkspaceReplaceUndoEntry
+                    {
+                        FilePath = file,
+                        TouchedDisk = true,
+                        PreDiskRaw = raw,
+                        PreEncoding = enc,
+                        PreHasBom = bom,
+                        PreEol = eol,
+                        PreHasFinalNewline = finalNl,
+                        WasOpen = open != null,
+                        WasDirty = false,
+                        PreOpenContent = open != null ? open.Content : raw,
+                        PreOpenSavedContent = open != null ? open.SavedContent : raw
+                    });
                     replacedTotal += count;
                     modifiedFiles++;
                     if (open != null)
@@ -920,12 +1039,18 @@ namespace codeLess.AvaloniaApp
                         open.PushUndoSnapshot();
                         open.Content = written;
                         open.SavedContent = written;
+                        open.RecordDiskBaseline(file);
                         open.SyncLinesFromContent();
                         open.IsDirty = false;
                         if (!open.IsLargeFile) open.RefreshGutterDiff();
                     }
                 }
                 catch { }
+            }
+            if (undoEntries.Count > 0)
+            {
+                lastWorkspaceReplaceUndo.Clear();
+                lastWorkspaceReplaceUndo.AddRange(undoEntries);
             }
 
             if (activeTab != null)

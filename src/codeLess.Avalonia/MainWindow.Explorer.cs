@@ -592,6 +592,10 @@ namespace codeLess.AvaloniaApp
         private void RouteNativeEditCommand(string cmd)
         {
             var focused = FocusManager?.GetFocusedElement();
+            if (cmd == "undo" && ReferenceEquals(focused, ExplorerTree))
+            {
+                if (UndoLastExplorerOperation()) return;
+            }
             if (focused is TextBox tb)
             {
                 if (cmd == "undo") tb.Undo();

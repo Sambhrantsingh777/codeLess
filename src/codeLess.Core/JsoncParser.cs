@@ -13,11 +13,26 @@ namespace codeLess.Core
             if (string.IsNullOrEmpty(jsonc)) return null;
 
             string cleanJson = StripJsonc(jsonc);
+            string trimmed = cleanJson != null ? cleanJson.Trim() : "";
+            if (trimmed.Length == 0 ||
+                (trimmed[0] == '{' && trimmed[trimmed.Length - 1] != '}') ||
+                (trimmed[0] == '[' && trimmed[trimmed.Length - 1] != ']'))
+            {
+                errorMessage = "JSON parse error: unexpected end of JSON input";
+                return null;
+            }
             var serializer = new JavaScriptSerializer();
             serializer.MaxJsonLength = int.MaxValue;
             try
             {
-                return serializer.Deserialize<object>(cleanJson);
+                object parsed = serializer.Deserialize<object>(cleanJson);
+                var dict = parsed as Dictionary<string, object>;
+                if (dict != null && dict.ContainsKey(""))
+                {
+                    errorMessage = "JSON parse error: expected quoted property name";
+                    return null;
+                }
+                return parsed;
             }
             catch (ArgumentException ex)
             {

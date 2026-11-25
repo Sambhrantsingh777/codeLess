@@ -201,9 +201,8 @@ namespace codeLess.AvaloniaApp
                 {
                     if (activeTab != null)
                     {
-                        if (shift) activeTab.IsPinned = !activeTab.IsPinned;
-                        activeTab.IsPreviewTab = false;
-                        RefreshTabStrip();
+                        if (shift) PinTab(activeTab, !activeTab.IsPinned);
+                        else { activeTab.IsPreviewTab = false; RefreshTabStrip(); }
                     }
                     return true;
                 }
@@ -564,6 +563,10 @@ namespace codeLess.AvaloniaApp
                     case Key.NumPad0:
                         AdjustZoom(0);
                         return true;
+                    case Key.Z:
+                        if (ExplorerTree != null && ExplorerTree.IsFocused && UndoLastExplorerOperation())
+                            return true;
+                        break;
                 }
             }
 
@@ -1146,7 +1149,7 @@ namespace codeLess.AvaloniaApp
                     MakeCtxItem("Copy Relative Path", () => _ = CopyPathToClipboardAsync(tab.RelativePath ?? tab.FileName)),
                     MakeCtxItem(revealLabel, () => { if (!string.IsNullOrEmpty(tab.FilePath)) RevealInOsFileManager(tab.FilePath); }),
                     new Separator(),
-                    MakeCtxItem(tab.IsPinned ? "Unpin Tab" : "Pin Tab", () => { tab.IsPinned = !tab.IsPinned; tab.IsPreviewTab = false; RefreshTabStrip(); }),
+                    MakeCtxItem(tab.IsPinned ? "Unpin Tab" : "Pin Tab", () => PinTab(tab, !tab.IsPinned)),
                     MakeCtxItem("Keep Open", () => { tab.IsPreviewTab = false; RefreshTabStrip(); }),
                     new Separator(),
                     MakeCtxItem($"Split Right   ({scSplit})", ToggleSplitEditor)
@@ -1269,6 +1272,123 @@ namespace codeLess.AvaloniaApp
             FocusPromptTextBox(tb);
         }
 
+        public void PinTab(EditorTabBuffer tab, bool pinned)
+        {
+            if (tab == null) return;
+            tab.IsPinned = pinned;
+            tab.IsPreviewTab = false;
+            if (pinned)
+            {
+                int curIdx = openTabs.IndexOf(tab);
+                int targetIdx = 0;
+                while (targetIdx < openTabs.Count && !ReferenceEquals(openTabs[targetIdx], tab) && openTabs[targetIdx].IsPinned)
+                    targetIdx++;
+                if (curIdx > targetIdx)
+                {
+                    openTabs.RemoveAt(curIdx);
+                    openTabs.Insert(targetIdx, tab);
+                    SaveWorkspaceSession();
+                }
+            }
+            RefreshTabStrip();
+            RefreshOpenEditorsSection();
+        }
+
+        private enum ExplorerUndoKind { CreateFile, CreateFolder, RenameOrMove }
+        private sealed class ExplorerUndoEntry
+        {
+            public ExplorerUndoKind Kind;
+            public string SourcePath;
+            public string TargetPath;
+            public bool IsDirectory;
+        }
+        private readonly Stack<ExplorerUndoEntry> explorerUndoStack = new Stack<ExplorerUndoEntry>();
+
+        private void RepathOpenTab(EditorTabBuffer t, string updatedPath)
+        {
+            if (t == null || string.IsNullOrEmpty(updatedPath)) return;
+            HotExitService.DeleteBackup(workspaceRoot, t);
+            t.FilePath = updatedPath;
+            t.FileName = Path.GetFileName(updatedPath);
+            t.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, updatedPath) : t.FileName;
+            string newExt = Path.GetExtension(updatedPath).TrimStart('.').ToLowerInvariant();
+            if (!string.IsNullOrEmpty(newExt) && !string.Equals(t.Language, newExt, StringComparison.OrdinalIgnoreCase))
+            {
+                t.Language = newExt;
+                EditorSyntaxSession.For(t).Prepare(t);
+            }
+            if (t.IsDirty)
+                ScheduleHotExitBackup(t);
+            if (ReferenceEquals(t, activeTab))
+            {
+                if (ExplorerTree != null) ExplorerTree.ActiveEditorFilePath = updatedPath;
+                PrimaryEditor?.Canvas?.InvalidateVisual();
+                UpdateStatusBar();
+            }
+            if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, t))
+                SplitEditor?.Canvas?.InvalidateVisual();
+        }
+
+        public bool UndoLastExplorerOperation()
+        {
+            while (explorerUndoStack.Count > 0)
+            {
+                var op = explorerUndoStack.Pop();
+                try
+                {
+                    if (op.Kind == ExplorerUndoKind.CreateFile)
+                    {
+                        if (!File.Exists(op.TargetPath)) continue;
+                        var open = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, op.TargetPath, PathKeyComparison));
+                        if (open != null) CloseTab(open, forceWithoutPrompt: true);
+                        File.Delete(op.TargetPath);
+                        RefreshWorkspaceAfterFileOperation(Path.GetDirectoryName(op.TargetPath));
+                        return true;
+                    }
+                    if (op.Kind == ExplorerUndoKind.CreateFolder)
+                    {
+                        if (!Directory.Exists(op.TargetPath)) continue;
+                        Directory.Delete(op.TargetPath, recursive: true);
+                        RefreshWorkspaceAfterFileOperation(Path.GetDirectoryName(op.TargetPath.TrimEnd('/', '\\')));
+                        return true;
+                    }
+                    if (op.Kind == ExplorerUndoKind.RenameOrMove)
+                    {
+                        bool existsNow = op.IsDirectory ? Directory.Exists(op.TargetPath) : File.Exists(op.TargetPath);
+                        if (!existsNow) continue;
+                        bool caseOnly = string.Equals(op.TargetPath, op.SourcePath, StringComparison.OrdinalIgnoreCase);
+                        if (!caseOnly && (File.Exists(op.SourcePath) || Directory.Exists(op.SourcePath))) continue;
+                        if (caseOnly)
+                        {
+                            string tmp = op.TargetPath + ".codeless-undo-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                            if (op.IsDirectory) { Directory.Move(op.TargetPath, tmp); Directory.Move(tmp, op.SourcePath); }
+                            else { File.Move(op.TargetPath, tmp); File.Move(tmp, op.SourcePath); }
+                        }
+                        else if (op.IsDirectory) Directory.Move(op.TargetPath, op.SourcePath);
+                        else File.Move(op.TargetPath, op.SourcePath);
+
+                        string oldPrefix = op.TargetPath.TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
+                        foreach (var t in openTabs)
+                        {
+                            if (string.IsNullOrEmpty(t.FilePath)) continue;
+                            string updated = null;
+                            if (string.Equals(t.FilePath, op.TargetPath, PathKeyComparison)) updated = op.SourcePath;
+                            else if (op.IsDirectory && t.FilePath.StartsWith(oldPrefix, PathKeyComparison))
+                                updated = Path.Combine(op.SourcePath, t.FilePath.Substring(oldPrefix.Length));
+                            if (updated != null) RepathOpenTab(t, updated);
+                        }
+                        RefreshWorkspaceAfterFileOperation(op.SourcePath);
+                        RefreshTabStrip();
+                        SaveWorkspaceSession();
+                        UpdateWindowTitle();
+                        return true;
+                    }
+                }
+                catch { }
+            }
+            return false;
+        }
+
         public string CreateFileInDirectory(string baseDir, string fileName)
         {
             if (string.IsNullOrWhiteSpace(fileName)) return null;
@@ -1287,6 +1407,7 @@ namespace codeLess.AvaloniaApp
                 if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
                     Directory.CreateDirectory(parent);
                 using (new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write)) { }
+                explorerUndoStack.Push(new ExplorerUndoEntry { Kind = ExplorerUndoKind.CreateFile, TargetPath = fullPath });
                 RefreshWorkspaceAfterFileOperation(fullPath);
                 OpenFileInTab(fullPath, preview: false);
                 return fullPath;
@@ -1333,6 +1454,7 @@ namespace codeLess.AvaloniaApp
             try
             {
                 Directory.CreateDirectory(fullPath);
+                explorerUndoStack.Push(new ExplorerUndoEntry { Kind = ExplorerUndoKind.CreateFolder, TargetPath = fullPath, IsDirectory = true });
                 RefreshWorkspaceAfterFileOperation(fullPath);
                 return fullPath;
             }
@@ -1402,6 +1524,8 @@ namespace codeLess.AvaloniaApp
                 else if (isDir) Directory.Move(oldPath, newPath);
                 else File.Move(oldPath, newPath);
 
+                explorerUndoStack.Push(new ExplorerUndoEntry { Kind = ExplorerUndoKind.RenameOrMove, SourcePath = oldPath, TargetPath = newPath, IsDirectory = isDir });
+
                 // Re-point open editors for the file itself or anything below a renamed folder.
                 string oldPrefix = oldPath.TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
                 foreach (var t in openTabs)
@@ -1412,12 +1536,11 @@ namespace codeLess.AvaloniaApp
                     else if (isDir && t.FilePath.StartsWith(oldPrefix, PathKeyComparison))
                         updated = Path.Combine(newPath, t.FilePath.Substring(oldPrefix.Length));
                     if (updated == null) continue;
-                    t.FilePath = updated;
-                    t.FileName = Path.GetFileName(updated);
-                    t.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, updated) : t.FileName;
+                    RepathOpenTab(t, updated);
                 }
                 RefreshWorkspaceAfterFileOperation(newPath);
                 RefreshTabStrip();
+                SaveWorkspaceSession();
                 UpdateWindowTitle();
                 return true;
             }
@@ -1551,22 +1674,19 @@ namespace codeLess.AvaloniaApp
                     else File.Move(explorerClipboardPath, dest);
 
                     string oldPath = explorerClipboardPath;
+                    explorerUndoStack.Push(new ExplorerUndoEntry { Kind = ExplorerUndoKind.RenameOrMove, SourcePath = oldPath, TargetPath = dest, IsDirectory = isDir });
                     string oldPrefix = oldPath.TrimEnd('/', '\\') + Path.DirectorySeparatorChar;
                     foreach (var t in openTabs)
                     {
                         if (string.IsNullOrEmpty(t.FilePath)) continue;
                         if (string.Equals(t.FilePath, oldPath, PathKeyComparison))
                         {
-                            t.FilePath = dest;
-                            t.FileName = Path.GetFileName(dest);
-                            t.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, dest) : t.FileName;
+                            RepathOpenTab(t, dest);
                         }
                         else if (isDir && t.FilePath.StartsWith(oldPrefix, PathKeyComparison))
                         {
                             string updated = Path.Combine(dest, t.FilePath.Substring(oldPrefix.Length));
-                            t.FilePath = updated;
-                            t.FileName = Path.GetFileName(updated);
-                            t.RelativePath = !string.IsNullOrEmpty(workspaceRoot) ? LlmHarnessAndAgentEngine.GetRelativePath(workspaceRoot, updated) : t.FileName;
+                            RepathOpenTab(t, updated);
                         }
                     }
 
@@ -1574,6 +1694,8 @@ namespace codeLess.AvaloniaApp
                     explorerClipboardIsCut = false;
                     RefreshWorkspaceAfterFileOperation(dest);
                     RefreshTabStrip();
+                    SaveWorkspaceSession();
+                    UpdateWindowTitle();
                     return dest;
                 }
                 else
@@ -1880,6 +2002,12 @@ namespace codeLess.AvaloniaApp
         public void ConfirmAndDiscardGitFile(GitStatusEntry entry)
         {
             if (entry == null) return;
+            if (DiscardConfirmOverride != null)
+            {
+                if (DiscardConfirmOverride(entry))
+                    ExecuteGitDiscardFile(entry);
+                return;
+            }
             bool untracked = entry.IndexStatus == '?';
             string name = Path.GetFileName(entry.FullPath.TrimEnd('/', '\\'));
             string msg = untracked
@@ -1919,6 +2047,9 @@ namespace codeLess.AvaloniaApp
             var tab = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, entry.FullPath, PathKeyComparison));
             if (tab != null)
             {
+                pendingHotExitBackups.Remove(tab);
+                if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop();
+                HotExitService.DeleteBackup(workspaceRoot, tab);
                 if (File.Exists(entry.FullPath)) { tab.IsDirty = false; ReloadOpenTabIfChangedOnDisk(entry.FullPath); }
                 else CloseTab(tab, forceWithoutPrompt: true);
             }
@@ -3458,30 +3589,15 @@ namespace codeLess.AvaloniaApp
         public List<WorkspaceSearchMatch> RunWorkspaceSearch(string query)
         {
             ExecuteWorkspaceSearch(query);
-            var matches = new List<WorkspaceSearchMatch>();
-            if (string.IsNullOrWhiteSpace(query)) return matches;
-            foreach (string file in workspaceFiles)
-            {
-                if (!File.Exists(file)) continue;
-                try
+            return searchGroups
+                .SelectMany(g => g.Matches)
+                .Select(m => new WorkspaceSearchMatch
                 {
-                    string[] lines = File.ReadAllLines(file);
-                    for (int i = 0; i < lines.Length; i++)
-                    {
-                        if (lines[i].IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            matches.Add(new WorkspaceSearchMatch
-                            {
-                                FilePath = file,
-                                LineNumber = i + 1,
-                                LineText = lines[i].Trim()
-                            });
-                        }
-                    }
-                }
-                catch { }
-            }
-            return matches;
+                    FilePath = m.FilePath,
+                    LineNumber = m.LineNumber,
+                    LineText = m.LinePreview ?? ""
+                })
+                .ToList();
         }
 
         public void HandleKeyShortcut(KeyEventArgs e)

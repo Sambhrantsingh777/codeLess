@@ -458,14 +458,21 @@ namespace codeLess.AvaloniaApp
             SaveBufferToDisk(tab);
         }
 
+        private IdePersistentSettings EffectiveAutoSaveSettings =>
+            (effectiveWorkspaceSettings != null && effectiveWorkspaceSettings.EffectiveAutoSaveMode != IdePersistentSettings.AutoSaveOff)
+                ? effectiveWorkspaceSettings
+                : settings;
+
         /// <summary>files.autoSave = afterDelay: called on edits; saves after files.autoSaveDelay of inactivity.</summary>
         private void ScheduleAutoSave(EditorTabBuffer buf)
         {
             if (buf == null || string.IsNullOrEmpty(buf.FilePath) || !File.Exists(buf.FilePath)) return;
+            if (!AutoSavePolicy.IsEligible(buf)) return;
+            var eff = EffectiveAutoSaveSettings;
             pendingAutoSave.Add(buf);
             if (autoSaveTimer == null) { FlushPendingAutoSave(); return; }
             autoSaveTimer.Stop();
-            autoSaveTimer.Interval = TimeSpan.FromMilliseconds(settings.EffectiveAutoSaveDelayMs);
+            autoSaveTimer.Interval = TimeSpan.FromMilliseconds(eff != null ? eff.EffectiveAutoSaveDelayMs : settings.EffectiveAutoSaveDelayMs);
             autoSaveTimer.Start();
         }
 
@@ -500,7 +507,7 @@ namespace codeLess.AvaloniaApp
         /// <summary>Hook in ActivateTab: files.autoSave = onFocusChange saves the editor being left.</summary>
         private void OnEditorFocusLeaving(EditorTabBuffer leaving, EditorTabBuffer next)
         {
-            if (leaving == null || ReferenceEquals(leaving, next) || !AutoSavePolicy.SavesOnEditorFocusLoss(settings)) return;
+            if (leaving == null || ReferenceEquals(leaving, next) || !AutoSavePolicy.SavesOnEditorFocusLoss(EffectiveAutoSaveSettings)) return;
             if (AutoSavePolicy.IsEligible(leaving) && openTabs.Contains(leaving))
                 AutoSaveBuffer(leaving);
         }
@@ -524,7 +531,7 @@ namespace codeLess.AvaloniaApp
             var leaving = focusedEditorBufferForAutoSave;
             focusedEditorBufferForAutoSave = editor?.CurrentBuffer;
             if (leaving == null || ReferenceEquals(leaving, focusedEditorBufferForAutoSave)) return;
-            if (AutoSavePolicy.SavesOnEditorFocusLoss(settings) && openTabs.Contains(leaving) && AutoSavePolicy.IsEligible(leaving))
+            if (AutoSavePolicy.SavesOnEditorFocusLoss(EffectiveAutoSaveSettings) && openTabs.Contains(leaving) && AutoSavePolicy.IsEligible(leaving))
                 AutoSaveBuffer(leaving);
         }
 

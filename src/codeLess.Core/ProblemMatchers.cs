@@ -601,8 +601,13 @@ namespace codeLess.Studio
         public void FeedBytes(byte[] buf, int count)
         {
             if (buf == null || count <= 0) return;
-            char[] chars = new char[decoder.GetCharCount(buf, 0, count)];
-            int n = decoder.GetChars(buf, 0, count, chars, 0);
+            char[] chars;
+            int n;
+            lock (gate)
+            {
+                chars = new char[decoder.GetCharCount(buf, 0, count)];
+                n = decoder.GetChars(buf, 0, count, chars, 0);
+            }
             FeedChars(chars, n);
         }
 
