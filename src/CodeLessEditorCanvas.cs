@@ -6907,26 +6907,10 @@ namespace codeLess.Studio
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            buf.ClearExtraCarets();
-            int sLine, sCol, eLine, eCol;
-            buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-            int first = sLine;
-            int last = (eLine > sLine && eCol == 0) ? eLine - 1 : eLine;
-            int count = last - first + 1;
-            buf.PushUndoSnapshot();
-            List<string> block = new List<string>();
-            for (int i = first; i <= last && i < buf.Lines.Count; i++)
-                block.Add(buf.Lines[i]);
-            buf.Lines.InsertRange(up ? first : last + 1, block);
-            if (!up)
-            {
-                bool hadSel = buf.HasSelection();
-                buf.CursorLine += count;
-                if (hadSel) buf.SelectionAnchorLine += count;
-                else buf.SelectionAnchorLine = buf.CursorLine;
-            }
+            if (!EditorMultiCaret.CopyLines(buf, up ? -1 : 1)) return;
             owner.NotifyBufferContentChanged();
             EnsureCursorVisible();
+            owner.UpdateCursorStatusLabel();
             this.Invalidate();
         }
 
@@ -6934,39 +6918,11 @@ namespace codeLess.Studio
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            buf.ClearExtraCarets();
-            int sLine, sCol, eLine, eCol;
-            buf.GetNormalizedSelection(out sLine, out sCol, out eLine, out eCol);
-            int first = sLine;
-            int last = (eLine > sLine && eCol == 0) ? eLine - 1 : eLine;
-            if (up && first > 0)
-            {
-                bool hadSel = buf.HasSelection();
-                buf.PushUndoSnapshot();
-                string above = buf.Lines[first - 1];
-                buf.Lines.RemoveAt(first - 1);
-                buf.Lines.Insert(last, above);
-                buf.CursorLine = Math.Max(0, buf.CursorLine - 1);
-                if (hadSel) buf.SelectionAnchorLine = Math.Max(0, buf.SelectionAnchorLine - 1);
-                else buf.SelectionAnchorLine = buf.CursorLine;
-                owner.NotifyBufferContentChanged();
-                EnsureCursorVisible();
-                this.Invalidate();
-            }
-            else if (!up && last + 1 < buf.Lines.Count)
-            {
-                bool hadSel = buf.HasSelection();
-                buf.PushUndoSnapshot();
-                string below = buf.Lines[last + 1];
-                buf.Lines.RemoveAt(last + 1);
-                buf.Lines.Insert(first, below);
-                buf.CursorLine = Math.Min(buf.Lines.Count - 1, buf.CursorLine + 1);
-                if (hadSel) buf.SelectionAnchorLine = Math.Min(buf.Lines.Count - 1, buf.SelectionAnchorLine + 1);
-                else buf.SelectionAnchorLine = buf.CursorLine;
-                owner.NotifyBufferContentChanged();
-                EnsureCursorVisible();
-                this.Invalidate();
-            }
+            if (!EditorMultiCaret.MoveLines(buf, up ? -1 : 1)) return;
+            owner.NotifyBufferContentChanged();
+            EnsureCursorVisible();
+            owner.UpdateCursorStatusLabel();
+            this.Invalidate();
         }
 
         public void DeleteActiveLines()
@@ -7124,17 +7080,15 @@ namespace codeLess.Studio
             ChangeAllOccurrences();
         }
 
-        /// <summary>Toggle Block Comment (Shift+Alt+A): language block tokens around the selection, or an empty block at the caret.</summary>
+        /// <summary>Toggle Block Comment (Shift+Alt+A): language block tokens around every selection, or an empty block at every caret.</summary>
         public void ToggleBlockCommentOnSelection()
         {
             EditorTabBuffer buf = owner.CurrentBuffer;
             if (buf == null) return;
-            CommentTokens tok = EditorComments.For(buf.FilePath ?? buf.FileName ?? ("x." + (buf.Language ?? "")));
-            if (tok.Line == null && tok.BlockStart == null) return;
-            buf.PushUndoSnapshot();
-            if (!EditorComments.ToggleBlockComment(buf)) { buf.PopUndoSnapshotAndRestore(); return; }
+            if (!EditorMultiCaret.ToggleBlockComments(buf)) return;
             buf.ClampCursor();
             owner.NotifyBufferContentChanged();
+            owner.UpdateCursorStatusLabel();
             this.Invalidate();
         }
 

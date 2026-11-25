@@ -593,6 +593,122 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal(3, tab.CursorLine);
         }
 
+        [AvaloniaFact]
+        public void A45_A46_MultiCursor_MoveLines_CopyLines_And_BlockComment_IndependentAndMergedBlocks_OneUndoStep()
+        {
+            var (_, tab, canvas) = OpenEditor("multiblock.cs", "L0\nL1\nL2\nL3\nL4");
+            MacKeymap.ForceMacKeymapOverride = true;
+
+            // A45a: Disjoint multi-cursor MoveLines Down (Alt+Down) on lines 1 and 3 moves both independently in one undo step
+            tab.ClearSelection();
+            tab.CursorLine = 1;
+            tab.CursorCol = 1;
+            canvas.ExtraCursors.Clear();
+            canvas.ExtraCursors.Add(new ExtraCursorCaret { Line = 3, Col = 1, AnchorLine = -1, AnchorCol = -1 });
+            PressKey(canvas, Key.Down, KeyModifiers.Alt);
+            Assert.Equal(new[] { "L0", "L2", "L1", "L4", "L3" }, tab.Lines);
+            Assert.Equal(2, tab.CursorLine);
+            Assert.Single(canvas.ExtraCursors);
+            Assert.Equal(4, canvas.ExtraCursors[0].Line);
+
+            // Single Cmd+Z undoes both moves and restores both carets
+            PressKey(canvas, Key.Z, KeyModifiers.Meta);
+            Assert.Equal(new[] { "L0", "L1", "L2", "L3", "L4" }, tab.Lines);
+            Assert.Equal(1, tab.CursorLine);
+            Assert.Single(canvas.ExtraCursors);
+            Assert.Equal(3, canvas.ExtraCursors[0].Line);
+
+            // A45b: Moving Up at document top (line 0) is a no-op for that block only while disjoint block at line 3 moves up to line 2
+            tab.CursorLine = 0;
+            tab.CursorCol = 1;
+            canvas.ExtraCursors.Clear();
+            canvas.ExtraCursors.Add(new ExtraCursorCaret { Line = 3, Col = 1, AnchorLine = -1, AnchorCol = -1 });
+            PressKey(canvas, Key.Up, KeyModifiers.Alt);
+            Assert.Equal(new[] { "L0", "L1", "L3", "L2", "L4" }, tab.Lines);
+            Assert.Equal(0, tab.CursorLine);
+            Assert.Single(canvas.ExtraCursors);
+            Assert.Equal(2, canvas.ExtraCursors[0].Line);
+            PressKey(canvas, Key.Z, KeyModifiers.Meta);
+
+            // A45c: Adjacent/overlapping blocks (carets on lines 1 and 2) merge first and move together as one block
+            tab.CursorLine = 1;
+            tab.CursorCol = 1;
+            canvas.ExtraCursors.Clear();
+            canvas.ExtraCursors.Add(new ExtraCursorCaret { Line = 2, Col = 1, AnchorLine = -1, AnchorCol = -1 });
+            PressKey(canvas, Key.Down, KeyModifiers.Alt);
+            Assert.Equal(new[] { "L0", "L3", "L1", "L2", "L4" }, tab.Lines);
+            Assert.Equal(2, tab.CursorLine);
+            Assert.Equal(3, canvas.ExtraCursors[0].Line);
+            PressKey(canvas, Key.Z, KeyModifiers.Meta);
+
+            // A45d: Disjoint multi-cursor CopyLines Down (Shift+Alt+Down) and Up (Shift+Alt+Up) on lines 1 and 3
+            tab.CursorLine = 1;
+            tab.CursorCol = 1;
+            canvas.ExtraCursors.Clear();
+            canvas.ExtraCursors.Add(new ExtraCursorCaret { Line = 3, Col = 1, AnchorLine = -1, AnchorCol = -1 });
+            PressKey(canvas, Key.Down, KeyModifiers.Shift | KeyModifiers.Alt);
+            Assert.Equal(new[] { "L0", "L1", "L1", "L2", "L3", "L3", "L4" }, tab.Lines);
+            Assert.Equal(2, tab.CursorLine);
+            Assert.Single(canvas.ExtraCursors);
+            Assert.Equal(5, canvas.ExtraCursors[0].Line);
+            PressKey(canvas, Key.Z, KeyModifiers.Meta);
+            Assert.Equal(new[] { "L0", "L1", "L2", "L3", "L4" }, tab.Lines);
+
+            // CopyLines Up keeps carets on the upper copy of each duplicated block
+            PressKey(canvas, Key.Up, KeyModifiers.Shift | KeyModifiers.Alt);
+            Assert.Equal(new[] { "L0", "L1", "L1", "L2", "L3", "L3", "L4" }, tab.Lines);
+            Assert.Equal(1, tab.CursorLine);
+            Assert.Single(canvas.ExtraCursors);
+            Assert.Equal(4, canvas.ExtraCursors[0].Line);
+            PressKey(canvas, Key.Z, KeyModifiers.Meta);
+            Assert.Equal(new[] { "L0", "L1", "L2", "L3", "L4" }, tab.Lines);
+
+            // A46: Multi-cursor Shift+Alt+A (ToggleBlockComment) wraps and unwraps each selection independently in one undo step
+            tab.Lines = new List<string> { "int a = 1 + 2;", "int b = 3 + 4;" };
+            tab.SyncContentFromLines();
+            tab.SelectionStartLine = 0;
+            tab.SelectionStartCol = 8;
+            tab.CursorLine = 0;
+            tab.CursorCol = 13; // "1 + 2"
+            canvas.ExtraCursors.Clear();
+            canvas.ExtraCursors.Add(new ExtraCursorCaret { Line = 1, Col = 13, AnchorLine = 1, AnchorCol = 8 }); // "3 + 4"
+
+            PressKey(canvas, Key.A, KeyModifiers.Shift | KeyModifiers.Alt);
+            Assert.Equal("int a = /* 1 + 2 */;", tab.Lines[0]);
+            Assert.Equal("int b = /* 3 + 4 */;", tab.Lines[1]);
+            Assert.Single(canvas.ExtraCursors);
+            Assert.Equal("1 + 2", tab.GetSelectedText());
+            Assert.Equal(11, canvas.ExtraCursors[0].AnchorCol);
+            Assert.Equal(16, canvas.ExtraCursors[0].Col);
+
+            // Second Shift+Alt+A unwraps both block comments in one step
+            PressKey(canvas, Key.A, KeyModifiers.Shift | KeyModifiers.Alt);
+            Assert.Equal("int a = 1 + 2;", tab.Lines[0]);
+            Assert.Equal("int b = 3 + 4;", tab.Lines[1]);
+            Assert.Single(canvas.ExtraCursors);
+
+            // Undo restores both block comments; second Undo restores original text
+            PressKey(canvas, Key.Z, KeyModifiers.Meta);
+            Assert.Equal("int a = /* 1 + 2 */;", tab.Lines[0]);
+            Assert.Equal("int b = /* 3 + 4 */;", tab.Lines[1]);
+            PressKey(canvas, Key.Z, KeyModifiers.Meta);
+            Assert.Equal("int a = 1 + 2;", tab.Lines[0]);
+            Assert.Equal("int b = 3 + 4;", tab.Lines[1]);
+
+            // Same-line multi-cursor Shift+Alt+A (two selections on line 0) shifts second selection accurately
+            tab.SelectionStartLine = 0;
+            tab.SelectionStartCol = 8;
+            tab.CursorLine = 0;
+            tab.CursorCol = 9; // "1"
+            canvas.ExtraCursors.Clear();
+            canvas.ExtraCursors.Add(new ExtraCursorCaret { Line = 0, AnchorLine = 0, AnchorCol = 12, Col = 13 }); // "2"
+            PressKey(canvas, Key.A, KeyModifiers.Shift | KeyModifiers.Alt);
+            Assert.Equal("int a = /* 1 */ + /* 2 */;", tab.Lines[0]);
+            Assert.Equal("1", tab.GetSelectedText());
+            Assert.Equal(21, canvas.ExtraCursors[0].AnchorCol);
+            Assert.Equal(22, canvas.ExtraCursors[0].Col);
+        }
+
         // =====================================================================
         // Sub-Area 6: Comment Toggle & Find/Replace (A31-A36)
         // =====================================================================
