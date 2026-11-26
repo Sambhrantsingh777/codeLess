@@ -309,8 +309,12 @@ namespace codeLess.AvaloniaApp
                 var weakSelf = new WeakReference<MainWindow>(this);
                 FileSystemEventHandler onFs = (s, e) =>
                 {
-                    if (weakSelf.TryGetTarget(out var self) && !self.windowClosed)
-                        self.OnWorkspaceFsEvent(s, e);
+                    try
+                    {
+                        if (weakSelf.TryGetTarget(out var self) && !self.windowClosed)
+                            self.OnWorkspaceFsEvent(s, e);
+                    }
+                    catch { }
                 };
                 var w = new FileSystemWatcher(root)
                 {
@@ -323,20 +327,24 @@ namespace codeLess.AvaloniaApp
                 w.Changed += onFs;
                 w.Renamed += (s, e) =>
                 {
-                    if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
-                    if (EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath))
+                    try
                     {
-                        // Atomic save renames .<name>.codeless-tmp-* -> <name>: treat as a non-structural Changed event on the target.
-                        if (!EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath))
+                        if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
+                        if (EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath))
                         {
-                            self.lsp?.NotifyFileSystemChange(e.FullPath, LanguageServerManager.FileChanged);
-                            self.QueueFsChange(e.FullPath, structural: false);
+                            // Atomic save renames .<name>.codeless-tmp-* -> <name>: treat as a non-structural Changed event on the target.
+                            if (!EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath))
+                            {
+                                self.lsp?.NotifyFileSystemChange(e.FullPath, LanguageServerManager.FileChanged);
+                                self.QueueFsChange(e.FullPath, structural: false);
+                            }
+                            return;
                         }
-                        return;
+                        self.OnWorkspaceFsEvent(s, e);
+                        self.QueueFsChange(e.OldFullPath, structural: true);
+                        self.lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
                     }
-                    self.OnWorkspaceFsEvent(s, e);
-                    self.QueueFsChange(e.OldFullPath, structural: true);
-                    self.lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
+                    catch { }
                 };
                 w.Error += (s, e) =>
                 {
@@ -375,22 +383,42 @@ namespace codeLess.AvaloniaApp
 
         private bool IsSelfSaveEcho(string fullPath)
         {
-            if (string.IsNullOrEmpty(fullPath)) return false;
-            bool recentSave = false;
-            lock (internalSaveTimestamps)
+            try
             {
-                if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
-                    recentSave = true;
+                if (string.IsNullOrEmpty(fullPath)) return false;
+                bool recentSave = false;
+                lock (internalSaveTimestamps)
+                {
+                    if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
+                        recentSave = true;
+                }
+                if (!recentSave) return false;
+                if (!File.Exists(fullPath)) return false;
+                EditorTabBuffer[] snapshot = openTabsSnapshot;
+                EditorTabBuffer openTab = null;
+                if (snapshot != null)
+                {
+                    for (int i = 0; i < snapshot.Length; i++)
+                    {
+                        EditorTabBuffer t = snapshot[i];
+                        if (t != null && !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison))
+                        {
+                            openTab = t;
+                            break;
+                        }
+                    }
+                }
+                if (openTab != null)
+                {
+                    if (openTab.IsDeletedOnDisk || openTab.HasDiskModifiedExternally(out _))
+                        return false;
+                }
+                return true;
             }
-            if (!recentSave) return false;
-            if (!File.Exists(fullPath)) return false;
-            var openTab = openTabs.FirstOrDefault(t => !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison));
-            if (openTab != null)
+            catch
             {
-                if (openTab.IsDeletedOnDisk || openTab.HasDiskModifiedExternally(out _))
-                    return false;
+                return false;
             }
-            return true;
         }
 
         private int fsDebouncePostPending;

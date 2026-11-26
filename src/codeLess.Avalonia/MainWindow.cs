@@ -788,6 +788,7 @@ namespace codeLess.AvaloniaApp
                 ReleaseClosedTabReferences(tab);
             }
             openTabs.Clear();
+            openTabsSnapshot = Array.Empty<EditorTabBuffer>();
             editorMru.Clear();
             closedTabStates.Clear();
             activeTab = null;
@@ -3831,8 +3832,11 @@ namespace codeLess.AvaloniaApp
             RefreshAgentTrustBanner();
         }
 
+        private volatile EditorTabBuffer[] openTabsSnapshot = Array.Empty<EditorTabBuffer>();
+
         public void RefreshTabStrip()
         {
+            openTabsSnapshot = openTabs.ToArray();
             if (windowClosed || tabStripStack == null || currentTheme == null) return;
             tabStripStack.Children.Clear();
 

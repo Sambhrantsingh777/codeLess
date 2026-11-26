@@ -1133,6 +1133,86 @@ namespace codeLess.Avalonia.Tests
             }
         }
 
+        [AvaloniaFact]
+        public void E22_IsSelfSaveEcho_ConcurrentBackgroundThreadHammering_WhileUiThreadOpensAndClosesTabs_NeverThrows()
+        {
+            string ws = Path.Combine(_tempDir, "concurrent_self_save_ws");
+            Directory.CreateDirectory(ws);
+            var files = new List<string>(24);
+            for (int i = 0; i < 24; i++)
+            {
+                string fp = Path.Combine(ws, "Conc_" + i.ToString("D2") + ".cs");
+                File.WriteAllText(fp, "public class Conc" + i + " { public int X = " + i + "; }\n");
+                files.Add(fp);
+            }
+
+            var w = new MainWindow(ws) { SuppressUnsavedPrompts = true };
+            try
+            {
+                var isSelfSaveMethod = typeof(MainWindow).GetMethod("IsSelfSaveEcho", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var queueFsMethod = typeof(MainWindow).GetMethod("QueueFsChange", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.NotNull(isSelfSaveMethod);
+                Assert.NotNull(queueFsMethod);
+
+                int stopFlag = 0;
+                var bgExceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+                var workers = new Task[4];
+                for (int k = 0; k < workers.Length; k++)
+                {
+                    int workerId = k;
+                    workers[k] = Task.Run(() =>
+                    {
+                        int iter = 0;
+                        while (Volatile.Read(ref stopFlag) == 0)
+                        {
+                            try
+                            {
+                                string target = files[(iter + workerId) % files.Count];
+                                _ = (bool)isSelfSaveMethod.Invoke(w, new object[] { target });
+                                queueFsMethod.Invoke(w, new object[] { target, false });
+                                iter++;
+                            }
+                            catch (System.Reflection.TargetInvocationException tie)
+                            {
+                                bgExceptions.Add(tie.InnerException ?? tie);
+                            }
+                            catch (Exception ex)
+                            {
+                                bgExceptions.Add(ex);
+                            }
+                        }
+                    });
+                }
+
+                // UI thread rapidly opens, edits, saves, and closes tabs (Cmd+S + Cmd+W race window) while background threads hammer IsSelfSaveEcho
+                for (int round = 0; round < 15; round++)
+                {
+                    foreach (string fp in files)
+                    {
+                        var tab = w.OpenFileInTab(fp, preview: false);
+                        tab.Content = "public class ConcEdit { public int R = " + round + "; }\n";
+                        tab.SyncLinesFromContent();
+                        tab.IsDirty = true;
+                        w.SaveBufferToDisk(tab);
+                        w.CloseTab(tab, forceWithoutPrompt: true);
+                    }
+                    w.CreateNewUntitledTab();
+                    w.CloseAllTabs();
+                }
+
+                Volatile.Write(ref stopFlag, 1);
+                Task.WaitAll(workers, TimeSpan.FromSeconds(10));
+                Dispatcher.UIThread.RunJobs();
+                w.DrainOneShotDebounceTimers();
+
+                Assert.Empty(bgExceptions);
+            }
+            finally
+            {
+                w.Close();
+            }
+        }
+
         // =====================================================================
         // Sub-area 6: Hot-Exit / Backup Recovery & Corrupt Backup Resilience — E18..E20
         // =====================================================================
