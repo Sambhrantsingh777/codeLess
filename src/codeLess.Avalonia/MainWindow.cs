@@ -3497,22 +3497,38 @@ namespace codeLess.AvaloniaApp
                 }
                 if (!string.IsNullOrEmpty(tab.FilePath))
                 {
-                    lock (internalSaveTimestamps) { internalSaveTimestamps[tab.FilePath] = DateTime.UtcNow; }
+                    string resolvedTarget = EditorTabBuffer.ResolveSymlinkTargetPath(tab.FilePath);
+                    lock (internalSaveTimestamps)
+                    {
+                        DateTime now = DateTime.UtcNow;
+                        internalSaveTimestamps[tab.FilePath] = now;
+                        if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveTimestamps[resolvedTarget] = now;
+                    }
                 }
                 ApplySaveParticipants(tab);
                 tab.SyncContentFromLines();
                 var agentSave = BeginAgentTrackedSave(tab);
                 tab.WriteFilePreservingMetadata(tab.FilePath);
+                tab.SavedContent = tab.Content;
+                tab.RecordDiskBaseline(tab.FilePath);
+                if (!string.IsNullOrEmpty(tab.FilePath))
+                {
+                    string resolvedTarget = EditorTabBuffer.ResolveSymlinkTargetPath(tab.FilePath);
+                    lock (internalSaveTimestamps)
+                    {
+                        DateTime now = DateTime.UtcNow;
+                        internalSaveTimestamps[tab.FilePath] = now;
+                        if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveTimestamps[resolvedTarget] = now;
+                    }
+                }
                 EndAgentTrackedSave(agentSave, tab);
                 tab.PreDiffContent = null;
                 tab.DiffHunks?.Clear();
                 tab.SyncProposedDiffProjection();
-                tab.SavedContent = tab.Content;
                 tab.IsDirty = false;
                 tab.IsPreviewTab = false;
                 tab.IsDeletedOnDisk = false;
                 tab.HasExternalDiskConflict = false;
-                tab.RecordDiskBaseline(tab.FilePath);
                 pendingHotExitBackups.Remove(tab);
                 if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop();
                 HotExitService.DeleteBackup(workspaceRoot, tab);

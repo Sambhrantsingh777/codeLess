@@ -1377,7 +1377,15 @@ namespace codeLess.Studio
                 {
                     try { File.SetUnixFileMode(tmpPath, existingUnixMode); } catch { }
                 }
-                File.Move(tmpPath, targetPath, true);
+                if (existed && Path.DirectorySeparatorChar == '\\')
+                {
+                    try { File.Replace(tmpPath, targetPath, null, true); }
+                    catch { File.Move(tmpPath, targetPath, true); }
+                }
+                else
+                {
+                    File.Move(tmpPath, targetPath, true);
+                }
 #else
                 if (existed)
                 {

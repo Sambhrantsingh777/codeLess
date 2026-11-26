@@ -1060,6 +1060,79 @@ namespace codeLess.Avalonia.Tests
             }
         }
 
+        [AvaloniaFact]
+        public void E21_SelfSaveInWatchedWorkspace_SuppressesTreeRefreshReloadAndConflict_WhileDetectingSubsequentExternalEdit()
+        {
+            string ws = Path.Combine(_tempDir, "self_save_watched_ws");
+            Directory.CreateDirectory(ws);
+            string filePath = Path.Combine(ws, "WatchedApp.cs");
+            File.WriteAllText(filePath, "public class WatchedApp { public int X = 1; }\n");
+
+            var w = new MainWindow(ws) { SuppressUnsavedPrompts = true };
+            try
+            {
+                var tab = w.OpenFileInTab(filePath, preview: false);
+                Assert.NotNull(tab);
+
+                var fsTreeDirtyField = typeof(MainWindow).GetField("fsTreeDirty", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var fsChangedFilesField = typeof(MainWindow).GetField("fsChangedFiles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var onFsMethod = typeof(MainWindow).GetMethod("OnWorkspaceFsEvent", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var queueFsMethod = typeof(MainWindow).GetMethod("QueueFsChange", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.NotNull(fsTreeDirtyField);
+                Assert.NotNull(fsChangedFilesField);
+                Assert.NotNull(onFsMethod);
+                Assert.NotNull(queueFsMethod);
+
+                // Drain any initial workspace-load watcher events before testing self-save
+                Dispatcher.UIThread.RunJobs();
+                w.DrainOneShotDebounceTimers();
+                fsTreeDirtyField.SetValue(w, false);
+                ((HashSet<string>)fsChangedFilesField.GetValue(w)).Clear();
+
+                // Edit and save the open file in the watched workspace
+                tab.Content = "public class WatchedApp { public int X = 42; }\n";
+                tab.SyncLinesFromContent();
+                tab.IsDirty = true;
+                Assert.True(w.SaveBufferToDisk(tab));
+                Assert.False(tab.IsDirty);
+
+                // Simulate OS watcher events produced by atomic save:
+                // 1) Created/Changed on .WatchedApp.cs.codeless-tmp-12345678
+                // 2) Renamed(.WatchedApp.cs.codeless-tmp-12345678 -> WatchedApp.cs) -> QueueFsChange(filePath, structural: false)
+                // 3) Created(WatchedApp.cs) (in case the platform watcher reports Created instead of Renamed)
+                string tmpFake = Path.Combine(ws, ".WatchedApp.cs.codeless-tmp-12345678");
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Created, ws, Path.GetFileName(tmpFake)) });
+                queueFsMethod.Invoke(w, new object[] { filePath, false });
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Created, ws, Path.GetFileName(filePath)) });
+
+                // Self-save echo must be suppressed: no tree dirty flag, no queued file change, no reload, no conflict!
+                Assert.False((bool)fsTreeDirtyField.GetValue(w));
+                Assert.Empty((HashSet<string>)fsChangedFilesField.GetValue(w));
+                Dispatcher.UIThread.RunJobs();
+                w.DrainOneShotDebounceTimers();
+                Assert.False(tab.IsDirty);
+                Assert.False(tab.HasExternalDiskConflict);
+                Assert.Empty(w.NotificationsHistory);
+
+                // Now perform a genuine external edit immediately afterwards (within the 1500ms window!)
+                string externalText = "public class WatchedApp { public int X = 777; // external tool edit }\n";
+                File.WriteAllText(filePath, externalText);
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Changed, ws, Path.GetFileName(filePath)) });
+                Dispatcher.UIThread.RunJobs();
+                w.DrainOneShotDebounceTimers();
+                Dispatcher.UIThread.RunJobs();
+
+                // Genuine external edit on clean tab is immediately detected and reloaded:
+                Assert.Equal(externalText, tab.Content);
+                Assert.False(tab.IsDirty);
+                Assert.False(tab.HasExternalDiskConflict);
+            }
+            finally
+            {
+                w.Close();
+            }
+        }
+
         // =====================================================================
         // Sub-area 6: Hot-Exit / Backup Recovery & Corrupt Backup Resilience — E18..E20
         // =====================================================================

@@ -324,6 +324,16 @@ namespace codeLess.AvaloniaApp
                 w.Renamed += (s, e) =>
                 {
                     if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
+                    if (EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath))
+                    {
+                        // Atomic save renames .<name>.codeless-tmp-* -> <name>: treat as a non-structural Changed event on the target.
+                        if (!EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath))
+                        {
+                            self.lsp?.NotifyFileSystemChange(e.FullPath, LanguageServerManager.FileChanged);
+                            self.QueueFsChange(e.FullPath, structural: false);
+                        }
+                        return;
+                    }
                     self.OnWorkspaceFsEvent(s, e);
                     self.QueueFsChange(e.OldFullPath, structural: true);
                     self.lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
@@ -355,10 +365,32 @@ namespace codeLess.AvaloniaApp
 
         private void OnWorkspaceFsEvent(object sender, FileSystemEventArgs e)
         {
+            if (e == null || EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath)) return;
+            bool selfSave = e.ChangeType != WatcherChangeTypes.Deleted && IsSelfSaveEcho(e.FullPath);
             // Language servers that watch files (pyright, gopls, rust-analyzer) learn about git checkouts, agent writes etc.
             lsp?.NotifyFileSystemChange(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
-                : e.ChangeType == WatcherChangeTypes.Changed ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
-            QueueFsChange(e.FullPath, structural: e.ChangeType != WatcherChangeTypes.Changed);
+                : (e.ChangeType == WatcherChangeTypes.Changed || selfSave) ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
+            QueueFsChange(e.FullPath, structural: !selfSave && e.ChangeType != WatcherChangeTypes.Changed);
+        }
+
+        private bool IsSelfSaveEcho(string fullPath)
+        {
+            if (string.IsNullOrEmpty(fullPath)) return false;
+            bool recentSave = false;
+            lock (internalSaveTimestamps)
+            {
+                if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
+                    recentSave = true;
+            }
+            if (!recentSave) return false;
+            if (!File.Exists(fullPath)) return false;
+            var openTab = openTabs.FirstOrDefault(t => !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison));
+            if (openTab != null)
+            {
+                if (openTab.IsDeletedOnDisk || openTab.HasDiskModifiedExternally(out _))
+                    return false;
+            }
+            return true;
         }
 
         private int fsDebouncePostPending;
@@ -367,14 +399,7 @@ namespace codeLess.AvaloniaApp
         {
             if (string.IsNullOrEmpty(fullPath)) return;
             if (EditorTabBuffer.IsAtomicSaveTempFile(fullPath)) return;
-            if (!structural)
-            {
-                lock (internalSaveTimestamps)
-                {
-                    if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
-                        return;
-                }
-            }
+            if (IsSelfSaveEcho(fullPath)) return;
             string sep = Path.DirectorySeparatorChar.ToString();
             int gitIdx = fullPath.IndexOf(sep + ".git" + sep, StringComparison.Ordinal);
             bool insideGitDir = gitIdx >= 0 || fullPath.EndsWith(sep + ".git", StringComparison.Ordinal);
