@@ -96,11 +96,27 @@ namespace codeLess.Avalonia.Tests
             Assert.Equal(3, term.GridInvalidateCountForTest - inv0);
         }
 
-        private static void Settle()
+        private static void Settle(Window window = null)
         {
             Dispatcher.UIThread.RunJobs();
+            window?.UpdateLayout();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             Dispatcher.UIThread.RunJobs();
+            window?.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        private static void WaitUntil(Window window, Func<bool> condition, int timeoutMs = 5000)
+        {
+            Settle(window);
+            if (condition()) return;
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs && !condition())
+            {
+                System.Threading.Thread.Sleep(5);
+                Settle(window);
+            }
         }
 
         [AvaloniaFact]
@@ -115,12 +131,12 @@ namespace codeLess.Avalonia.Tests
             var window = new Window { Width = 800, Height = 400, Content = panel };
             window.Show();
             window.Activate();
-            Settle();
+            Settle(window);
             try
             {
                 term.FallbackBuffer.FeedText("$ echo hi");
                 term.SimulatePtyOutputForTest();
-                Settle();
+                WaitUntil(window, () => term.GridRenderCountForTest > 0);
                 Assert.True(term.GridRenderCountForTest > 0);
 
                 // unfocused: hollow outline at the cursor cell (terminal.integrated.cursorStyleInactive)
@@ -130,19 +146,20 @@ namespace codeLess.Avalonia.Tests
                 Assert.Equal(term.CellHeightForTest, rect.Height, 3);
 
                 term.FocusTerminalCanvas();
-                Settle();
+                WaitUntil(window, () => term.CursorHasFocus);
                 Assert.True(term.CursorHasFocus);
                 Assert.Equal("block", term.RenderCursorLayerForTest(out rect)); // VS Code default: steady block
                 Assert.Equal(term.CellWidthForTest, rect.Width, 3);
                 Assert.False(term.IsCursorBlinkTimerRunning); // terminal.integrated.cursorBlinking = false
 
                 // blink ticks repaint only the cursor layer: the compositor never re-renders the grid for them
-                Settle();
+                Settle(window);
                 long grid0 = term.GridInvalidateCountForTest, render0 = term.GridRenderCountForTest, layer0 = term.CursorLayerRenderCountForTest;
                 for (int i = 0; i < 6; i++)
                 {
+                    long before = term.CursorLayerRenderCountForTest;
                     term.TickCursorBlinkForTest();
-                    Settle();
+                    WaitUntil(window, () => term.CursorLayerRenderCountForTest > before, 1000);
                 }
                 Dispatcher.UIThread.RunJobs();
                 Assert.Equal(grid0, term.GridInvalidateCountForTest);
@@ -150,9 +167,10 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(term.CursorLayerRenderCountForTest >= layer0 + 3, "layer renders " + (term.CursorLayerRenderCountForTest - layer0));
 
                 // the application asks for a blinking bar (vim insert mode, DECSCUSR 5)
+                long renderBeforeBar = term.GridRenderCountForTest;
                 term.FallbackBuffer.FeedText("\x1b[5 q");
                 term.SimulatePtyOutputForTest();
-                Settle();
+                WaitUntil(window, () => term.GridRenderCountForTest > renderBeforeBar);
                 Assert.Equal("line", term.RenderCursorLayerForTest(out rect));
                 Assert.Equal(1, rect.Width, 3);
                 Assert.True(term.IsCursorBlinkTimerRunning);

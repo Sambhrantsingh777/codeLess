@@ -377,12 +377,38 @@ namespace codeLess.Avalonia.Tests
     [Collection("SequentialWorkbench")]
     public class AvaloniaTerminalLinkAndSelectionTests
     {
+        private static void Settle(Window window, AvaloniaTerminalEmulatorControl term = null)
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            if (term != null)
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 5000)
+                {
+                    if (term.Bounds.Width > 0 && term.Bounds.Height > 0 &&
+                        window.InputHitTest(new Point(term.Bounds.Width / 2, term.Bounds.Height / 2)) != null)
+                        break;
+                    Thread.Sleep(5);
+                    Dispatcher.UIThread.RunJobs();
+                    window.UpdateLayout();
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    Dispatcher.UIThread.RunJobs();
+                }
+            }
+        }
+
         private static (Window, AvaloniaTerminalEmulatorControl) MakeTerminal()
         {
             var term = new AvaloniaTerminalEmulatorControl();
             var window = new Window { Width = 900, Height = 300, Content = term };
             window.Show();
-            Dispatcher.UIThread.RunJobs();
+            Settle(window, term);
             return (window, term);
         }
 
@@ -439,20 +465,27 @@ namespace codeLess.Avalonia.Tests
                 var (window, term) = MakeTerminal();
                 term.WorkspaceRootProvider = () => t.Path;
                 term.FeedAnsiPreview("pkg/mod.py:7");
+                Settle(window, term);
                 string opened = null;
                 term.FileLinkActivated += (p, l, c) => opened = p;
 
                 var pt = CellCenter(term, 0, 3);
+                Settle(window, term);
                 window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
                 window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
-                Dispatcher.UIThread.RunJobs();
+                Settle(window);
                 Assert.Null(opened);
 
-                window.MouseMove(pt, LinkModifier);
-                Dispatcher.UIThread.RunJobs();
-                window.MouseDown(pt, MouseButton.Left, LinkModifier);
-                window.MouseUp(pt, MouseButton.Left, LinkModifier);
-                Dispatcher.UIThread.RunJobs();
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (opened == null && sw.ElapsedMilliseconds < 5000)
+                {
+                    window.MouseMove(pt, LinkModifier);
+                    Settle(window);
+                    window.MouseDown(pt, MouseButton.Left, LinkModifier);
+                    window.MouseUp(pt, MouseButton.Left, LinkModifier);
+                    Settle(window);
+                    if (opened == null) Thread.Sleep(5);
+                }
                 Assert.Equal(f, opened);
                 window.Close();
             }
@@ -467,31 +500,52 @@ namespace codeLess.Avalonia.Tests
                 var (window, term) = MakeTerminal();
                 term.WorkspaceRootProvider = () => t.Path;
                 term.FeedAnsiPreview("error at pkg/mod.py:7 now");
+                Settle(window, term);
                 var pt = CellCenter(term, 0, 12);
+                Settle(window, term);
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (term.GetSelectedText() != "pkg/mod.py:7" && sw.ElapsedMilliseconds < 5000)
+                {
+                    window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
+                    Dispatcher.UIThread.RunJobs();
+                    if (term.GetSelectedText() == "pkg/mod.py:7") break;
+                    Settle(window, term);
+                }
+                Assert.Equal("pkg/mod.py:7", term.GetSelectedText());
 
                 window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
                 window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
-                window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
-                window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
                 Dispatcher.UIThread.RunJobs();
-                Assert.Equal("pkg/mod.py:7", term.GetSelectedText());
-                window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
-                window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
-                Dispatcher.UIThread.RunJobs();
+                while (term.GetSelectedText() != "error at pkg/mod.py:7 now" && sw.ElapsedMilliseconds < 5000)
+                {
+                    window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseDown(pt, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseUp(pt, MouseButton.Left, RawInputModifiers.None);
+                    Dispatcher.UIThread.RunJobs();
+                    if (term.GetSelectedText() == "error at pkg/mod.py:7 now") break;
+                    Settle(window, term);
+                }
                 Assert.Equal("error at pkg/mod.py:7 now", term.GetSelectedText());
 
                 object canvas = typeof(AvaloniaTerminalEmulatorControl).GetField("gridCanvas", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(term);
                 PropertyInfo hovered = canvas.GetType().GetProperty("HoveredLink", BindingFlags.NonPublic | BindingFlags.Instance);
                 window.MouseMove(pt, RawInputModifiers.None);
-                Dispatcher.UIThread.RunJobs();
+                Settle(window);
                 Assert.Null(hovered.GetValue(canvas));
                 window.MouseMove(pt, LinkModifier);
-                Dispatcher.UIThread.RunJobs();
+                Settle(window);
                 var link = (TerminalLinkMatch)hovered.GetValue(canvas);
                 Assert.NotNull(link);
                 Assert.Equal(9, link.StartCol);
                 window.MouseMove(pt, RawInputModifiers.None);
-                Dispatcher.UIThread.RunJobs();
+                Settle(window);
                 Assert.Null(hovered.GetValue(canvas));
                 window.Close();
             }

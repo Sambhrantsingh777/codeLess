@@ -68,12 +68,27 @@ namespace codeLess.Avalonia.Tests
             // Input hit-testing uses the last rendered scene: tick the headless render timer so clicks hit fresh layout.
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             Dispatcher.UIThread.RunJobs();
+            w.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
         }
 
         private static void Click(MainWindow w, Control target, int clicks = 1)
         {
             ForceLayout(w);
-            var p = target.TranslatePoint(new Point(Math.Min(30, target.Bounds.Width / 2), target.Bounds.Height / 2), w);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Point? p = null;
+            while (sw.ElapsedMilliseconds < 5000)
+            {
+                if (target.Bounds.Width > 0 && target.Bounds.Height > 0)
+                {
+                    p = target.TranslatePoint(new Point(Math.Min(30, target.Bounds.Width / 2), target.Bounds.Height / 2), w);
+                    if (p.HasValue && w.InputHitTest(p.Value) != null)
+                        break;
+                }
+                System.Threading.Thread.Sleep(5);
+                ForceLayout(w);
+            }
             Assert.True(p.HasValue, "target is not in the visual tree");
             for (int i = 0; i < clicks; i++)
             {
@@ -86,10 +101,18 @@ namespace codeLess.Avalonia.Tests
         private static ListBoxItem ContainerFor(MainWindow w, SearchResultRow row)
         {
             var lb = w.WorkspaceSearchResultsListControl;
-            ForceLayout(w);
-            lb.ScrollIntoView(row);
-            ForceLayout(w);
-            var item = lb.GetVisualDescendants().OfType<ListBoxItem>().FirstOrDefault(i => ReferenceEquals(i.DataContext, row));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            ListBoxItem item = null;
+            while (sw.ElapsedMilliseconds < 5000)
+            {
+                ForceLayout(w);
+                lb.ScrollIntoView(row);
+                ForceLayout(w);
+                item = lb.GetVisualDescendants().OfType<ListBoxItem>().FirstOrDefault(i => ReferenceEquals(i.DataContext, row));
+                if (item != null && item.Bounds.Width > 0 && item.Bounds.Height > 0)
+                    break;
+                System.Threading.Thread.Sleep(5);
+            }
             if (item == null)
             {
                 var chain = string.Join(" <- ", lb.GetVisualAncestors().OfType<Control>().Take(8).Select(a => a.GetType().Name + "[" + a.Bounds.Width + "x" + a.Bounds.Height + (a.IsVisible ? "" : ",hidden") + "]"));

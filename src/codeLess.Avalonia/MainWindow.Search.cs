@@ -172,9 +172,25 @@ namespace codeLess.AvaloniaApp
                 }
             });
             ScrollViewer.SetHorizontalScrollBarVisibility(workspaceSearchResultsList, global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
-            // Tapped (not SelectionChanged): clicking the already-selected result again must re-open / re-reveal it.
+            // Handle search result clicks directly on PointerPressed (with Tapped/DoubleTapped fallback) so
+            // clicks are never dropped if SelectingItemsControl consumes PointerPressed or CPU load delays MouseUp.
+            bool searchRowHandledOnPointerPress = false;
+            workspaceSearchResultsList.AddHandler(InputElement.PointerPressedEvent, (s, e) =>
+            {
+                searchRowHandledOnPointerPress = false;
+                if (!e.GetCurrentPoint(workspaceSearchResultsList).Properties.IsLeftButtonPressed) return;
+                var row = SearchRowFromEvent(e.Source, e);
+                if (row == null) return;
+                searchRowHandledOnPointerPress = true;
+                workspaceSearchResultsList.SelectedItem = row;
+                if (row.IsFileHeader) ToggleSearchGroup(row.Group);
+                else if (e.ClickCount >= 2) ActivateSearchMatch(row.Match, preview: false, focusEditor: true);
+                else ActivateSearchMatch(row.Match, preview: true, focusEditor: false);
+                e.Handled = true;
+            }, RoutingStrategies.Bubble, handledEventsToo: true);
             workspaceSearchResultsList.Tapped += (s, e) =>
             {
+                if (searchRowHandledOnPointerPress) { e.Handled = true; return; }
                 var row = SearchRowFromSource(e.Source);
                 if (row == null) return;
                 if (row.IsFileHeader) ToggleSearchGroup(row.Group);
@@ -183,6 +199,7 @@ namespace codeLess.AvaloniaApp
             };
             workspaceSearchResultsList.DoubleTapped += (s, e) =>
             {
+                if (searchRowHandledOnPointerPress) { e.Handled = true; return; }
                 var row = SearchRowFromSource(e.Source);
                 if (row == null) return;
                 // The 2nd click of a double click raises DoubleTapped instead of Tapped: a header toggles again
@@ -648,6 +665,21 @@ namespace codeLess.AvaloniaApp
             var v = source as Visual;
             var item = v as ListBoxItem ?? v?.FindAncestorOfType<ListBoxItem>();
             return item?.DataContext as SearchResultRow;
+        }
+
+        private SearchResultRow SearchRowFromEvent(object source, PointerEventArgs e)
+        {
+            var row = SearchRowFromSource(source);
+            if (row != null) return row;
+            if (workspaceSearchResultsList == null || e == null) return null;
+            foreach (var item in workspaceSearchResultsList.GetVisualDescendants().OfType<ListBoxItem>())
+            {
+                if (!item.IsVisible || item.Bounds.Width <= 0 || item.Bounds.Height <= 0) continue;
+                var pt = e.GetPosition(item);
+                if (pt.X >= 0 && pt.Y >= 0 && pt.X <= item.Bounds.Width && pt.Y <= item.Bounds.Height)
+                    return item.DataContext as SearchResultRow;
+            }
+            return null;
         }
 
         private void OnSearchResultsKeyDown(object sender, KeyEventArgs e)

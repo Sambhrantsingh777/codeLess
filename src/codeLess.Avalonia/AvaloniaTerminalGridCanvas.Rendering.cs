@@ -584,6 +584,8 @@ namespace codeLess.AvaloniaApp
         internal bool TryGetCursor(out Rect cell, out string style, out bool blink, out TermCell under)
         {
             cell = default; style = TerminalCursorStyle.Block; blink = false; under = default;
+            if (snapshot.Version == 0 && owner?.ActiveBuffer != null)
+                TakeSnapshot(owner.ActiveBuffer);
             var snap = snapshot;
             if (snap.Version == 0 || !snap.CursorVisible || IsImeComposing) return false;
             int viewRow = snap.CursorRow + snap.ScrollbackOffset; // still on screen when scrolled back a little (xterm.js)
