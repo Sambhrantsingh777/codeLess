@@ -117,6 +117,15 @@ $coreSourceFiles = @(
     (Join-Path $projectRoot "src\VsixAndPluginHostEngine.cs")
 )
 
+# Echo csc output and surface compiler errors as GitHub Actions annotations (annotations are public; raw job logs need auth).
+filter Write-CscOutput {
+    $line = "$_"
+    Write-Host $line
+    if ($env:GITHUB_ACTIONS -eq 'true' -and $line -match 'error [A-Z]+[0-9]+') {
+        Write-Host ("::error title=csc::" + ($line -replace '%', '%25'))
+    }
+}
+
 # Bundled MIT TextMate grammars (src\codeLess.Core\Grammars\*.gz) are embedded as resources
 $grammarResources = @(Get-ChildItem -Path (Join-Path $projectRoot "src\codeLess.Core\Grammars") -Filter "*.gz" -ErrorAction SilentlyContinue |
     ForEach-Object { "/resource:$($_.FullName),codeLess.Grammars.$($_.Name)" })
@@ -131,7 +140,7 @@ $grammarResources = @(Get-ChildItem -Path (Join-Path $projectRoot "src\codeLess.
     /r:System.IO.Compression.FileSystem.dll `
     /r:System.Net.Http.dll `
     $grammarResources `
-    $coreSourceFiles
+    $coreSourceFiles | Write-CscOutput
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "codeLess.Core.dll compilation failed with exit code $LASTEXITCODE"
@@ -187,7 +196,7 @@ $sourceFiles = @(
     /r:System.IO.Compression.dll `
     /r:System.IO.Compression.FileSystem.dll `
     /r:Microsoft.VisualBasic.dll `
-    $sourceFiles
+    $sourceFiles | Write-CscOutput
 
 if ($LASTEXITCODE -eq 0) {
     $sizeKb = [Math]::Round((Get-Item $outExe).Length / 1KB, 1)
