@@ -381,7 +381,7 @@ namespace codeLess.Studio
             BracketFrame stack = start.Stack;
             PreprocBranchFrame preproc = start.Preproc;
             string heredocEnd = null;
-            int interpDepth = (mode == BracketLexState.ModeString || mode == BracketLexState.ModeVerbatim) ? start.CommentDepth : 0;
+            int interpDepth = (mode == BracketLexState.ModeString || mode == BracketLexState.ModeVerbatim) ? start.CommentDepth - 1 : -1;
             int n = s.Length;
             if (mode == BracketLexState.ModeCode && p.LineComment == "//")
             {
@@ -435,12 +435,12 @@ namespace codeLess.Studio
                         stack = new BracketFrame(stack, '$', lineIndex, i);
                         mode = BracketLexState.ModeCode;
                         quote = '\0';
-                        interpDepth = 0;
+                        interpDepth = -1;
                         cdepth = 0;
                         i += 2;
                         continue;
                     }
-                    if (p.InterpolatedStrings && quote != '`')
+                    if (p.InterpolatedStrings && quote != '`' && interpDepth >= 0)
                     {
                         if (c == '{')
                         {
@@ -467,7 +467,7 @@ namespace codeLess.Studio
                             continue;
                         }
                     }
-                    if (c == quote) { mode = BracketLexState.ModeCode; quote = '\0'; interpDepth = 0; cdepth = 0; }
+                    if (c == quote) { mode = BracketLexState.ModeCode; quote = '\0'; interpDepth = -1; cdepth = 0; }
                     i++;
                     continue;
                 }
@@ -489,7 +489,7 @@ namespace codeLess.Studio
                 }
                 if (mode == BracketLexState.ModeVerbatim)
                 {
-                    if (p.InterpolatedStrings)
+                    if (p.InterpolatedStrings && interpDepth >= 0)
                     {
                         if (c == '{')
                         {
@@ -519,7 +519,7 @@ namespace codeLess.Studio
                     {
                         if (i + 1 < n && s[i + 1] == '"') { i += 2; continue; }
                         mode = BracketLexState.ModeCode;
-                        interpDepth = 0;
+                        interpDepth = -1;
                         cdepth = 0;
                         i++;
                         continue;
@@ -579,7 +579,7 @@ namespace codeLess.Studio
                 if (p.CSharpVerbatim && c == '@' && i + 1 < n && s[i + 1] == '"')
                 {
                     mode = BracketLexState.ModeVerbatim;
-                    interpDepth = 0;
+                    interpDepth = -1;
                     cdepth = 0;
                     i += 2;
                     continue;
@@ -589,7 +589,7 @@ namespace codeLess.Studio
                 {
                     mode = BracketLexState.ModeVerbatim;
                     interpDepth = 0;
-                    cdepth = 0;
+                    cdepth = 1;
                     i += 3;
                     continue;
                 }
@@ -631,8 +631,9 @@ namespace codeLess.Studio
                 {
                     mode = BracketLexState.ModeString;
                     quote = c;
-                    interpDepth = 0;
-                    cdepth = 0;
+                    bool isInterp = c == '"' && p.InterpolatedStrings && HasInterpolatedStringPrefix(s, i, p.CSharpVerbatim);
+                    interpDepth = isInterp ? 0 : -1;
+                    cdepth = isInterp ? 1 : 0;
                     i++;
                     continue;
                 }
@@ -660,8 +661,9 @@ namespace codeLess.Studio
                     }
                     mode = BracketLexState.ModeString;
                     quote = '\'';
-                    interpDepth = 0;
-                    cdepth = 0;
+                    bool isInterp = p.InterpolatedStrings && HasInterpolatedStringPrefix(s, i, p.CSharpVerbatim);
+                    interpDepth = isInterp ? 0 : -1;
+                    cdepth = isInterp ? 1 : 0;
                     i++;
                     continue;
                 }
@@ -681,7 +683,7 @@ namespace codeLess.Studio
                         stack = stack.Parent;
                         mode = BracketLexState.ModeString;
                         quote = '`';
-                        interpDepth = 0;
+                        interpDepth = -1;
                         cdepth = 0;
                         i++;
                         continue;
@@ -727,17 +729,27 @@ namespace codeLess.Studio
                 {
                     mode = BracketLexState.ModeCode;
                     quote = '\0';
-                    interpDepth = 0;
+                    interpDepth = -1;
                 }
             }
             if (mode == BracketLexState.ModeString || mode == BracketLexState.ModeVerbatim)
-                cdepth = interpDepth;
+                cdepth = interpDepth + 1;
             data = d ?? BracketLineData.Empty;
             if (mode == start.Mode && quote == start.Quote && cdepth == start.CommentDepth &&
                 ReferenceEquals(stack, start.Stack) && PreprocBranchFrame.Same(preproc, start.Preproc) &&
                 string.Equals(heredocEnd, start.HeredocEnd, StringComparison.Ordinal))
                 return start;
             return new BracketLexState(mode, quote, cdepth, stack, preproc, heredocEnd);
+        }
+
+        private static bool HasInterpolatedStringPrefix(string s, int quoteIdx, bool csharpMode)
+        {
+            if (quoteIdx <= 0) return false;
+            if (csharpMode) return s[quoteIdx - 1] == '$';
+            char p1 = s[quoteIdx - 1];
+            if (p1 == 'f' || p1 == 'F') return true;
+            if ((p1 == 'r' || p1 == 'R') && quoteIdx >= 2 && (s[quoteIdx - 2] == 'f' || s[quoteIdx - 2] == 'F')) return true;
+            return false;
         }
 
         private static bool AtQuotes(string s, int idx, int n, char quote, int count)
