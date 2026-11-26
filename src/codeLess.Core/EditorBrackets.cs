@@ -95,7 +95,7 @@ namespace codeLess.Studio
                     else { p.ShellMode = true; }
                     break;
                 case ".yaml": case ".yml":
-                    p.LineComment = "#"; p.HashCommentNeedsSpace = true; p.IndentBased = true;
+                    p.LineComment = "#"; p.HashCommentNeedsSpace = true; p.IndentBased = true; p.ShellMode = true;
                     break;
                 case ".toml": case ".ini": case ".cfg": case ".conf": case ".properties": case ".env":
                     p.LineComment = "#"; p.LineComment2 = ";"; p.HashCommentNeedsSpace = true;
@@ -171,6 +171,36 @@ namespace codeLess.Studio
         }
     }
 
+    /// <summary>Tracks #if / #elif / #else / #endif conditional branches so braces opened in both branches don't double-push or underflow.</summary>
+    public sealed class PreprocBranchFrame
+    {
+        public readonly PreprocBranchFrame Parent;
+        public readonly BracketFrame EntryStack;
+        public readonly BracketFrame FirstBranchEndStack;
+        public readonly bool InElse;
+
+        public PreprocBranchFrame(PreprocBranchFrame parent, BracketFrame entryStack, BracketFrame firstBranchEndStack, bool inElse)
+        {
+            Parent = parent;
+            EntryStack = entryStack;
+            FirstBranchEndStack = firstBranchEndStack;
+            InElse = inElse;
+        }
+
+        public static bool Same(PreprocBranchFrame a, PreprocBranchFrame b)
+        {
+            while (true)
+            {
+                if (ReferenceEquals(a, b)) return true;
+                if (a == null || b == null || a.InElse != b.InElse) return false;
+                if (!BracketLexState.SameFrames(a.EntryStack, b.EntryStack)) return false;
+                if (!BracketLexState.SameFrames(a.FirstBranchEndStack, b.FirstBranchEndStack)) return false;
+                a = a.Parent;
+                b = b.Parent;
+            }
+        }
+    }
+
     public sealed class BracketLexState
     {
         public const int ModeCode = 0, ModeBlockComment = 1, ModeString = 2, ModeTriple = 3, ModeVerbatim = 4;
@@ -178,21 +208,26 @@ namespace codeLess.Studio
         public readonly char Quote;
         public readonly int CommentDepth;
         public readonly BracketFrame Stack;
+        public readonly PreprocBranchFrame Preproc;
+        public readonly string HeredocEnd;
 
         public BracketLexState(int mode, char quote, int commentDepth, BracketFrame stack)
+            : this(mode, quote, commentDepth, stack, null, null)
+        {
+        }
+
+        public BracketLexState(int mode, char quote, int commentDepth, BracketFrame stack, PreprocBranchFrame preproc, string heredocEnd)
         {
             Mode = mode;
             Quote = quote;
             CommentDepth = commentDepth;
             Stack = stack;
+            Preproc = preproc;
+            HeredocEnd = heredocEnd;
         }
 
-        public static bool Same(BracketLexState a, BracketLexState b)
+        public static bool SameFrames(BracketFrame x, BracketFrame y)
         {
-            if (ReferenceEquals(a, b)) return true;
-            if (a == null || b == null) return false;
-            if (a.Mode != b.Mode || a.Quote != b.Quote || a.CommentDepth != b.CommentDepth) return false;
-            BracketFrame x = a.Stack, y = b.Stack;
             while (true)
             {
                 if (ReferenceEquals(x, y)) return true;
@@ -201,6 +236,16 @@ namespace codeLess.Studio
                 x = x.Parent;
                 y = y.Parent;
             }
+        }
+
+        public static bool Same(BracketLexState a, BracketLexState b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null) return false;
+            if (a.Mode != b.Mode || a.Quote != b.Quote || a.CommentDepth != b.CommentDepth) return false;
+            if (!string.Equals(a.HeredocEnd, b.HeredocEnd, StringComparison.Ordinal)) return false;
+            if (!PreprocBranchFrame.Same(a.Preproc, b.Preproc)) return false;
+            return SameFrames(a.Stack, b.Stack);
         }
     }
 
@@ -313,12 +358,20 @@ namespace codeLess.Studio
         {
             BracketLexProfile p = Profile;
             string s = text ?? "";
+            if (!string.IsNullOrEmpty(start.HeredocEnd))
+            {
+                ctxAtStop = ContextString;
+                data = BracketLineData.Empty;
+                if (string.Equals(s.Trim(), start.HeredocEnd, StringComparison.Ordinal))
+                    return new BracketLexState(start.Mode, start.Quote, start.CommentDepth, start.Stack, start.Preproc, null);
+                return start;
+            }
             ctxAtStop = ContextOfMode(start.Mode);
             if (!p.Enabled || s.Length > MaxLineLength)
             {
                 data = BracketLineData.Empty;
                 // single-line strings never continue past the end of a line
-                if (start.Mode == BracketLexState.ModeString && start.Quote != '`') return new BracketLexState(BracketLexState.ModeCode, '\0', 0, start.Stack);
+                if (start.Mode == BracketLexState.ModeString && start.Quote != '`') return new BracketLexState(BracketLexState.ModeCode, '\0', 0, start.Stack, start.Preproc, null);
                 return start;
             }
             BracketLineData d = null;
@@ -326,8 +379,35 @@ namespace codeLess.Studio
             char quote = start.Quote;
             int cdepth = start.CommentDepth;
             BracketFrame stack = start.Stack;
-            int interpDepth = 0;
+            PreprocBranchFrame preproc = start.Preproc;
+            string heredocEnd = null;
+            int interpDepth = (mode == BracketLexState.ModeString || mode == BracketLexState.ModeVerbatim) ? start.CommentDepth - 1 : -1;
             int n = s.Length;
+            if (mode == BracketLexState.ModeCode && p.LineComment == "//")
+            {
+                string dir = TryReadPreprocessorDirective(s, n);
+                if (dir != null)
+                {
+                    data = BracketLineData.Empty;
+                    ctxAtStop = ContextCode;
+                    if (dir == "if" || dir == "ifdef" || dir == "ifndef")
+                        preproc = new PreprocBranchFrame(preproc, stack, null, false);
+                    else if ((dir == "elif" || dir == "else") && preproc != null)
+                    {
+                        BracketFrame firstEnd = preproc.InElse ? preproc.FirstBranchEndStack : stack;
+                        stack = preproc.EntryStack;
+                        preproc = new PreprocBranchFrame(preproc.Parent, preproc.EntryStack, firstEnd, true);
+                    }
+                    else if (dir == "endif" && preproc != null)
+                    {
+                        if (preproc.InElse && ReferenceEquals(stack, preproc.EntryStack) && !ReferenceEquals(preproc.FirstBranchEndStack, preproc.EntryStack))
+                            stack = preproc.FirstBranchEndStack;
+                        preproc = preproc.Parent;
+                    }
+                    if (ReferenceEquals(stack, start.Stack) && PreprocBranchFrame.Same(preproc, start.Preproc)) return start;
+                    return new BracketLexState(mode, quote, cdepth, stack, preproc, null);
+                }
+            }
             int i = 0;
             while (i < n)
             {
@@ -355,10 +435,12 @@ namespace codeLess.Studio
                         stack = new BracketFrame(stack, '$', lineIndex, i);
                         mode = BracketLexState.ModeCode;
                         quote = '\0';
+                        interpDepth = -1;
+                        cdepth = 0;
                         i += 2;
                         continue;
                     }
-                    if (p.InterpolatedStrings && quote != '`')
+                    if (p.InterpolatedStrings && quote != '`' && interpDepth >= 0)
                     {
                         if (c == '{')
                         {
@@ -385,19 +467,32 @@ namespace codeLess.Studio
                             continue;
                         }
                     }
-                    if (c == quote) { mode = BracketLexState.ModeCode; quote = '\0'; interpDepth = 0; }
+                    if (c == quote)
+                    {
+                        if (quote == '\'' && p.IndentBased && p.ShellMode && i + 1 < n && s[i + 1] == '\'')
+                        {
+                            i += 2;
+                            continue;
+                        }
+                        mode = BracketLexState.ModeCode;
+                        quote = '\0';
+                        interpDepth = -1;
+                        cdepth = 0;
+                    }
                     i++;
                     continue;
                 }
                 if (mode == BracketLexState.ModeTriple)
                 {
                     if (c == '\\' && (!p.CSharpVerbatim || quote != '"')) { i += 2; continue; }
-                    if (c == quote && i + 2 < n && s[i + 1] == quote && s[i + 2] == quote)
+                    int needed = Math.Max(3, cdepth);
+                    if (c == quote && AtQuotes(s, i, n, quote, needed))
                     {
-                        i += 3;
+                        i += needed;
                         while (p.CSharpVerbatim && i < n && s[i] == quote) i++;
                         mode = BracketLexState.ModeCode;
                         quote = '\0';
+                        cdepth = 0;
                         continue;
                     }
                     i++;
@@ -405,7 +500,7 @@ namespace codeLess.Studio
                 }
                 if (mode == BracketLexState.ModeVerbatim)
                 {
-                    if (p.InterpolatedStrings)
+                    if (p.InterpolatedStrings && interpDepth >= 0)
                     {
                         if (c == '{')
                         {
@@ -435,7 +530,8 @@ namespace codeLess.Studio
                     {
                         if (i + 1 < n && s[i + 1] == '"') { i += 2; continue; }
                         mode = BracketLexState.ModeCode;
-                        interpDepth = 0;
+                        interpDepth = -1;
+                        cdepth = 0;
                         i++;
                         continue;
                     }
@@ -453,7 +549,8 @@ namespace codeLess.Studio
                 }
                 if (p.LineComment != null && At(s, i, p.LineComment))
                 {
-                    if (!(p.HashCommentNeedsSpace && p.LineComment == "#" && i > 0 && !char.IsWhiteSpace(s[i - 1])))
+                    bool urlDoubleSlash = p.LineComment == "//" && i > 0 && s[i - 1] == ':';
+                    if (!urlDoubleSlash && !(p.HashCommentNeedsSpace && p.LineComment == "#" && i > 0 && !char.IsWhiteSpace(s[i - 1])))
                     {
                         if (stopCol >= 0) { ctxAtStop = ContextComment; data = BracketLineData.Empty; return start; }
                         break;
@@ -469,17 +566,32 @@ namespace codeLess.Studio
                     i++;
                     continue;
                 }
+                if (p.ShellMode && c == '<' && i + 1 < n && s[i + 1] == '<' && (i + 2 >= n || s[i + 2] != '<') && (i == 0 || s[i - 1] != '<'))
+                {
+                    int nextIdx;
+                    string hd = TryParseShellHeredoc(s, i + 2, n, out nextIdx);
+                    if (hd != null)
+                    {
+                        heredocEnd = hd;
+                        i = nextIdx;
+                        continue;
+                    }
+                }
                 if (p.TripleQuotes && (c == '"' || c == '\'') && i + 2 < n && s[i + 1] == c && s[i + 2] == c)
                 {
                     mode = BracketLexState.ModeTriple;
                     quote = c;
+                    int qCount = 3;
                     i += 3;
-                    while (p.CSharpVerbatim && i < n && s[i] == c) i++;
+                    while (p.CSharpVerbatim && i < n && s[i] == c) { qCount++; i++; }
+                    cdepth = qCount;
                     continue;
                 }
                 if (p.CSharpVerbatim && c == '@' && i + 1 < n && s[i + 1] == '"')
                 {
                     mode = BracketLexState.ModeVerbatim;
+                    interpDepth = -1;
+                    cdepth = 0;
                     i += 2;
                     continue;
                 }
@@ -487,6 +599,8 @@ namespace codeLess.Studio
                                          (c == '@' && i + 2 < n && s[i + 1] == '$' && s[i + 2] == '"')))
                 {
                     mode = BracketLexState.ModeVerbatim;
+                    interpDepth = 0;
+                    cdepth = 1;
                     i += 3;
                     continue;
                 }
@@ -528,7 +642,9 @@ namespace codeLess.Studio
                 {
                     mode = BracketLexState.ModeString;
                     quote = c;
-                    interpDepth = 0;
+                    bool isInterp = c == '"' && p.InterpolatedStrings && HasInterpolatedStringPrefix(s, i, p.CSharpVerbatim);
+                    interpDepth = isInterp ? 0 : -1;
+                    cdepth = isInterp ? 1 : 0;
                     i++;
                     continue;
                 }
@@ -549,14 +665,16 @@ namespace codeLess.Studio
                         i++; // lifetime / stray quote
                         continue;
                     }
-                    if (p.JsxMode && ((i > 0 && (char.IsLetterOrDigit(s[i - 1]) || s[i - 1] == '_')) || !HasUnescapedQuoteOnLine(s, i + 1, n, '\'')))
+                    if ((p.JsxMode || p.ShellMode) && ((i > 0 && (char.IsLetterOrDigit(s[i - 1]) || s[i - 1] == '_')) || !HasUnescapedQuoteOnLine(s, i + 1, n, '\'')))
                     {
                         i++;
                         continue;
                     }
                     mode = BracketLexState.ModeString;
                     quote = '\'';
-                    interpDepth = 0;
+                    bool isInterp = p.InterpolatedStrings && HasInterpolatedStringPrefix(s, i, p.CSharpVerbatim);
+                    interpDepth = isInterp ? 0 : -1;
+                    cdepth = isInterp ? 1 : 0;
                     i++;
                     continue;
                 }
@@ -576,10 +694,17 @@ namespace codeLess.Studio
                         stack = stack.Parent;
                         mode = BracketLexState.ModeString;
                         quote = '`';
+                        interpDepth = -1;
+                        cdepth = 0;
                         i++;
                         continue;
                     }
                     if (p.JsxMode && c == ')' && IsJsxProseParen(s, i, n))
+                    {
+                        i++;
+                        continue;
+                    }
+                    if (p.ShellMode && c == ')' && IsShellCasePatternParen(s, i, stack, lineIndex))
                     {
                         i++;
                         continue;
@@ -608,10 +733,98 @@ namespace codeLess.Studio
                 i++;
             }
             if (stopCol >= 0) ctxAtStop = ContextOfMode(mode); // caret at / past the end of the line (an open string is still a string)
-            if (mode == BracketLexState.ModeString && quote != '`') { mode = BracketLexState.ModeCode; quote = '\0'; }
+            bool lineContinued = i > n;
+            if (mode == BracketLexState.ModeString && quote != '`')
+            {
+                if (!lineContinued && !(p.InterpolatedStrings && interpDepth > 0))
+                {
+                    mode = BracketLexState.ModeCode;
+                    quote = '\0';
+                    interpDepth = -1;
+                }
+            }
+            if (mode == BracketLexState.ModeString || mode == BracketLexState.ModeVerbatim)
+                cdepth = interpDepth + 1;
             data = d ?? BracketLineData.Empty;
-            if (mode == start.Mode && quote == start.Quote && cdepth == start.CommentDepth && ReferenceEquals(stack, start.Stack)) return start;
-            return new BracketLexState(mode, quote, cdepth, stack);
+            if (mode == start.Mode && quote == start.Quote && cdepth == start.CommentDepth &&
+                ReferenceEquals(stack, start.Stack) && PreprocBranchFrame.Same(preproc, start.Preproc) &&
+                string.Equals(heredocEnd, start.HeredocEnd, StringComparison.Ordinal))
+                return start;
+            return new BracketLexState(mode, quote, cdepth, stack, preproc, heredocEnd);
+        }
+
+        private static bool HasInterpolatedStringPrefix(string s, int quoteIdx, bool csharpMode)
+        {
+            if (quoteIdx <= 0) return false;
+            if (csharpMode) return s[quoteIdx - 1] == '$';
+            char p1 = s[quoteIdx - 1];
+            if (p1 == 'f' || p1 == 'F') return true;
+            if ((p1 == 'r' || p1 == 'R') && quoteIdx >= 2 && (s[quoteIdx - 2] == 'f' || s[quoteIdx - 2] == 'F')) return true;
+            return false;
+        }
+
+        private static bool AtQuotes(string s, int idx, int n, char quote, int count)
+        {
+            if (idx + count > n) return false;
+            for (int k = 0; k < count; k++) if (s[idx + k] != quote) return false;
+            return true;
+        }
+
+        private static string TryReadPreprocessorDirective(string s, int n)
+        {
+            int i = 0;
+            while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+            if (i >= n || s[i] != '#') return null;
+            i++;
+            while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+            int start = i;
+            while (i < n && char.IsLetter(s[i])) i++;
+            if (i == start) return null;
+            string word = s.Substring(start, i - start);
+            if (word == "if" || word == "ifdef" || word == "ifndef" || word == "elif" || word == "else" || word == "endif")
+                return word;
+            return null;
+        }
+
+        private static string TryParseShellHeredoc(string s, int idx, int n, out int nextIdx)
+        {
+            nextIdx = idx;
+            int i = idx;
+            if (i < n && s[i] == '-') i++;
+            while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+            if (i >= n) return null;
+            char q = '\0';
+            if (s[i] == '\'' || s[i] == '"') { q = s[i]; i++; }
+            else if (s[i] == '\\') i++;
+            int start = i;
+            while (i < n && (char.IsLetterOrDigit(s[i]) || s[i] == '_' || s[i] == '-')) i++;
+            if (i == start) return null;
+            string delim = s.Substring(start, i - start);
+            if (q != '\0')
+            {
+                if (i >= n || s[i] != q) return null;
+                i++;
+            }
+            nextIdx = i;
+            return delim;
+        }
+
+        private static bool IsShellCasePatternParen(string s, int idx, BracketFrame stack, int lineIndex)
+        {
+            if (stack != null && stack.Open == '(' && stack.Line == lineIndex) return false;
+            int first = 0;
+            for (int k = idx - 1; k >= 1; k--)
+            {
+                if (s[k] == ';' && s[k - 1] == ';') { first = k + 1; break; }
+            }
+            while (first < idx && (s[first] == ' ' || s[first] == '\t')) first++;
+            if (first == idx) return false; // standalone ')' closing a multi-line subshell / $(...)
+            for (int k = first; k < idx; k++)
+            {
+                char ch = s[k];
+                if (ch == '(' || ch == ';' || ch == '=') return false;
+            }
+            return true;
         }
 
         private static bool HasUnescapedQuoteOnLine(string s, int from, int n, char q)
@@ -626,6 +839,15 @@ namespace codeLess.Studio
 
         private static bool IsJsxProseParen(string s, int idx, int n)
         {
+            int first = 0;
+            while (first < idx && (s[first] == ' ' || s[first] == '\t')) first++;
+            if (first < idx && idx - first <= 3 && idx + 1 < n && s[idx + 1] == ' ')
+            {
+                bool listMarker = true;
+                for (int k = first; k < idx; k++)
+                    if (!char.IsLetterOrDigit(s[k])) { listMarker = false; break; }
+                if (listMarker) return true;
+            }
             int closeTag = s.IndexOf("</", idx + 1, StringComparison.Ordinal);
             if (closeTag < 0) return false;
             for (int k = idx + 1; k < closeTag; k++)
