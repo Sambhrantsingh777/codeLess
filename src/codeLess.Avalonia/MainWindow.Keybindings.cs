@@ -305,7 +305,6 @@ namespace codeLess.AvaloniaApp
         private bool DispatchKeybinding(Key key, KeyModifiers modifiers, bool isTerminalFocus)
         {
             if (keybindings == null || isDispatchingCommandKey) return false;
-            if ((DateTime.UtcNow - lastCtrlKChordTime).TotalMilliseconds < 3500) return false;
             if (MacKeymap.ForceMacKeymapOverride.HasValue &&
                 MacKeymap.ForceMacKeymapOverride.Value != System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
             {
@@ -316,16 +315,33 @@ namespace codeLess.AvaloniaApp
                 keybindings.SetPlatform(MacKeymap.IsMacOS, KeybindingManager.IsLinux);
             }
             string ks = KeyStringParser.FromKeyName(key.ToString(), (int)modifiers);
+            if ((DateTime.UtcNow - lastCtrlKChordTime).TotalMilliseconds < 3500)
+            {
+                if (keybindings.HasPendingChord && keybindings.HasBoundChordMatch(ks, contextKeyService))
+                {
+                    lastCtrlKChordTime = DateTime.MinValue;
+                }
+                else
+                {
+                    keybindings.CancelPendingChord();
+                    return false;
+                }
+            }
             isDispatchingCommandKey = true;
             try
             {
-                return keybindings.Dispatch(ks, contextKeyService, msg =>
+                bool handled = keybindings.Dispatch(ks, contextKeyService, msg =>
                 {
                     if (!string.IsNullOrEmpty(msg))
                         statusChordLabel.Text = msg;
                     else
                         statusChordLabel.Text = "";
                 }, isTerminalFocus);
+                if (handled && keybindings.HasPendingChord)
+                {
+                    lastCtrlKChordTime = DateTime.UtcNow;
+                }
+                return handled;
             }
             finally
             {

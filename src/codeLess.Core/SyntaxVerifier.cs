@@ -59,6 +59,32 @@ namespace codeLess.Studio
                     .Where(d => d.Severity == DiagnosticSeverity.Error)
                     .Take(5)
                     .ToList();
+                if (errors.Count > 0 && !string.IsNullOrEmpty(content) && content.IndexOf("#if", StringComparison.Ordinal) >= 0)
+                {
+                    HashSet<string> symbols = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (Match m in Regex.Matches(content, @"^\s*#(?:if|elif)\b([^\r\n]*)", RegexOptions.Multiline))
+                    {
+                        foreach (Match id in Regex.Matches(m.Groups[1].Value, @"\b[A-Za-z_][A-Za-z0-9_]*\b"))
+                        {
+                            string sym = id.Value;
+                            if (sym != "true" && sym != "false") symbols.Add(sym);
+                        }
+                    }
+                    if (symbols.Count > 0)
+                    {
+                        CSharpParseOptions withSyms = parseOptions.WithPreprocessorSymbols(symbols);
+                        SyntaxTree treeWithSyms = CSharpSyntaxTree.ParseText(content, withSyms);
+                        var symErrors = treeWithSyms.GetDiagnostics()
+                            .Where(d => d.Severity == DiagnosticSeverity.Error)
+                            .Take(5)
+                            .ToList();
+                        if (symErrors.Count == 0) return true;
+                    }
+                    // Also check if preprocessor branches individually balance via PreprocBranchFrame in EditorBracketCache
+                    string bracketErr;
+                    if (VerifyBracketsWithProfile(".cs", content, out bracketErr))
+                        return true;
+                }
                 if (errors.Count > 0)
                 {
                     StringBuilder sb = new StringBuilder();
