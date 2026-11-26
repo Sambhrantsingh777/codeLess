@@ -136,10 +136,11 @@ namespace codeLess.Avalonia.Tests
                 return "Should have been cancelled";
             };
 
-            var sw = Stopwatch.StartNew();
             var parentTurnTask = harness.RunAutonomousAgentLoopAsync("build", "start", null, "auto", null, _testDir, new List<string>(), new List<string>());
 
             await childStarted.Task;
+            // Measure cancellation latency only (from Stop to the parent turn returning), not agent-loop startup/JIT time.
+            var sw = Stopwatch.StartNew();
             harness.CancelStreamingRequested = true;
 
             var res = await parentTurnTask;
