@@ -179,6 +179,8 @@ $sourceFiles = @(
     "src\WorkspaceTrustWinForms.cs",
     "src\CodeLessMainForm.Menus.cs",
     "src\CodeLessMainForm.EditorSwitcher.cs",
+    "src\CodeLessMainForm.IWorkbenchWindow.cs",
+    "src\CodeLessMainForm.MultiWindowContext.cs",
     "src\CodeLessMainForm.cs"
 )
 
@@ -195,6 +197,7 @@ $sourceFiles = @(
     /r:System.Web.Extensions.dll `
     /r:System.IO.Compression.dll `
     /r:System.IO.Compression.FileSystem.dll `
+    /r:System.Net.Http.dll `
     /r:Microsoft.VisualBasic.dll `
     $sourceFiles | Write-CscOutput
 

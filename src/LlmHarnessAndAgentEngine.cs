@@ -2241,7 +2241,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
             if (CustomModelResponder != null)
             {
                 if (IsCancellationRequested) return "";
-                Task<string> respTask = Task.Run(() => CustomModelResponder(systemPrompt, conversationMessages));
+                Task<string> respTask = Task.Run<string>(() => CustomModelResponder(systemPrompt, conversationMessages));
                 while (!respTask.IsCompleted)
                 {
                     if (IsCancellationRequested) return "";
@@ -2276,7 +2276,7 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                 try {
                     ret = await ApiRetryHandler.ExecuteWithRetriesAsync(async () =>
                     {
-                return await Task.Run(() =>
+                return await Task.Run<string>(() =>
                 {
                     JavaScriptSerializer ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
                 string endpoint = vendor.Id == "anthropic"

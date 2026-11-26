@@ -1479,5 +1479,59 @@ namespace codeLess.Avalonia.Tests
                 w.Close();
             }
         }
+
+        [Fact]
+        public void E24_CompilePs1SourceFilesList_IncludesAllWinFormsSourceFiles_And_MatchesWinFormsCheck()
+        {
+            string dir = AppContext.BaseDirectory;
+            string repoRoot = null;
+            while (!string.IsNullOrEmpty(dir))
+            {
+                if (File.Exists(Path.Combine(dir, "Compile.ps1")) && Directory.Exists(Path.Combine(dir, "src")))
+                {
+                    repoRoot = dir;
+                    break;
+                }
+                dir = Path.GetDirectoryName(dir);
+            }
+            Assert.NotNull(repoRoot);
+
+            string compilePs1 = File.ReadAllText(Path.Combine(repoRoot, "Compile.ps1"));
+            var allListed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(compilePs1, @"src\\[A-Za-z0-9_.]+\.cs"))
+            {
+                allListed.Add(m.Value.Replace('\\', '/'));
+            }
+
+            int sourceFilesStart = compilePs1.IndexOf("$sourceFiles = @(", StringComparison.Ordinal);
+            Assert.True(sourceFilesStart >= 0, "$sourceFiles block not found in Compile.ps1");
+            int sourceFilesEnd = compilePs1.IndexOf(")", sourceFilesStart, StringComparison.Ordinal);
+            Assert.True(sourceFilesEnd > sourceFilesStart);
+            string sourceFilesBlock = compilePs1.Substring(sourceFilesStart, sourceFilesEnd - sourceFilesStart);
+            var winFormsListed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(sourceFilesBlock, @"src\\[A-Za-z0-9_.]+\.cs"))
+            {
+                string rel = m.Value.Replace('\\', '/');
+                winFormsListed.Add(rel);
+                Assert.True(File.Exists(Path.Combine(repoRoot, rel.Replace('/', Path.DirectorySeparatorChar))),
+                    "Compile.ps1 $sourceFiles references non-existent file: " + rel);
+            }
+
+            foreach (string fullPath in Directory.GetFiles(Path.Combine(repoRoot, "src"), "*.cs", SearchOption.TopDirectoryOnly))
+            {
+                string fileName = Path.GetFileName(fullPath);
+                string rel = "src/" + fileName;
+                Assert.True(allListed.Contains(rel),
+                    "WinForms/Core source file '" + rel + "' is missing from Compile.ps1 (causes Windows CI csc.exe failure while wildcard globs pass)");
+
+                if (fileName.StartsWith("CodeLessMainForm", StringComparison.Ordinal) ||
+                    fileName.StartsWith("CodeLessEditorCanvas", StringComparison.Ordinal) ||
+                    fileName.StartsWith("LanguageServerWinForms", StringComparison.Ordinal))
+                {
+                    Assert.True(winFormsListed.Contains(rel),
+                        "WinForms partial file '" + rel + "' must be listed in $sourceFiles of Compile.ps1");
+                }
+            }
+        }
     }
 }
