@@ -879,8 +879,19 @@ namespace codeLess.AvaloniaApp
             {
                 CommandPalette.AllEntries?.Clear();
                 CommandPalette.FilteredEntries?.Clear();
+                CommandPalette.FileEntriesProvider = null;
+                CommandPalette.CommandEntriesProvider = null;
+                CommandPalette.EditorSymbolEntriesProvider = null;
+                CommandPalette.WorkspaceSymbolEntriesProvider = null;
+                CommandPalette.QuickOpenFileSearch = null;
+                CommandPalette.CustomModeHint = null;
                 if (CommandPalette.ResultsListBox != null) CommandPalette.ResultsListBox.ItemsSource = null;
             }
+            savedSymbolPreviewState = (null, 0, 0, 0);
+            navHistory.Clear();
+            closedTabHistory.Clear();
+            workspaceIgnoreRules = null;
+            quickOpenIndex = null;
             focusedEditorBufferForAutoSave = null;
             pendingDebouncedBuffer = null;
             lastRenderedTabRef = null;
@@ -3271,6 +3282,7 @@ namespace codeLess.AvaloniaApp
             if (ReferenceEquals(lastDebugDecoratedTab, tab)) lastDebugDecoratedTab = null;
             if (ReferenceEquals(hunkPopupBuffer, tab)) hunkPopupBuffer = null;
             if (ReferenceEquals(focusedEditorBufferForAutoSave, tab)) focusedEditorBufferForAutoSave = null;
+            if (ReferenceEquals(savedSymbolPreviewState.Tab, tab)) savedSymbolPreviewState = (null, 0, 0, 0);
             if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, tab))
             {
                 var fallback = openTabs.FirstOrDefault(t => !ReferenceEquals(t, tab));

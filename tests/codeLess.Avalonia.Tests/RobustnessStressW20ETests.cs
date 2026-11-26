@@ -138,6 +138,7 @@ namespace codeLess.Avalonia.Tests
                     Directory.Delete(_tempDir, true);
             }
             catch { }
+            ForceFullGc();
         }
 
         private static void RenderCanvasOnce(AvaloniaVirtualEditorCanvas canvas)
