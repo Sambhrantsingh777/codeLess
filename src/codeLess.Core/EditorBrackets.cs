@@ -467,7 +467,18 @@ namespace codeLess.Studio
                             continue;
                         }
                     }
-                    if (c == quote) { mode = BracketLexState.ModeCode; quote = '\0'; interpDepth = -1; cdepth = 0; }
+                    if (c == quote)
+                    {
+                        if (quote == '\'' && p.IndentBased && p.ShellMode && i + 1 < n && s[i + 1] == '\'')
+                        {
+                            i += 2;
+                            continue;
+                        }
+                        mode = BracketLexState.ModeCode;
+                        quote = '\0';
+                        interpDepth = -1;
+                        cdepth = 0;
+                    }
                     i++;
                     continue;
                 }

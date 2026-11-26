@@ -623,31 +623,60 @@ namespace Demo.Conditional
     }
 
     // =========================================================================
-    // F14: YAML workflow / config with comments, block scalars, flow sequences
+    // F14: YAML workflow / docker-compose / config with merge keys (<<: *defaults,
+    // <<: [*a, *b]), plain scalars with apostrophes, '' single-quote escapes,
+    // # inside quotes, multi-line flow maps, and GitHub Actions run: | with
+    // heredocs and case statements
     // =========================================================================
     [AvaloniaFact]
-    public void F14_Yaml_WorkflowWithBlockScalarsAndFlowCollections()
+    public void F14_Yaml_MergeKeys_SingleQuoteEscapes_MultiLineFlowMaps_And_RunHeredocCase()
     {
         const string code = """
-            name: CI Verify
-            on:
-              push:
-                branches: [main, release/*]
-              pull_request:
-                types: [opened, synchronize]
+            x-defaults: &defaults
+              restart: unless-stopped
+              logging: &log_opts
+                driver: "json-file"
+
+            x-extra: &extra
+              environment:
+                MODE: "prod"
+
+            services:
+              api:
+                <<: *defaults
+                image: ghcr.io/example/api:latest
+                command: ["sh", "-c", "echo $${X}"]
+                description: don't (maybe) stop
+                escaped_single: 'it''s a single-quoted scalar with unmatched ( [ { inside'
+                quoted_hash: "a # not comment with unmatched ( [ {"
+                flow_map: {
+                  a: [
+                    1,
+                    2
+                  ],
+                  b: { nested: [3, 4] }
+                }
+              worker:
+                <<: [*defaults, *extra]
+                command: ["sh", "-c", "echo $${WORKER_ID:-0}"]
 
             jobs:
               build:
                 runs-on: ubuntu-latest
-                env:
-                  DOTNET_NOLOGO: "true"
                 steps:
                   - name: Checkout
                     uses: actions/checkout@v4
-                  - name: Run script
+                  - name: Run script with heredoc and case
                     run: |
-                      echo " Building (step [1/2]) "
-                      dotnet --info
+                      cat <<'EOF' > /tmp/banner.txt
+                      Unmatched ( [ { inside YAML embedded heredoc
+                      EOF
+                      for f in *; do
+                        case "$f" in
+                          *.asc|*.sigstore.json) continue ;;
+                          *) echo "signing ($f)" ;;
+                        esac
+                      done
             """;
 
         AssertZeroFalsePositivesForBuffer("F14", "ci.yml", code);
