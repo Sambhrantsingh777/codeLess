@@ -1242,6 +1242,61 @@ namespace codeLess.Avalonia.Tests
         }
 
         [Fact]
+        public void C45_InitializeTimeout_IntentionalKill_PreservesInitializeFailedMessage_AfterProcessExits_And_DoesNotCountCrashRestart()
+        {
+            string line = LanguageServerManagerTests.FakeServerCommandLine(out bool available);
+            if (!available) return;
+            using (var mgr = new LanguageServerManager(a => a()))
+            {
+                mgr.SetWorkspaceRoot(tempDir);
+                mgr.InitializeTimeoutMs = 150;
+                mgr.MaxRestarts = 3; // even with auto-restart enabled, an intentional init-timeout kill must not count as a crash restart
+                mgr.RestartBackoffMs = 30;
+                mgr.UserSettingsProvider = () => LanguageServerUserSettings.Parse("python = " + line + " --init-delay-ms 3000", false);
+
+                string f = Path.Combine(tempDir, "timeout_race.py");
+                File.WriteAllText(f, "x = 1\n");
+                mgr.OpenDocument(f, () => "x = 1\n");
+
+                var inst = mgr.GetInstanceForPath(f);
+                Assert.NotNull(inst);
+
+                // Capture the spawned process while it is starting so we can wait for its exit and deterministically replay OnProcessExited
+                var procField = typeof(LanguageServerInstance).GetField("Process", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Process spawnedProc = null;
+                var sw = Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < 5000 && mgr.GetStatus(f)?.State != LanguageServerState.Error)
+                {
+                    if (spawnedProc == null && procField != null)
+                        spawnedProc = procField.GetValue(inst) as Process;
+                    Thread.Sleep(15);
+                }
+
+                Assert.Equal(LanguageServerState.Error, mgr.GetStatus(f).State);
+                Assert.Contains("initialize failed", mgr.GetStatus(f).Message);
+
+                if (spawnedProc != null)
+                {
+                    try { spawnedProc.WaitForExit(3000); } catch { }
+                }
+
+                // Deterministically simulate a late OS Process.Exited callback firing for generation 1 (the Windows CI race)
+                var onExitedMethod = typeof(LanguageServerManager).GetMethod(
+                    "OnProcessExited",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.NotNull(onExitedMethod);
+                onExitedMethod.Invoke(mgr, new object[] { inst, spawnedProc, 1 });
+
+                Thread.Sleep(120);
+                var statusAfterExit = mgr.GetStatus(f);
+                Assert.Equal(LanguageServerState.Error, statusAfterExit.State);
+                Assert.Contains("initialize failed", statusAfterExit.Message);
+                Assert.DoesNotContain("exited unexpectedly", statusAfterExit.Message);
+                Assert.Equal(0, inst.RestartCount);
+            }
+        }
+
+        [Fact]
         public void C44_RestrictedMode_BlocksWorkspaceLocalExecutables_And_StartsWhenWorkspaceTrusted()
         {
             string line = LanguageServerManagerTests.FakeServerCommandLine(out bool available);

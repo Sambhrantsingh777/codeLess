@@ -133,6 +133,17 @@ namespace codeLess.Studio
         internal readonly HashSet<string> DynamicRegistrations = new HashSet<string>(StringComparer.Ordinal);
         internal readonly Dictionary<string, string> ProgressTitles = new Dictionary<string, string>(StringComparer.Ordinal);
         internal readonly List<DateTime> CrashTimes = new List<DateTime>();
+        internal readonly HashSet<int> IntentionalKillGenerations = new HashSet<int>();
+
+        internal void MarkIntentionalKill(int gen)
+        {
+            lock (CrashTimes) { IntentionalKillGenerations.Add(gen); }
+        }
+
+        internal bool IsIntentionalKill(int gen)
+        {
+            lock (CrashTimes) { return IntentionalKillGenerations.Contains(gen); }
+        }
         /// <summary>workspace/didChangeWatchedFiles watchers by registration id (dynamic registration).</summary>
         internal readonly Dictionary<string, List<LspFileWatcher>> FileWatchers = new Dictionary<string, List<LspFileWatcher>>(StringComparer.Ordinal);
 
@@ -652,7 +663,9 @@ namespace codeLess.Studio
         private void StartInstance(LanguageServerInstance inst, bool raiseHint)
         {
             if (disposed || inst.ShuttingDown) return;
+            int prevGen = inst.Generation;
             int gen = Interlocked.Increment(ref inst.Generation);
+            inst.MarkIntentionalKill(prevGen);
             // One process per instance: a previous process that is still alive (double restart, crash-restart race) is
             // killed before a new one starts - otherwise it would be orphaned until codeLess exits.
             Process previous = inst.Process;
@@ -708,9 +721,9 @@ namespace codeLess.Studio
             }
             catch (Exception ex)
             {
+                inst.MarkIntentionalKill(gen);
                 inst.AppendLog("[client] Failed to start: " + ex.Message);
-                KillProcessTree(proc);
-                HandleCrash(inst, gen, "Failed to start " + res.DisplayName + ": " + ex.Message);
+                HandleInitOrStartFailure(inst, gen, proc, null, "Failed to start " + res.DisplayName + ": " + ex.Message);
                 return;
             }
 
@@ -722,7 +735,7 @@ namespace codeLess.Studio
             Process epProc = proc;
             ep.Closed += delegate (string reason)
             {
-                if (inst.Generation == gen && !inst.ShuttingDown)
+                if (inst.Generation == gen && !inst.ShuttingDown && !inst.IsIntentionalKill(gen))
                 {
                     inst.AppendLog("[client] connection closed: " + reason);
                     try
@@ -752,9 +765,9 @@ namespace codeLess.Studio
             {
                 Exception inner = ex is AggregateException && ex.InnerException != null ? ex.InnerException : ex;
                 if (inst.Generation != gen || inst.ShuttingDown || disposed) { AbandonStart(inst, proc, ep); return; }
+                inst.MarkIntentionalKill(gen);
                 inst.AppendLog("[client] initialize failed: " + inner.Message);
-                KillProcessTree(proc);
-                HandleCrash(inst, gen, "initialize failed: " + inner.Message);
+                HandleInitOrStartFailure(inst, gen, proc, ep, "initialize failed: " + inner.Message);
                 return;
             }
             if (inst.Generation != gen || inst.ShuttingDown || disposed) { AbandonStart(inst, proc, ep); return; }
@@ -770,6 +783,7 @@ namespace codeLess.Studio
         /// </summary>
         private static void AbandonStart(LanguageServerInstance inst, Process proc, LspRpcEndpoint ep)
         {
+            inst.MarkIntentionalKill(inst.Generation);
             if (ep != null && ReferenceEquals(inst.Endpoint, ep)) inst.Endpoint = null;
             if (proc != null && ReferenceEquals(inst.Process, proc)) inst.Process = null;
             int pid = 0;
@@ -883,17 +897,40 @@ namespace codeLess.Studio
         private void OnProcessExited(LanguageServerInstance inst, Process proc, int gen)
         {
             int code = -1;
-            try { code = proc.ExitCode; } catch { }
-            if (inst.ShuttingDown || inst.Generation != gen) return;
+            try { code = proc != null ? proc.ExitCode : -1; } catch { }
+            if (inst.ShuttingDown || inst.Generation != gen || inst.IsIntentionalKill(gen)) return;
             inst.AppendLog("[client] Server process exited with code " + code);
             HandleCrash(inst, gen, inst.DisplayName + " exited unexpectedly (code " + code + ").");
+        }
+
+        private void HandleInitOrStartFailure(LanguageServerInstance inst, int gen, Process proc, LspRpcEndpoint ep, string message)
+        {
+            lock (inst.CrashTimes)
+            {
+                inst.IntentionalKillGenerations.Add(gen);
+                if (inst.Generation != gen || inst.ShuttingDown || disposed)
+                {
+                    if (ep != null) { try { ep.Dispose(); } catch { } }
+                    KillProcessTree(proc);
+                    return;
+                }
+                Interlocked.Increment(ref inst.Generation); // ignore late events of this intentionally killed process
+                inst.State = LanguageServerState.Error;
+                inst.Message = message;
+                if (ReferenceEquals(inst.Endpoint, ep)) inst.Endpoint = null;
+                if (ReferenceEquals(inst.Process, proc)) inst.Process = null;
+            }
+            ClearDiagnosticsFor(new List<LanguageServerInstance> { inst });
+            RaiseStatusChanged();
+            if (ep != null) { try { ep.Dispose(); } catch { } }
+            KillProcessTree(proc);
         }
 
         private void HandleCrash(LanguageServerInstance inst, int gen, string message)
         {
             lock (inst.CrashTimes)
             {
-                if (inst.Generation != gen || inst.ShuttingDown) return;
+                if (inst.Generation != gen || inst.ShuttingDown || inst.IntentionalKillGenerations.Contains(gen)) return;
                 Interlocked.Increment(ref inst.Generation); // ignore late events of this process
                 inst.State = LanguageServerState.Error;
                 inst.Message = message;
@@ -977,7 +1014,10 @@ namespace codeLess.Studio
         private void StopInstance(LanguageServerInstance inst, int timeoutMs)
         {
             inst.ShuttingDown = true;
-            Interlocked.Increment(ref inst.Generation);
+            int prevGen = inst.Generation;
+            int nextGen = Interlocked.Increment(ref inst.Generation);
+            inst.MarkIntentionalKill(prevGen);
+            inst.MarkIntentionalKill(nextGen);
             LspRpcEndpoint ep = inst.Endpoint;
             Process proc = inst.Process;
             inst.Endpoint = null;

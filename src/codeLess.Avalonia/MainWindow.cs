@@ -666,6 +666,7 @@ namespace codeLess.AvaloniaApp
         private DispatcherTimer hotExitBackupTimer;
         private readonly HashSet<EditorTabBuffer> pendingHotExitBackups = new HashSet<EditorTabBuffer>();
         private readonly Dictionary<string, DateTime> internalSaveTimestamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> internalSaveInFlightPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<EditorTabBuffer, TextBlock> tabTitleBlocks = new Dictionary<EditorTabBuffer, TextBlock>();
         private readonly List<string> lastConflictNotificationChoices = new List<string>();
 
@@ -820,6 +821,7 @@ namespace codeLess.AvaloniaApp
             hotExitBackupTimer?.Stop();
             pendingHotExitBackups.Clear();
             internalSaveTimestamps.Clear();
+            internalSaveInFlightPaths.Clear();
             tabTitleBlocks.Clear();
             lastConflictNotificationChoices.Clear();
             chatAtMentionSuggestions.Clear();
@@ -3496,30 +3498,45 @@ namespace codeLess.AvaloniaApp
                             File.SetAttributes(tab.FilePath, attrs & ~FileAttributes.ReadOnly);
                     }
                 }
+                string resolvedTarget = !string.IsNullOrEmpty(tab.FilePath) ? EditorTabBuffer.ResolveSymlinkTargetPath(tab.FilePath) : null;
                 if (!string.IsNullOrEmpty(tab.FilePath))
                 {
-                    string resolvedTarget = EditorTabBuffer.ResolveSymlinkTargetPath(tab.FilePath);
                     lock (internalSaveTimestamps)
                     {
                         DateTime now = DateTime.UtcNow;
                         internalSaveTimestamps[tab.FilePath] = now;
-                        if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveTimestamps[resolvedTarget] = now;
+                        internalSaveInFlightPaths.Add(tab.FilePath);
+                        if (!string.IsNullOrEmpty(resolvedTarget))
+                        {
+                            internalSaveTimestamps[resolvedTarget] = now;
+                            internalSaveInFlightPaths.Add(resolvedTarget);
+                        }
                     }
                 }
                 ApplySaveParticipants(tab);
                 tab.SyncContentFromLines();
                 var agentSave = BeginAgentTrackedSave(tab);
-                tab.WriteFilePreservingMetadata(tab.FilePath);
-                tab.SavedContent = tab.Content;
-                tab.RecordDiskBaseline(tab.FilePath);
-                if (!string.IsNullOrEmpty(tab.FilePath))
+                try
                 {
-                    string resolvedTarget = EditorTabBuffer.ResolveSymlinkTargetPath(tab.FilePath);
+                    tab.WriteFilePreservingMetadata(tab.FilePath);
+                    tab.SavedContent = tab.Content;
+                    tab.RecordDiskBaseline(tab.FilePath);
+                    if (!string.IsNullOrEmpty(tab.FilePath))
+                    {
+                        lock (internalSaveTimestamps)
+                        {
+                            DateTime now = DateTime.UtcNow;
+                            internalSaveTimestamps[tab.FilePath] = now;
+                            if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveTimestamps[resolvedTarget] = now;
+                        }
+                    }
+                }
+                finally
+                {
                     lock (internalSaveTimestamps)
                     {
-                        DateTime now = DateTime.UtcNow;
-                        internalSaveTimestamps[tab.FilePath] = now;
-                        if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveTimestamps[resolvedTarget] = now;
+                        if (!string.IsNullOrEmpty(tab.FilePath)) internalSaveInFlightPaths.Remove(tab.FilePath);
+                        if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveInFlightPaths.Remove(resolvedTarget);
                     }
                 }
                 EndAgentTrackedSave(agentSave, tab);

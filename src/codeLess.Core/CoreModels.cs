@@ -1260,11 +1260,16 @@ namespace codeLess.Studio
         /// <summary>Optional test fault-injection hook invoked after writing half of the payload to the target/temp stream.</summary>
         public static Action<Stream, string> MidStreamWriteFaultInjector;
 
-        /// <summary>True when <paramref name="pathOrName"/> is a temporary file created by atomic save.</summary>
+        /// <summary>True when <paramref name="pathOrName"/> is a temporary file created by atomic save or Win32 ReplaceFileW (~RF*.TMP).</summary>
         public static bool IsAtomicSaveTempFile(string pathOrName)
         {
             if (string.IsNullOrEmpty(pathOrName)) return false;
-            return pathOrName.IndexOf(".codeless-tmp-", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (pathOrName.IndexOf(".codeless-tmp-", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            int rfIdx = pathOrName.IndexOf("~RF", StringComparison.OrdinalIgnoreCase);
+            if (rfIdx >= 0 && pathOrName.EndsWith(".TMP", StringComparison.OrdinalIgnoreCase))
+                return true;
+            return false;
         }
 
         /// <summary>Resolves a symbolic link chain to its final target file path so saving through a symlink writes the target and keeps the link intact.</summary>

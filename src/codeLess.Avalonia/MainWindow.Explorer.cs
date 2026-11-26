@@ -330,19 +330,7 @@ namespace codeLess.AvaloniaApp
                     try
                     {
                         if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
-                        if (EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath))
-                        {
-                            // Atomic save renames .<name>.codeless-tmp-* -> <name>: treat as a non-structural Changed event on the target.
-                            if (!EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath))
-                            {
-                                self.lsp?.NotifyFileSystemChange(e.FullPath, LanguageServerManager.FileChanged);
-                                self.QueueFsChange(e.FullPath, structural: false);
-                            }
-                            return;
-                        }
-                        self.OnWorkspaceFsEvent(s, e);
-                        self.QueueFsChange(e.OldFullPath, structural: true);
-                        self.lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
+                        self.OnWorkspaceFsRenamed(s, e);
                     }
                     catch { }
                 };
@@ -371,14 +359,37 @@ namespace codeLess.AvaloniaApp
             try { w.Dispose(); } catch { }
         }
 
+        private void OnWorkspaceFsRenamed(object sender, RenamedEventArgs e)
+        {
+            if (e == null) return;
+            bool oldIsTemp = EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath);
+            bool newIsTemp = EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath);
+            if (oldIsTemp || newIsTemp)
+            {
+                // Atomic save (.codeless-tmp-* -> target) or Win32 ReplaceFileW (target -> ~RF*.TMP, .codeless-tmp-* -> target):
+                // treat any non-temp side of the rename as a non-structural Changed event on the target.
+                string targetPath = !newIsTemp ? e.FullPath : (!oldIsTemp ? e.OldFullPath : null);
+                if (!string.IsNullOrEmpty(targetPath))
+                {
+                    if (!IsSelfSaveEcho(targetPath))
+                        lsp?.NotifyFileSystemChange(targetPath, LanguageServerManager.FileChanged);
+                    QueueFsChange(targetPath, structural: false);
+                }
+                return;
+            }
+            OnWorkspaceFsEvent(sender, e);
+            QueueFsChange(e.OldFullPath, structural: true);
+            lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
+        }
+
         private void OnWorkspaceFsEvent(object sender, FileSystemEventArgs e)
         {
             if (e == null || EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath)) return;
-            bool selfSave = e.ChangeType != WatcherChangeTypes.Deleted && IsSelfSaveEcho(e.FullPath);
+            if (IsSelfSaveEcho(e.FullPath)) return;
             // Language servers that watch files (pyright, gopls, rust-analyzer) learn about git checkouts, agent writes etc.
             lsp?.NotifyFileSystemChange(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
-                : (e.ChangeType == WatcherChangeTypes.Changed || selfSave) ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
-            QueueFsChange(e.FullPath, structural: !selfSave && e.ChangeType != WatcherChangeTypes.Changed);
+                : e.ChangeType == WatcherChangeTypes.Changed ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
+            QueueFsChange(e.FullPath, structural: e.ChangeType != WatcherChangeTypes.Changed);
         }
 
         private bool IsSelfSaveEcho(string fullPath)
@@ -386,12 +397,36 @@ namespace codeLess.AvaloniaApp
             try
             {
                 if (string.IsNullOrEmpty(fullPath)) return false;
+                if (EditorTabBuffer.IsAtomicSaveTempFile(fullPath)) return true;
                 bool recentSave = false;
+                bool inFlight = false;
+                bool recentSaveInDir = false;
+                string trimmedDir = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 lock (internalSaveTimestamps)
                 {
-                    if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
+                    DateTime now = DateTime.UtcNow;
+                    if (internalSaveInFlightPaths.Contains(fullPath))
+                        inFlight = true;
+                    if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (now - savedAt).TotalMilliseconds < 1500)
                         recentSave = true;
+                    if (!recentSave && !inFlight)
+                    {
+                        foreach (var kv in internalSaveTimestamps)
+                        {
+                            if ((now - kv.Value).TotalMilliseconds < 1500)
+                            {
+                                string parent = Path.GetDirectoryName(kv.Key);
+                                if (!string.IsNullOrEmpty(parent) && string.Equals(parent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), trimmedDir, PathKeyComparison))
+                                {
+                                    recentSaveInDir = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
+                if (inFlight) return true;
+                if (recentSaveInDir && Directory.Exists(fullPath) && !File.Exists(fullPath)) return true;
                 if (!recentSave) return false;
                 if (!File.Exists(fullPath)) return false;
                 EditorTabBuffer[] snapshot = openTabsSnapshot;

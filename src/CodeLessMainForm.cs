@@ -212,6 +212,7 @@ namespace codeLess.Studio
         public Func<string, string, bool> AgentToolApprovalOverride = null;
         private FileSystemWatcher workspaceFileWatcher;
         private Dictionary<string, DateTime> internalSaveTimestamps = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private HashSet<string> internalSaveInFlightPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public List<DiagnosticItem> WorkspaceDiagnostics = new List<DiagnosticItem>();
 
         public class TerminalSessionState
@@ -8918,10 +8919,10 @@ if __name__ == '__main__':
                     try
                     {
                         if (e == null || EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath)) return;
-                        bool selfSave = e.ChangeType != WatcherChangeTypes.Deleted && IsSelfSaveEchoWin(e.FullPath);
+                        if (IsSelfSaveEchoWin(e.FullPath)) return;
                         NotifyLspFileEvent(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
-                            : (e.ChangeType == WatcherChangeTypes.Changed || selfSave) ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
-                        QueueWorkspaceFsChange(e.FullPath, !selfSave && e.ChangeType != WatcherChangeTypes.Changed, e.ChangeType == WatcherChangeTypes.Deleted);
+                            : e.ChangeType == WatcherChangeTypes.Changed ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
+                        QueueWorkspaceFsChange(e.FullPath, e.ChangeType != WatcherChangeTypes.Changed, e.ChangeType == WatcherChangeTypes.Deleted);
                     }
                     catch { }
                 };
@@ -8932,12 +8933,17 @@ if __name__ == '__main__':
                 {
                     try
                     {
-                        if (EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath))
+                        if (e == null) return;
+                        bool oldIsTemp = EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath);
+                        bool newIsTemp = EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath);
+                        if (oldIsTemp || newIsTemp)
                         {
-                            if (!EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath))
+                            string targetPath = !newIsTemp ? e.FullPath : (!oldIsTemp ? e.OldFullPath : null);
+                            if (!string.IsNullOrEmpty(targetPath))
                             {
-                                NotifyLspFileEvent(e.FullPath, LanguageServerManager.FileChanged);
-                                QueueWorkspaceFsChange(e.FullPath, false, false);
+                                if (!IsSelfSaveEchoWin(targetPath))
+                                    NotifyLspFileEvent(targetPath, LanguageServerManager.FileChanged);
+                                QueueWorkspaceFsChange(targetPath, false, false);
                             }
                             return;
                         }
@@ -8983,13 +8989,37 @@ if __name__ == '__main__':
             try
             {
                 if (string.IsNullOrEmpty(fullPath)) return false;
+                if (EditorTabBuffer.IsAtomicSaveTempFile(fullPath)) return true;
                 bool recentSave = false;
+                bool inFlight = false;
+                bool recentSaveInDir = false;
+                string trimmedDir = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 DateTime savedAt;
                 lock (internalSaveTimestamps)
                 {
-                    if (internalSaveTimestamps.TryGetValue(fullPath, out savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
+                    DateTime now = DateTime.UtcNow;
+                    if (internalSaveInFlightPaths.Contains(fullPath))
+                        inFlight = true;
+                    if (internalSaveTimestamps.TryGetValue(fullPath, out savedAt) && (now - savedAt).TotalMilliseconds < 1500)
                         recentSave = true;
+                    if (!recentSave && !inFlight)
+                    {
+                        foreach (KeyValuePair<string, DateTime> kv in internalSaveTimestamps)
+                        {
+                            if ((now - kv.Value).TotalMilliseconds < 1500)
+                            {
+                                string parent = Path.GetDirectoryName(kv.Key);
+                                if (!string.IsNullOrEmpty(parent) && string.Equals(parent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), trimmedDir, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    recentSaveInDir = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
+                if (inFlight) return true;
+                if (recentSaveInDir && Directory.Exists(fullPath) && !File.Exists(fullPath)) return true;
                 if (!recentSave) return false;
                 if (!File.Exists(fullPath)) return false;
                 EditorTabBuffer[] snapshot = openTabsSnapshotWin;
@@ -10209,16 +10239,32 @@ if __name__ == '__main__':
                 {
                     DateTime now = DateTime.UtcNow;
                     internalSaveTimestamps[buf.FilePath] = now;
-                    if (!string.IsNullOrEmpty(resolvedSaveTarget)) internalSaveTimestamps[resolvedSaveTarget] = now;
+                    internalSaveInFlightPaths.Add(buf.FilePath);
+                    if (!string.IsNullOrEmpty(resolvedSaveTarget))
+                    {
+                        internalSaveTimestamps[resolvedSaveTarget] = now;
+                        internalSaveInFlightPaths.Add(resolvedSaveTarget);
+                    }
                 }
                 ApplySaveParticipantsWin(buf, backgroundSave);
                 object agentSave = BeginAgentTrackedSaveWin(buf);
-                buf.WriteToDisk(buf.FilePath);
-                lock (internalSaveTimestamps)
+                try
                 {
-                    DateTime now = DateTime.UtcNow;
-                    internalSaveTimestamps[buf.FilePath] = now;
-                    if (!string.IsNullOrEmpty(resolvedSaveTarget)) internalSaveTimestamps[resolvedSaveTarget] = now;
+                    buf.WriteToDisk(buf.FilePath);
+                    lock (internalSaveTimestamps)
+                    {
+                        DateTime now = DateTime.UtcNow;
+                        internalSaveTimestamps[buf.FilePath] = now;
+                        if (!string.IsNullOrEmpty(resolvedSaveTarget)) internalSaveTimestamps[resolvedSaveTarget] = now;
+                    }
+                }
+                finally
+                {
+                    lock (internalSaveTimestamps)
+                    {
+                        if (!string.IsNullOrEmpty(buf.FilePath)) internalSaveInFlightPaths.Remove(buf.FilePath);
+                        if (!string.IsNullOrEmpty(resolvedSaveTarget)) internalSaveInFlightPaths.Remove(resolvedSaveTarget);
+                    }
                 }
                 EndAgentTrackedSaveWin(agentSave, buf);
                 buf.IsUntitled = false;

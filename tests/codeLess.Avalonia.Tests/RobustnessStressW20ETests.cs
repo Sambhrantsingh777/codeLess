@@ -1083,7 +1083,9 @@ namespace codeLess.Avalonia.Tests
                 Assert.NotNull(onFsMethod);
                 Assert.NotNull(queueFsMethod);
 
-                // Drain any initial workspace-load watcher events before testing self-save
+                // Stop the live OS FileSystemWatcher after opening so initial setup notifications from File.WriteAllText
+                // cannot race asynchronously with the deterministic watcher-handler invocations below.
+                w.StopWorkspaceWatcher();
                 Dispatcher.UIThread.RunJobs();
                 w.DrainOneShotDebounceTimers();
                 fsTreeDirtyField.SetValue(w, false);
@@ -1206,6 +1208,89 @@ namespace codeLess.Avalonia.Tests
                 w.DrainOneShotDebounceTimers();
 
                 Assert.Empty(bgExceptions);
+            }
+            finally
+            {
+                w.Close();
+            }
+        }
+
+        [AvaloniaFact]
+        public void E23_WindowsReplaceFileEventSequence_SuppressesSelfSaveEcho_WithoutTreeDirtyReloadOrConflict()
+        {
+            string ws = Path.Combine(_tempDir, "win_replacefile_ws");
+            Directory.CreateDirectory(ws);
+            string filePath = Path.Combine(ws, "WatchedApp.cs");
+            File.WriteAllText(filePath, "public class WatchedApp { public int X = 1; }\n");
+
+            var w = new MainWindow(ws) { SuppressUnsavedPrompts = true };
+            try
+            {
+                var tab = w.OpenFileInTab(filePath, preview: false);
+                Assert.NotNull(tab);
+
+                var fsTreeDirtyField = typeof(MainWindow).GetField("fsTreeDirty", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var fsChangedFilesField = typeof(MainWindow).GetField("fsChangedFiles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var onFsMethod = typeof(MainWindow).GetMethod("OnWorkspaceFsEvent", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var onRenamedMethod = typeof(MainWindow).GetMethod("OnWorkspaceFsRenamed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                Assert.NotNull(fsTreeDirtyField);
+                Assert.NotNull(fsChangedFilesField);
+                Assert.NotNull(onFsMethod);
+                Assert.NotNull(onRenamedMethod);
+
+                w.StopWorkspaceWatcher();
+                Dispatcher.UIThread.RunJobs();
+                w.DrainOneShotDebounceTimers();
+                fsTreeDirtyField.SetValue(w, false);
+                ((HashSet<string>)fsChangedFilesField.GetValue(w)).Clear();
+
+                // Save the open file in the workspace
+                tab.Content = "public class WatchedApp { public int X = 100; }\n";
+                tab.SyncLinesFromContent();
+                tab.IsDirty = true;
+                Assert.True(w.SaveBufferToDisk(tab));
+                Assert.False(tab.IsDirty);
+
+                // Simulate the exact Win32 ReplaceFileW (File.Replace) event sequence emitted on Windows:
+                // 1) Created + Changed on .WatchedApp.cs.codeless-tmp-a1b2c3d4
+                // 2) Renamed(WatchedApp.cs -> WatchedApp.cs~RF1a2b3c.TMP)
+                // 3) Renamed(.WatchedApp.cs.codeless-tmp-a1b2c3d4 -> WatchedApp.cs)
+                // 4) Deleted(WatchedApp.cs~RF1a2b3c.TMP)
+                // 5) Deleted(WatchedApp.cs), Created(WatchedApp.cs), Changed(WatchedApp.cs)
+                // 6) Changed on parent directory ws
+                string codelessTmpName = ".WatchedApp.cs.codeless-tmp-a1b2c3d4";
+                string rfTmpName = "WatchedApp.cs~RF1a2b3c.TMP";
+                string targetName = Path.GetFileName(filePath);
+
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Created, ws, codelessTmpName) });
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Changed, ws, codelessTmpName) });
+                onRenamedMethod.Invoke(w, new object[] { null, new RenamedEventArgs(WatcherChangeTypes.Renamed, ws, rfTmpName, targetName) });
+                onRenamedMethod.Invoke(w, new object[] { null, new RenamedEventArgs(WatcherChangeTypes.Renamed, ws, targetName, codelessTmpName) });
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Deleted, ws, rfTmpName) });
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Deleted, ws, targetName) });
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Created, ws, targetName) });
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Changed, ws, targetName) });
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Changed, Path.GetDirectoryName(ws), Path.GetFileName(ws)) });
+
+                Assert.False((bool)fsTreeDirtyField.GetValue(w));
+                Assert.Empty((HashSet<string>)fsChangedFilesField.GetValue(w));
+                Dispatcher.UIThread.RunJobs();
+                w.DrainOneShotDebounceTimers();
+                Assert.False(tab.IsDirty);
+                Assert.False(tab.HasExternalDiskConflict);
+                Assert.Empty(w.NotificationsHistory);
+                Assert.Equal("public class WatchedApp { public int X = 100; }\n", tab.Content);
+
+                // Subsequent genuine external edit is still detected and reloaded:
+                string extContent = "public class WatchedApp { public int X = 999; // external edit after ReplaceFileW }\n";
+                File.WriteAllText(filePath, extContent);
+                onFsMethod.Invoke(w, new object[] { null, new FileSystemEventArgs(WatcherChangeTypes.Changed, ws, targetName) });
+                Dispatcher.UIThread.RunJobs();
+                w.DrainOneShotDebounceTimers();
+                Dispatcher.UIThread.RunJobs();
+                Assert.Equal(extContent, tab.Content);
+                Assert.False(tab.IsDirty);
+                Assert.False(tab.HasExternalDiskConflict);
             }
             finally
             {
