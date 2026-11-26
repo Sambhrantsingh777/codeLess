@@ -178,6 +178,7 @@ namespace codeLess.AvaloniaApp
             workspaceSearchResultsList.AddHandler(InputElement.PointerPressedEvent, (s, e) =>
             {
                 searchRowHandledOnPointerPress = false;
+                if (IsScrollBarVisual(e.Source)) return;
                 if (!e.GetCurrentPoint(workspaceSearchResultsList).Properties.IsLeftButtonPressed) return;
                 var row = SearchRowFromEvent(e.Source, e);
                 if (row == null) return;
@@ -660,8 +661,24 @@ namespace codeLess.AvaloniaApp
             return host;
         }
 
+        private static bool IsScrollBarVisual(object source)
+        {
+            if (source is global::Avalonia.Controls.Primitives.ScrollBar ||
+                source is global::Avalonia.Controls.Primitives.Thumb ||
+                source is global::Avalonia.Controls.Primitives.Track ||
+                source is RepeatButton)
+                return true;
+            var v = source as Visual;
+            if (v == null) return false;
+            return v.FindAncestorOfType<global::Avalonia.Controls.Primitives.ScrollBar>(includeSelf: true) != null ||
+                   v.FindAncestorOfType<global::Avalonia.Controls.Primitives.Thumb>(includeSelf: true) != null ||
+                   v.FindAncestorOfType<global::Avalonia.Controls.Primitives.Track>(includeSelf: true) != null ||
+                   v.FindAncestorOfType<RepeatButton>(includeSelf: true) != null;
+        }
+
         private static SearchResultRow SearchRowFromSource(object source)
         {
+            if (IsScrollBarVisual(source)) return null;
             var v = source as Visual;
             var item = v as ListBoxItem ?? v?.FindAncestorOfType<ListBoxItem>();
             return item?.DataContext as SearchResultRow;
@@ -669,9 +686,17 @@ namespace codeLess.AvaloniaApp
 
         private SearchResultRow SearchRowFromEvent(object source, PointerEventArgs e)
         {
+            if (IsScrollBarVisual(source)) return null;
             var row = SearchRowFromSource(source);
             if (row != null) return row;
-            if (workspaceSearchResultsList == null || e == null) return null;
+            if (workspaceSearchResultsList == null || e == null || searchRows.Count == 0) return null;
+            foreach (var sb in workspaceSearchResultsList.GetVisualDescendants().OfType<global::Avalonia.Controls.Primitives.ScrollBar>())
+            {
+                if (!sb.IsVisible || sb.Bounds.Width <= 0 || sb.Bounds.Height <= 0) continue;
+                var sp = e.GetPosition(sb);
+                if (sp.X >= 0 && sp.Y >= 0 && sp.X <= sb.Bounds.Width && sp.Y <= sb.Bounds.Height)
+                    return null;
+            }
             foreach (var item in workspaceSearchResultsList.GetVisualDescendants().OfType<ListBoxItem>())
             {
                 if (!item.IsVisible || item.Bounds.Width <= 0 || item.Bounds.Height <= 0) continue;

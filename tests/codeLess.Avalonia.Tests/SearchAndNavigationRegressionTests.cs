@@ -156,6 +156,52 @@ namespace codeLess.Avalonia.Tests
         }
 
         [AvaloniaFact]
+        public void ClickingSearchResultsScrollBar_ThumbAndTrack_DoesNotOpenPreviewTab()
+        {
+            Write("many.txt", string.Join("\n", Enumerable.Range(1, 80).Select(i => $"line {i} needle match")) + "\n");
+            var w = OpenWindow();
+            w.SwitchActivityView("search");
+            w.ExecuteWorkspaceSearch("needle");
+            ForceLayout(w);
+
+            Assert.Null(w.ActiveTab);
+            Assert.True(w.WorkspaceSearchRows.Count >= 80);
+
+            var lb = w.WorkspaceSearchResultsListControl;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            global::Avalonia.Controls.Primitives.ScrollBar vBar = null;
+            global::Avalonia.Controls.Primitives.Thumb thumb = null;
+            while (sw.ElapsedMilliseconds < 5000)
+            {
+                ForceLayout(w);
+                vBar = lb.GetVisualDescendants()
+                    .OfType<global::Avalonia.Controls.Primitives.ScrollBar>()
+                    .FirstOrDefault(sb => sb.Orientation == global::Avalonia.Layout.Orientation.Vertical && sb.Bounds.Width > 0 && sb.Bounds.Height > 0);
+                thumb = vBar?.GetVisualDescendants()
+                    .OfType<global::Avalonia.Controls.Primitives.Thumb>()
+                    .FirstOrDefault(t => t.Bounds.Width > 0 && t.Bounds.Height > 0);
+                if (vBar != null && thumb != null) break;
+                System.Threading.Thread.Sleep(5);
+            }
+            Assert.NotNull(vBar);
+            Assert.NotNull(thumb);
+
+            // Press on the scrollbar thumb: must not open a preview tab.
+            Click(w, thumb);
+            Assert.Null(w.ActiveTab);
+
+            // Press on the scrollbar track below the thumb: must not open a preview tab.
+            double trackY = Math.Min(vBar.Bounds.Height - 6, Math.Max(thumb.Bounds.Bottom + 20, vBar.Bounds.Height * 0.85));
+            var trackPoint = vBar.TranslatePoint(new Point(vBar.Bounds.Width / 2, trackY), w);
+            Assert.True(trackPoint.HasValue);
+            w.MouseDown(trackPoint.Value, MouseButton.Left);
+            w.MouseUp(trackPoint.Value, MouseButton.Left);
+            ForceLayout(w);
+            Assert.Null(w.ActiveTab);
+            w.Close();
+        }
+
+        [AvaloniaFact]
         public void FileHeaderClick_TogglesCollapse_AndKeyboardEnterOpens()
         {
             string f = Write("x.cs", "class A { int needle; int needle2; }\n// needle\n");
