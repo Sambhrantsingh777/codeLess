@@ -1257,13 +1257,163 @@ namespace codeLess.Studio
             catch (EncoderFallbackException) { return false; }
         }
 
-        /// <summary>Overwrites a file's bytes in place (keeps its identity, permissions and xattrs, like the editor's Save).</summary>
-        public static void WriteBytesInPlace(string filePath, byte[] bytes)
+        /// <summary>Optional test fault-injection hook invoked after writing half of the payload to the target/temp stream.</summary>
+        public static Action<Stream, string> MidStreamWriteFaultInjector;
+
+        /// <summary>True when <paramref name="pathOrName"/> is a temporary file created by atomic save.</summary>
+        public static bool IsAtomicSaveTempFile(string pathOrName)
         {
-            using (FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read))
+            if (string.IsNullOrEmpty(pathOrName)) return false;
+            return pathOrName.IndexOf(".codeless-tmp-", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>Resolves a symbolic link chain to its final target file path so saving through a symlink writes the target and keeps the link intact.</summary>
+        public static string ResolveSymlinkTargetPath(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath)) return filePath;
+#if NET6_0_OR_GREATER
+            try
+            {
+                string cur = Path.GetFullPath(filePath);
+                for (int hop = 0; hop < 32; hop++)
+                {
+                    FileInfo fi = new FileInfo(cur);
+                    string link = fi.LinkTarget;
+                    if (string.IsNullOrEmpty(link)) break;
+                    if (Path.IsPathRooted(link))
+                        cur = Path.GetFullPath(link);
+                    else
+                    {
+                        string baseDir = Path.GetDirectoryName(cur) ?? "";
+                        cur = Path.GetFullPath(Path.Combine(baseDir, link));
+                    }
+                }
+                return cur;
+            }
+            catch { return filePath; }
+#else
+            return filePath;
+#endif
+        }
+
+        private static void WritePayloadToStream(Stream fs, string targetPath, byte[] payload)
+        {
+            if (payload == null || payload.Length == 0)
+            {
+                Action<Stream, string> emptyHook = MidStreamWriteFaultInjector;
+                if (emptyHook != null) emptyHook(fs, targetPath);
+                return;
+            }
+            Action<Stream, string> hook = MidStreamWriteFaultInjector;
+            if (hook != null)
+            {
+                int half = payload.Length / 2;
+                if (half > 0) fs.Write(payload, 0, half);
+                fs.Flush();
+                hook(fs, targetPath);
+                if (payload.Length - half > 0) fs.Write(payload, half, payload.Length - half);
+            }
+            else
+            {
+                fs.Write(payload, 0, payload.Length);
+            }
+        }
+
+        private static void WriteBytesInPlaceDirect(string targetPath, byte[] bytes)
+        {
+            using (FileStream fs = new FileStream(targetPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read))
             {
                 fs.SetLength(0);
-                if (bytes != null && bytes.Length > 0) fs.Write(bytes, 0, bytes.Length);
+                WritePayloadToStream(fs, targetPath, bytes);
+                fs.Flush(true);
+            }
+        }
+
+        /// <summary>Atomically writes a file's bytes via a sibling temp file (falling back to in-place write when the directory is not writable), preserving symlinks, permissions, and attributes.</summary>
+        public static void WriteBytesInPlace(string filePath, byte[] bytes)
+        {
+            if (string.IsNullOrEmpty(filePath)) throw new ArgumentNullException("filePath");
+            byte[] payload = bytes ?? new byte[0];
+            string targetPath = ResolveSymlinkTargetPath(filePath);
+            bool existed = File.Exists(targetPath);
+            FileAttributes existingAttrs = FileAttributes.Normal;
+#if NET6_0_OR_GREATER
+            bool hasExistingUnixMode = false;
+            UnixFileMode existingUnixMode = default(UnixFileMode);
+#endif
+            if (existed)
+            {
+                existingAttrs = File.GetAttributes(targetPath);
+                if ((existingAttrs & FileAttributes.ReadOnly) != 0)
+                    throw new UnauthorizedAccessException("Access to the path '" + filePath + "' is denied.");
+                // Verify target file write permission before creating a temp file (Unix rename() checks directory write
+                // permission, not target file mode bits; opening for Write without truncation enforces 0444 / locks).
+                using (new FileStream(targetPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { }
+#if NET6_0_OR_GREATER
+                if (Path.DirectorySeparatorChar == '/')
+                {
+                    try { existingUnixMode = File.GetUnixFileMode(targetPath); hasExistingUnixMode = true; } catch { }
+                }
+#endif
+            }
+
+            string dir = Path.GetDirectoryName(targetPath);
+            if (string.IsNullOrEmpty(dir)) dir = Directory.GetCurrentDirectory();
+            string name = Path.GetFileName(targetPath);
+            string tmpPath = Path.Combine(dir, "." + name + ".codeless-tmp-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            bool writeStarted = false;
+            bool writeFinished = false;
+            try
+            {
+                using (FileStream fs = new FileStream(tmpPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    writeStarted = true;
+                    WritePayloadToStream(fs, targetPath, payload);
+                    fs.Flush(true);
+                    writeFinished = true;
+                }
+#if NET6_0_OR_GREATER
+                if (hasExistingUnixMode)
+                {
+                    try { File.SetUnixFileMode(tmpPath, existingUnixMode); } catch { }
+                }
+                if (existed && Path.DirectorySeparatorChar == '\\')
+                {
+                    try { File.Replace(tmpPath, targetPath, null, true); }
+                    catch { File.Move(tmpPath, targetPath, true); }
+                }
+                else
+                {
+                    File.Move(tmpPath, targetPath, true);
+                }
+#else
+                if (existed)
+                {
+                    try { File.Replace(tmpPath, targetPath, null, true); }
+                    catch { File.Copy(tmpPath, targetPath, true); }
+                }
+                else
+                {
+                    File.Move(tmpPath, targetPath);
+                }
+#endif
+                if (existed && (existingAttrs & (FileAttributes.Hidden | FileAttributes.System)) != 0)
+                {
+                    try { File.SetAttributes(targetPath, existingAttrs); } catch { }
+                }
+            }
+            catch
+            {
+                // A mid-stream write failure (disk full / fault injection) must NEVER fall back to truncating targetPath.
+                if (writeStarted && !writeFinished)
+                    throw;
+                // Directory not writable (e.g. chmod 0555 dir with writable file) or special FS rename failure:
+                // payload is already in memory, so fall back to in-place write.
+                WriteBytesInPlaceDirect(targetPath, payload);
+            }
+            finally
+            {
+                try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
             }
         }
 
@@ -1474,16 +1624,19 @@ namespace codeLess.Studio
 
             byte[] preamble = hasBom ? enc.GetPreamble() : new byte[0];
             byte[] body = enc.GetBytes(exactTextWithEol ?? "");
-            // OpenOrCreate + SetLength(0) instead of FileMode.Create: CREATE_ALWAYS fails with "access denied" on
-            // Hidden/System files on Windows, and this keeps the file's identity, permissions (exec bit) and xattrs.
-            using (FileStream fs = new FileStream(filePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read))
+            byte[] allBytes;
+            if (preamble != null && preamble.Length > 0)
             {
-                fs.SetLength(0);
-                if (preamble != null && preamble.Length > 0)
-                    fs.Write(preamble, 0, preamble.Length);
+                allBytes = new byte[preamble.Length + (body != null ? body.Length : 0)];
+                Buffer.BlockCopy(preamble, 0, allBytes, 0, preamble.Length);
                 if (body != null && body.Length > 0)
-                    fs.Write(body, 0, body.Length);
+                    Buffer.BlockCopy(body, 0, allBytes, preamble.Length, body.Length);
             }
+            else
+            {
+                allBytes = body ?? new byte[0];
+            }
+            WriteBytesInPlace(filePath, allBytes);
         }
 
         // 0-based internal cursor & selection coordinates
@@ -1888,7 +2041,7 @@ namespace codeLess.Studio
             {
                 bool sameSpot = LastTypingUndoCol < 0 || (CursorCol >= LastTypingUndoCol && CursorCol - LastTypingUndoCol <= 2);
                 bool afterWordBoundary = false;
-                if (Lines != null && CursorLine >= 0 && CursorLine < Lines.Count)
+                if (!IsLargeFile && Lines != null && CursorLine >= 0 && CursorLine < Lines.Count)
                 {
                     string curLn = Lines[CursorLine] ?? "";
                     if (CursorCol >= 2 && CursorCol <= curLn.Length &&
@@ -1908,7 +2061,7 @@ namespace codeLess.Studio
                 return;
             }
             if (Lines == null || Lines.Count == 0) Lines = new List<string> { "" };
-            if (UndoStack.Count == 0 || !LinesEqual(UndoStack.Peek().FullLines, Lines))
+            if (UndoStack.Count == 0 || !LinesEqual(UndoStack.Peek().FullLines, Lines, CursorLine))
             {
                 PushSnapshot(UndoStack, CaptureSnapshot());
                 RedoStack.Clear();
@@ -2086,9 +2239,14 @@ namespace codeLess.Studio
             else GutterDiffVersion++;
         }
 
-        private static bool LinesEqual(string[] a, List<string> b)
+        private static bool LinesEqual(string[] a, List<string> b, int hintLine = -1)
         {
             if (a == null || b == null || a.Length != b.Count) return false;
+            if (hintLine >= 0 && hintLine < a.Length)
+            {
+                if (!ReferenceEquals(a[hintLine], b[hintLine]) && !string.Equals(a[hintLine], b[hintLine], StringComparison.Ordinal))
+                    return false;
+            }
             for (int i = 0; i < a.Length; i++)
                 if (!ReferenceEquals(a[i], b[i]) && !string.Equals(a[i], b[i], StringComparison.Ordinal)) return false;
             return true;

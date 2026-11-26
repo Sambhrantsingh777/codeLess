@@ -236,8 +236,15 @@ namespace codeLess.Studio
                     try
                     {
                         string json = File.ReadAllText(files[i]);
+                        if (string.IsNullOrWhiteSpace(json)) continue;
+                        string parseErr;
+                        object parsed = codeLess.Core.JsoncParser.Parse(json, out parseErr);
+                        if (parseErr != null || !(parsed is Dictionary<string, object>)) continue;
                         HotExitBackupEntry entry = ser.Deserialize<HotExitBackupEntry>(json);
-                        if (entry != null) result.Add(entry);
+                        if (entry == null || string.IsNullOrEmpty(entry.BackupId)) continue;
+                        if (!entry.IsUntitled && string.IsNullOrEmpty(entry.FilePath)) continue;
+                        if (entry.IsUntitled && string.IsNullOrEmpty(entry.FileName) && string.IsNullOrEmpty(entry.Content)) continue;
+                        result.Add(entry);
                     }
                     catch { }
                 }

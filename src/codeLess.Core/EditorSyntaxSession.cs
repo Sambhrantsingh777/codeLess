@@ -153,6 +153,8 @@ namespace codeLess.Studio
         private FallbackTokenCache fallback;
         private bool fallbackSynced;
         private bool fallbackUsed;
+        private IList<string> lastPreparedLinesRef;
+        private int lastPreparedEditVersion = int.MinValue;
 
         /// <summary>Lines whose start state the paint pass may compute synchronously before falling back to a guess.</summary>
         public static int SyncTokenizeBudgetMs = 12;
@@ -197,7 +199,8 @@ namespace codeLess.Studio
         {
             if (buf == null) return;
             string p = EffectiveSyntaxPathFor(buf);
-            if (!pathInitialized || !string.Equals(p, path, StringComparison.Ordinal))
+            bool pathChanged = !pathInitialized || !string.Equals(p, path, StringComparison.Ordinal);
+            if (pathChanged)
             {
                 pathInitialized = true;
                 path = p;
@@ -205,10 +208,17 @@ namespace codeLess.Studio
                 textMate = null;
                 scope = null;
                 registryGeneration = -1;
+                lastPreparedLinesRef = null;
+                lastPreparedEditVersion = int.MinValue;
             }
+            int prevGen = registryGeneration;
             ResolveGrammar();
             List<string> lines = buf.Lines;
             if (lines == null) return;
+            if (!pathChanged && prevGen == registryGeneration && ReferenceEquals(lastPreparedLinesRef, lines) && lastPreparedEditVersion == buf.EditVersion)
+                return;
+            lastPreparedLinesRef = lines;
+            lastPreparedEditVersion = buf.EditVersion;
             brackets.Sync(lines);
             if (textMate != null) textMate.Sync(lines);
             fallbackSynced = false;

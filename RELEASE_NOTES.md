@@ -33,7 +33,7 @@ A visual polish, editor selection parity, and cross-platform CI reliability rele
 - **C/C++ `#define` macros hiding brackets**: `EditorBracketCache` tracks `#if`/`#elif`/`#else`/`#endif` conditional branches (`PreprocBranchFrame`), but does not expand C/C++ `#define` macros whose replacement body hides an unmatched `{` or `}`.
 - **Hard links (`nlink > 1`) on atomic save**: Atomic save via sibling temp file and rename (`EditorTabBuffer.WriteBytesInPlace`) creates a new inode on POSIX and breaks hard links when `nlink > 1` (symlinks are resolved via `ResolveSymlinkTargetPath` and remain intact).
 - **Unix group-writable ownership & Windows `File.Move` fallback ACLs**: On Unix, atomic save of a file owned by another user in a group-writable directory creates the replacement file owned by the current user; on Windows, `EditorTabBuffer.WriteBytesInPlace` uses `File.Replace` to preserve ACLs and creation time, but if `File.Replace` falls back to `File.Move` on a special filesystem or network share, the replacement file inherits the temp file's creation time and ACLs.
-- **Empty-window hot-exit bucket**: Hot-exit backups are keyed by `WorkspaceSessionStore.GetWorkspaceHash`, so unsaved buffers in windows with no workspace folder open share the `"empty_workspace"` backup bucket rather than per-window empty buckets.
+- **Empty-window hot-exit bucket**: Hot-exit backups are keyed by `HotExitService.GetWorkspaceBackupDir` (`WorkspaceSessionStore.GetWorkspaceHash`), so unsaved buffers in windows with no workspace folder open share a single empty-workspace backup directory rather than per-window empty buckets.
 
 ---
 

@@ -309,8 +309,12 @@ namespace codeLess.AvaloniaApp
                 var weakSelf = new WeakReference<MainWindow>(this);
                 FileSystemEventHandler onFs = (s, e) =>
                 {
-                    if (weakSelf.TryGetTarget(out var self) && !self.windowClosed)
-                        self.OnWorkspaceFsEvent(s, e);
+                    try
+                    {
+                        if (weakSelf.TryGetTarget(out var self) && !self.windowClosed)
+                            self.OnWorkspaceFsEvent(s, e);
+                    }
+                    catch { }
                 };
                 var w = new FileSystemWatcher(root)
                 {
@@ -323,10 +327,24 @@ namespace codeLess.AvaloniaApp
                 w.Changed += onFs;
                 w.Renamed += (s, e) =>
                 {
-                    if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
-                    self.OnWorkspaceFsEvent(s, e);
-                    self.QueueFsChange(e.OldFullPath, structural: true);
-                    self.lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
+                    try
+                    {
+                        if (!weakSelf.TryGetTarget(out var self) || self.windowClosed) return;
+                        if (EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath))
+                        {
+                            // Atomic save renames .<name>.codeless-tmp-* -> <name>: treat as a non-structural Changed event on the target.
+                            if (!EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath))
+                            {
+                                self.lsp?.NotifyFileSystemChange(e.FullPath, LanguageServerManager.FileChanged);
+                                self.QueueFsChange(e.FullPath, structural: false);
+                            }
+                            return;
+                        }
+                        self.OnWorkspaceFsEvent(s, e);
+                        self.QueueFsChange(e.OldFullPath, structural: true);
+                        self.lsp?.NotifyFileSystemChange(e.OldFullPath, LanguageServerManager.FileDeleted);
+                    }
+                    catch { }
                 };
                 w.Error += (s, e) =>
                 {
@@ -355,23 +373,61 @@ namespace codeLess.AvaloniaApp
 
         private void OnWorkspaceFsEvent(object sender, FileSystemEventArgs e)
         {
+            if (e == null || EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath)) return;
+            bool selfSave = e.ChangeType != WatcherChangeTypes.Deleted && IsSelfSaveEcho(e.FullPath);
             // Language servers that watch files (pyright, gopls, rust-analyzer) learn about git checkouts, agent writes etc.
             lsp?.NotifyFileSystemChange(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
-                : e.ChangeType == WatcherChangeTypes.Changed ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
-            QueueFsChange(e.FullPath, structural: e.ChangeType != WatcherChangeTypes.Changed);
+                : (e.ChangeType == WatcherChangeTypes.Changed || selfSave) ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
+            QueueFsChange(e.FullPath, structural: !selfSave && e.ChangeType != WatcherChangeTypes.Changed);
         }
+
+        private bool IsSelfSaveEcho(string fullPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(fullPath)) return false;
+                bool recentSave = false;
+                lock (internalSaveTimestamps)
+                {
+                    if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
+                        recentSave = true;
+                }
+                if (!recentSave) return false;
+                if (!File.Exists(fullPath)) return false;
+                EditorTabBuffer[] snapshot = openTabsSnapshot;
+                EditorTabBuffer openTab = null;
+                if (snapshot != null)
+                {
+                    for (int i = 0; i < snapshot.Length; i++)
+                    {
+                        EditorTabBuffer t = snapshot[i];
+                        if (t != null && !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, PathKeyComparison))
+                        {
+                            openTab = t;
+                            break;
+                        }
+                    }
+                }
+                if (openTab != null)
+                {
+                    if (openTab.IsDeletedOnDisk || openTab.HasDiskModifiedExternally(out _))
+                        return false;
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private int fsDebouncePostPending;
 
         private void QueueFsChange(string fullPath, bool structural)
         {
             if (string.IsNullOrEmpty(fullPath)) return;
-            if (!structural)
-            {
-                lock (internalSaveTimestamps)
-                {
-                    if (internalSaveTimestamps.TryGetValue(fullPath, out DateTime savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
-                        return;
-                }
-            }
+            if (EditorTabBuffer.IsAtomicSaveTempFile(fullPath)) return;
+            if (IsSelfSaveEcho(fullPath)) return;
             string sep = Path.DirectorySeparatorChar.ToString();
             int gitIdx = fullPath.IndexOf(sep + ".git" + sep, StringComparison.Ordinal);
             bool insideGitDir = gitIdx >= 0 || fullPath.EndsWith(sep + ".git", StringComparison.Ordinal);
@@ -397,11 +453,21 @@ namespace codeLess.AvaloniaApp
                 {
                     if (structural) { fsTreeDirty = true; RecordStructuralFsChange(fullPath, excludedFromIndex: false); }
                     fsGitDirty = true;
-                    if (!structural && fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
+                    if (fsChangedFiles.Count < 5000) fsChangedFiles.Add(fullPath);
                 }
             }
-            var weakSelf = new WeakReference<MainWindow>(this);
-            MainUi.Post(() => { if (weakSelf.TryGetTarget(out var self) && !self.windowClosed) self.RestartFsDebounce(); });
+            if (Interlocked.Exchange(ref fsDebouncePostPending, 1) == 0)
+            {
+                var weakSelf = new WeakReference<MainWindow>(this);
+                MainUi.Post(() =>
+                {
+                    if (weakSelf.TryGetTarget(out var self))
+                    {
+                        Interlocked.Exchange(ref self.fsDebouncePostPending, 0);
+                        if (!self.windowClosed) self.RestartFsDebounce();
+                    }
+                });
+            }
         }
 
         private void RestartFsDebounce()
@@ -456,6 +522,9 @@ namespace codeLess.AvaloniaApp
             }
             if (git)
                 RefreshGitStatusInBackground();
+            var openPathSet = new HashSet<string>(
+                openTabs.Where(t => !string.IsNullOrEmpty(t.FilePath)).Select(t => t.FilePath),
+                PathKeyComparer);
             foreach (var t in openTabs.ToList())
             {
                 if (!t.IsUntitled && !string.IsNullOrEmpty(t.FilePath) && !File.Exists(t.FilePath) && !t.IsDeletedOnDisk)
@@ -463,6 +532,7 @@ namespace codeLess.AvaloniaApp
             }
             foreach (string f in changed)
             {
+                if (!openPathSet.Contains(f)) continue;
                 if (File.Exists(f)) HandleExternalFileChanged(f);
                 else HandleExternalFileDeleted(f);
             }

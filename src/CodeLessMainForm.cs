@@ -8915,19 +8915,38 @@ if __name__ == '__main__':
                 };
                 FileSystemEventHandler onChanged = (s, e) =>
                 {
-                    NotifyLspFileEvent(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
-                        : e.ChangeType == WatcherChangeTypes.Changed ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
-                    QueueWorkspaceFsChange(e.FullPath, e.ChangeType != WatcherChangeTypes.Changed, e.ChangeType == WatcherChangeTypes.Deleted);
+                    try
+                    {
+                        if (e == null || EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath)) return;
+                        bool selfSave = e.ChangeType != WatcherChangeTypes.Deleted && IsSelfSaveEchoWin(e.FullPath);
+                        NotifyLspFileEvent(e.FullPath, e.ChangeType == WatcherChangeTypes.Deleted ? LanguageServerManager.FileDeleted
+                            : (e.ChangeType == WatcherChangeTypes.Changed || selfSave) ? LanguageServerManager.FileChanged : LanguageServerManager.FileCreated);
+                        QueueWorkspaceFsChange(e.FullPath, !selfSave && e.ChangeType != WatcherChangeTypes.Changed, e.ChangeType == WatcherChangeTypes.Deleted);
+                    }
+                    catch { }
                 };
                 workspaceFileWatcher.Changed += onChanged;
                 workspaceFileWatcher.Created += onChanged;
                 workspaceFileWatcher.Deleted += onChanged;
                 workspaceFileWatcher.Renamed += (s, e) =>
                 {
-                    NotifyLspFileEvent(e.OldFullPath, LanguageServerManager.FileDeleted);
-                    NotifyLspFileEvent(e.FullPath, LanguageServerManager.FileCreated);
-                    QueueWorkspaceFsChange(e.OldFullPath, true, true);
-                    QueueWorkspaceFsChange(e.FullPath, true, false);
+                    try
+                    {
+                        if (EditorTabBuffer.IsAtomicSaveTempFile(e.OldFullPath))
+                        {
+                            if (!EditorTabBuffer.IsAtomicSaveTempFile(e.FullPath))
+                            {
+                                NotifyLspFileEvent(e.FullPath, LanguageServerManager.FileChanged);
+                                QueueWorkspaceFsChange(e.FullPath, false, false);
+                            }
+                            return;
+                        }
+                        NotifyLspFileEvent(e.OldFullPath, LanguageServerManager.FileDeleted);
+                        NotifyLspFileEvent(e.FullPath, LanguageServerManager.FileCreated);
+                        QueueWorkspaceFsChange(e.OldFullPath, true, true);
+                        QueueWorkspaceFsChange(e.FullPath, true, false);
+                    }
+                    catch { }
                 };
                 workspaceFileWatcher.Error += (s, e) =>
                 {
@@ -8957,9 +8976,57 @@ if __name__ == '__main__':
         private DateTime fsFirstPendingUtc = DateTime.MinValue;
         private readonly HashSet<EditorTabBuffer> tabsWithReloadPromptOpen = new HashSet<EditorTabBuffer>();
 
+        private volatile EditorTabBuffer[] openTabsSnapshotWin = new EditorTabBuffer[0];
+
+        private bool IsSelfSaveEchoWin(string fullPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(fullPath)) return false;
+                bool recentSave = false;
+                DateTime savedAt;
+                lock (internalSaveTimestamps)
+                {
+                    if (internalSaveTimestamps.TryGetValue(fullPath, out savedAt) && (DateTime.UtcNow - savedAt).TotalMilliseconds < 1500)
+                        recentSave = true;
+                }
+                if (!recentSave) return false;
+                if (!File.Exists(fullPath)) return false;
+                EditorTabBuffer[] snapshot = openTabsSnapshotWin;
+                EditorTabBuffer openTab = null;
+                if (snapshot != null)
+                {
+                    for (int i = 0; i < snapshot.Length; i++)
+                    {
+                        EditorTabBuffer t = snapshot[i];
+                        if (t != null && !string.IsNullOrEmpty(t.FilePath) && string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            openTab = t;
+                            break;
+                        }
+                    }
+                }
+                if (openTab != null)
+                {
+                    string dummy;
+                    if (openTab.IsDeletedOnDisk || openTab.HasDiskModifiedExternally(out dummy))
+                        return false;
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private int fsFlushBeginInvokePending;
+
         private void QueueWorkspaceFsChange(string fullPath, bool structural, bool deleted)
         {
             if (string.IsNullOrEmpty(fullPath)) return;
+            if (EditorTabBuffer.IsAtomicSaveTempFile(fullPath)) return;
+            if (!deleted && IsSelfSaveEchoWin(fullPath)) return;
             bool insideGit = fullPath.IndexOf("\\.git\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
                              fullPath.EndsWith("\\.git", StringComparison.OrdinalIgnoreCase);
             lock (fsChangeLock)
@@ -8984,10 +9051,12 @@ if __name__ == '__main__':
         private void ScheduleFsFlush()
         {
             if (!this.IsHandleCreated || this.IsDisposed) return;
+            if (System.Threading.Interlocked.Exchange(ref fsFlushBeginInvokePending, 1) != 0) return;
             try
             {
                 this.BeginInvoke(new Action(() =>
                 {
+                    System.Threading.Interlocked.Exchange(ref fsFlushBeginInvokePending, 0);
                     if (this.IsDisposed) return;
                     if (fsFlushTimer == null)
                     {
@@ -9038,6 +9107,7 @@ if __name__ == '__main__':
                 foreach (string c in changed)
                 {
                     // node_modules / bin / obj churn refreshes the tree but never enters the search index.
+                    if (known.Contains(c)) continue;
                     if (IsUnderExcludedFolder(c, excludedNames)) continue;
                     string ext = Path.GetExtension(c);
                     if ((string.IsNullOrEmpty(ext) || !DefaultIgnoredBinaryExtensions.Contains(ext)) && File.Exists(c) && known.Add(c))
@@ -9079,8 +9149,7 @@ if __name__ == '__main__':
                 back.IsDeletedOnDisk = false; // file came back (branch switch / stash pop), even if content is unchanged
                 RefreshTabStrip();
             }
-            DateTime lastSave;
-            if (internalSaveTimestamps.TryGetValue(fullPath, out lastSave) && (DateTime.UtcNow - lastSave).TotalMilliseconds < 1500)
+            if (IsSelfSaveEchoWin(fullPath))
                 return;
 
             EditorTabBuffer tab = openTabs.FirstOrDefault(t => string.Equals(t.FilePath, fullPath, StringComparison.OrdinalIgnoreCase));
@@ -9416,7 +9485,14 @@ if __name__ == '__main__':
 
             if (!string.IsNullOrEmpty(captured.FilePath))
             {
+                if (closedTabPaths.Count >= 64)
+                {
+                    List<string> recent = closedTabPaths.Take(32).Reverse().ToList();
+                    closedTabPaths.Clear();
+                    foreach (string p in recent) closedTabPaths.Push(p);
+                }
                 closedTabPaths.Push(captured.FilePath);
+                if (closedTabStatesWin.Count >= 64) closedTabStatesWin.Clear();
                 closedTabStatesWin[captured.FilePath] = new ClosedTabStateWin
                 {
                     Line = captured.CursorLine,
@@ -9424,6 +9500,7 @@ if __name__ == '__main__':
                     ScrollTop = captured.ScrollTopLine
                 };
             }
+            HotExitService.DeleteBackup(workspaceRoot, captured);
 
             openTabs.Remove(captured);
             if (captured.OnClosed != null)
@@ -9723,6 +9800,7 @@ if __name__ == '__main__':
 
         private void RefreshTabStrip()
         {
+            openTabsSnapshotWin = openTabs.ToArray();
             TouchEditorMruWin();
             ArmAutoSaveTimer();
             WinFormsLargeFileHost.SweepClosed(openTabs);
@@ -10126,10 +10204,22 @@ if __name__ == '__main__':
                             File.SetAttributes(buf.FilePath, attrs & ~FileAttributes.ReadOnly);
                     }
                 }
-                internalSaveTimestamps[buf.FilePath] = DateTime.UtcNow;
+                string resolvedSaveTarget = EditorTabBuffer.ResolveSymlinkTargetPath(buf.FilePath);
+                lock (internalSaveTimestamps)
+                {
+                    DateTime now = DateTime.UtcNow;
+                    internalSaveTimestamps[buf.FilePath] = now;
+                    if (!string.IsNullOrEmpty(resolvedSaveTarget)) internalSaveTimestamps[resolvedSaveTarget] = now;
+                }
                 ApplySaveParticipantsWin(buf, backgroundSave);
                 object agentSave = BeginAgentTrackedSaveWin(buf);
                 buf.WriteToDisk(buf.FilePath);
+                lock (internalSaveTimestamps)
+                {
+                    DateTime now = DateTime.UtcNow;
+                    internalSaveTimestamps[buf.FilePath] = now;
+                    if (!string.IsNullOrEmpty(resolvedSaveTarget)) internalSaveTimestamps[resolvedSaveTarget] = now;
+                }
                 EndAgentTrackedSaveWin(agentSave, buf);
                 buf.IsUntitled = false;
                 buf.IsDeletedOnDisk = false;

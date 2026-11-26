@@ -335,6 +335,11 @@ namespace codeLess.Studio
             return ContextString;
         }
 
+        private long DeadlineForInteractiveLine(int targetLine)
+        {
+            return (targetLine - ValidCount > 2000) ? EditorSyntaxSession.DeadlineFromNow(8) : 0;
+        }
+
         /// <summary>
         /// Whether (line, col) is in code, a comment or a string, with the same lexer as bracket matching (VS Code uses
         /// the token type at the position). Lines before <paramref name="line"/> are lexed once and cached.
@@ -345,8 +350,8 @@ namespace codeLess.Studio
             BracketLexState st = InitialState;
             if (line > 0)
             {
-                if (!EnsureValid(lines, line - 1, 0)) return ContextCode;
-                st = GetEndState(line - 1) ?? InitialState;
+                if (EnsureValid(lines, line - 1, DeadlineForInteractiveLine(line - 1)))
+                    st = GetEndState(line - 1) ?? InitialState;
             }
             BracketLineData unusedData;
             int ctx;
@@ -924,7 +929,7 @@ namespace codeLess.Studio
         public BracketFrame GetStackAtLineStart(IList<string> lines, int line)
         {
             if (lines == null || line <= 0 || line >= lines.Count) return null;
-            if (!EnsureValid(lines, line - 1, 0)) return null;
+            if (!EnsureValid(lines, line - 1, DeadlineForInteractiveLine(line - 1))) return null;
             BracketLexState st = GetEndState(line - 1);
             return st == null ? null : st.Stack;
         }
@@ -935,7 +940,7 @@ namespace codeLess.Studio
             if (lines == null || line < 0 || line >= lines.Count) return BracketPair.None;
             if (activeVersion == Version && activeLine == line && activeCol == col) return activePair;
             BracketPair res = BracketPair.None;
-            if (EnsureValid(lines, line, 0))
+            if (EnsureValid(lines, line, DeadlineForInteractiveLine(line)))
             {
                 BracketLexState st = line == 0 ? InitialState : GetEndState(line - 1);
                 BracketFrame stack = st == null ? null : st.Stack;
@@ -969,9 +974,10 @@ namespace codeLess.Studio
         private BracketPair FindCloser(IList<string> lines, BracketFrame opener, int fromLine, int fromCol)
         {
             int last = Math.Min(lines.Count - 1, fromLine + PairSearchLimit);
+            long dl = DeadlineForInteractiveLine(last);
             for (int L = fromLine; L <= last; L++)
             {
-                if (!EnsureValid(lines, L, 0)) break;
+                if (!EnsureValid(lines, L, dl)) break;
                 BracketLineData d = GetData(L);
                 if (d != null)
                 {
@@ -1004,7 +1010,7 @@ namespace codeLess.Studio
         {
             pair = BracketPair.None;
             if (lines == null || line < 0 || line >= lines.Count) return false;
-            if (!EnsureValid(lines, line, 0)) return false;
+            if (!EnsureValid(lines, line, DeadlineForInteractiveLine(line))) return false;
             BracketLineData d = GetData(line);
             if (d == null || d.Count == 0) return false;
             int hit = -1;

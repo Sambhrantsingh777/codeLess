@@ -709,6 +709,7 @@ namespace codeLess.AvaloniaApp
 
         public new void Close()
         {
+            if (windowClosed) return;
             bool shouldHotExit = HotExitService.ShouldBackupWithoutPrompt(settings, isApplicationQuitting);
             if (shouldHotExit)
             {
@@ -787,6 +788,7 @@ namespace codeLess.AvaloniaApp
                 ReleaseClosedTabReferences(tab);
             }
             openTabs.Clear();
+            openTabsSnapshot = Array.Empty<EditorTabBuffer>();
             editorMru.Clear();
             closedTabStates.Clear();
             activeTab = null;
@@ -878,8 +880,19 @@ namespace codeLess.AvaloniaApp
             {
                 CommandPalette.AllEntries?.Clear();
                 CommandPalette.FilteredEntries?.Clear();
+                CommandPalette.FileEntriesProvider = null;
+                CommandPalette.CommandEntriesProvider = null;
+                CommandPalette.EditorSymbolEntriesProvider = null;
+                CommandPalette.WorkspaceSymbolEntriesProvider = null;
+                CommandPalette.QuickOpenFileSearch = null;
+                CommandPalette.CustomModeHint = null;
                 if (CommandPalette.ResultsListBox != null) CommandPalette.ResultsListBox.ItemsSource = null;
             }
+            savedSymbolPreviewState = (null, 0, 0, 0);
+            navHistory.Clear();
+            closedTabHistory.Clear();
+            workspaceIgnoreRules = null;
+            quickOpenIndex = null;
             focusedEditorBufferForAutoSave = null;
             pendingDebouncedBuffer = null;
             lastRenderedTabRef = null;
@@ -3270,6 +3283,7 @@ namespace codeLess.AvaloniaApp
             if (ReferenceEquals(lastDebugDecoratedTab, tab)) lastDebugDecoratedTab = null;
             if (ReferenceEquals(hunkPopupBuffer, tab)) hunkPopupBuffer = null;
             if (ReferenceEquals(focusedEditorBufferForAutoSave, tab)) focusedEditorBufferForAutoSave = null;
+            if (ReferenceEquals(savedSymbolPreviewState.Tab, tab)) savedSymbolPreviewState = (null, 0, 0, 0);
             if (isEditorSplit && ReferenceEquals(SplitEditor?.CurrentBuffer, tab))
             {
                 var fallback = openTabs.FirstOrDefault(t => !ReferenceEquals(t, tab));
@@ -3290,6 +3304,12 @@ namespace codeLess.AvaloniaApp
         private void RecordClosedTabHistory(EditorTabBuffer tab)
         {
             if (tab == null || string.IsNullOrEmpty(tab.FilePath) || !File.Exists(tab.FilePath)) return;
+            if (closedTabHistory.Count >= 64)
+            {
+                var recent = closedTabHistory.Take(32).Reverse().ToList();
+                closedTabHistory.Clear();
+                foreach (var p in recent) closedTabHistory.Push(p);
+            }
             closedTabHistory.Push(tab.FilePath);
             if (closedTabStates.Count >= 64) closedTabStates.Clear();
             closedTabStates[tab.FilePath] = (tab.CursorLine, tab.CursorCol, tab.ScrollTopLine);
@@ -3302,6 +3322,10 @@ namespace codeLess.AvaloniaApp
             {
                 if (!ConfirmSaveOrDiscardDirtyTabs(new[] { tab }, () => { if (openTabs.Contains(tab)) CloseTab(tab, forceWithoutPrompt: true); }))
                     return false;
+            }
+            else if (forceWithoutPrompt)
+            {
+                HotExitService.DeleteBackup(workspaceRoot, tab);
             }
 
             RecordClosedTabHistory(tab);
@@ -3474,22 +3498,38 @@ namespace codeLess.AvaloniaApp
                 }
                 if (!string.IsNullOrEmpty(tab.FilePath))
                 {
-                    lock (internalSaveTimestamps) { internalSaveTimestamps[tab.FilePath] = DateTime.UtcNow; }
+                    string resolvedTarget = EditorTabBuffer.ResolveSymlinkTargetPath(tab.FilePath);
+                    lock (internalSaveTimestamps)
+                    {
+                        DateTime now = DateTime.UtcNow;
+                        internalSaveTimestamps[tab.FilePath] = now;
+                        if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveTimestamps[resolvedTarget] = now;
+                    }
                 }
                 ApplySaveParticipants(tab);
                 tab.SyncContentFromLines();
                 var agentSave = BeginAgentTrackedSave(tab);
                 tab.WriteFilePreservingMetadata(tab.FilePath);
+                tab.SavedContent = tab.Content;
+                tab.RecordDiskBaseline(tab.FilePath);
+                if (!string.IsNullOrEmpty(tab.FilePath))
+                {
+                    string resolvedTarget = EditorTabBuffer.ResolveSymlinkTargetPath(tab.FilePath);
+                    lock (internalSaveTimestamps)
+                    {
+                        DateTime now = DateTime.UtcNow;
+                        internalSaveTimestamps[tab.FilePath] = now;
+                        if (!string.IsNullOrEmpty(resolvedTarget)) internalSaveTimestamps[resolvedTarget] = now;
+                    }
+                }
                 EndAgentTrackedSave(agentSave, tab);
                 tab.PreDiffContent = null;
                 tab.DiffHunks?.Clear();
                 tab.SyncProposedDiffProjection();
-                tab.SavedContent = tab.Content;
                 tab.IsDirty = false;
                 tab.IsPreviewTab = false;
                 tab.IsDeletedOnDisk = false;
                 tab.HasExternalDiskConflict = false;
-                tab.RecordDiskBaseline(tab.FilePath);
                 pendingHotExitBackups.Remove(tab);
                 if (pendingHotExitBackups.Count == 0) hotExitBackupTimer?.Stop();
                 HotExitService.DeleteBackup(workspaceRoot, tab);
@@ -3792,8 +3832,11 @@ namespace codeLess.AvaloniaApp
             RefreshAgentTrustBanner();
         }
 
+        private volatile EditorTabBuffer[] openTabsSnapshot = Array.Empty<EditorTabBuffer>();
+
         public void RefreshTabStrip()
         {
+            openTabsSnapshot = openTabs.ToArray();
             if (windowClosed || tabStripStack == null || currentTheme == null) return;
             tabStripStack.Children.Clear();
 
