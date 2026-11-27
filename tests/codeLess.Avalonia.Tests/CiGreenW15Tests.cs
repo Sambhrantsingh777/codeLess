@@ -150,6 +150,8 @@ namespace codeLess.Avalonia.Tests
             string lockPath = filePath + ".lock";
             try
             {
+                // Warm up initial file creation and JIT so the stopwatch measures 3 sequential lock-acquire/release cycles.
+                CrossProcessFile.ReadModifyWrite(filePath, p => File.WriteAllText(p, "{\"step\":-1}"), timeoutMs: 5000);
                 var sw = Stopwatch.StartNew();
                 for (int i = 0; i < 3; i++)
                 {

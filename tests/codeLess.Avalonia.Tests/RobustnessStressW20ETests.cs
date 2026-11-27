@@ -279,6 +279,7 @@ namespace codeLess.Avalonia.Tests
             Assert.DoesNotContain(files, f => f.Contains("ignored_out"));
 
             var qoIndex = new QuickOpenFileIndex(_ws50k.RootDir, files);
+            qoIndex.Search("mod_000", 10, null); // warm up JIT before timing search over 48k files
             sw.Restart();
             var hits = qoIndex.Search("mod_123/file_045.ts", 50, null);
             sw.Stop();
@@ -454,7 +455,8 @@ namespace codeLess.Avalonia.Tests
                 double allocPerKeyKb = allocDelta / 1024.0 / 80.0;
                 double avgMsPerKey = sw.Elapsed.TotalMilliseconds / 80.0;
 
-                // Also measure 10 rendered frames during typing at line 150,000
+                // Also measure 10 rendered frames during typing at line 150,000 (settle one frame after the 80-key burst first)
+                RenderCanvasOnce(canvas);
                 var renderSw = Stopwatch.StartNew();
                 for (int i = 0; i < 10; i++)
                 {

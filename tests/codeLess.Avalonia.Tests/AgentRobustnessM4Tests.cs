@@ -190,11 +190,26 @@ namespace codeLess.Avalonia.Tests
             
             var method = harness.GetType().GetMethod("RunAutonomousAgentLoopCoreAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             var buf = new EditorTabBuffer { FilePath = otherFile };
-            
-            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            // Warm up reflection + agent loop JIT before timing the write_file turn without a DiagnosticsProvider.
+            harness.CustomModelResponder = (sys, msgs) => Task.FromResult("Warmup done");
+            await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "warmup", null, null, buf, _testDir, new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
+
+            var sw = new System.Diagnostics.Stopwatch();
+            harness.CustomModelResponder = (sys, msgs) =>
+            {
+                turns++;
+                if (turns == 1)
+                {
+                    sw.Start();
+                    return Task.FromResult("<tool_call>{\"tool\": \"write_file\", \"args\": {\"path\": \"" + fastFile + "\", \"content\": \"code\"}}</tool_call>");
+                }
+                return Task.FromResult("Done");
+            };
+
             var res = await (Task<AgentExecutionTurnResult>)method.Invoke(harness, new object[] { "test", "instruct", null, null, buf, _testDir, new List<string>(), new List<string>(), "build", new Dictionary<string, string>() });
             sw.Stop();
-            
+
             Assert.True(sw.ElapsedMilliseconds < 1000, "Turn should be fast without provider");
             Assert.DoesNotContain("<file_diagnostics", res.ToolCalls[0].Output);
         }

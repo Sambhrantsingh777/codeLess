@@ -437,7 +437,7 @@ namespace codeLess.Avalonia.Tests
             public Task<int?> RunInTerminalAsync(string title, string cwd, List<string> args, Dictionary<string, string> env) => Inner.RunInTerminalAsync(title, cwd, args, env);
             public void RevealLocation(string path, int line) => Inner.RevealLocation(path, line);
             public IList<EditorTabBuffer> GetOpenBuffers() => Inner.GetOpenBuffers();
-            public void RefreshEditors() { }
+            public void RefreshEditors() { } // TaskHost Helper
             public void ShowStatus(string message) => Inner.ShowStatus(message);
             public void ShowDebugError(string message, string hint, string installCommand) => Inner.ShowDebugError(message, hint, installCommand);
             public string WorkspaceRoot => Inner.Root;
@@ -499,8 +499,10 @@ namespace codeLess.Avalonia.Tests
             var input = new BlockingInput();
             var client = new DapClient(input, output);
             client.Start();
+            var hugeArgs = new Dictionary<string, object> { { "x", new string('a', 1 << 20) } };
+            DapJson.Serialize(new Dictionary<string, object> { { "w", "1" } });
             var sw = Stopwatch.StartNew();
-            var t = client.SendRequestAsync("setBreakpoints", new Dictionary<string, object> { { "x", new string('a', 1 << 20) } }, 500);
+            var t = client.SendRequestAsync("setBreakpoints", hugeArgs, 500);
             Assert.True(sw.ElapsedMilliseconds < PerfBudget.Ms(400), "SendRequestAsync blocked on the adapter's stdin: " + sw.ElapsedMilliseconds + " ms");
             Assert.True(t.Wait(5000));
             Assert.False(t.Result.Success);

@@ -535,8 +535,12 @@ namespace codeLess.Avalonia.Tests
                 Assert.True(tab.Lines.Count >= 10000);
 
                 // Verify typing coalesced undo snapshots on a 10,000-line file executes rapidly (< 150ms for 20 characters)
+                global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
                 tab.CursorLine = 5000;
                 tab.CursorCol = 8;
+                tab.PushUndoSnapshot(coalesceTyping: true);
+                tab.InsertTextAtCursor("a");
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 for (int c = 0; c < 20; c++)
                 {

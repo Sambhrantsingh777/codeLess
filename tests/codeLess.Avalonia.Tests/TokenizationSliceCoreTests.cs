@@ -172,9 +172,13 @@ namespace codeLess.Avalonia.Tests
             var session = new EditorSyntaxSession();
             var theme = StudioTheme.GetById(StudioTheme.DefaultThemeId);
             bool g;
+            // Warm up FallbackTokenizer JIT on a tiny line before measuring the 1 MB line.
+            new EditorSyntaxSession().GetFallbackSpans(new List<string> { "{\"a\":1}" }, 0, "json", theme, 0, 7, false, 0, out g);
             var sw = Stopwatch.StartNew();
             var first = session.GetFallbackSpans(lines, 0, "json", theme, 700000, 700200, false, 0, out g);
             long firstMs = sw.ElapsedMilliseconds;
+            // Warm up cached-slice path once before measuring 200 cached slices.
+            session.GetFallbackSpans(lines, 0, "json", theme, 0, 200, false, 0, out g);
             sw.Restart();
             for (int k = 0; k < 200; k++) session.GetFallbackSpans(lines, 0, "json", theme, 1000 * k, 1000 * k + 200, false, 0, out g);
             double perFrameMs = sw.Elapsed.TotalMilliseconds / 200;

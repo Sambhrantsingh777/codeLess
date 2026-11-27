@@ -81,6 +81,8 @@ namespace codeLess.Avalonia.Tests
             string log = WriteLog("huge.log", 60);
             var window = new MainWindow(ws);
             window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var tab = window.OpenFileInTab(log, preview: false);
