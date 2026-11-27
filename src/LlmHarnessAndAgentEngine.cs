@@ -276,7 +276,17 @@ namespace codeLess.Studio
         }
         public IDiagnosticsProvider DiagnosticsProvider { get; set; }
         public HashSet<string> PendingPostApplyDiagnosticsPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        public void NotifyChangesApplied(IEnumerable<string> paths) { foreach(var p in paths) PendingPostApplyDiagnosticsPaths.Add(p); }
+        public void NotifyChangesApplied(IEnumerable<string> paths)
+        {
+            foreach (var p in paths)
+            {
+                PendingPostApplyDiagnosticsPaths.Add(p);
+                if (FileTimeTracker != null && !string.IsNullOrEmpty(p) && File.Exists(p) && FileTimeTracker.HasRead(p))
+                {
+                    try { FileTimeTracker.RecordRead(p, File.GetLastWriteTimeUtc(p)); } catch { }
+                }
+            }
+        }
         public int AgentLoopTimeoutMs = 60000;
         public int HttpTimeoutMs = 60000;
 
@@ -3638,12 +3648,12 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                     if (stagedFiles != null && stagedFiles.ContainsKey(fullPath))
                     {
                         rawText = stagedFiles[fullPath];
-                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
+                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow, rawText);
                     }
                     else if (activeTab != null && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
                     {
                         rawText = activeTab.Content ?? "";
-                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
+                        FileTimeTracker.RecordRead(fullPath, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow, rawText);
                     }
                     else
                     {
@@ -3651,8 +3661,9 @@ Coordinate atomic changes across multiple files using ### File: <path> followed 
                         {
                             return new AgentToolCallResult { ToolName = "read_file", Success = false, Summary = "Binary file: " + relPath, Output = "Cannot read binary file: " + relPath };
                         }
+                        byte[] rawBytes = File.ReadAllBytes(fullPath);
                         rawText = File.ReadAllText(fullPath);
-                        FileTimeTracker.RecordRead(fullPath, File.GetLastWriteTimeUtc(fullPath));
+                        FileTimeTracker.RecordRead(fullPath, File.GetLastWriteTimeUtc(fullPath), rawBytes);
                     }
 
                     string[] lines = (rawText ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
@@ -4063,7 +4074,7 @@ else if (toolName == "list_dir")
                         Output = sb.ToString().TrimEnd()
                     };
                 }
-else if (toolName == "write_file")
+                else if (toolName == "write_file")
                 {
                     string relPath = args.ContainsKey("path") ? Convert.ToString(args["path"]) : "";
                     string content = args.ContainsKey("content") ? Convert.ToString(args["content"]) : "";
@@ -4071,10 +4082,8 @@ else if (toolName == "write_file")
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("write_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
 
-                    if (File.Exists(fullPath))
-                    {
-                        return new AgentToolCallResult { ToolName = "write_file", Success = false, Summary = "File already exists", Output = "File already exists. Use edit_file or multiedit to modify existing files." };
-                    }
+                    AgentToolCallResult readCheck = VerifyReadBeforeModify("write_file", fullPath, relPath, stagedFiles, activeTab);
+                    if (readCheck != null) return readCheck;
                     if (false)
                     {
                         return new AgentToolCallResult
@@ -4097,6 +4106,7 @@ else if (toolName == "write_file")
                         };
                     }
                     stagedFiles[fullPath] = content;
+                    FileTimeTracker.RecordAgentWrite(fullPath, content, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
                     return new AgentToolCallResult
                     {
                         ToolName = "write_file",
@@ -4116,19 +4126,8 @@ else if (toolName == "write_file")
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("edit_file", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
                     
-                    if (File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        if (!FileTimeTracker.HasRead(fullPath))
-                        {
-                            return new AgentToolCallResult { ToolName = "edit_file", Success = false, Summary = "Must read file first", Output = "You must read the file " + relPath + " before overwriting it. Use the read_file tool first." };
-                        }
-                        DateTime lastRead = FileTimeTracker.GetLastReadTime(fullPath);
-                        DateTime lastWrite = File.GetLastWriteTimeUtc(fullPath);
-                        if (lastWrite > lastRead)
-                        {
-                            return new AgentToolCallResult { ToolName = "edit_file", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
-                        }
-                    }
+                    AgentToolCallResult readCheck = VerifyReadBeforeModify("edit_file", fullPath, relPath, stagedFiles, activeTab);
+                    if (readCheck != null) return readCheck;
                     if (false)
                     {
                         return new AgentToolCallResult
@@ -4165,6 +4164,7 @@ else if (toolName == "write_file")
                             };
                         }
                         stagedFiles[fullPath] = next;
+                        FileTimeTracker.RecordAgentWrite(fullPath, next, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
                         return new AgentToolCallResult
                         {
                             ToolName = "edit_file",
@@ -4189,19 +4189,8 @@ else if (toolName == "write_file")
                     AgentToolCallResult denied = RejectIfOutsideWorkspace("multiedit", workspaceRoot, fullPath, relPath, activeTab);
                     if (denied != null) return denied;
                     
-                    if (File.Exists(fullPath) && (stagedFiles == null || !stagedFiles.ContainsKey(fullPath)) && (activeTab == null || !string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        if (!FileTimeTracker.HasRead(fullPath))
-                        {
-                            return new AgentToolCallResult { ToolName = "multiedit", Success = false, Summary = "Must read file first", Output = "You must read the file " + relPath + " before overwriting it. Use the read_file tool first." };
-                        }
-                        DateTime lastRead = FileTimeTracker.GetLastReadTime(fullPath);
-                        DateTime lastWrite = File.GetLastWriteTimeUtc(fullPath);
-                        if (lastWrite > lastRead)
-                        {
-                            return new AgentToolCallResult { ToolName = "multiedit", Success = false, Summary = "File modified since read", Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it." };
-                        }
-                    }
+                    AgentToolCallResult readCheck = VerifyReadBeforeModify("multiedit", fullPath, relPath, stagedFiles, activeTab);
+                    if (readCheck != null) return readCheck;
                     if (false)
                     {
                         return new AgentToolCallResult
@@ -4267,6 +4256,7 @@ else if (toolName == "write_file")
                     }
                     
                     stagedFiles[fullPath] = next;
+                    FileTimeTracker.RecordAgentWrite(fullPath, next, File.Exists(fullPath) ? File.GetLastWriteTimeUtc(fullPath) : DateTime.UtcNow);
                     return new AgentToolCallResult
                     {
                         ToolName = "multiedit",
@@ -4342,6 +4332,48 @@ else if (toolName == "write_file")
             
             return new AgentToolCallResult { ToolName = "invalid", Success = false, Summary = "Unknown tool", Output = "Fallback unknown tool" };
 
+        }
+
+        private AgentToolCallResult VerifyReadBeforeModify(
+            string toolName,
+            string fullPath,
+            string relPath,
+            Dictionary<string, string> stagedFiles,
+            EditorTabBuffer activeTab)
+        {
+            if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath))
+                return null;
+            if (activeTab != null && string.Equals(activeTab.FilePath, fullPath, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            bool isStaged = stagedFiles != null && stagedFiles.ContainsKey(fullPath);
+            if (!FileTimeTracker.HasRead(fullPath))
+            {
+                if (isStaged)
+                    return null;
+                string prefix = toolName == "write_file" ? "File already exists. " : "";
+                return new AgentToolCallResult
+                {
+                    ToolName = toolName,
+                    Success = false,
+                    Summary = "Must read file first",
+                    Output = prefix + "You must read the file " + relPath + " before overwriting it. Use the read_file tool first."
+                };
+            }
+
+            DateTime lastRead;
+            DateTime lastWrite;
+            if (FileTimeTracker.IsModifiedSinceRead(fullPath, out lastRead, out lastWrite))
+            {
+                return new AgentToolCallResult
+                {
+                    ToolName = toolName,
+                    Success = false,
+                    Summary = "File modified since read",
+                    Output = "File " + relPath + " has been modified since it was last read.\nLast modification: " + lastWrite.ToString("o") + "\nLast read: " + lastRead.ToString("o") + "\n\nPlease read the file again before modifying it."
+                };
+            }
+            return null;
         }
 
         private void ExtractAndStageSearchReplaceBlocks(

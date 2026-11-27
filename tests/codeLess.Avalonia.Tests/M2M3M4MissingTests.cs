@@ -166,5 +166,125 @@ namespace codeLess.Avalonia.Tests
             var res = RunTool("read_file", new System.Collections.Generic.Dictionary<string, object>{{"path", "bin.dat"}});
             Xunit.Assert.Contains("binary", res.Output);
         }
+
+        [Fact]
+        public void ModifiedSinceRead_SameMtimeDifferentContent_RejectedAcross_Edit_Multiedit_And_WriteFile()
+        {
+            // (1) read, then an external write of different content with the mtime forced back to the original
+            // via File.SetLastWriteTimeUtc -> edit_file, multiedit, and write_file are all rejected with "modified since".
+            string fEdit = Path.Combine(testDir, "stale_edit.txt");
+            File.WriteAllText(fEdit, "alpha\nbeta\n");
+            DateTime tEdit = File.GetLastWriteTimeUtc(fEdit);
+            Assert.True(RunTool("read_file", new Dictionary<string, object> { { "path", "stale_edit.txt" } }).Success);
+
+            // External edit of different content (both same-length and different-length) with mtime forced back to tEdit:
+            File.WriteAllText(fEdit, "alpha\nbetX\n");
+            File.SetLastWriteTimeUtc(fEdit, tEdit);
+            Assert.Equal(tEdit, File.GetLastWriteTimeUtc(fEdit));
+            var editRes = RunTool("edit_file", new Dictionary<string, object>
+            {
+                { "path", "stale_edit.txt" },
+                { "search", "alpha" },
+                { "replace", "ALPHA" }
+            });
+            Assert.False(editRes.Success);
+            Assert.Contains("modified since", editRes.Output);
+
+            string fMulti = Path.Combine(testDir, "stale_multi.txt");
+            File.WriteAllText(fMulti, "one\ntwo\n");
+            DateTime tMulti = File.GetLastWriteTimeUtc(fMulti);
+            Assert.True(RunTool("read_file", new Dictionary<string, object> { { "path", "stale_multi.txt" } }).Success);
+
+            File.WriteAllText(fMulti, "one\ntwo\nexternal_extra\n");
+            File.SetLastWriteTimeUtc(fMulti, tMulti);
+            Assert.Equal(tMulti, File.GetLastWriteTimeUtc(fMulti));
+            var multiRes = RunTool("multiedit", new Dictionary<string, object>
+            {
+                { "path", "stale_multi.txt" },
+                { "edits", new List<object> { new Dictionary<string, object> { { "oldString", "one" }, { "newString", "ONE" } } } }
+            });
+            Assert.False(multiRes.Success);
+            Assert.Contains("modified since", multiRes.Output);
+
+            string fWrite = Path.Combine(testDir, "stale_write.txt");
+            File.WriteAllText(fWrite, "initial content\n");
+            DateTime tWrite = File.GetLastWriteTimeUtc(fWrite);
+            Assert.True(RunTool("read_file", new Dictionary<string, object> { { "path", "stale_write.txt" } }).Success);
+
+            File.WriteAllText(fWrite, "externally changed\n");
+            File.SetLastWriteTimeUtc(fWrite, tWrite);
+            Assert.Equal(tWrite, File.GetLastWriteTimeUtc(fWrite));
+            var writeRes = RunTool("write_file", new Dictionary<string, object>
+            {
+                { "path", "stale_write.txt" },
+                { "content", "agent overwrite\n" }
+            });
+            Assert.False(writeRes.Success);
+            Assert.Contains("modified since", writeRes.Output);
+        }
+
+        [Fact]
+        public void ConsecutiveAgentEdits_AfterSingleRead_BothSucceed()
+        {
+            // (2) read, then the agent edits twice in a row: both succeed.
+            string f = Path.Combine(testDir, "consecutive.txt");
+            File.WriteAllText(f, "first\nsecond\n");
+            var staged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var files = new List<string> { f };
+
+            var readRes = engine.ExecuteWorkspaceTool("read_file", new Dictionary<string, object> { { "path", "consecutive.txt" } }, testDir, files, null, staged, "build", testSettings);
+            Assert.True(readRes.Success);
+
+            var edit1 = engine.ExecuteWorkspaceTool("edit_file", new Dictionary<string, object>
+            {
+                { "path", "consecutive.txt" },
+                { "search", "first" },
+                { "replace", "FIRST" }
+            }, testDir, files, null, staged, "build", testSettings);
+            Assert.True(edit1.Success, edit1.Output);
+
+            var edit2 = engine.ExecuteWorkspaceTool("edit_file", new Dictionary<string, object>
+            {
+                { "path", "consecutive.txt" },
+                { "search", "FIRST\nsecond" },
+                { "replace", "FIRST\nSECOND" }
+            }, testDir, files, null, staged, "build", testSettings);
+            Assert.True(edit2.Success, edit2.Output);
+            Assert.Equal("FIRST\nSECOND\n", staged[f]);
+
+            // Even if the agent's staged write is flushed to disk between consecutive edits, the next edit still succeeds:
+            File.WriteAllText(f, staged[f]);
+            var edit3 = engine.ExecuteWorkspaceTool("edit_file", new Dictionary<string, object>
+            {
+                { "path", "consecutive.txt" },
+                { "search", "SECOND" },
+                { "replace", "THIRD" }
+            }, testDir, files, null, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), "build", testSettings);
+            Assert.True(edit3.Success, edit3.Output);
+        }
+
+        [Fact]
+        public void IdenticalContentRewrite_WithUnchangedMtime_IsAllowed()
+        {
+            // (3) read, then an identical-content rewrite with the mtime unchanged: allowed.
+            string f = Path.Combine(testDir, "identical.txt");
+            File.WriteAllText(f, "unchanged line\n");
+            DateTime origMtime = File.GetLastWriteTimeUtc(f);
+
+            Assert.True(RunTool("read_file", new Dictionary<string, object> { { "path", "identical.txt" } }).Success);
+
+            File.WriteAllText(f, "unchanged line\n");
+            File.SetLastWriteTimeUtc(f, origMtime);
+            Assert.Equal(origMtime, File.GetLastWriteTimeUtc(f));
+
+            var editRes = RunTool("edit_file", new Dictionary<string, object>
+            {
+                { "path", "identical.txt" },
+                { "search", "unchanged line" },
+                { "replace", "updated line" }
+            });
+            Assert.True(editRes.Success, editRes.Output);
+            Assert.Contains("Patch applied cleanly.", editRes.Output);
+        }
     }
 }
